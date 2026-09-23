@@ -40,7 +40,7 @@ class MockAggregate extends StateStoredAggregate<
 		events: TestEvent[],
 		version: number,
 		restoredVersion?: number,
-		// The aggregate takes the identity its events carry, so a fixture
+		// The aggregate takes the aggregate identity its events carry, so a fixture
 		// event that belongs to "first" builds aggregate "first".
 		id: TestId = (events[0]?.aggregateId ?? "agg-1") as TestId,
 	) {
@@ -310,8 +310,9 @@ describe("withCommit", () => {
 	});
 
 	it("rejects a harvested event of another aggregate than the enrolled one", async () => {
-		// The aggregate base classes stamp and check the identity themselves;
-		// this backstop covers an instance whose recording path did not.
+		// The aggregate base classes stamp and check the aggregate identity
+		// themselves; this backstop covers an instance whose recording path
+		// did not.
 		const stray = unstampedOrder([
 			createDomainEvent(
 				"OrderCreated",
@@ -1017,7 +1018,7 @@ describe("withCommit", () => {
 	});
 
 	it("throws if a harvested event is missing aggregateId (harvest guard)", async () => {
-		// The aggregate base classes stamp a missing identity; an instance
+		// The aggregate base classes stamp a missing aggregate identity; an instance
 		// from another package copy may not. The harvest guard catches the
 		// gap with a diagnostic message naming the event type and the
 		// missing field, because downstream routing relies on the source.

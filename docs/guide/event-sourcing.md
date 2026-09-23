@@ -154,8 +154,8 @@ replay performs over the stream.
 
 `apply(event)` runs in this order:
 
-1. The identity check runs. The aggregate supplies a missing `aggregateId` or
-   `aggregateType`. A foreign identity throws `MisattributedEventError` before
+1. The aggregate identity check runs. The aggregate supplies a missing `aggregateId` or
+   `aggregateType`. A foreign aggregate identity throws `MisattributedEventError` before
    recording. `ForeignEventError` is the replay error for persisted rows.
 2. `validateEvent(event)` decides whether this event is allowed in the current
    state.

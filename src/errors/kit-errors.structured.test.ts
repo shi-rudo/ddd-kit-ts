@@ -771,7 +771,7 @@ describe("an error that names an aggregate keeps its own copy of the identity", 
 	];
 
 	it.each(identityCarriers)(
-		"$name holds a frozen copy of the two identity fields",
+		"$name holds a frozen copy of the two aggregate identity fields",
 		({ build }) => {
 			const identity = {
 				aggregateType: "Order",

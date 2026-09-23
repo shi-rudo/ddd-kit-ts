@@ -163,8 +163,9 @@ export type AnyDomainEvent = DomainEvent<string, unknown>;
  * A domain event accepted by an aggregate but not yet given its recording
  * identity, recording time, or delivery metadata.
  *
- * The aggregate owns the event type, payload, source identity, and payload
- * schema version because those values describe the business fact it produced.
+ * The aggregate owns the event type, payload, source aggregate identity,
+ * and payload schema version because those values describe the business
+ * fact it produced.
  * The application shell later turns this value into a {@link DomainEvent}.
  */
 export interface UncommittedDomainEvent<T extends string, P = void> {
@@ -550,9 +551,9 @@ export function adoptUncommittedDomainEvent<T extends object>(copy: T): T {
 /**
  * Attaches shell-owned recording data to an accepted aggregate decision.
  *
- * The decision supplies the domain type, payload, source identity, and payload
- * schema version. The stamp supplies only event identity, recording time, and
- * trace metadata.
+ * The decision supplies the domain type, payload, source aggregate
+ * identity, and payload schema version. The stamp supplies only event
+ * identity, recording time, and trace metadata.
  */
 export function recordDomainEvent<T extends string, P>(
 	event: UncommittedDomainEvent<T, P>,
@@ -621,7 +622,8 @@ function mintRecordedEvent<T extends string, P>(
 
 /**
  * Brands, freezes, and registers a kit-derived copy of a recorded event
- * (e.g. the identity-stamped copy `apply()` creates) as recorded itself.
+ * (e.g. the copy `apply()` stamps with the aggregate identity) as recorded
+ * itself.
  * The copy shares the already-frozen payload/metadata of its source,
  * so the mint guarantee carries over. Stamping the cooperative brand
  * before freezing keeps the copy recognizable by another loaded kit

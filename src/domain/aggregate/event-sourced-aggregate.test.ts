@@ -931,7 +931,7 @@ describe("replay trusts history", () => {
 	});
 
 	it("throws a wiring error from apply() when a new event belongs to another aggregate", () => {
-		// Without the guard, a hand-built event with a foreign identity
+		// Without the guard, a hand-built event with a foreign aggregate identity
 		// would be recorded and committed, and the NEXT load of this
 		// stream would reject it, poisoning the stream. A wiring error
 		// (MisattributedEventError), not ForeignEventError: a wrong new
@@ -965,10 +965,10 @@ describe("replay trusts history", () => {
 		expect(agg.state.value).toBe(10);
 	});
 
-	it("apply() stamps missing identity fields, so recorded events always carry their full identity", () => {
-		// Without the stamp an identity-less event mutates state and then
-		// fails far away: at harvest (withCommit) or on the next load
-		// (replay guard).
+	it("apply() stamps missing aggregate identity fields, so recorded events always carry their full aggregate identity", () => {
+		// Without the stamp, an event without an aggregate identity mutates
+		// state and then fails far away: at harvest (withCommit) or on the
+		// next load (replay guard).
 		const agg = new RuleTighteningAggregate("test-1" as TestId, {
 			value: 10,
 			status: "inactive",
@@ -988,7 +988,7 @@ describe("replay trusts history", () => {
 		expect(Object.isFrozen(recorded)).toBe(true);
 	});
 
-	it("keeps an identity-stamped decision uncommitted until the shell records it", () => {
+	it("keeps a decision stamped with the aggregate identity uncommitted until the shell records it", () => {
 		const agg = new RuleTighteningAggregate("test-1" as TestId, {
 			value: 10,
 			status: "inactive",
@@ -1119,7 +1119,7 @@ describe("replay trusts history", () => {
 		expect(agg.pendingEvents).toHaveLength(0);
 	});
 
-	it("accepts the identity-stamped copy apply() mints for identity-less events", () => {
+	it("accepts the copy apply() mints with the aggregate identity for events without one", () => {
 		// The stamped copy is kit-derived from a minted event and adopted
 		// into the mint marker; the gate must not reject apply's own work.
 		const agg = new RuleTighteningAggregate("test-1" as TestId, {
@@ -1154,7 +1154,7 @@ describe("replay trusts history", () => {
 		expect(agg.state.value).toBe(7);
 	});
 
-	it("accepts replayed events that carry the matching identity", () => {
+	it("accepts replayed events that carry the matching aggregate identity", () => {
 		const agg = new RuleTighteningAggregate("test-1" as TestId, {
 			value: 10,
 			status: "inactive",
@@ -1655,7 +1655,7 @@ describe("apply and replay bookkeeping", () => {
 		expect(agg.pendingEvents).toHaveLength(1);
 	});
 
-	it("stamps the missing half of a partial identity and keeps the identity", () => {
+	it("stamps the missing half of a partial aggregate identity and keeps the identity", () => {
 		const agg = fresh();
 		const event = createDomainEvent(
 			"TestEventUpdated",
@@ -1672,7 +1672,7 @@ describe("apply and replay bookkeeping", () => {
 		expect(isRecordedDomainEvent(recorded as object)).toBe(true);
 	});
 
-	it("stamps the missing id of a partial identity that names only the type", () => {
+	it("stamps the missing id of a partial aggregate identity that names only the type", () => {
 		const agg = fresh();
 		const event = createDomainEvent(
 			"TestEventUpdated",

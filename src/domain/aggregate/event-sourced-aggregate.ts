@@ -137,7 +137,7 @@ export abstract class EventSourcedAggregate<
 	 * `undefined`, the signature of a fold without a `return`.
 	 * Throws `MisattributedEventError` (wiring) when the event carries an
 	 * `aggregateId` or `aggregateType` naming a different aggregate;
-	 * missing identity fields are stamped from the aggregate instead.
+	 * missing aggregate identity fields are stamped from the aggregate instead.
 	 *
 	 * State is not mutated if any step throws: the fold is invoked into
 	 * a local and only stored once all checks pass.
@@ -156,9 +156,9 @@ export abstract class EventSourcedAggregate<
 	protected apply<K extends TEvent["type"]>(
 		event: PendingDomainEvent<Extract<TEvent, { type: K }>>,
 	): void {
-		// New facts get their identity here, by construction: missing
+		// New facts get their aggregate identity here, by construction: missing
 		// fields are stamped from the aggregate (the createEvent
-		// guarantee), a present-but-foreign identity throws
+		// guarantee), a present-but-foreign aggregate identity throws
 		// MisattributedEventError before anything is recorded. Without
 		// this, a misattributed event would mutate state, version, and
 		// pendingEvents and only fail later at harvest or on the next
@@ -203,14 +203,14 @@ export abstract class EventSourcedAggregate<
 	 * and the discriminator is resolved via the (statically-sound)
 	 * `folds` map.
 	 *
-	 * Replay identity check: a history event that names a DIFFERENT
+	 * Replay aggregate identity check: a history event that names a DIFFERENT
 	 * aggregate id or type is a persisted row that belongs to someone
 	 * else (a miswired stream read, colliding ids across types, a
 	 * corrupted store). Throws `ForeignEventError`, an
 	 * `InfrastructureError`, which PROPAGATES through the replay
 	 * methods (their `Result` channel is reserved for `DomainError`
 	 * stream corruption) after the all-or-nothing rollback. History
-	 * events without the optional identity fields pass unchecked (the
+	 * events without the optional aggregate identity fields pass unchecked (the
 	 * fields are optional on the event shape); NEW events are covered
 	 * by the stricter `stampNewEventIdentity` on the apply path.
 	 */

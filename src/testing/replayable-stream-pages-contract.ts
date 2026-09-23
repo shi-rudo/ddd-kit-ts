@@ -40,7 +40,7 @@ export interface ReplayableStreamPagesContractEnvironment<
 }
 
 /**
- * Inputs the suite needs. `createStream` returns a stream identity that no
+ * Inputs the suite needs. `createStream` returns an aggregate identity that no
  * other test uses. `createEvent` returns an event that belongs to that
  * stream; different sequence values give different event ids.
  */

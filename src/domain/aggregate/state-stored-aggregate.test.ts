@@ -1228,7 +1228,7 @@ describe("event identity on the state-stored path", () => {
 		expect(aggregate.pendingEvents).toHaveLength(0);
 	});
 
-	it("stamps a missing identity from the aggregate on commit", () => {
+	it("stamps a missing aggregate identity from the aggregate on commit", () => {
 		const aggregate = fresh();
 
 		aggregate.commitWith(createDomainEvent("Noted", { value: 1 }));

@@ -668,8 +668,9 @@ export class UnreplayableAggregateError extends KitWiringError<"UNREPLAYABLE_AGG
 /**
  * Constructor options for {@link MisattributedEventError} and
  * {@link ForeignEventError}: the identity of the aggregate that received the
- * event, and the identity fields the event carries. A missing field on the
- * event matches by default, so `actual` names only what the event states.
+ * event, and the aggregate identity fields the event carries. A missing
+ * field on the event matches by default, so `actual` names only what the
+ * event states.
  */
 export interface AggregateIdentityMismatchOptions {
 	readonly expected: {
@@ -696,9 +697,10 @@ export function describeAggregateIdentity(identity: {
 }
 
 /**
- * A frozen copy of the two identity fields. An error keeps its own copy, so
- * it neither shares the caller's object nor carries its other properties
- * into the log. Kit modules only; not part of the package entries.
+ * A frozen copy of the two aggregate identity fields. An error keeps its own
+ * copy, so it neither shares the caller's object nor carries its other
+ * properties into the log. Kit modules only; not part of the package
+ * entries.
  */
 export function detachAggregateIdentity(identity: {
 	readonly aggregateType: string;
@@ -739,8 +741,8 @@ function describeEventIdentity(
  * `aggregateId` or `aggregateType` naming a different aggregate: a
  * deterministic programming bug at the call site (a hand-built or
  * copied event that belongs elsewhere), caught before the event can be
- * recorded and poison the own stream. Events with MISSING identity
- * fields do not trip this: `apply()` stamps them from the aggregate,
+ * recorded and poison the own stream. Events with MISSING aggregate
+ * identity fields do not trip this: `apply()` stamps them from the aggregate,
  * the same guarantee `createEvent` gives. A wiring error, distinct
  * from {@link ForeignEventError} on purpose: a wrong new event is a
  * bug in today's code, a wrong PERSISTED row is corrupted or miswired
@@ -749,7 +751,7 @@ function describeEventIdentity(
 export class MisattributedEventError extends KitWiringError<"MISATTRIBUTED_EVENT"> {
 	/** Identity of the aggregate that received the event. */
 	readonly expected: AggregateIdentityMismatchOptions["expected"];
-	/** Identity fields the event carries. */
+	/** Aggregate identity fields the event carries. */
 	readonly actual: AggregateIdentityMismatchOptions["actual"];
 	readonly eventType: string;
 
@@ -981,20 +983,20 @@ export class PendingEventBatchMismatchError extends KitWiringError<"PENDING_EVEN
  * the persisted row belongs to someone else (a miswired stream read,
  * ids colliding across aggregate types, a corrupted store). An
  * `InfrastructureError`, NOT a `DomainError` (same posture as
- * {@link SnapshotSchemaMismatchError}): a wrong identity is data
+ * {@link SnapshotSchemaMismatchError}): a wrong aggregate identity is data
  * corruption or wiring, never an expected business rejection, so it
  * must not be absorbed by generic domain error handling or presented
  * as a 4xx. It therefore PROPAGATES as a throw through the replay
  * methods' `Result` contract (which reserves `Err` for `DomainError`),
  * after the usual all-or-nothing rollback. History events without the
- * optional identity fields pass unchecked (the fields are optional on
+ * optional aggregate identity fields pass unchecked (the fields are optional on
  * the event shape); new events are covered by
  * {@link MisattributedEventError}.
  */
 export class ForeignEventError extends InfrastructureError<"FOREIGN_EVENT"> {
 	/** Identity of the aggregate that received the event. */
 	readonly expected: AggregateIdentityMismatchOptions["expected"];
-	/** Identity fields the event carries. */
+	/** Aggregate identity fields the event carries. */
 	readonly actual: AggregateIdentityMismatchOptions["actual"];
 	readonly eventType: string;
 

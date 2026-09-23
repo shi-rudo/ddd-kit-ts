@@ -327,7 +327,7 @@ export abstract class BaseAggregate<
 	/**
 	 * Appends a domain event to the pending list. The event must be minted
 	 * by a kit constructor; a missing `aggregateId` or `aggregateType` is
-	 * stamped from this aggregate, and an identity that names another
+	 * stamped from this aggregate, and an aggregate identity that names another
 	 * aggregate throws {@link MisattributedEventError} before anything is
 	 * recorded. Each append is one fact. A decision appended twice becomes
 	 * two facts with distinct ids. A recorded event that is already pending
@@ -415,11 +415,12 @@ export abstract class BaseAggregate<
 	}
 
 	/**
-	 * Identity discipline for NEW facts, shared by both flavours: a
+	 * Aggregate identity discipline for NEW facts, shared by both flavours: a
 	 * present-but-foreign `aggregateId` / `aggregateType` is a wiring bug and
 	 * throws {@link MisattributedEventError}; missing fields are filled in
-	 * from the aggregate, so a recorded event always carries its full identity and
-	 * can never fail the harvest or the replay guard later. The mint gate
+	 * from the aggregate, so a recorded event always carries its full
+	 * aggregate identity and can never fail the harvest or the replay guard
+	 * later. The mint gate
 	 * runs first, so an unminted event fails before anything else. The
 	 * stamped copy is frozen like the original (payload and metadata are
 	 * shared, already deep-frozen by the constructors); a fully stamped

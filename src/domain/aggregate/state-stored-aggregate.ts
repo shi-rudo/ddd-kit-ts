@@ -19,7 +19,7 @@ export abstract class StateStoredAggregate<
 	/**
 	 * Replaces the state, advances the OCC version, and records the events
 	 * of the change, in that order. State validation, the event mint gate,
-	 * the aggregate identity check of the event, the pending-identity check,
+	 * the aggregate identity check of the event, the pending event-id check,
 	 * and the pending event limit check run before the change becomes
 	 * observable, so a rejected decision records nothing and moves nothing.
 	 * Without events the call is a plain versioned state change.

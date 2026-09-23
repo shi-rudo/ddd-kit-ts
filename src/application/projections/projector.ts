@@ -77,7 +77,7 @@ export interface ProjectionBatchResult {
  *   at or behind the watermark is already traversed and can be skipped under
  *   the source's one-logical-event-per-position contract.
  * - **Feeds are complete per aggregate identity.** Once a feed supplies one
- *   identity, it must supply every committed envelope in that identity's cursor
+ *   identity, it must supply every committed envelope in that aggregate's cursor
  *   chain. Do not event-type-filter a projector subscription. Irrelevant event
  *   types are explicit no-ops in `Projection.apply`; invoking the handler and
  *   checkpointing their positions preserves continuity.
@@ -302,7 +302,7 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 				{ eventId: string; position: ProjectionPosition }
 			>();
 			for (const { event, position, identity } of cursored) {
-				const key = identityPositionKey(identity, position);
+				const key = aggregatePositionKey(identity, position);
 				const recorded = batchReceiptsByPosition.get(key);
 				if (recorded !== undefined && recorded.eventId !== event.eventId) {
 					throw new ProjectionIdentityViolationError(
@@ -342,7 +342,7 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 				const stored = watermarks.get(key);
 				if (stored !== undefined && !isPositionAfter(position, stored))
 					continue;
-				const positionKey = identityPositionKey(identity, position);
+				const positionKey = aggregatePositionKey(identity, position);
 				if (positionsSeenInBatch.has(positionKey)) continue;
 				positionsSeenInBatch.add(positionKey);
 				const newest = newestUnprocessed.get(key);
@@ -442,7 +442,7 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 	 * `truncate`, the read model with them. Replay the source through
 	 * {@link Projector.project} afterwards. Stop all live consumers for this
 	 * projection before reset and keep them stopped through catch-up replay;
-	 * rebuild is not coordinated by the per-identity delivery locks.
+	 * rebuild is not coordinated by the per-aggregate delivery locks.
 	 */
 	async reset(): Promise<void> {
 		await this.scope.transactional(async (ctx) => {
@@ -540,7 +540,7 @@ function isSamePositionReceipt(
 	);
 }
 
-function identityPositionKey(
+function aggregatePositionKey(
 	identity: AggregateIdentity,
 	position: ProjectionPosition,
 ): string {

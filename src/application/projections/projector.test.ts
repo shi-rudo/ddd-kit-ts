@@ -1038,7 +1038,7 @@ describe("Projector", () => {
 		expect(rows).toEqual([]);
 	});
 
-	it("uses the envelope source when the bare event has no optional identity", async () => {
+	it("uses the envelope source when the bare event has no optional aggregate identity", async () => {
 		const rows: string[] = [];
 		const checkpoints = new InMemoryProjectionCheckpointStore();
 		const projector = new Projector({
@@ -1050,7 +1050,7 @@ describe("Projector", () => {
 			"OrderPlaced",
 			{ total: 1 },
 			{
-				eventId: "evt-without-identity",
+				eventId: "evt-without-aggregate-identity",
 			},
 		);
 		const committed: CommittedDomainEvent<typeof event> = {
@@ -1068,10 +1068,12 @@ describe("Projector", () => {
 			applied: 1,
 			skipped: 0,
 		});
-		expect(rows).toEqual(["evt-without-identity"]);
+		expect(rows).toEqual(["evt-without-aggregate-identity"]);
 		await expect(
 			checkpoints.load(undefined, "order-list", committed.source),
-		).resolves.toMatchObject({ lastAppliedEventId: "evt-without-identity" });
+		).resolves.toMatchObject({
+			lastAppliedEventId: "evt-without-aggregate-identity",
+		});
 	});
 
 	it("rejects an envelope source without an aggregateType before applying anything", async () => {

@@ -184,14 +184,14 @@ and its `Projector` the complete union delivered by the source.
 
 ## Projectors Need A Complete Source Feed
 
-For every `(aggregateType, aggregateId)` identity a projector consumes, its
-input must contain every committed envelope in that identity's source chain.
+For every aggregate identity `(aggregateType, aggregateId)` a projector consumes, its
+input must contain every committed envelope in that aggregate's source chain.
 Do not subscribe a projector to an event-type-filtered topic such as only
 `OrderPlaced`: another event from the same commit still owns a cursor position,
 and dropping it would make the next commit correctly fail with
 `ProjectionGapError`.
 
-Route the complete, ordered per-identity feed to the projector and explicitly
+Route the complete, ordered per-aggregate feed to the projector and explicitly
 ignore known facts that do not affect this read model:
 
 ```ts
@@ -345,7 +345,7 @@ must participate in the same transaction.
 Competing projector instances also need exclusion around the complete
 `load -> apply -> save` path. `Projector` calls the required
 `withCheckpointLocks` port method inside that transaction with a unique,
-canonically sorted identity set. The adapter must serialize every
+canonically sorted set of aggregate identities. The adapter must serialize every
 `(projection, aggregateType, aggregateId)` key even when no checkpoint exists
 yet. `SELECT ... FOR UPDATE` on the checkpoint table alone is wrong at
 genesis: an absent row locks nothing, so two consumers can both observe
@@ -419,8 +419,8 @@ capability.
 `InMemoryProjectionCheckpointStore` is a test/reference implementation. It is
 not transaction-aware, so it does not prove production rollback behavior.
 Without `maxCheckpoints`, its checkpoint map is unbounded and intended only for
-finite-lifetime tests and demos. A configured limit counts identities across all
-projection names. New identities then fail before mutation with
+finite-lifetime tests and demos. A configured limit counts aggregate identities across all
+projection names. New aggregate identities then fail before mutation with
 `InMemoryCapacityExceededError`, while an existing watermark can still advance
 and `reset(projection)` releases its slots. Checkpoints are never evicted
 automatically because forgetting one changes projection correctness.
@@ -610,7 +610,7 @@ still real: write, outbox, dispatcher, projector, query.
 
 Measure lag at the transport/source boundary — for example oldest pending
 outbox age and depth, broker partition lag, or subscription distance — not by
-counting per-aggregate checkpoint rows. Per-identity watermarks prove local
+counting per-aggregate checkpoint rows. Per-aggregate watermarks prove local
 progress and power bounded waits; without a global source position they cannot
 produce one meaningful global lag number.
 
@@ -648,7 +648,7 @@ enough because several events in one commit can share the same
 `projection.truncate(...)` in one transaction when `truncate` exists.
 Stop every live consumer for that projection before reset and keep them stopped
 until the replay has caught up; reset is an operational exclusivity boundary,
-not an identity-scoped delivery operation.
+not an aggregate-scoped delivery operation.
 
 ```ts
 await projector.reset();

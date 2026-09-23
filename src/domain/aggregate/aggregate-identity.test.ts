@@ -2,7 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { encodeAggregateIdentity } from "./aggregate-identity";
 
 describe("encodeAggregateIdentity", () => {
-	it("keeps identities apart whose fields would collide under a naive join", () => {
+	it("keeps aggregate identities apart whose fields would collide under a naive join", () => {
 		const shiftedType = encodeAggregateIdentity({
 			aggregateType: "Order:1",
 			aggregateId: "2",
@@ -15,7 +15,7 @@ describe("encodeAggregateIdentity", () => {
 		expect(shiftedType).not.toBe(shiftedId);
 	});
 
-	it("encodes equal identities to equal keys", () => {
+	it("encodes equal aggregate identities to equal keys", () => {
 		const first = encodeAggregateIdentity({
 			aggregateType: "Order",
 			aggregateId: "o-1",

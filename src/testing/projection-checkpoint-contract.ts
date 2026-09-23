@@ -411,12 +411,12 @@ export function createProjectionCheckpointStoreContractTests<TCtx>(
 			}),
 		},
 		{
-			name: "identity encoding is collision-free even with separator-like characters in either half",
+			name: "aggregate identity encoding is collision-free even with separator-like characters in either half",
 			run: inEnv(async (env) => {
 				// The two classic composite-key collisions: a separator
 				// smuggled into the type vs. into the id. Whatever encoding
 				// the adapter uses (composite column, JSON tuple, nested
-				// key), these identities must keep distinct watermarks.
+				// key), these aggregate identities must keep distinct watermarks.
 				const inType: AggregateIdentity = {
 					aggregateType: "A\u0000B",
 					aggregateId: "C",
@@ -443,7 +443,7 @@ export function createProjectionCheckpointStoreContractTests<TCtx>(
 				assert(
 					first?.position.aggregateVersion === 10 &&
 						second?.position.aggregateVersion === 1,
-					"two identities that differ only in where a hostile separator sits must not share a watermark",
+					"two aggregate identities that differ only in where a hostile separator sits must not share a watermark",
 				);
 			}),
 		},

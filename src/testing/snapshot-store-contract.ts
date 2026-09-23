@@ -198,7 +198,7 @@ export function createSnapshotStoreContractTests(
 			}),
 		},
 		{
-			name: "delete removes exactly the snapshot of the given identity and tolerates unknown keys",
+			name: "delete removes exactly the snapshot of the given aggregate identity and tolerates unknown keys",
 			run: inEnv(async (env) => {
 				await env.store.save(
 					identity("Order", "o-1"),
