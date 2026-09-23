@@ -7,9 +7,10 @@ import {
 } from "../../internal/validate";
 import type { EventStreamReader, ReadStreamOptions } from "./event-store";
 import {
+	assertPageNotEmpty,
 	assertPageWithinWindow,
-	type ReplayableStreamPages,
-} from "./reconstitute-from-stream-pages";
+} from "./event-stream-page";
+import type { ReplayableStreamPages } from "./reconstitute-from-stream-pages";
 
 /** Options for {@link readStreamPages}. */
 export interface ReadStreamPagesOptions
@@ -290,12 +291,12 @@ async function* continueToPinnedTarget<Evt extends AnyDomainEvent>(
 				firstPageLastVersion: window.firstPageLastVersion,
 			});
 		}
-		if (page.events.length === 0) {
-			throw new InvalidEventStreamPageError({
-				...pageAt,
-				reason: "empty_page",
-			});
-		}
+		assertPageNotEmpty(
+			window.stream,
+			page.events.length,
+			cursor,
+			window.targetVersion,
+		);
 		assertPageWithinWindow(
 			window.stream,
 			page.events.length,

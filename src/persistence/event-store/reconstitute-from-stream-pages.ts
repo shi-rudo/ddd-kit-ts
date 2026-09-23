@@ -12,6 +12,10 @@ import {
 	assertNonNegativeSafeInteger,
 	assertPositiveSafeInteger,
 } from "../../internal/validate";
+import {
+	assertPageNotEmpty,
+	assertPageWithinWindow,
+} from "./event-stream-page";
 
 /**
  * The shape the replay reads: the stream, the window, and the pages.
@@ -133,14 +137,12 @@ export async function reconstituteAggregateFromStreamPages<
 		});
 	}
 	for await (const page of read.pages) {
-		if (page.length === 0) {
-			throw new InvalidEventStreamPageError({
-				...read.stream,
-				reason: "empty_page",
-				fromVersion: aggregate.version,
-				targetVersion: read.targetVersion,
-			});
-		}
+		assertPageNotEmpty(
+			read.stream,
+			page.length,
+			aggregate.version,
+			read.targetVersion,
+		);
 		assertPageWithinWindow(
 			read.stream,
 			page.length,
@@ -170,20 +172,4 @@ export async function reconstituteAggregateFromStreamPages<
 		});
 	}
 	return ok(aggregate);
-}
-
-export function assertPageWithinWindow(
-	stream: AggregateAddress,
-	eventCount: number,
-	fromVersion: number,
-	targetVersion: number,
-): void {
-	if (eventCount <= targetVersion - fromVersion) return;
-	throw new InvalidEventStreamPageError({
-		...stream,
-		reason: "page_past_target",
-		fromVersion,
-		targetVersion,
-		eventCount,
-	});
 }
