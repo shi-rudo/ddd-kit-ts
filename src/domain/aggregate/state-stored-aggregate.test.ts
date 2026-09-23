@@ -1558,3 +1558,16 @@ describe("aggregate identity", () => {
 		expect(aggregate.aggregateIdentity).toBe(aggregate.aggregateIdentity);
 	});
 });
+
+describe("aggregate identity of a frozen aggregate", () => {
+	it("reads the identity without writing to the instance", () => {
+		const aggregate = Object.freeze(
+			TestAggregate.create("test-1" as TestId, 1),
+		);
+
+		expect(aggregate.aggregateIdentity).toStrictEqual({
+			aggregateType: "TestAggregate",
+			aggregateId: "test-1",
+		});
+	});
+});
