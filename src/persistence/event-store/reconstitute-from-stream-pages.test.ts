@@ -261,6 +261,7 @@ describe("reconstituteAggregateFromStreamPages", () => {
 		});
 		const rejectsEmptyHistory: ReplayableAggregate<CounterId, CounterEvent> = {
 			id: counterId,
+			aggregateIdentity: stream,
 			version: 0 as Version,
 			pendingEvents: [],
 			replayHistory: (history) =>
@@ -293,6 +294,7 @@ describe("reconstituteAggregateFromStreamPages", () => {
 		const offCursorAndRejecting: ReplayableAggregate<CounterId, CounterEvent> =
 			{
 				id: counterId,
+				aggregateIdentity: stream,
 				version: 7 as Version,
 				pendingEvents: [],
 				replayHistory: () => err(new PoisonedRowError()),

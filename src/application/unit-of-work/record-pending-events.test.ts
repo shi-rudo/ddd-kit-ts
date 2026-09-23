@@ -309,6 +309,10 @@ describe("recordPendingEvents", () => {
 	it("rejects an aggregate that this package did not construct", () => {
 		const lookalike = {
 			id: "counter-1" as CounterId,
+			aggregateIdentity: {
+				aggregateType: "Counter",
+				aggregateId: "counter-1" as CounterId,
+			},
 			version: 0 as Version,
 			pendingEvents: [] as ReadonlyArray<CounterChanged>,
 		};

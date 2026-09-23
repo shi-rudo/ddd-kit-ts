@@ -1535,3 +1535,21 @@ describe("one version write path", () => {
 		expect(aggregate.version).toBe(Number.MAX_SAFE_INTEGER);
 	});
 });
+
+describe("aggregate identity", () => {
+	it("exposes the aggregate type and the id as one frozen value", () => {
+		const aggregate = TestAggregate.create("test-1" as TestId, 1);
+
+		expect(aggregate.aggregateIdentity).toStrictEqual({
+			aggregateType: "TestAggregate",
+			aggregateId: "test-1",
+		});
+		expect(Object.isFrozen(aggregate.aggregateIdentity)).toBe(true);
+	});
+
+	it("returns the same value on every read", () => {
+		const aggregate = TestAggregate.create("test-1" as TestId, 1);
+
+		expect(aggregate.aggregateIdentity).toBe(aggregate.aggregateIdentity);
+	});
+});

@@ -25,6 +25,7 @@ import {
 } from "../event/domain-event";
 import type { Id } from "../identity/id";
 import { type Aggregate, toVersion, type Version } from "./aggregate";
+import type { AggregateIdentity } from "./aggregate-identity";
 import { registerPendingEventLifecycleCapability } from "./pending-event-lifecycle";
 import {
 	type PendingEventStampFactory,
@@ -98,6 +99,22 @@ export abstract class BaseAggregate<
 	 * subclass renaming).
 	 */
 	protected abstract readonly aggregateType: string;
+
+	private _aggregateIdentity: AggregateIdentity<TId> | undefined;
+
+	/**
+	 * The full identity of the aggregate: its declared `aggregateType` and
+	 * its `id`, as one frozen value. The id alone is unique only within the
+	 * type, so this value names the aggregate wherever it leaves the model:
+	 * in store addresses, commit envelopes, and errors.
+	 */
+	public get aggregateIdentity(): AggregateIdentity<TId> {
+		this._aggregateIdentity ??= Object.freeze({
+			aggregateType: this.aggregateType,
+			aggregateId: this.id,
+		});
+		return this._aggregateIdentity;
+	}
 
 	private _version: Version = 0 as Version;
 

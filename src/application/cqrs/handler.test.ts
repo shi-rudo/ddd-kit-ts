@@ -244,6 +244,10 @@ describe("withCommit", () => {
 		};
 		const lookalike: Aggregate<TestId, TestEvent> = {
 			id: "lookalike" as TestId,
+			aggregateIdentity: {
+				aggregateType: "Lookalike",
+				aggregateId: "lookalike" as TestId,
+			},
 			version: 1 as Version,
 			pendingEvents: [],
 		};

@@ -29,6 +29,21 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Changed (breaking): an aggregate exposes its full identity
+
+An aggregate id is unique only within its type, so the full identity of an
+aggregate is the pair of both. The aggregate showed only its `id` in public,
+while every event it records already carried `aggregateType`. The
+`Aggregate` interface now has a read-only `aggregateIdentity:
+AggregateIdentity<TId>`. The base classes build it from `aggregateType` and
+`id` and freeze it, so an aggregate built on them needs no change. A
+hand-written implementation of `Aggregate`, for example a test stub, adds
+the property.
+
+The property is named `aggregateIdentity`, not `identity`, because it is
+reserved on every aggregate, and some domains use `identity` as a business
+term.
+
 ### Changed (breaking): kit errors carry the aggregate identity as one value
 
 An aggregate id is unique only together with its aggregate type, so the
