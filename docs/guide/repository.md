@@ -711,9 +711,10 @@ const order = reconstituted.value;
 A snapshot beyond the head outlived its stream. `readStreamPages` reports
 that window as `reachable: false`, and the check before the replay discards
 the snapshot. `readStreamPages` reads the events after the snapshot page by
-page. Pages that do not bridge the snapshot to the target version throw
-`ReplayTargetMismatchError`, because the adapter broke its contract. The
-complete recipe with the coded discard set is in
+page. Pages that end short of the target version throw
+`ReplayTargetMismatchError`, and a page that runs past it throws
+`InvalidEventStreamPageError`: in both cases the adapter broke its contract.
+The complete recipe with the coded discard set is in
 [Event Sourcing -> Snapshots](./event-sourcing.md#snapshots).
 
 `captureAggregateSnapshot` supplies no hidden clock and performs no I/O. It
