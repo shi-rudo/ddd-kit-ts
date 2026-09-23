@@ -107,6 +107,7 @@ export {
 } from "./application/projections/projector";
 export {
 	AggregateTrackingError,
+	type AggregateTrackingErrorOptions,
 	type AggregateTrackingReason,
 	CommitError,
 	type FlushStatementReason,
@@ -116,6 +117,7 @@ export {
 	InvalidRepositoryDefinitionError,
 	NestedUnitOfWorkError,
 	RepositoryErrorMappingFailedError,
+	type RepositoryErrorMappingFailedErrorOptions,
 	RollbackError,
 	TransactionClosedError,
 } from "./application/unit-of-work/errors";
@@ -270,6 +272,7 @@ export { voValidated } from "./domain/value-object/vo-validated";
 // Errors
 export {
 	AggregateDeletedError,
+	type AggregateDeletedErrorOptions,
 	type AggregateIdentityMismatchOptions,
 	AggregateNotFoundError,
 	type AggregateNotFoundErrorOptions,
@@ -278,6 +281,7 @@ export {
 	type ConcurrencyConflictErrorOptions,
 	type ConcurrencyConflictReason,
 	DirectStateMutationError,
+	type DirectStateMutationErrorOptions,
 	DomainError,
 	DuplicateAggregateError,
 	type DuplicateAggregateErrorOptions,
@@ -318,6 +322,7 @@ export {
 	MissingFoldError,
 	MissingHandlerError,
 	PendingEventBatchMismatchError,
+	type PendingEventBatchMismatchErrorOptions,
 	PendingEventLimitExceededError,
 	type PendingEventLimitExceededErrorOptions,
 	ProjectionGapError,
@@ -336,12 +341,14 @@ export {
 	SnapshotVersionNotRestoredError,
 	type SnapshotVersionNotRestoredErrorOptions,
 	UnenrolledChangesError,
+	type UnenrolledChangesErrorOptions,
 	UnmanagedInstanceError,
 	UnmintedEventError,
 	UnprojectableEventError,
 	UnregisteredHandlerError,
 	type UnregisteredHandlerErrorOptions,
 	UnreplayableAggregateError,
+	type UnreplayableAggregateErrorOptions,
 } from "./errors/kit-errors";
 export type { ExecutionContext } from "./internal/async/execution";
 export type {

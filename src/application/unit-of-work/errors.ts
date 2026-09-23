@@ -93,27 +93,34 @@ export class InvalidRepositoryDefinitionError extends KitWiringError<"INVALID_RE
 
 /** A repository's persistence-error policy threw or returned a non-kit error. */
 export class RepositoryErrorMappingFailedError extends KitWiringError<"REPOSITORY_ERROR_MAPPING_FAILED"> {
-	readonly aggregateId: string;
+	readonly identity: AggregateIdentity;
 	readonly intent: AggregateWriteIntent;
 	readonly mapperCause: unknown;
 
-	constructor(options: {
-		readonly aggregateId: string;
-		readonly intent: AggregateWriteIntent;
-		readonly persistenceError: unknown;
-		readonly mapperError: unknown;
-	}) {
+	constructor(options: RepositoryErrorMappingFailedErrorOptions) {
 		super(
 			"REPOSITORY_ERROR_MAPPING_FAILED",
 			`The repository error mapper failed for ${options.intent} of aggregate ` +
-				`${options.aggregateId}. The original persistence failure is preserved ` +
-				"as cause; the mapper failure is available as mapperCause.",
+				`${describeAggregateIdentity(options.identity)}. The original persistence ` +
+				"failure is preserved as cause; the mapper failure is available as " +
+				"mapperCause.",
 			options.persistenceError,
 		);
-		this.aggregateId = options.aggregateId;
+		this.identity = detachAggregateIdentity(options.identity);
 		this.intent = options.intent;
 		this.mapperCause = options.mapperError;
 	}
+}
+
+/** Constructor options for {@link RepositoryErrorMappingFailedError}. */
+export interface RepositoryErrorMappingFailedErrorOptions {
+	/** The aggregate the error names. */
+	readonly identity: AggregateIdentity;
+	readonly intent: AggregateWriteIntent;
+	/** The store failure the mapper was translating. */
+	readonly persistenceError: unknown;
+	/** The failure of the mapper itself. */
+	readonly mapperError: unknown;
 }
 
 /** What is wrong with the store statements that build a flush. */
@@ -218,43 +225,46 @@ export type AggregateTrackingReason =
  * cannot execute truthfully. Retrying the same callback cannot repair it.
  */
 export class AggregateTrackingError extends KitWiringError<"AGGREGATE_TRACKING"> {
-	constructor(
-		public readonly aggregateId: string,
-		public readonly operation: AggregateWriteIntent | "load" | "commit",
-		public readonly reason: AggregateTrackingReason,
-		public readonly registeredIntent?: AggregateWriteIntent,
-		options: { readonly appendOnly?: boolean } = {},
-	) {
-		super(
-			"AGGREGATE_TRACKING",
-			trackingReasonMessage(
-				aggregateId,
-				operation,
-				reason,
-				registeredIntent,
-				options,
-			),
-		);
+	readonly identity: AggregateIdentity;
+	readonly operation: AggregateWriteIntent | "load" | "commit";
+	readonly reason: AggregateTrackingReason;
+	readonly registeredIntent: AggregateWriteIntent | undefined;
+
+	constructor(options: AggregateTrackingErrorOptions) {
+		super("AGGREGATE_TRACKING", trackingReasonMessage(options));
+		this.identity = detachAggregateIdentity(options.identity);
+		this.operation = options.operation;
+		this.reason = options.reason;
+		this.registeredIntent = options.registeredIntent;
 	}
 }
 
-function trackingReasonMessage(
-	aggregateId: string,
-	operation: AggregateWriteIntent | "load" | "commit",
-	reason: AggregateTrackingReason,
-	registeredIntent: AggregateWriteIntent | undefined,
-	options: { readonly appendOnly?: boolean },
-): string {
-	switch (reason) {
+/** Constructor options for {@link AggregateTrackingError}. */
+export interface AggregateTrackingErrorOptions {
+	/** The aggregate the error names. */
+	readonly identity: AggregateIdentity;
+	/** The registration or phase that failed. */
+	readonly operation: AggregateWriteIntent | "load" | "commit";
+	readonly reason: AggregateTrackingReason;
+	/** The intent registered before, for the reasons that name one. */
+	readonly registeredIntent?: AggregateWriteIntent;
+	/** Whether the repository of the aggregate is append-only. */
+	readonly appendOnly?: boolean;
+}
+
+function trackingReasonMessage(options: AggregateTrackingErrorOptions): string {
+	const { operation, registeredIntent } = options;
+	const aggregate = describeAggregateIdentity(options.identity);
+	switch (options.reason) {
 		case "not_loaded":
 			return (
-				`Aggregate ${aggregateId} cannot be registered for ${operation}: ` +
+				`Aggregate ${aggregate} cannot be registered for ${operation}: ` +
 				"it was not loaded into this unit of work. Load it through the " +
 				"repository before updating or removing it."
 			);
 		case "loaded_as_new":
 			return (
-				`Aggregate ${aggregateId} cannot be added as new because it was ` +
+				`Aggregate ${aggregate} cannot be added as new because it was ` +
 				"loaded by this unit of work. " +
 				(options.appendOnly
 					? "Its repository is append-only, so a loaded aggregate is already " +
@@ -263,20 +273,20 @@ function trackingReasonMessage(
 			);
 		case "different_repository":
 			return (
-				`Aggregate ${aggregateId} cannot be registered for ${operation} through ` +
+				`Aggregate ${aggregate} cannot be registered for ${operation} through ` +
 				"a different repository in the same unit of work. One aggregate instance " +
 				"must remain owned by the repository definition that first tracked it."
 			);
 		case "conflicting_intent":
 			return (
-				`Aggregate ${aggregateId} is already registered for ` +
+				`Aggregate ${aggregate} is already registered for ` +
 				`${registeredIntent ?? "another write"}; ${operation} would create ` +
 				"conflicting persistence intent in one unit of work. Decide the final " +
 				"lifecycle outcome before registering it."
 			);
 		case "mutated_after_registration":
 			return (
-				`Aggregate ${aggregateId} changed after ${registeredIntent ?? "write"} ` +
+				`Aggregate ${aggregate} changed after ${registeredIntent ?? "write"} ` +
 				"was registered. Make domain decisions first and call add, update, or " +
 				"remove last so persisted state and recorded events cannot diverge."
 			);

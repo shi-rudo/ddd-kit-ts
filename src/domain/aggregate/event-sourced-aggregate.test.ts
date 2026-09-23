@@ -620,6 +620,7 @@ describe("EventSourcedAggregate", () => {
 				}
 			})();
 			expect(thrown).toBeInstanceOf(UnreplayableAggregateError);
+			expect(thrown).toMatchObject({ identity: aggregate.aggregateIdentity });
 			expect((thrown as Error).message).toContain(
 				"discard this dirty instance",
 			);
@@ -1576,6 +1577,9 @@ describe("state changes only through events", () => {
 		});
 
 		expect(() => agg.overwrite(2)).toThrow(DirectStateMutationError);
+		expect(() => agg.overwrite(2)).toThrow(
+			expect.objectContaining({ identity: agg.aggregateIdentity }),
+		);
 
 		expect(agg.state).toEqual({ value: 1, status: "inactive" });
 		expect(agg.version).toBe(0);
@@ -1600,7 +1604,9 @@ describe("state changes only through events", () => {
 		expect((caught as DirectStateMutationError).code).toBe(
 			"DIRECT_STATE_MUTATION",
 		);
-		expect((caught as DirectStateMutationError).aggregateId).toBe("test-1");
+		expect((caught as DirectStateMutationError).identity.aggregateId).toBe(
+			"test-1",
+		);
 	});
 });
 

@@ -762,6 +762,11 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 			expect(() =>
 				lifecycleOf(aggregate).acknowledge(reversed, 1 as Version),
 			).toThrow(PendingEventBatchMismatchError);
+			expect(() =>
+				lifecycleOf(aggregate).acknowledge(reversed, 1 as Version),
+			).toThrow(
+				expect.objectContaining({ identity: aggregate.aggregateIdentity }),
+			);
 
 			expect(aggregate.pendingEvents).toHaveLength(2);
 		});
@@ -787,7 +792,7 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 			expect(caught).toBeInstanceOf(PendingEventBatchMismatchError);
 			const mismatch = caught as PendingEventBatchMismatchError;
 			expect(mismatch.code).toBe("PENDING_EVENT_BATCH_MISMATCH");
-			expect(mismatch.aggregateId).toBe("test-1");
+			expect(mismatch.identity.aggregateId).toBe("test-1");
 			expect(mismatch.batchLength).toBe(2);
 			expect(mismatch.pendingLength).toBe(1);
 			expect(aggregate.pendingEvents).toHaveLength(1);

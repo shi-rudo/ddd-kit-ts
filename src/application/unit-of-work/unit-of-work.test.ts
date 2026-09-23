@@ -327,6 +327,10 @@ async function expectTrackingFailure(
 		category: "WIRING",
 		retryable: false,
 		reason,
+		identity: {
+			aggregateType: expect.any(String),
+			aggregateId: expect.any(String),
+		},
 	});
 }
 
@@ -445,12 +449,16 @@ describe("UnitOfWork", () => {
 			expect(Object.isFrozen(writes[0]?.events)).toBe(true);
 			expect(outbox.added).toEqual([[stamped(event, 2)]]);
 
-			await expect(
-				uow.run(async ({ repositories }) => {
+			const unenrolled = await uow
+				.run(async ({ repositories }) => {
 					repositories.projected.load(unregisteredState);
 					unregisteredState.changePersistenceOnly(2);
-				}),
-			).rejects.toBeInstanceOf(UnenrolledChangesError);
+				})
+				.catch((error: unknown) => error);
+			expect(unenrolled).toBeInstanceOf(UnenrolledChangesError);
+			expect(unenrolled).toMatchObject({
+				identity: unregisteredState.aggregateIdentity,
+			});
 		});
 
 		it("flushes writes in registration order rather than load order", async () => {
@@ -1674,14 +1682,16 @@ describe("UnitOfWork", () => {
 			const first = createMockAggregate("o-1");
 			const second = createMockAggregate("o-1");
 
-			await expect(
-				uow.run(async ({ repositories }) => {
+			const deleted = await uow
+				.run(async ({ repositories }) => {
 					repositories.orders.trackLoaded(first);
 					repositories.orders.remove(first);
 					repositories.orders.trackLoaded(second);
 					return undefined;
-				}),
-			).rejects.toBeInstanceOf(AggregateDeletedError);
+				})
+				.catch((error: unknown) => error);
+			expect(deleted).toBeInstanceOf(AggregateDeletedError);
+			expect(deleted).toMatchObject({ identity: second.aggregateIdentity });
 		});
 
 		it("saving an aggregate after deleting it in the same unit of work throws AggregateDeletedError", async () => {

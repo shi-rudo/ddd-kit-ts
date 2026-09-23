@@ -121,7 +121,7 @@ export abstract class EventSourcedAggregate<
 	 * recorded and the version advances with it.
 	 */
 	protected override setState(_newState: TState): void {
-		throw new DirectStateMutationError(String(this.id));
+		throw new DirectStateMutationError({ identity: this.aggregateIdentity });
 	}
 
 	/**
@@ -287,7 +287,7 @@ export abstract class EventSourcedAggregate<
 		history: ReadonlyArray<TEvent>,
 	): Result<void, DomainError> {
 		assertReplayTargetHasNoPendingEvents(
-			this.id,
+			this.aggregateIdentity,
 			requirePendingEventLifecycleReadView(
 				this,
 				"replayHistory",

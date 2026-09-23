@@ -48,31 +48,43 @@ term.
 
 An aggregate id is unique only together with its aggregate type, so the
 pair is one value: `AggregateIdentity`. Ten kit errors split it into two
-fields, and every reader had to put them together again. They now carry
-one `identity` field of the shape `{ aggregateType, aggregateId }`, the same
-field on each of them. Each error keeps a frozen copy of the two fields, not
-the caller's object. Every kit message renders an aggregate identity as
-`Type(id)`, so a log search finds all of them.
+fields, and every reader had to put them together again. Seven more named
+the aggregate by its id alone, which does not say which aggregate it is.
+Every kit error that names one aggregate now carries one `identity` field
+of the shape `{ aggregateType, aggregateId }`. Each error keeps a frozen
+copy of the two fields, not the caller's object. Every kit message renders
+an aggregate identity as `Type(id)`, so a log search finds all of them.
 
-The errors are `ConcurrencyConflictError`, `DuplicateAggregateError`,
-`AggregateNotFoundError`, `SnapshotSchemaMismatchError`,
-`SnapshotVersionNotRestoredError`, `PendingEventLimitExceededError`,
-`InvalidFlushStatementError`, `InvalidEventStreamPageError`,
-`ReplayTargetMismatchError`, and `ReplayRejectedError`. An adapter that
-throws one of them passes the identity; a catch block that reads the fields
-reads them from `identity`.
+The errors that split the pair are `ConcurrencyConflictError`,
+`DuplicateAggregateError`, `AggregateNotFoundError`,
+`SnapshotSchemaMismatchError`, `SnapshotVersionNotRestoredError`,
+`PendingEventLimitExceededError`, `InvalidFlushStatementError`,
+`InvalidEventStreamPageError`, `ReplayTargetMismatchError`, and
+`ReplayRejectedError`. An adapter that throws one of them passes the
+identity; a catch block reads the fields from `identity`.
+
+The errors that named only the id are `AggregateDeletedError`,
+`AggregateTrackingError`, `DirectStateMutationError`,
+`PendingEventBatchMismatchError`, `RepositoryErrorMappingFailedError`,
+`UnenrolledChangesError`, and `UnreplayableAggregateError`. The kit throws
+them with the identity of the aggregate. They take an options object now,
+like the other kit errors, so only code that constructs them, for example
+a test double, changes.
 
 | Before | After |
 | --- | --- |
 | `new ConcurrencyConflictError({ aggregateType, aggregateId, expectedVersion, reason, actualVersion })` | `new ConcurrencyConflictError({ identity: { aggregateType, aggregateId }, expectedVersion, reason, actualVersion })` |
 | `new AggregateNotFoundError({ aggregateType, id })` | `new AggregateNotFoundError({ identity: { aggregateType, aggregateId: id } })` |
+| `new AggregateDeletedError(aggregateId)` | `new AggregateDeletedError({ identity })` |
+| `new UnreplayableAggregateError(aggregateId, reason)` | `new UnreplayableAggregateError({ identity, reason })` |
+| `new AggregateTrackingError(aggregateId, operation, reason, registeredIntent, { appendOnly })` | `new AggregateTrackingError({ identity, operation, reason, registeredIntent, appendOnly })` |
 | `error.aggregateType`, `error.aggregateId` | `error.identity.aggregateType`, `error.identity.aggregateId` |
 | `error.id` on `AggregateNotFoundError` | `error.identity.aggregateId` |
 
-The other errors change the same way as `ConcurrencyConflictError`. An
-`AggregateIdentity` value passes as it is, for example
-`new DuplicateAggregateError({ identity: stream })`. The log object of a
-serialized error carries the nested `identity`.
+The other errors change the same way. An `AggregateIdentity` value passes
+as it is, for example `new DuplicateAggregateError({ identity: stream })`
+or `new AggregateDeletedError({ identity: order.aggregateIdentity })`. The
+log object of a serialized error carries the nested `identity`.
 
 ### Changed (breaking): AggregateAddress is AggregateIdentity
 

@@ -8,10 +8,18 @@ type BookingId = Id<"BookingId">;
 
 class Restaurant {
 	constructor(public readonly id: RestaurantId) {}
+
+	get aggregateIdentity() {
+		return { aggregateType: "Restaurant", aggregateId: this.id };
+	}
 }
 
 class Booking {
 	constructor(public readonly id: BookingId) {}
+
+	get aggregateIdentity() {
+		return { aggregateType: "Booking", aggregateId: this.id };
+	}
 }
 
 describe("IdentityMap", () => {
@@ -116,6 +124,9 @@ describe("IdentityMap", () => {
 		// of AggregateClass is what makes this compile.
 		class GuardedAggregate {
 			protected constructor(public readonly id: RestaurantId) {}
+			get aggregateIdentity() {
+				return { aggregateType: "Guarded", aggregateId: this.id };
+			}
 			static reconstitute(id: RestaurantId): GuardedAggregate {
 				return new GuardedAggregate(id);
 			}
@@ -175,6 +186,9 @@ describe("clear() resets the pending-event baselines", () => {
 	class EventfulAggregate {
 		pendingEvents: unknown[] = [];
 		constructor(public readonly id: RestaurantId) {}
+		get aggregateIdentity() {
+			return { aggregateType: "Eventful", aggregateId: this.id };
+		}
 	}
 
 	it("re-registering the same instance after clear() captures a fresh baseline", () => {

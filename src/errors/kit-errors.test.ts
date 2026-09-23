@@ -340,10 +340,10 @@ describe("UnreplayableAggregateError", () => {
 	it("keeps the class message focused on fresh-instance reconstitution", () => {
 		// Replay guards can add context while the class keeps the safe common
 		// remedy: discard the dirty target and reconstitute a fresh instance.
-		const error = new UnreplayableAggregateError(
-			"agg-1",
-			"it carries 2 unflushed pending event(s)",
-		);
+		const error = new UnreplayableAggregateError({
+			identity: { aggregateType: "Order", aggregateId: "agg-1" },
+			reason: "it carries 2 unflushed pending event(s)",
+		});
 
 		expect(error.message).not.toContain("markPersisted");
 		expect(error.message).not.toContain("clearPendingEvents");
@@ -485,10 +485,15 @@ describe("EventHarvestError", () => {
 
 describe("UnenrolledChangesError", () => {
 	it("is a BaseError but NOT an InfrastructureError (crash-loud programming bug)", () => {
-		const e = new UnenrolledChangesError("order-1");
+		const e = new UnenrolledChangesError({
+			identity: { aggregateType: "Order", aggregateId: "order-1" },
+		});
 		expect(isBaseError(e)).toBe(true);
 		expect(e).not.toBeInstanceOf(InfrastructureError);
 		expect(e.name).toBe("UNENROLLED_CHANGES");
-		expect(e.aggregateId).toBe("order-1");
+		expect(e.identity).toEqual({
+			aggregateType: "Order",
+			aggregateId: "order-1",
+		});
 	});
 });

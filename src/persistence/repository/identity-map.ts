@@ -1,3 +1,4 @@
+import type { AggregateIdentity } from "../../domain/aggregate/aggregate-identity";
 import { pendingEventLifecycleReadViewFor } from "../../domain/aggregate/pending-event-lifecycle";
 import type { Id } from "../../domain/identity/id";
 import { AggregateDeletedError } from "../../errors/kit-errors";
@@ -115,13 +116,15 @@ export class IdentityMap {
 	 *   work throws `AggregateDeletedError`: deletion is final within
 	 *   the operation.
 	 */
-	public set<TAgg>(
+	public set<TAgg extends { readonly aggregateIdentity: AggregateIdentity }>(
 		type: AggregateClass<TAgg>,
 		id: Id<string>,
 		aggregate: TAgg,
 	): void {
 		if (this._deleted.get(type)?.has(id)) {
-			throw new AggregateDeletedError(String(id));
+			throw new AggregateDeletedError({
+				identity: aggregate.aggregateIdentity,
+			});
 		}
 		let store = this._stores.get(type);
 		if (store === undefined) {

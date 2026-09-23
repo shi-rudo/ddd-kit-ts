@@ -249,11 +249,11 @@ export abstract class BaseAggregate<
 			events.length > this._pendingEvents.length ||
 			events.some((event, index) => event !== this._pendingEvents[index])
 		) {
-			throw new PendingEventBatchMismatchError(
-				String(this.id),
-				events.length,
-				this._pendingEvents.length,
-			);
+			throw new PendingEventBatchMismatchError({
+				identity: this.aggregateIdentity,
+				batchLength: events.length,
+				pendingLength: this._pendingEvents.length,
+			});
 		}
 		this._pendingEvents = this._pendingEvents.slice(events.length);
 	}
@@ -329,7 +329,10 @@ export abstract class BaseAggregate<
 	 * ```
 	 */
 	protected markReconstituted(version: Version): void {
-		assertReplayTargetHasNoPendingEvents(this.id, this._pendingEvents.length);
+		assertReplayTargetHasNoPendingEvents(
+			this.aggregateIdentity,
+			this._pendingEvents.length,
+		);
 		const restored = toVersion(version);
 		if (restored < this._version) {
 			throw new InvalidVersionError(
@@ -542,15 +545,16 @@ export abstract class BaseAggregate<
  * the public API.
  */
 export function assertReplayTargetHasNoPendingEvents(
-	id: unknown,
+	identity: AggregateIdentity,
 	pending: number,
 ): void {
 	if (pending > 0) {
-		throw new UnreplayableAggregateError(
-			String(id),
-			`it carries ${pending} unflushed pending event(s) that are not ` +
+		throw new UnreplayableAggregateError({
+			identity,
+			reason:
+				`it carries ${pending} unflushed pending event(s) that are not ` +
 				"part of the persisted stream; discard this dirty instance and " +
 				"reconstitute a fresh aggregate before restoring persisted history",
-		);
+		});
 	}
 }

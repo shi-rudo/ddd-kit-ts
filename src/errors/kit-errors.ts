@@ -373,14 +373,26 @@ export class FoldReturnedNoStateError extends KitWiringError<"FOLD_RETURNED_NO_S
  * deterministic bug in the aggregate's own code, the remedy is an event
  * and a handler.
  */
+/** Constructor options for {@link DirectStateMutationError}. */
+export interface DirectStateMutationErrorOptions {
+	/** The aggregate the error names. */
+	readonly identity: {
+		readonly aggregateType: string;
+		readonly aggregateId: string;
+	};
+}
+
 export class DirectStateMutationError extends KitWiringError<"DIRECT_STATE_MUTATION"> {
-	constructor(public readonly aggregateId: string) {
+	readonly identity: DirectStateMutationErrorOptions["identity"];
+
+	constructor(options: DirectStateMutationErrorOptions) {
 		super(
 			"DIRECT_STATE_MUTATION",
-			`Aggregate ${aggregateId} is event-sourced: its state changes only ` +
+			`Aggregate ${describeAggregateIdentity(options.identity)} is event-sourced: its state changes only ` +
 				"through apply(). Record the fact as an event and fold it in a " +
 				"handler instead of calling setState.",
 		);
+		this.identity = detachAggregateIdentity(options.identity);
 	}
 }
 
@@ -651,17 +663,28 @@ export class InvalidVersionError extends KitWiringError<"INVALID_VERSION"> {
  * commit an actually saved instance through application orchestration, or
  * discard a dirty instance and replay into a fresh one.
  */
+/** Constructor options for {@link UnreplayableAggregateError}. */
+export interface UnreplayableAggregateErrorOptions {
+	/** The aggregate the error names. */
+	readonly identity: {
+		readonly aggregateType: string;
+		readonly aggregateId: string;
+	};
+	/** Why the aggregate cannot take a replay, with the safe remedy. */
+	readonly reason: string;
+}
+
 export class UnreplayableAggregateError extends KitWiringError<"UNREPLAYABLE_AGGREGATE"> {
-	constructor(
-		public readonly aggregateId: string,
-		reason: string,
-	) {
+	readonly identity: UnreplayableAggregateErrorOptions["identity"];
+
+	constructor(options: UnreplayableAggregateErrorOptions) {
 		super(
 			"UNREPLAYABLE_AGGREGATE",
-			`Cannot replay onto aggregate ${aggregateId}: ${reason}. ` +
-				"Reconstitute on a fresh instance (no factory-recorded events, " +
-				"no unpersisted mutations).",
+			`Cannot replay onto aggregate ${describeAggregateIdentity(options.identity)}: ` +
+				`${options.reason}. Reconstitute on a fresh instance ` +
+				"(no factory-recorded events, no unpersisted mutations).",
 		);
+		this.identity = detachAggregateIdentity(options.identity);
 	}
 }
 
@@ -961,18 +984,35 @@ export class PendingEventLimitExceededError extends KitWiringError<"PENDING_EVEN
  * pending list stays untouched. A wiring error in application commit
  * orchestration: acknowledge exactly the batch that was enrolled, once.
  */
+/** Constructor options for {@link PendingEventBatchMismatchError}. */
+export interface PendingEventBatchMismatchErrorOptions {
+	/** The aggregate the error names. */
+	readonly identity: {
+		readonly aggregateType: string;
+		readonly aggregateId: string;
+	};
+	/** Events in the committed batch. */
+	readonly batchLength: number;
+	/** Events pending on the aggregate. */
+	readonly pendingLength: number;
+}
+
 export class PendingEventBatchMismatchError extends KitWiringError<"PENDING_EVENT_BATCH_MISMATCH"> {
-	constructor(
-		public readonly aggregateId: string,
-		public readonly batchLength: number,
-		public readonly pendingLength: number,
-	) {
+	readonly identity: PendingEventBatchMismatchErrorOptions["identity"];
+	readonly batchLength: number;
+	readonly pendingLength: number;
+
+	constructor(options: PendingEventBatchMismatchErrorOptions) {
 		super(
 			"PENDING_EVENT_BATCH_MISMATCH",
-			`The committed batch of ${batchLength} event(s) is no longer the ` +
-				`pending prefix of aggregate ${aggregateId} (${pendingLength} ` +
+			`The committed batch of ${options.batchLength} event(s) is no longer ` +
+				"the pending prefix of aggregate " +
+				`${describeAggregateIdentity(options.identity)} (${options.pendingLength} ` +
 				"pending). Acknowledge exactly the batch that was enrolled, once.",
 		);
+		this.identity = detachAggregateIdentity(options.identity);
+		this.batchLength = options.batchLength;
+		this.pendingLength = options.pendingLength;
 	}
 }
 
@@ -1540,20 +1580,31 @@ export class ErrorMapperFailedError extends KitWiringError<"ERROR_MAPPER_FAILED"
  * message names the rule instead: a loaded append-only aggregate must not
  * change.
  */
+/** Constructor options for {@link UnenrolledChangesError}. */
+export interface UnenrolledChangesErrorOptions {
+	/** The aggregate the error names. */
+	readonly identity: {
+		readonly aggregateType: string;
+		readonly aggregateId: string;
+	};
+	/** Whether the repository of the aggregate is append-only. */
+	readonly appendOnly?: boolean;
+}
+
 export class UnenrolledChangesError extends KitWiringError<"UNENROLLED_CHANGES"> {
-	constructor(
-		public readonly aggregateId: string,
-		options: { readonly appendOnly?: boolean } = {},
-	) {
+	readonly identity: UnenrolledChangesErrorOptions["identity"];
+
+	constructor(options: UnenrolledChangesErrorOptions) {
 		super(
 			"UNENROLLED_CHANGES",
-			`Aggregate ${aggregateId} was loaded and changed in this unit of work, ` +
+			`Aggregate ${describeAggregateIdentity(options.identity)} was loaded and changed in this unit of work, ` +
 				(options.appendOnly
 					? "but its repository is append-only and installs no update. " +
 						"An append-only aggregate must not change after add."
 					: "but no update intent was registered. Call repository.update(aggregate) " +
 						"after the final domain decision so state and events flush together."),
 		);
+		this.identity = detachAggregateIdentity(options.identity);
 	}
 }
 
@@ -1567,16 +1618,28 @@ export class UnenrolledChangesError extends KitWiringError<"UNENROLLED_CHANGES">
  * {@link MissingHandlerError}): a programming bug that should crash
  * loud, not be absorbed by a generic infrastructure-error handler.
  */
+/** Constructor options for {@link AggregateDeletedError}. */
+export interface AggregateDeletedErrorOptions {
+	/** The aggregate the error names. */
+	readonly identity: {
+		readonly aggregateType: string;
+		readonly aggregateId: string;
+	};
+}
+
 export class AggregateDeletedError extends KitWiringError<"AGGREGATE_DELETED"> {
-	constructor(public readonly aggregateId: string) {
+	readonly identity: AggregateDeletedErrorOptions["identity"];
+
+	constructor(options: AggregateDeletedErrorOptions) {
 		super(
 			"AGGREGATE_DELETED",
-			`Aggregate ${aggregateId} was removed in this unit of work and ` +
+			`Aggregate ${describeAggregateIdentity(options.identity)} was removed in this unit of work and ` +
 				"cannot be added, updated, tracked, or removed through another " +
 				"instance again. Removal is final within an operation. A repeated " +
 				"remove of the SAME instance is an accepted no-op; if the " +
 				"aggregate must remain, do not remove it.",
 		);
+		this.identity = detachAggregateIdentity(options.identity);
 	}
 }
 
