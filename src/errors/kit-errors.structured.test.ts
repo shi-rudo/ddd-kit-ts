@@ -4,6 +4,7 @@ import {
 	InvalidFlushStatementError,
 	RollbackError,
 } from "../application/unit-of-work/errors";
+import type { AggregateIdentity } from "../domain/aggregate/aggregate-identity";
 import { InvalidDomainTransitionError } from "../domain/state-machine/errors";
 import type {
 	EventBusClosedError,
@@ -11,12 +12,16 @@ import type {
 } from "../messaging/event-bus/errors";
 import {
 	AggregateDeletedError,
+	type AggregateIdentityMismatchOptions,
 	AggregateNotFoundError,
+	type AggregateNotFoundErrorOptions,
 	CapabilityRegistryConflictError,
 	ConcurrencyConflictError,
+	type ConcurrencyConflictErrorOptions,
 	DirectStateMutationError,
 	DomainError,
 	DuplicateAggregateError,
+	type DuplicateAggregateErrorOptions,
 	ErrorMapperFailedError,
 	EventHarvestError,
 	FoldReturnedNoStateError,
@@ -26,6 +31,7 @@ import {
 	InMemoryCapacityExceededError,
 	InvalidCommandMessageError,
 	InvalidEventStreamPageError,
+	type InvalidEventStreamPageErrorOptions,
 	InvalidIntegrationMessageError,
 	InvalidVersionError,
 	type KitErrorCode,
@@ -35,14 +41,19 @@ import {
 	MissingHandlerError,
 	PendingEventBatchMismatchError,
 	PendingEventLimitExceededError,
+	type PendingEventLimitExceededErrorOptions,
 	ProjectionGapError,
 	ProjectionIdentityViolationError,
 	ProjectionOrderViolationError,
 	ProjectionReceiptViolationError,
 	ReplayRejectedError,
+	type ReplayRejectedErrorOptions,
 	ReplayTargetMismatchError,
+	type ReplayTargetMismatchErrorOptions,
 	SnapshotSchemaMismatchError,
+	type SnapshotSchemaMismatchErrorOptions,
 	SnapshotVersionNotRestoredError,
+	type SnapshotVersionNotRestoredErrorOptions,
 	UnenrolledChangesError,
 	UnmanagedInstanceError,
 	UnprojectableEventError,
@@ -809,4 +820,35 @@ describe("an error that names an aggregate keeps its own copy of the identity", 
 			expect(Object.isFrozen(error.actual)).toBe(true);
 		},
 	);
+});
+
+// The errors area imports nothing from the kit, so its options types
+// declare the identity shape inline. This pins every copy to
+// AggregateIdentity: a lost readonly or an extra field breaks the typecheck.
+type SameType<X, Y> =
+	(<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2
+		? true
+		: false;
+
+const identityShapesMatchAggregateIdentity: [
+	SameType<ConcurrencyConflictErrorOptions["identity"], AggregateIdentity>,
+	SameType<DuplicateAggregateErrorOptions["identity"], AggregateIdentity>,
+	SameType<AggregateNotFoundErrorOptions["identity"], AggregateIdentity>,
+	SameType<SnapshotSchemaMismatchErrorOptions["identity"], AggregateIdentity>,
+	SameType<
+		SnapshotVersionNotRestoredErrorOptions["identity"],
+		AggregateIdentity
+	>,
+	SameType<
+		PendingEventLimitExceededErrorOptions["identity"],
+		AggregateIdentity
+	>,
+	SameType<InvalidEventStreamPageErrorOptions["identity"], AggregateIdentity>,
+	SameType<ReplayTargetMismatchErrorOptions["identity"], AggregateIdentity>,
+	SameType<ReplayRejectedErrorOptions["identity"], AggregateIdentity>,
+	SameType<AggregateIdentityMismatchOptions["expected"], AggregateIdentity>,
+] = [true, true, true, true, true, true, true, true, true, true];
+
+it("pins every inline identity shape to AggregateIdentity", () => {
+	expect(identityShapesMatchAggregateIdentity.every(Boolean)).toBe(true);
 });

@@ -1,3 +1,4 @@
+import type { AggregateIdentity } from "../../domain/aggregate/aggregate-identity";
 import {
 	describeAggregateIdentity,
 	detachAggregateIdentity,
@@ -158,10 +159,7 @@ export class InvalidFlushStatementError extends KitWiringError<"INVALID_FLUSH_ST
 /** The fields that describe one defect of the flush statements. */
 export interface InvalidFlushStatementErrorOptions {
 	/** The aggregate the error names. */
-	readonly identity: {
-		readonly aggregateType: string;
-		readonly aggregateId: string;
-	};
+	readonly identity: AggregateIdentity;
 	readonly intent: AggregateWriteIntent;
 	readonly reason: FlushStatementReason;
 	readonly received?: string;
