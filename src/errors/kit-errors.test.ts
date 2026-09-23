@@ -99,16 +99,29 @@ describe("InvalidEventStreamPageError", () => {
 		expect(error.message).toContain("head 300 of the first page");
 	});
 
-	it("names an existing stream without events and pins no target version", () => {
+	it("names a head below 1 and pins no target version on the first page", () => {
 		const error = new InvalidEventStreamPageError({
 			...stream,
-			reason: "stream_without_events",
+			reason: "invalid_head",
 			fromVersion: 0,
 			lastVersion: 0,
 		});
 
 		expect(error.targetVersion).toBeUndefined();
-		expect(error.message).toContain("exists with head 0");
+		expect(error.message).toContain("head 0");
+		expect(error.message).toContain("report a stream without events as absent");
+	});
+
+	it("names the type of a head that is not a number", () => {
+		const error = new InvalidEventStreamPageError({
+			...stream,
+			reason: "invalid_head",
+			fromVersion: 0,
+			lastVersion: "5",
+		});
+
+		expect(error.lastVersion).toBe("5");
+		expect(error.message).toContain('head "5" of type string');
 	});
 });
 

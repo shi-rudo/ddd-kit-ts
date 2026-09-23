@@ -1,6 +1,42 @@
 import type { AggregateAddress } from "../../domain/aggregate/aggregate-address";
 import { InvalidEventStreamPageError } from "../../errors/kit-errors";
 
+export function assertValidHead(
+	stream: AggregateAddress,
+	lastVersion: unknown,
+	fromVersion: number,
+	targetVersion?: number,
+): asserts lastVersion is number {
+	if (typeof lastVersion === "number" && Number.isSafeInteger(lastVersion)) {
+		if (lastVersion >= 1) return;
+	}
+	throw new InvalidEventStreamPageError({
+		...stream,
+		reason: "invalid_head",
+		fromVersion,
+		...(targetVersion === undefined ? {} : { targetVersion }),
+		lastVersion,
+	});
+}
+
+export function assertHeadNotBehindFirstPage(
+	stream: AggregateAddress,
+	lastVersion: number,
+	firstPageLastVersion: number,
+	fromVersion: number,
+	targetVersion: number,
+): void {
+	if (lastVersion >= firstPageLastVersion) return;
+	throw new InvalidEventStreamPageError({
+		...stream,
+		reason: "head_regressed",
+		fromVersion,
+		targetVersion,
+		lastVersion,
+		firstPageLastVersion,
+	});
+}
+
 export function assertPageNotEmpty(
 	stream: AggregateAddress,
 	eventCount: number,

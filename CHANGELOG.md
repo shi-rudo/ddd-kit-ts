@@ -57,9 +57,9 @@ read from an in-memory tail. A test of a repository, or of the replay over
 a fixed window, then needs no store. The optional `limit` slices the tail
 into pages, so such a test can cross a page boundary.
 
-`createReplayableStreamPagesContractTests` from the same entry proves a
-reader that builds such values, the kit read or an adapter that pages on
-its own. The pages hold the events after the cursor through the target
+`createReplayableStreamPagesContractTests` from the same entry proves code
+that builds such values: the kit read, or an adapter that pages on its
+own. The pages hold the events after the cursor through the target
 version in append order. No page is empty or larger than the limit.
 Every iteration yields the same prefix, and an append during the
 iteration stays out. An absent stream and a window outside the stream
@@ -82,8 +82,9 @@ defect:
   New.
 - `head_regressed`: a continuation page reports a head below the head of
   the first page. New.
-- `stream_without_events`: the first page reports an existing stream with a
-  head below 1. New.
+- `invalid_head`: a page of an existing stream reports a head that is not
+  a safe integer of at least 1, for example `0` for a stream without events,
+  or a string from a driver that returns big integers as text. New.
 
 `readStreamPages` checks every page it reads, and
 `reconstituteAggregateFromStreamPages` checks every page it replays. Both
@@ -95,8 +96,10 @@ past the target version as `ReplayTargetMismatchError` with the reason
 keeps `target_not_at_cursor` and `pages_short_of_target`.
 
 `targetVersion` is optional on the error, because the first page pins no
-target when it reports a head below 1. The optional fields `lastVersion`,
+target when its head is invalid. The optional fields `lastVersion`,
 `firstPageLastVersion`, and `eventCount` carry what the page reported.
+`lastVersion` is `unknown`, because an invalid head keeps the value the
+adapter returned.
 Rename the class, the options type, and the code where you construct or
 match on them. No alias remains.
 

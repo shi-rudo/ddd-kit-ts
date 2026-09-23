@@ -8,8 +8,10 @@ import {
 } from "../../internal/validate";
 import type { EventStreamReader, ReadStreamOptions } from "./event-store";
 import {
+	assertHeadNotBehindFirstPage,
 	assertPageNotEmpty,
 	assertPageWithinWindow,
+	assertValidHead,
 } from "./event-stream-page";
 import type { ReplayableStreamPages } from "./reconstitute-from-stream-pages";
 
@@ -161,8 +163,8 @@ export function pinTargetVersion(
  * prefix even when another writer appends during the replay.
  *
  * The call checks every page against the `readStream` contract and throws
- * {@link InvalidEventStreamPageError} for a page that breaks it: an
- * existing stream with a head below 1, a page with more events than its
+ * {@link InvalidEventStreamPageError} for a page that breaks it: a head
+ * that is not a safe integer of at least 1, a page with more events than its
  * window has left, and a continuation page that is empty, reports the
  * stream absent, or reports a head below the head of the first page.
  *
@@ -201,14 +203,7 @@ export async function readStreamPages<Evt extends AnyDomainEvent>(
 		...(options.signal === undefined ? {} : { signal: options.signal }),
 	});
 	if (!first.exists) return { exists: false, reachable: false };
-	if (first.lastVersion < 1) {
-		throw new InvalidEventStreamPageError({
-			...address,
-			reason: "stream_without_events",
-			fromVersion,
-			lastVersion: first.lastVersion,
-		});
-	}
+	assertValidHead(address, first.lastVersion, fromVersion);
 	const pinned = pinTargetVersion({
 		fromVersion,
 		toVersion: options.toVersion,
@@ -273,25 +268,27 @@ async function* continueToPinnedTarget<Evt extends AnyDomainEvent>(
 			limit: window.limit,
 			...(window.signal === undefined ? {} : { signal: window.signal }),
 		});
-		const pageAt = {
-			...window.stream,
-			fromVersion: cursor,
-			targetVersion: window.targetVersion,
-		};
 		if (!page.exists) {
 			throw new InvalidEventStreamPageError({
-				...pageAt,
+				...window.stream,
 				reason: "stream_vanished",
+				fromVersion: cursor,
+				targetVersion: window.targetVersion,
 			});
 		}
-		if (page.lastVersion < window.firstPageLastVersion) {
-			throw new InvalidEventStreamPageError({
-				...pageAt,
-				reason: "head_regressed",
-				lastVersion: page.lastVersion,
-				firstPageLastVersion: window.firstPageLastVersion,
-			});
-		}
+		assertValidHead(
+			window.stream,
+			page.lastVersion,
+			cursor,
+			window.targetVersion,
+		);
+		assertHeadNotBehindFirstPage(
+			window.stream,
+			page.lastVersion,
+			window.firstPageLastVersion,
+			cursor,
+			window.targetVersion,
+		);
 		assertPageNotEmpty(
 			window.stream,
 			page.events.length,

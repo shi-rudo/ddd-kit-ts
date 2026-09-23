@@ -423,19 +423,60 @@ describe("readStreamPages", () => {
 		);
 	});
 
-	it("rejects an existing stream whose first page reports head 0", async () => {
-		const reader = scriptedReader({ exists: true, lastVersion: 0, events: [] });
+	it.each([
+		["0", 0],
+		["the string '5'", "5"],
+		["NaN", Number.NaN],
+		["undefined", undefined],
+	])(
+		"rejects an existing stream whose first page reports head %s",
+		async (_, head) => {
+			const reader = scriptedReader({
+				exists: true,
+				lastVersion: head as number,
+				events: [],
+			});
 
-		const rejection = await readStreamPages(reader, stream, {
-			limit: 2,
-		}).catch((error: unknown) => error);
+			const rejection = await readStreamPages(reader, stream, {
+				limit: 2,
+			}).catch((error: unknown) => error);
+
+			expect(rejection).toBeInstanceOf(InvalidEventStreamPageError);
+			expect(rejection).toMatchObject({
+				...stream,
+				reason: "invalid_head",
+				fromVersion: 0,
+				lastVersion: head,
+			});
+		},
+	);
+
+	it.each([
+		["0", 0],
+		["the string '5'", "5"],
+	])("rejects a continuation page that reports head %s", async (_, head) => {
+		const history = countedUpTo(5);
+		const reader = scriptedReader(
+			{ exists: true, lastVersion: 5, events: history.slice(0, 2) },
+			{
+				exists: true,
+				lastVersion: head as number,
+				events: history.slice(2, 4),
+			},
+		);
+		const read = await readReachable(reader, { limit: 2 });
+
+		const rejection = await collectPages(read.pages).catch(
+			(error: unknown) => error,
+		);
 
 		expect(rejection).toBeInstanceOf(InvalidEventStreamPageError);
 		expect(rejection).toMatchObject({
 			...stream,
-			reason: "stream_without_events",
-			fromVersion: 0,
-			lastVersion: 0,
+			reason: "invalid_head",
+			fromVersion: 2,
+			targetVersion: 5,
+			lastVersion: head,
 		});
 	});
 

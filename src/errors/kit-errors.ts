@@ -974,7 +974,7 @@ export type EventStreamPageReason =
 	| "stream_vanished"
 	| "page_past_target"
 	| "head_regressed"
-	| "stream_without_events";
+	| "invalid_head";
 
 /** Constructor options for {@link InvalidEventStreamPageError}. */
 export interface InvalidEventStreamPageErrorOptions {
@@ -985,19 +985,25 @@ export interface InvalidEventStreamPageErrorOptions {
 	/** The exclusive cursor the page followed. */
 	readonly fromVersion: number;
 	/**
-	 * The pinned inclusive target version. Absent for
-	 * `stream_without_events`: the first page pins no target.
+	 * The pinned inclusive target version. Absent for `invalid_head` on the
+	 * first page: that page pins no target.
 	 */
 	readonly targetVersion?: number;
 	/**
-	 * The stream head the page reported. Present for `head_regressed` and
-	 * `stream_without_events`.
+	 * The stream head the page reported, as the adapter returned it. Present
+	 * for `head_regressed` and `invalid_head`.
 	 */
-	readonly lastVersion?: number;
+	readonly lastVersion?: unknown;
 	/** The stream head the first page reported. Present for `head_regressed`. */
 	readonly firstPageLastVersion?: number;
 	/** The number of events on the page. Present for `page_past_target`. */
 	readonly eventCount?: number;
+}
+
+function describeReportedHead(head: unknown): string {
+	if (typeof head === "number" && Number.isFinite(head)) return String(head);
+	const shown = typeof head === "string" ? JSON.stringify(head) : String(head);
+	return `${shown} of type ${typeof head}`;
 }
 
 function eventStreamPageReasonMessage(
@@ -1032,11 +1038,12 @@ function eventStreamPageReasonMessage(
 				`${String(options.firstPageLastVersion)} of the first page. A stream ` +
 				"is append-only, so its head never moves back."
 			);
-		case "stream_without_events":
+		case "invalid_head":
 			return (
-				`readStream reported that ${stream} exists with head ` +
-				`${String(options.lastVersion)}. An existing stream holds at least one ` +
-				"event; report a stream without events as absent."
+				`readStream reported ${stream} with head ` +
+				`${describeReportedHead(options.lastVersion)} after version ` +
+				`${options.fromVersion}. The head of an existing stream is a safe ` +
+				"integer of at least 1; report a stream without events as absent."
 			);
 	}
 }
@@ -1052,8 +1059,9 @@ function eventStreamPageReasonMessage(
  * continuation page reports the stream absent. `page_past_target`: the
  * page holds more events than its window has left. `head_regressed`: a
  * continuation page reports a head below the head of the first page.
- * `stream_without_events`: the first page reports an existing stream with
- * a head below 1.
+ * `invalid_head`: a page of an existing stream reports a head that is not
+ * a safe integer of at least 1, for example `0` for a stream without
+ * events, or a string from a driver that returns big integers as text.
  *
  * No case is retryable. Fix the adapter: run `createEventStoreContractTests`
  * against an EventStore adapter, and `createReplayableStreamPagesContractTests`
@@ -1070,7 +1078,7 @@ export class InvalidEventStreamPageError extends InfrastructureError<"INVALID_EV
 	readonly reason: EventStreamPageReason;
 	readonly fromVersion: number;
 	readonly targetVersion: number | undefined;
-	readonly lastVersion: number | undefined;
+	readonly lastVersion: unknown;
 	readonly firstPageLastVersion: number | undefined;
 	readonly eventCount: number | undefined;
 
