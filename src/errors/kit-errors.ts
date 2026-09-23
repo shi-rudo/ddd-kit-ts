@@ -695,6 +695,34 @@ export function describeAggregateIdentity(identity: {
 	return `${identity.aggregateType}(${identity.aggregateId})`;
 }
 
+/**
+ * A frozen copy of the two identity fields. An error keeps its own copy, so
+ * it neither shares the caller's object nor carries its other properties
+ * into the log. Kit modules only; not part of the package entries.
+ */
+export function detachAggregateIdentity(identity: {
+	readonly aggregateType: string;
+	readonly aggregateId: string;
+}): { readonly aggregateType: string; readonly aggregateId: string } {
+	return Object.freeze({
+		aggregateType: identity.aggregateType,
+		aggregateId: identity.aggregateId,
+	});
+}
+
+function detachPartialAggregateIdentity(
+	identity: AggregateIdentityMismatchOptions["actual"],
+): AggregateIdentityMismatchOptions["actual"] {
+	return Object.freeze({
+		...(identity.aggregateType === undefined
+			? {}
+			: { aggregateType: identity.aggregateType }),
+		...(identity.aggregateId === undefined
+			? {}
+			: { aggregateId: identity.aggregateId }),
+	});
+}
+
 /** The identity the event names; a missing field falls back to the receiving aggregate. */
 function describeEventIdentity(
 	options: AggregateIdentityMismatchOptions,
@@ -733,8 +761,8 @@ export class MisattributedEventError extends KitWiringError<"MISATTRIBUTED_EVENT
 				`${describeAggregateIdentity(options.expected)}: ` +
 				"fix the call site (createEvent stamps the right identity).",
 		);
-		this.expected = options.expected;
-		this.actual = options.actual;
+		this.expected = detachAggregateIdentity(options.expected);
+		this.actual = detachPartialAggregateIdentity(options.actual);
 		this.eventType = options.eventType;
 	}
 }
@@ -775,7 +803,7 @@ export class SnapshotVersionNotRestoredError extends KitWiringError<"SNAPSHOT_VE
 				"the persisted version; call markReconstituted(version) inside " +
 				"the aggregate factory.",
 		);
-		this.identity = options.identity;
+		this.identity = detachAggregateIdentity(options.identity);
 		this.snapshotVersion = options.snapshotVersion;
 		this.restoredVersion = options.restoredVersion;
 	}
@@ -915,7 +943,7 @@ export class PendingEventLimitExceededError extends KitWiringError<"PENDING_EVEN
 				"A decision that emits this many facts points at a missing " +
 				"aggregate boundary.",
 		);
-		this.identity = options.identity;
+		this.identity = detachAggregateIdentity(options.identity);
 		this.limit = options.limit;
 		this.pending = options.pending;
 		this.added = options.added;
@@ -979,8 +1007,8 @@ export class ForeignEventError extends InfrastructureError<"FOREIGN_EVENT"> {
 				`${describeAggregateIdentity(options.expected)}: ` +
 				"the stream row belongs to a different aggregate.",
 		});
-		this.expected = options.expected;
-		this.actual = options.actual;
+		this.expected = detachAggregateIdentity(options.expected);
+		this.actual = detachPartialAggregateIdentity(options.actual);
 		this.eventType = options.eventType;
 	}
 }
@@ -1130,7 +1158,7 @@ export class InvalidEventStreamPageError extends InfrastructureError<"INVALID_EV
 			code: "INVALID_EVENT_STREAM_PAGE",
 			message: eventStreamPageReasonMessage(stream, options),
 		});
-		this.identity = options.identity;
+		this.identity = detachAggregateIdentity(options.identity);
 		this.reason = options.reason;
 		this.fromVersion = options.fromVersion;
 		this.targetVersion = options.targetVersion;
@@ -1218,7 +1246,7 @@ export class ReplayTargetMismatchError extends InfrastructureError<"REPLAY_TARGE
 		const stream = `${describeAggregateIdentity(options.identity)}`;
 		const message = replayTargetMismatchMessage(stream, options);
 		super({ code: "REPLAY_TARGET_MISMATCH", message });
-		this.identity = options.identity;
+		this.identity = detachAggregateIdentity(options.identity);
 		this.reason = options.reason;
 		this.fromVersion = options.fromVersion;
 		this.targetVersion = options.targetVersion;
@@ -1275,7 +1303,7 @@ export class ReplayRejectedError extends InfrastructureError<"REPLAY_REJECTED"> 
 						`(${options.fromVersion}, ${options.toVersion}] with ${rejected}`,
 			cause: options.cause,
 		});
-		this.identity = options.identity;
+		this.identity = detachAggregateIdentity(options.identity);
 		this.fromVersion = options.fromVersion;
 		this.toVersion = options.toVersion;
 	}
@@ -1582,7 +1610,7 @@ export class AggregateNotFoundError extends InfrastructureError<"AGGREGATE_NOT_F
 			message: `Aggregate not found: ${describeAggregateIdentity(options.identity)}`,
 			cause: options.cause,
 		});
-		this.identity = options.identity;
+		this.identity = detachAggregateIdentity(options.identity);
 	}
 }
 
@@ -1624,7 +1652,7 @@ export class DuplicateAggregateError extends InfrastructureError<"DUPLICATE_AGGR
 			message: `Duplicate aggregate: ${describeAggregateIdentity(options.identity)} already exists`,
 			cause: options.cause,
 		});
-		this.identity = options.identity;
+		this.identity = detachAggregateIdentity(options.identity);
 	}
 }
 
@@ -1668,7 +1696,7 @@ export class SnapshotSchemaMismatchError extends InfrastructureError<"SNAPSHOT_S
 				`the model's migrate function to upgrade old snapshots, or discard the snapshot ` +
 				`and refold from the full event stream.`,
 		});
-		this.identity = options.identity;
+		this.identity = detachAggregateIdentity(options.identity);
 		this.expectedSchemaVersion = options.expectedSchemaVersion;
 		this.actualSchemaVersion = options.actualSchemaVersion;
 	}
@@ -1768,7 +1796,7 @@ export class ConcurrencyConflictError extends InfrastructureError<"CONCURRENCY_C
 			// repeats it, so that one reason is not retryable.
 			retryable: options.reason !== "version_unchanged",
 		});
-		this.identity = options.identity;
+		this.identity = detachAggregateIdentity(options.identity);
 		this.expectedVersion = options.expectedVersion;
 		this.actualVersion = options.actualVersion ?? null;
 		this.reason = options.reason;

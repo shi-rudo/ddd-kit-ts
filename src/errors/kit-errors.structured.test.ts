@@ -654,3 +654,159 @@ describe("KitErrorCode stays in sync with the classes", () => {
 		expect(witness).toBeUndefined();
 	});
 });
+
+describe("an error that names an aggregate keeps its own copy of the identity", () => {
+	class RowRejected extends DomainError<"ROW_REJECTED"> {
+		constructor() {
+			super({ code: "ROW_REJECTED", message: "the fold rejects this row" });
+		}
+	}
+
+	const identityCarriers: ReadonlyArray<{
+		name: string;
+		build: (identity: { aggregateType: string; aggregateId: string }) => {
+			readonly identity: {
+				readonly aggregateType: string;
+				readonly aggregateId: string;
+			};
+		};
+	}> = [
+		{
+			name: "ConcurrencyConflictError",
+			build: (identity) =>
+				new ConcurrencyConflictError({
+					identity,
+					expectedVersion: 1,
+					reason: "stale_version",
+					actualVersion: 2,
+				}),
+		},
+		{
+			name: "DuplicateAggregateError",
+			build: (identity) => new DuplicateAggregateError({ identity }),
+		},
+		{
+			name: "AggregateNotFoundError",
+			build: (identity) => new AggregateNotFoundError({ identity }),
+		},
+		{
+			name: "SnapshotSchemaMismatchError",
+			build: (identity) =>
+				new SnapshotSchemaMismatchError({
+					identity,
+					expectedSchemaVersion: 2,
+					actualSchemaVersion: 1,
+				}),
+		},
+		{
+			name: "SnapshotVersionNotRestoredError",
+			build: (identity) =>
+				new SnapshotVersionNotRestoredError({
+					identity,
+					snapshotVersion: 3,
+					restoredVersion: 0,
+				}),
+		},
+		{
+			name: "PendingEventLimitExceededError",
+			build: (identity) =>
+				new PendingEventLimitExceededError({
+					identity,
+					limit: 1,
+					pending: 1,
+					added: 1,
+				}),
+		},
+		{
+			name: "InvalidFlushStatementError",
+			build: (identity) =>
+				new InvalidFlushStatementError({
+					identity,
+					intent: "update",
+					reason: "no_row_count",
+				}),
+		},
+		{
+			name: "InvalidEventStreamPageError",
+			build: (identity) =>
+				new InvalidEventStreamPageError({
+					identity,
+					reason: "empty_page",
+					fromVersion: 0,
+					targetVersion: 1,
+				}),
+		},
+		{
+			name: "ReplayTargetMismatchError",
+			build: (identity) =>
+				new ReplayTargetMismatchError({
+					identity,
+					reason: "pages_short_of_target",
+					fromVersion: 0,
+					targetVersion: 2,
+					actualVersion: 1,
+				}),
+		},
+		{
+			name: "ReplayRejectedError",
+			build: (identity) =>
+				new ReplayRejectedError({
+					identity,
+					fromVersion: 0,
+					toVersion: 1,
+					cause: new RowRejected(),
+				}),
+		},
+	];
+
+	it.each(identityCarriers)(
+		"$name holds a frozen copy of the two identity fields",
+		({ build }) => {
+			const identity = {
+				aggregateType: "Order",
+				aggregateId: "o-1",
+				extra: "x",
+			};
+
+			const error = build(identity);
+			identity.aggregateId = "o-2";
+
+			expect(error.identity).toStrictEqual({
+				aggregateType: "Order",
+				aggregateId: "o-1",
+			});
+			expect(Object.isFrozen(error.identity)).toBe(true);
+		},
+	);
+
+	it.each([
+		["ForeignEventError", ForeignEventError],
+		["MisattributedEventError", MisattributedEventError],
+	] as const)(
+		"%s holds frozen copies of the expected and the actual identity",
+		(_, ErrorClass) => {
+			const expected = {
+				aggregateType: "Order",
+				aggregateId: "o-1",
+				extra: "x",
+			};
+			const actual = { aggregateId: "o-2" };
+
+			const error = new ErrorClass({
+				expected,
+				actual,
+				eventType: "OrderPlaced",
+			});
+			expected.aggregateId = "changed";
+			actual.aggregateId = "changed";
+
+			expect(error.expected).toStrictEqual({
+				aggregateType: "Order",
+				aggregateId: "o-1",
+			});
+			expect(error.actual).toStrictEqual({ aggregateId: "o-2" });
+			expect(Object.isFrozen(error.expected)).toBe(true);
+			expect(Object.isFrozen(error.actual)).toBe(true);
+		},
+	);
+});

@@ -1,5 +1,6 @@
 import {
 	describeAggregateIdentity,
+	detachAggregateIdentity,
 	InfrastructureError,
 	KitWiringError,
 } from "../../errors/kit-errors";
@@ -146,7 +147,7 @@ export class InvalidFlushStatementError extends KitWiringError<"INVALID_FLUSH_ST
 			flushStatementReasonMessage(options),
 			options.cause,
 		);
-		this.identity = options.identity;
+		this.identity = detachAggregateIdentity(options.identity);
 		this.intent = options.intent;
 		this.reason = options.reason;
 		this.received = options.received;
