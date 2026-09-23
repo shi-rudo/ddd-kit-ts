@@ -4,7 +4,7 @@ import type {
 	ReplayableAggregate,
 	Version,
 } from "../../domain/aggregate/aggregate";
-import type { AggregateAddress } from "../../domain/aggregate/aggregate-address";
+import type { AggregateIdentity } from "../../domain/aggregate/aggregate-identity";
 import { EventSourcedAggregate } from "../../domain/aggregate/event-sourced-aggregate";
 import {
 	type AnyDomainEvent,
@@ -84,13 +84,13 @@ class Counter extends EventSourcedAggregate<
 }
 
 const counterId = "counter-1" as CounterId;
-const stream: AggregateAddress<CounterId> = {
+const stream: AggregateIdentity<CounterId> = {
 	aggregateType: "Counter",
 	aggregateId: counterId,
 };
 
-function counted(by: number, address: AggregateAddress = stream): Counted {
-	return createDomainEvent("Counted", { by }, address);
+function counted(by: number, identity: AggregateIdentity = stream): Counted {
+	return createDomainEvent("Counted", { by }, identity);
 }
 
 function poisoned(): Poisoned {
@@ -198,7 +198,7 @@ describe("reconstituteAggregateFromStreamPages", () => {
 		if (loaded.isOk()) throw new Error("a poisoned row must not load");
 		expect(loaded.error).toBeInstanceOf(ReplayRejectedError);
 		expect(loaded.error).toMatchObject({
-			...stream,
+			identity: stream,
 			fromVersion: 2,
 			toVersion: 4,
 		});
@@ -222,7 +222,7 @@ describe("reconstituteAggregateFromStreamPages", () => {
 
 		expect(rejection).toBeInstanceOf(ReplayTargetMismatchError);
 		expect(rejection).toMatchObject({
-			...stream,
+			identity: stream,
 			reason: "target_not_at_cursor",
 			fromVersion: 2,
 			targetVersion: 5,
@@ -245,7 +245,7 @@ describe("reconstituteAggregateFromStreamPages", () => {
 
 		expect(rejection).toBeInstanceOf(ReplayTargetMismatchError);
 		expect(rejection).toMatchObject({
-			...stream,
+			identity: stream,
 			reason: "pages_short_of_target",
 			fromVersion: 0,
 			targetVersion: 5,
@@ -277,7 +277,7 @@ describe("reconstituteAggregateFromStreamPages", () => {
 			throw new Error("a rejected priming replay must not load");
 		expect(loaded.error).toBeInstanceOf(ReplayRejectedError);
 		expect(loaded.error).toMatchObject({
-			...stream,
+			identity: stream,
 			fromVersion: 0,
 			toVersion: 0,
 		});
@@ -336,7 +336,7 @@ describe("reconstituteAggregateFromStreamPages", () => {
 
 		expect(rejection).toBeInstanceOf(InvalidEventStreamPageError);
 		expect(rejection).toMatchObject({
-			...stream,
+			identity: stream,
 			reason: "empty_page",
 			fromVersion: 2,
 			targetVersion: 3,
@@ -367,7 +367,7 @@ describe("reconstituteAggregateFromStreamPages", () => {
 
 		expect(rejection).toBeInstanceOf(InvalidEventStreamPageError);
 		expect(rejection).toMatchObject({
-			...stream,
+			identity: stream,
 			reason: "page_past_target",
 			fromVersion: 2,
 			targetVersion: 3,

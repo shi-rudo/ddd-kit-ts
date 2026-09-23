@@ -1,4 +1,4 @@
-import type { AggregateAddress } from "../../domain/aggregate/aggregate-address";
+import type { AggregateIdentity } from "../../domain/aggregate/aggregate-identity";
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import type { CommitPosition } from "../../messaging/committed-event";
 
@@ -90,19 +90,19 @@ export interface ProjectionCheckpointStore<TCtx = unknown> {
 	withCheckpointLocks<R>(
 		ctx: TCtx,
 		projection: string,
-		addresses: ReadonlyArray<AggregateAddress>,
+		identities: ReadonlyArray<AggregateIdentity>,
 		work: () => Promise<R>,
 	): Promise<R>;
 
 	/**
-	 * The stored watermark receipt for `(projection, address)`, or `undefined`
+	 * The stored watermark receipt for `(projection, identity)`, or `undefined`
 	 * when this projection has never applied an event of that
 	 * aggregate. Called inside the projector's transaction.
 	 */
 	load(
 		ctx: TCtx,
 		projection: string,
-		address: AggregateAddress,
+		identity: AggregateIdentity,
 	): Promise<ProjectionCheckpoint | undefined>;
 
 	/**
@@ -114,13 +114,13 @@ export interface ProjectionCheckpointStore<TCtx = unknown> {
 	save(
 		ctx: TCtx,
 		projection: string,
-		address: AggregateAddress,
+		identity: AggregateIdentity,
 		checkpoint: ProjectionCheckpoint,
 	): Promise<void>;
 
 	/**
 	 * The wait-for-version building block: `true` when the stored
-	 * watermark for `(projection, address)` is at or past
+	 * watermark for `(projection, identity)` is at or past
 	 * `position`. Runs OUTSIDE any transaction (a query-side poll).
 	 *
 	 * Pass the position of the LAST event your commit emitted: all
@@ -130,7 +130,7 @@ export interface ProjectionCheckpointStore<TCtx = unknown> {
 	 */
 	hasReached(
 		projection: string,
-		address: AggregateAddress,
+		identity: AggregateIdentity,
 		position: ProjectionPosition,
 	): Promise<boolean>;
 
@@ -151,7 +151,7 @@ export interface ProjectionCheckpointStore<TCtx = unknown> {
  * read-model writes.
  *
  * The projector feed MUST contain every committed envelope for each aggregate
- * address it carries, including event types this read model does not use.
+ * identity it carries, including event types this read model does not use.
  * Handle those events as explicit no-ops in `apply`: the projector still
  * advances their cursor. Filtering a broker subscription by event type drops
  * positions from the source chain and turns the next commit into a real gap.

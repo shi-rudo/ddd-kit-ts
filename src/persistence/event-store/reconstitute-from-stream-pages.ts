@@ -1,6 +1,6 @@
 import { err, ok, type Result } from "@shirudo/result";
 import type { ReplayableAggregate } from "../../domain/aggregate/aggregate";
-import type { AggregateAddress } from "../../domain/aggregate/aggregate-address";
+import type { AggregateIdentity } from "../../domain/aggregate/aggregate-identity";
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
 import {
@@ -25,7 +25,7 @@ import {
  */
 export interface ReplayableStreamPages<Evt extends AnyDomainEvent> {
 	/** The qualified stream the pages come from. */
-	readonly stream: AggregateAddress;
+	readonly stream: AggregateIdentity;
 
 	/**
 	 * The cursor the read started at: `fromVersion`, or `0`. The pages hold
@@ -125,7 +125,7 @@ export async function reconstituteAggregateFromStreamPages<
 	const primed = aggregate.replayHistory([]);
 	if (aggregate.version !== read.fromVersion) {
 		throw new ReplayTargetMismatchError({
-			...read.stream,
+			identity: read.stream,
 			reason: "target_not_at_cursor",
 			fromVersion: read.fromVersion,
 			targetVersion: read.targetVersion,
@@ -135,7 +135,7 @@ export async function reconstituteAggregateFromStreamPages<
 	if (primed.isErr()) {
 		return err(
 			new ReplayRejectedError({
-				...read.stream,
+				identity: read.stream,
 				fromVersion: aggregate.version,
 				toVersion: aggregate.version,
 				cause: primed.error,
@@ -160,7 +160,7 @@ export async function reconstituteAggregateFromStreamPages<
 		if (replayed.isErr()) {
 			return err(
 				new ReplayRejectedError({
-					...read.stream,
+					identity: read.stream,
 					fromVersion: versionBeforePage,
 					toVersion: versionBeforePage + page.length,
 					cause: replayed.error,
@@ -170,7 +170,7 @@ export async function reconstituteAggregateFromStreamPages<
 	}
 	if (aggregate.version !== read.targetVersion) {
 		throw new ReplayTargetMismatchError({
-			...read.stream,
+			identity: read.stream,
 			reason: "pages_short_of_target",
 			fromVersion: read.fromVersion,
 			targetVersion: read.targetVersion,

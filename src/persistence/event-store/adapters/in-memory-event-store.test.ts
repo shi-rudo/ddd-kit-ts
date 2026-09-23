@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { AggregateAddress } from "../../../domain/aggregate/aggregate-address";
+import type { AggregateIdentity } from "../../../domain/aggregate/aggregate-identity";
 import {
 	createDomainEvent,
 	type DomainEvent,
@@ -11,24 +11,27 @@ import { InMemoryEventStore } from "./in-memory-event-store";
 type StreamId = Id<"EsOrderId">;
 type OrderEvent = DomainEvent<"OrderRenamed", { name: string }>;
 
-const streamA: AggregateAddress<StreamId> = {
+const streamA: AggregateIdentity<StreamId> = {
 	aggregateType: "EsOrder",
 	aggregateId: "order-a" as StreamId,
 };
-const streamB: AggregateAddress<StreamId> = {
+const streamB: AggregateIdentity<StreamId> = {
 	aggregateType: "EsOrder",
 	aggregateId: "order-b" as StreamId,
 };
 const allEvents = { limit: 100 } as const;
 
-function renamed(name: string, stream: AggregateAddress = streamA): OrderEvent {
+function renamed(
+	name: string,
+	stream: AggregateIdentity = streamA,
+): OrderEvent {
 	return createDomainEvent("OrderRenamed", { name }, stream);
 }
 
 describe("InMemoryEventStore", () => {
 	it("hands out detached events so a mutated read result never rewrites history", async () => {
 		const store = new InMemoryEventStore<OrderEvent>();
-		const address: AggregateAddress = {
+		const identity: AggregateIdentity = {
 			aggregateType: "SalesOrder",
 			aggregateId: "own-1" as StreamId,
 		};
@@ -40,27 +43,27 @@ describe("InMemoryEventStore", () => {
 			payload: { name: "original" },
 			occurredAt: new Date("2026-07-29T10:00:00.000Z"),
 			version: 1,
-			...address,
+			...identity,
 		} as unknown as OrderEvent;
-		await store.append(address, [plainEvent], { expectedVersion: 0 });
+		await store.append(identity, [plainEvent], { expectedVersion: 0 });
 
-		const firstRead = await store.readStream(address, { limit: 10 });
+		const firstRead = await store.readStream(identity, { limit: 10 });
 		(firstRead.events[0] as { payload: { name: string } }).payload.name =
 			"tampered";
 		plainEvent.payload.name = "tampered at the source too";
 
-		const secondRead = await store.readStream(address, { limit: 10 });
+		const secondRead = await store.readStream(identity, { limit: 10 });
 		expect(secondRead.events[0]?.payload.name).toBe("original");
 	});
 
 	it("isolates equal aggregate ids by aggregate type", async () => {
 		const store = new InMemoryEventStore<OrderEvent>();
 		const aggregateId = "shared-1" as StreamId;
-		const salesOrder: AggregateAddress = {
+		const salesOrder: AggregateIdentity = {
 			aggregateType: "SalesOrder",
 			aggregateId,
 		};
-		const fulfillmentOrder: AggregateAddress = {
+		const fulfillmentOrder: AggregateIdentity = {
 			aggregateType: "FulfillmentOrder",
 			aggregateId,
 		};

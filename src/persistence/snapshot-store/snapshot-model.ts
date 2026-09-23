@@ -7,6 +7,7 @@ import { SnapshotTimeValidationError } from "../../domain/event/domain-event-err
 import type { Id } from "../../domain/identity/id";
 import { deepFreeze } from "../../domain/value-object/value-object";
 import {
+	describeAggregateIdentity,
 	isDomainErrorLike,
 	SnapshotCorruptedError,
 	SnapshotSchemaMismatchError,
@@ -31,7 +32,7 @@ export interface SnapshotModel<
 	TAggregate extends SnapshotAggregate,
 	TSnapshotState,
 > {
-	/** Stable type name used to address schema errors and snapshot storage. */
+	/** Stable type name that names the aggregate in schema errors and snapshot storage. */
 	readonly aggregateType: string;
 
 	/** Current schema version of the stored snapshot DTO. */
@@ -149,7 +150,7 @@ export function reconstituteAggregateFromSnapshot<
 		version = toVersion(snapshot.version);
 	} catch (error) {
 		throw new SnapshotCorruptedError(
-			`Snapshot of ${model.aggregateType} ${String(id)} carries the ` +
+			`Snapshot of ${describeAggregateIdentity({ aggregateType: model.aggregateType, aggregateId: String(id) })} carries the ` +
 				`invalid version ${String(snapshot.version)}. Discard the derived ` +
 				"snapshot and refold from the stream.",
 			error,
@@ -166,8 +167,10 @@ export function reconstituteAggregateFromSnapshot<
 			);
 		} else {
 			throw new SnapshotSchemaMismatchError({
-				aggregateType: model.aggregateType,
-				aggregateId: String(id),
+				identity: {
+					aggregateType: model.aggregateType,
+					aggregateId: String(id),
+				},
 				expectedSchemaVersion: model.schemaVersion,
 				actualSchemaVersion: storedSchemaVersion,
 			});
@@ -179,7 +182,7 @@ export function reconstituteAggregateFromSnapshot<
 		// plain instanceof; the corruption channel must catch it regardless.
 		if (isDomainErrorLike(error)) {
 			throw new SnapshotCorruptedError(
-				`Snapshot of ${model.aggregateType} ${String(id)} (schema ` +
+				`Snapshot of ${describeAggregateIdentity({ aggregateType: model.aggregateType, aggregateId: String(id) })} (schema ` +
 					`${storedSchemaVersion}, version ${String(snapshot.version)}) was ` +
 					"rejected during reconstitution. Discard the derived snapshot and " +
 					"refold from the stream.",
@@ -194,8 +197,10 @@ export function reconstituteAggregateFromSnapshot<
 	// perpetual silent refolding, so it surfaces as a wiring error instead.
 	if (aggregate.version !== snapshot.version) {
 		throw new SnapshotVersionNotRestoredError({
-			aggregateType: model.aggregateType,
-			aggregateId: String(id),
+			identity: {
+				aggregateType: model.aggregateType,
+				aggregateId: String(id),
+			},
 			snapshotVersion: snapshot.version,
 			restoredVersion: aggregate.version,
 		});

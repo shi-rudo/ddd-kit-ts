@@ -1,7 +1,7 @@
 import {
 	DuplicateEventIdError,
 	InvalidVersionError,
-	MisaddressedEventError,
+	MisattributedEventError,
 	PendingEventBatchMismatchError,
 	PendingEventLimitExceededError,
 	ReentrantEventRecordingError,
@@ -327,8 +327,8 @@ export abstract class BaseAggregate<
 	/**
 	 * Appends a domain event to the pending list. The event must be minted
 	 * by a kit constructor; a missing `aggregateId` or `aggregateType` is
-	 * stamped from this aggregate, and an address that names another
-	 * aggregate throws {@link MisaddressedEventError} before anything is
+	 * stamped from this aggregate, and an aggregate identity that names another
+	 * aggregate throws {@link MisattributedEventError} before anything is
 	 * recorded. Each append is one fact. A decision appended twice becomes
 	 * two facts with distinct ids. A recorded event that is already pending
 	 * throws {@link DuplicateEventIdError}, and a list at `maxPendingEvents`
@@ -343,7 +343,7 @@ export abstract class BaseAggregate<
 	 * application shell rejects it; use `setState(currentState, event)`.
 	 */
 	protected addDomainEvent(event: PendingDomainEvent<TEvent>): void {
-		const stamped = this.addressNewEvent(event);
+		const stamped = this.stampNewEventIdentity(event);
 		this.assertEventIdsNotPending([stamped]);
 		this.assertPendingEventLimit(1);
 		this.appendStampedEvent(stamped);
@@ -384,8 +384,10 @@ export abstract class BaseAggregate<
 		const pending = this._pendingEvents.length;
 		if (pending + added <= limit) return;
 		throw new PendingEventLimitExceededError({
-			aggregateType: this.aggregateType,
-			aggregateId: String(this.id),
+			identity: {
+				aggregateType: this.aggregateType,
+				aggregateId: String(this.id),
+			},
 			limit,
 			pending,
 			added,
@@ -394,7 +396,7 @@ export abstract class BaseAggregate<
 
 	/**
 	 * Appends an event that the caller already passed through
-	 * {@link addressNewEvent}, {@link assertEventIdsNotPending} and
+	 * {@link stampNewEventIdentity}, {@link assertEventIdsNotPending} and
 	 * {@link assertPendingEventLimit}. `setState()` and `apply()` run the
 	 * three before the state moves and append afterwards, so each gate
 	 * runs once per event.
@@ -413,24 +415,27 @@ export abstract class BaseAggregate<
 	}
 
 	/**
-	 * Address discipline for NEW facts, shared by both flavours: a
+	 * Aggregate identity discipline for NEW facts, shared by both flavours: a
 	 * present-but-foreign `aggregateId` / `aggregateType` is a wiring bug and
-	 * throws {@link MisaddressedEventError}; missing fields are filled in
-	 * from the aggregate, so a recorded event is always fully addressed and
-	 * can never fail the harvest or the replay guard later. The mint gate
+	 * throws {@link MisattributedEventError}; missing fields are filled in
+	 * from the aggregate, so a recorded event always carries its full
+	 * aggregate identity and can never fail the harvest or the replay guard
+	 * later. The mint gate
 	 * runs first, so an unminted event fails before anything else. The
 	 * stamped copy is frozen like the original (payload and metadata are
-	 * shared, already deep-frozen by the constructors); a fully addressed
+	 * shared, already deep-frozen by the constructors); a fully stamped
 	 * event is returned as is.
 	 */
-	protected addressNewEvent<E extends PendingDomainEvent<TEvent>>(event: E): E {
+	protected stampNewEventIdentity<E extends PendingDomainEvent<TEvent>>(
+		event: E,
+	): E {
 		this.assertMintedEvent(event);
 		const { aggregateId, aggregateType } = event;
 		const idForeign = aggregateId !== undefined && aggregateId !== this.id;
 		const typeForeign =
 			aggregateType !== undefined && aggregateType !== this.aggregateType;
 		if (idForeign || typeForeign) {
-			throw new MisaddressedEventError({
+			throw new MisattributedEventError({
 				expected: { aggregateType: this.aggregateType, aggregateId: this.id },
 				actual: { aggregateType, aggregateId },
 				eventType: event.type,

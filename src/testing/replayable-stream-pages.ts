@@ -1,4 +1,4 @@
-import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
+import type { AggregateIdentity } from "../domain/aggregate/aggregate-identity";
 import type { AnyDomainEvent } from "../domain/event/domain-event";
 import { deepFreeze } from "../domain/value-object/value-object";
 import { assertPositiveSafeInteger } from "../internal/validate";
@@ -28,7 +28,7 @@ export interface CreateReplayableStreamPagesOptions<Evt extends AnyDomainEvent>
  * tail yields no page, as `readStreamPages` does.
  */
 export function createReplayableStreamPages<Evt extends AnyDomainEvent>(
-	stream: AggregateAddress,
+	stream: AggregateIdentity,
 	options: CreateReplayableStreamPagesOptions<Evt>,
 ): ReplayableStreamPages<Evt> {
 	const limit = options.limit ?? Math.max(options.tail.length, 1);

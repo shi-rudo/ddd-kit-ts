@@ -1,4 +1,4 @@
-import type { AggregateAddress } from "../../domain/aggregate/aggregate-address";
+import type { AggregateIdentity } from "../../domain/aggregate/aggregate-identity";
 import {
 	type AnyDomainEvent,
 	createDomainEvent,
@@ -57,7 +57,7 @@ export interface IntegrationMessage<
 > extends IntegrationMessageContent<TType, TPayload, TMetadata> {
 	readonly messageId: string;
 	readonly occurredAt: string;
-	readonly source: AggregateAddress;
+	readonly source: AggregateIdentity;
 	readonly position: CommitPosition;
 }
 

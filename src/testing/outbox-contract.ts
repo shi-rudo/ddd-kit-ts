@@ -1,4 +1,4 @@
-import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
+import type { AggregateIdentity } from "../domain/aggregate/aggregate-identity";
 import type { AnyDomainEvent } from "../domain/event/domain-event";
 import { deepEqual } from "../internal/structural/deep-equal";
 import type { EventCommitCandidate } from "../messaging/committed-event";
@@ -134,14 +134,14 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 ): OutboxContractTest[] {
 	type Env = OutboxContractEnvironment<Evt>;
 	const inEnv = bindContractEnvironment(() => harness.createEnvironment());
-	const defaultSource: AggregateAddress = {
+	const defaultSource: AggregateIdentity = {
 		aggregateType: "ContractAggregate",
 		aggregateId: "contract-aggregate",
 	};
 	const commit = (
 		events: ReadonlyArray<Evt>,
 		aggregateVersion = 1,
-		source: AggregateAddress = defaultSource,
+		source: AggregateIdentity = defaultSource,
 	): ReadonlyArray<EventCommitCandidate<Evt>> =>
 		events.map((event, commitSequence) => ({
 			event,
@@ -239,7 +239,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 		{
 			name: "keeps event-source heads isolated by aggregate type and id",
 			run: inEnv(async (env) => {
-				const sources: ReadonlyArray<AggregateAddress> = [
+				const sources: ReadonlyArray<AggregateIdentity> = [
 					{ aggregateType: "Order", aggregateId: "1" },
 					{ aggregateType: "Payment", aggregateId: "1" },
 					{ aggregateType: "Order", aggregateId: "2" },

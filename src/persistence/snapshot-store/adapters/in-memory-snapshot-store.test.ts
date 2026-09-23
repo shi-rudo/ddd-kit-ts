@@ -23,8 +23,8 @@ function snapshot(
 	};
 }
 
-describe("InMemorySnapshotStore aggregate addresses", () => {
-	it("uses one value-address object and cannot alias delimiter-like values", async () => {
+describe("InMemorySnapshotStore aggregate identities", () => {
+	it("uses one aggregate identity value and cannot alias delimiter-like values", async () => {
 		const store = new InMemorySnapshotStore<TestState>();
 		const first = {
 			aggregateType: "Sales\u0000Order",

@@ -641,7 +641,7 @@ describe("Projector", () => {
 	it("rejects a legacy checkpoint that cannot prove its commit boundary", async () => {
 		const rows: string[] = [];
 		const legacy: ProjectionCheckpointStore<undefined> = {
-			withCheckpointLocks: async (_ctx, _projection, _addresses, work) =>
+			withCheckpointLocks: async (_ctx, _projection, _identities, work) =>
 				work(),
 			load: async () =>
 				({
@@ -1038,7 +1038,7 @@ describe("Projector", () => {
 		expect(rows).toEqual([]);
 	});
 
-	it("uses the envelope source when the bare event has no optional address", async () => {
+	it("uses the envelope source when the bare event has no optional aggregate identity", async () => {
 		const rows: string[] = [];
 		const checkpoints = new InMemoryProjectionCheckpointStore();
 		const projector = new Projector({
@@ -1050,7 +1050,7 @@ describe("Projector", () => {
 			"OrderPlaced",
 			{ total: 1 },
 			{
-				eventId: "evt-unaddressed",
+				eventId: "evt-without-aggregate-identity",
 			},
 		);
 		const committed: CommittedDomainEvent<typeof event> = {
@@ -1068,10 +1068,12 @@ describe("Projector", () => {
 			applied: 1,
 			skipped: 0,
 		});
-		expect(rows).toEqual(["evt-unaddressed"]);
+		expect(rows).toEqual(["evt-without-aggregate-identity"]);
 		await expect(
 			checkpoints.load(undefined, "order-list", committed.source),
-		).resolves.toMatchObject({ lastAppliedEventId: "evt-unaddressed" });
+		).resolves.toMatchObject({
+			lastAppliedEventId: "evt-without-aggregate-identity",
+		});
 	});
 
 	it("rejects an envelope source without an aggregateType before applying anything", async () => {
@@ -1132,14 +1134,14 @@ describe("Projector", () => {
 		};
 		const committed = new Map<string, ProjectionCheckpoint>();
 		const checkpoints: ProjectionCheckpointStore<Ctx> = {
-			withCheckpointLocks: async (_ctx, _projection, _addresses, work) =>
+			withCheckpointLocks: async (_ctx, _projection, _identities, work) =>
 				work(),
-			load: async (_ctx, _p, address) => committed.get(address.aggregateId),
-			save: async (ctx, _p, address, checkpoint) => {
-				ctx.staged.push(() => committed.set(address.aggregateId, checkpoint));
+			load: async (_ctx, _p, identity) => committed.get(identity.aggregateId),
+			save: async (ctx, _p, identity, checkpoint) => {
+				ctx.staged.push(() => committed.set(identity.aggregateId, checkpoint));
 			},
-			hasReached: async (_p, address, position) => {
-				const stored = committed.get(address.aggregateId);
+			hasReached: async (_p, identity, position) => {
+				const stored = committed.get(identity.aggregateId);
 				if (!stored) return false;
 				return (
 					stored.position.aggregateVersion > position.aggregateVersion ||
@@ -1197,11 +1199,11 @@ describe("Projector", () => {
 		};
 		const committed = new Map<string, ProjectionCheckpoint>();
 		const checkpoints: ProjectionCheckpointStore<Ctx> = {
-			withCheckpointLocks: async (_ctx, _projection, _addresses, work) =>
+			withCheckpointLocks: async (_ctx, _projection, _identities, work) =>
 				work(),
-			load: async (_ctx, _p, address) => committed.get(address.aggregateId),
-			save: async (ctx, _p, address, checkpoint) => {
-				ctx.staged.push(() => committed.set(address.aggregateId, checkpoint));
+			load: async (_ctx, _p, identity) => committed.get(identity.aggregateId),
+			save: async (ctx, _p, identity, checkpoint) => {
+				ctx.staged.push(() => committed.set(identity.aggregateId, checkpoint));
 			},
 			hasReached: async () => false,
 			reset: async () => {},
@@ -1249,11 +1251,11 @@ describe("Projector", () => {
 		// open transaction. The projector's in-memory batch watermark must
 		// still catch the duplicate.
 		const checkpoints: ProjectionCheckpointStore<Ctx> = {
-			withCheckpointLocks: async (_ctx, _projection, _addresses, work) =>
+			withCheckpointLocks: async (_ctx, _projection, _identities, work) =>
 				work(),
-			load: async (_ctx, _p, address) => committed.get(address.aggregateId),
-			save: async (ctx, _p, address, checkpoint) => {
-				ctx.staged.push(() => committed.set(address.aggregateId, checkpoint));
+			load: async (_ctx, _p, identity) => committed.get(identity.aggregateId),
+			save: async (ctx, _p, identity, checkpoint) => {
+				ctx.staged.push(() => committed.set(identity.aggregateId, checkpoint));
 			},
 			hasReached: async () => false,
 			reset: async () => {},

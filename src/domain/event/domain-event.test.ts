@@ -163,12 +163,18 @@ describe("DomainEvent", () => {
 			["aggregateType", { aggregateType: "\t" }],
 		] as const)("rejects a blank supplied %s", (field, options) => {
 			expect(() => createDomainEvent("Demo", undefined, options)).toThrowError(
-				expect.objectContaining({ code: "EVENT_ADDRESS_INVALID", field }),
+				expect.objectContaining({
+					code: "EVENT_AGGREGATE_IDENTITY_INVALID",
+					field,
+				}),
 			);
 			expect(() =>
 				createUncommittedDomainEvent("Demo", undefined, options),
 			).toThrowError(
-				expect.objectContaining({ code: "EVENT_ADDRESS_INVALID", field }),
+				expect.objectContaining({
+					code: "EVENT_AGGREGATE_IDENTITY_INVALID",
+					field,
+				}),
 			);
 		});
 

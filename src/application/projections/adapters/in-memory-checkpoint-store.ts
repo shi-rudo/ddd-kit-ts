@@ -1,7 +1,7 @@
 import {
-	type AggregateAddress,
-	encodeAggregateAddress,
-} from "../../../domain/aggregate/aggregate-address";
+	type AggregateIdentity,
+	encodeAggregateIdentity,
+} from "../../../domain/aggregate/aggregate-identity";
 import { InMemoryCapacityExceededError } from "../../../errors/kit-errors";
 import { assertPositiveSafeInteger } from "../../../internal/validate";
 import {
@@ -12,7 +12,7 @@ import {
 } from "../ports";
 
 export interface InMemoryProjectionCheckpointStoreOptions {
-	/** Maximum checkpoints across all projection names and aggregate addresses. */
+	/** Maximum checkpoints across all projection names and aggregate identities. */
 	readonly maxCheckpoints?: number;
 }
 
@@ -31,7 +31,7 @@ export interface InMemoryProjectionCheckpointStoreOptions {
  *
  * Without `maxCheckpoints`, checkpoint retention is unbounded and supported
  * only for finite-lifetime tests and demos. A configured limit rejects a new
- * address before mutation; existing watermarks remain updatable and are never
+ * identity before mutation; existing watermarks remain updatable and are never
  * evicted because forgetting one would change projection correctness.
  *
  * Do not nest `withCheckpointLocks` calls whose key sets overlap. This
@@ -66,16 +66,16 @@ export class InMemoryProjectionCheckpointStore
 	async withCheckpointLocks<R>(
 		_ctx: unknown,
 		projection: string,
-		addresses: ReadonlyArray<AggregateAddress>,
+		identities: ReadonlyArray<AggregateIdentity>,
 		work: () => Promise<R>,
 	): Promise<R> {
 		const keys = [
 			...new Set(
-				addresses.map((address) =>
+				identities.map((identity) =>
 					JSON.stringify([
 						projection,
-						address.aggregateType,
-						address.aggregateId,
+						identity.aggregateType,
+						identity.aggregateId,
 					]),
 				),
 			),
@@ -109,11 +109,11 @@ export class InMemoryProjectionCheckpointStore
 	async load(
 		_ctx: unknown,
 		projection: string,
-		address: AggregateAddress,
+		identity: AggregateIdentity,
 	): Promise<ProjectionCheckpoint | undefined> {
 		const stored = this.checkpoints
 			.get(projection)
-			?.get(encodeAggregateAddress(address));
+			?.get(encodeAggregateIdentity(identity));
 		// Detached copy: a caller mutating the loaded receipt must not
 		// move the stored watermark.
 		return stored === undefined
@@ -124,12 +124,12 @@ export class InMemoryProjectionCheckpointStore
 	async save(
 		_ctx: unknown,
 		projection: string,
-		address: AggregateAddress,
+		identity: AggregateIdentity,
 		checkpoint: ProjectionCheckpoint,
 	): Promise<void> {
-		const addressKey = encodeAggregateAddress(address);
+		const identityKey = encodeAggregateIdentity(identity);
 		let perAggregate = this.checkpoints.get(projection);
-		const isNewCheckpoint = perAggregate?.has(addressKey) !== true;
+		const isNewCheckpoint = perAggregate?.has(identityKey) !== true;
 		if (
 			isNewCheckpoint &&
 			this.maxCheckpoints !== undefined &&
@@ -147,7 +147,7 @@ export class InMemoryProjectionCheckpointStore
 			perAggregate = new Map();
 			this.checkpoints.set(projection, perAggregate);
 		}
-		perAggregate.set(addressKey, {
+		perAggregate.set(identityKey, {
 			...checkpoint,
 			position: { ...checkpoint.position },
 		});
@@ -156,12 +156,12 @@ export class InMemoryProjectionCheckpointStore
 
 	async hasReached(
 		projection: string,
-		address: AggregateAddress,
+		identity: AggregateIdentity,
 		position: ProjectionPosition,
 	): Promise<boolean> {
 		const stored = this.checkpoints
 			.get(projection)
-			?.get(encodeAggregateAddress(address));
+			?.get(encodeAggregateIdentity(identity));
 		if (stored === undefined) return false;
 		return !isPositionAfter(position, stored.position);
 	}

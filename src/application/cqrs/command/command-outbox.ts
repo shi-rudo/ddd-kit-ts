@@ -1,4 +1,4 @@
-import type { AggregateAddress } from "../../../domain/aggregate/aggregate-address";
+import type { AggregateIdentity } from "../../../domain/aggregate/aggregate-identity";
 import type { AnyDomainEvent } from "../../../domain/event/domain-event";
 import { deepFreeze } from "../../../domain/value-object/value-object";
 import { InvalidCommandMessageError } from "../../../errors/kit-errors";
@@ -68,7 +68,7 @@ export interface DurableCommandMessage<C extends PublishedCommand>
  */
 export interface CommandCommitOriginCandidate {
 	readonly eventId: string;
-	readonly source: AggregateAddress;
+	readonly source: AggregateIdentity;
 	readonly position: EventCommitCandidatePosition;
 }
 

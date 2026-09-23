@@ -312,8 +312,7 @@ describe("adapter-owned snapshot models", () => {
 		expect(error.code).toBe("SNAPSHOT_VERSION_NOT_RESTORED");
 		expect(error.message).toContain("markReconstituted");
 		expect(error).toMatchObject({
-			aggregateType: "Order",
-			aggregateId: "order-1",
+			identity: { aggregateType: "Order", aggregateId: "order-1" },
 			snapshotVersion: 7,
 			restoredVersion: 0,
 		});
@@ -413,7 +412,7 @@ describe("adapter-owned snapshot models", () => {
 		expect(restored.state).toEqual({ status: "migrated" });
 	});
 
-	it("fails with an addressed schema mismatch when no migration exists", () => {
+	it("fails with a schema mismatch that names the aggregate when no migration exists", () => {
 		expect(() =>
 			reconstituteAggregateFromSnapshot(model, "order-1" as OrderId, {
 				state: { status: "placed" },
@@ -423,8 +422,7 @@ describe("adapter-owned snapshot models", () => {
 			}),
 		).toThrowError(
 			expect.objectContaining({
-				aggregateType: "Order",
-				aggregateId: "order-1",
+				identity: { aggregateType: "Order", aggregateId: "order-1" },
 				expectedSchemaVersion: 2,
 				actualSchemaVersion: 1,
 			}) as SnapshotSchemaMismatchError,

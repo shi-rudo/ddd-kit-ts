@@ -232,8 +232,7 @@ class DrizzleOrderReadAdapter {
     const order = await this.findById(id);
     if (!order) {
       throw new AggregateNotFoundError({
-        aggregateType: "Order",
-        aggregateId: id,
+        identity: { aggregateType: "Order", aggregateId: id },
       });
     }
     return order;

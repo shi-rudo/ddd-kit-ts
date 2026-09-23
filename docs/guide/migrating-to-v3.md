@@ -297,7 +297,7 @@ Capture at an application-supplied time:
 
 ```ts
 const snapshot = captureAggregateSnapshot(orderSnapshots, order, clock());
-await snapshotStore.save(address, snapshot);
+await snapshotStore.save(identity, snapshot);
 ```
 
 Load by creating a fresh aggregate:

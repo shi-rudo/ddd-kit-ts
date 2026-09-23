@@ -8,7 +8,7 @@ import {
 	UnitOfWork,
 } from "../application/unit-of-work/unit-of-work";
 import type { Version } from "../domain/aggregate/aggregate";
-import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
+import type { AggregateIdentity } from "../domain/aggregate/aggregate-identity";
 import type { AggregateConfig } from "../domain/aggregate/base-aggregate";
 import { EventSourcedAggregate } from "../domain/aggregate/event-sourced-aggregate";
 import {
@@ -60,12 +60,12 @@ type EsOrderRenamed = DomainEvent<"EsOrderRenamed", { name: string }>;
 type EsItemAdded = DomainEvent<"EsItemAdded", { item: string }>;
 type EsOrderEvent = EsOrderCreated | EsOrderRenamed | EsItemAdded;
 
-const orderStream = (id: EsOrderId): AggregateAddress<EsOrderId> => ({
+const orderStream = (id: EsOrderId): AggregateIdentity<EsOrderId> => ({
 	aggregateType: "ContractEsOrder",
 	aggregateId: id,
 });
 
-const streamMapKey = (stream: AggregateAddress): string =>
+const streamMapKey = (stream: AggregateIdentity): string =>
 	JSON.stringify([stream.aggregateType, stream.aggregateId]);
 
 class ContractEsOrder extends EventSourcedAggregate<
@@ -464,8 +464,10 @@ function flushEsOrder(
 	if (stream.length !== expectedVersion) {
 		throw new ConcurrencyConflictError({
 			reason: "stale_version",
-			aggregateType: "ContractEsOrder",
-			aggregateId: write.aggregateId,
+			identity: {
+				aggregateType: "ContractEsOrder",
+				aggregateId: write.aggregateId,
+			},
 			expectedVersion,
 			actualVersion: stream.length,
 		});

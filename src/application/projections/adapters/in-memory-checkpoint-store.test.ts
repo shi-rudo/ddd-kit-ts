@@ -2,7 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { InMemoryCapacityExceededError } from "../../../errors/kit-errors";
 import { InMemoryProjectionCheckpointStore } from "./in-memory-checkpoint-store";
 
-const address = (aggregateId: string) => ({
+const identity = (aggregateId: string) => ({
 	aggregateType: "Order",
 	aggregateId,
 });
@@ -21,10 +21,10 @@ const checkpoint = (aggregateVersion: number) => ({
 describe("InMemoryProjectionCheckpointStore capacity", () => {
 	it("rejects a new checkpoint atomically while allowing updates at capacity", async () => {
 		const store = new InMemoryProjectionCheckpointStore({ maxCheckpoints: 1 });
-		await store.save(undefined, "orders", address("o-1"), checkpoint(1));
+		await store.save(undefined, "orders", identity("o-1"), checkpoint(1));
 
 		await expect(
-			store.save(undefined, "orders", address("o-2"), checkpoint(1)),
+			store.save(undefined, "orders", identity("o-2"), checkpoint(1)),
 		).rejects.toMatchObject({
 			code: "IN_MEMORY_CAPACITY_EXCEEDED",
 			store: "InMemoryProjectionCheckpointStore",
@@ -34,26 +34,26 @@ describe("InMemoryProjectionCheckpointStore capacity", () => {
 			attempted: 1,
 		});
 		await expect(
-			store.load(undefined, "orders", address("o-2")),
+			store.load(undefined, "orders", identity("o-2")),
 		).resolves.toBeUndefined();
 
-		await store.save(undefined, "orders", address("o-1"), checkpoint(2));
+		await store.save(undefined, "orders", identity("o-1"), checkpoint(2));
 		await expect(
-			store.load(undefined, "orders", address("o-1")),
+			store.load(undefined, "orders", identity("o-1")),
 		).resolves.toEqual(checkpoint(2));
 	});
 
 	it("counts checkpoints globally and reset releases their capacity", async () => {
 		const store = new InMemoryProjectionCheckpointStore({ maxCheckpoints: 1 });
-		await store.save(undefined, "orders", address("o-1"), checkpoint(1));
+		await store.save(undefined, "orders", identity("o-1"), checkpoint(1));
 
 		await expect(
-			store.save(undefined, "audit", address("o-1"), checkpoint(1)),
+			store.save(undefined, "audit", identity("o-1"), checkpoint(1)),
 		).rejects.toBeInstanceOf(InMemoryCapacityExceededError);
 
 		await store.reset(undefined, "orders");
 		await expect(
-			store.save(undefined, "audit", address("o-1"), checkpoint(1)),
+			store.save(undefined, "audit", identity("o-1"), checkpoint(1)),
 		).resolves.toBeUndefined();
 	});
 

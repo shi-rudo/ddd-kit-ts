@@ -115,8 +115,7 @@ describe("versionedFlush", () => {
 
 		expect(rejection).toBeInstanceOf(DuplicateAggregateError);
 		expect(rejection).toMatchObject({
-			aggregateType: "Order",
-			aggregateId: orderId,
+			identity: { aggregateType: "Order", aggregateId: orderId },
 			cause: violation,
 		});
 	});
@@ -159,8 +158,7 @@ describe("versionedFlush", () => {
 		expect(rejection).toBeInstanceOf(ConcurrencyConflictError);
 		expect(rejection).toMatchObject({
 			reason: "stale_version",
-			aggregateType: "Order",
-			aggregateId: orderId,
+			identity: { aggregateType: "Order", aggregateId: orderId },
 			expectedVersion: 3,
 			actualVersion: 5,
 			retryable: true,
@@ -266,8 +264,7 @@ describe("versionedFlush", () => {
 			expect(rejection).toMatchObject({
 				code: "INVALID_FLUSH_STATEMENT",
 				reason: "statement_absent",
-				aggregateType: "Order",
-				aggregateId: orderId,
+				identity: { aggregateType: "Order", aggregateId: orderId },
 				intent,
 			});
 			expect((rejection as Error).message).toContain(requirement);

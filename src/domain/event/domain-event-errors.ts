@@ -5,7 +5,7 @@ export type DomainEventValidationCode =
 	| "EVENT_OCCURRED_AT_REQUIRED"
 	| "EVENT_OCCURRED_AT_INVALID"
 	| "EVENT_SCHEMA_VERSION_INVALID"
-	| "EVENT_ADDRESS_INVALID";
+	| "EVENT_AGGREGATE_IDENTITY_INVALID";
 
 export type DomainEventValidationField =
 	| "eventId"

@@ -29,6 +29,59 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Changed (breaking): kit errors carry the aggregate identity as one value
+
+An aggregate id is unique only together with its aggregate type, so the
+pair is one value: `AggregateIdentity`. Ten kit errors split it into two
+fields, and every reader had to put them together again. They now carry
+one `identity` field of the shape `{ aggregateType, aggregateId }`, the same
+field on each of them. Each error keeps a frozen copy of the two fields, not
+the caller's object. Every kit message renders an aggregate identity as
+`Type(id)`, so a log search finds all of them.
+
+The errors are `ConcurrencyConflictError`, `DuplicateAggregateError`,
+`AggregateNotFoundError`, `SnapshotSchemaMismatchError`,
+`SnapshotVersionNotRestoredError`, `PendingEventLimitExceededError`,
+`InvalidFlushStatementError`, `InvalidEventStreamPageError`,
+`ReplayTargetMismatchError`, and `ReplayRejectedError`. An adapter that
+throws one of them passes the identity; a catch block that reads the fields
+reads them from `identity`.
+
+| Before | After |
+| --- | --- |
+| `new ConcurrencyConflictError({ aggregateType, aggregateId, expectedVersion, reason, actualVersion })` | `new ConcurrencyConflictError({ identity: { aggregateType, aggregateId }, expectedVersion, reason, actualVersion })` |
+| `new AggregateNotFoundError({ aggregateType, id })` | `new AggregateNotFoundError({ identity: { aggregateType, aggregateId: id } })` |
+| `error.aggregateType`, `error.aggregateId` | `error.identity.aggregateType`, `error.identity.aggregateId` |
+| `error.id` on `AggregateNotFoundError` | `error.identity.aggregateId` |
+
+The other errors change the same way as `ConcurrencyConflictError`. An
+`AggregateIdentity` value passes as it is, for example
+`new DuplicateAggregateError({ identity: stream })`. The log object of a
+serialized error carries the nested `identity`.
+
+### Changed (breaking): AggregateAddress is AggregateIdentity
+
+The pair of aggregate type and aggregate id is the identity of an
+aggregate: the id alone is unique only within its type. The kit called the
+pair an address, which is not a term of domain-driven design and reads like
+the postal address that many domains model. It is now `AggregateIdentity`,
+and every name built on it follows.
+
+| Before | After |
+| --- | --- |
+| `AggregateAddress` | `AggregateIdentity` |
+| `AggregateAddressMismatchOptions` | `AggregateIdentityMismatchOptions` |
+| `MisaddressedEventError` (code `MISADDRESSED_EVENT`) | `MisattributedEventError` (code `MISATTRIBUTED_EVENT`) |
+| `DomainEventValidationCode` `EVENT_ADDRESS_INVALID` | `EVENT_AGGREGATE_IDENTITY_INVALID` |
+| protected `addressNewEvent(event)` on the aggregate base classes | protected `stampNewEventIdentity(event)` |
+
+The fields of the type stay `aggregateType` and `aggregateId`. Parameter
+names that describe a role stay as well: `stream` on the event store,
+`source` on committed events and integration messages, `expected` and
+`actual` on the mismatch errors. Parameters that were named `address` are
+named `identity`. Rename the type and the error where you import or match
+on them. No alias remains.
+
 ### Changed (breaking): the stream-page replay takes a replayable stream read
 
 `reconstituteAggregateFromStreamPages` takes a `ReplayableStreamPages`

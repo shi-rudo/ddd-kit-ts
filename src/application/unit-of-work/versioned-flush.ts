@@ -185,8 +185,7 @@ function insertWriter<
 				duplicate = isDuplicate(error);
 			} catch (classifierCause) {
 				throw new InvalidFlushStatementError({
-					aggregateType,
-					aggregateId: write.aggregateId,
+					identity: { aggregateType, aggregateId: write.aggregateId },
 					intent: "add",
 					reason: "duplicate_check_failed",
 					cause: error,
@@ -195,8 +194,7 @@ function insertWriter<
 			}
 			if (!duplicate) throw error;
 			throw new DuplicateAggregateError({
-				aggregateType,
-				aggregateId: write.aggregateId,
+				identity: { aggregateType, aggregateId: write.aggregateId },
 				cause: error,
 			});
 		}
@@ -271,8 +269,7 @@ function versionedWriter<
 		received?: string,
 	) =>
 		new InvalidFlushStatementError({
-			aggregateType,
-			aggregateId: write.aggregateId,
+			identity: { aggregateType, aggregateId: write.aggregateId },
 			intent,
 			reason,
 			received,
@@ -304,8 +301,7 @@ function versionedWriter<
 			write.aggregateId,
 		);
 		throw new ConcurrencyConflictError({
-			aggregateType,
-			aggregateId: write.aggregateId,
+			identity: { aggregateType, aggregateId: write.aggregateId },
 			expectedVersion: write.expectedVersion,
 			cause: stored.read ? undefined : stored.readFailure,
 			...storedVersionOf(stored, write.expectedVersion),

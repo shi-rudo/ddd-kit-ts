@@ -4,6 +4,7 @@ import {
 	InvalidFlushStatementError,
 	RollbackError,
 } from "../application/unit-of-work/errors";
+import type { AggregateIdentity } from "../domain/aggregate/aggregate-identity";
 import { InvalidDomainTransitionError } from "../domain/state-machine/errors";
 import type {
 	EventBusClosedError,
@@ -11,12 +12,16 @@ import type {
 } from "../messaging/event-bus/errors";
 import {
 	AggregateDeletedError,
+	type AggregateIdentityMismatchOptions,
 	AggregateNotFoundError,
+	type AggregateNotFoundErrorOptions,
 	CapabilityRegistryConflictError,
 	ConcurrencyConflictError,
+	type ConcurrencyConflictErrorOptions,
 	DirectStateMutationError,
 	DomainError,
 	DuplicateAggregateError,
+	type DuplicateAggregateErrorOptions,
 	ErrorMapperFailedError,
 	EventHarvestError,
 	FoldReturnedNoStateError,
@@ -26,23 +31,29 @@ import {
 	InMemoryCapacityExceededError,
 	InvalidCommandMessageError,
 	InvalidEventStreamPageError,
+	type InvalidEventStreamPageErrorOptions,
 	InvalidIntegrationMessageError,
 	InvalidVersionError,
 	type KitErrorCode,
-	MisaddressedEventError,
+	MisattributedEventError,
 	MissingEntityIdError,
 	MissingFoldError,
 	MissingHandlerError,
 	PendingEventBatchMismatchError,
 	PendingEventLimitExceededError,
+	type PendingEventLimitExceededErrorOptions,
 	ProjectionGapError,
 	ProjectionIdentityViolationError,
 	ProjectionOrderViolationError,
 	ProjectionReceiptViolationError,
 	ReplayRejectedError,
+	type ReplayRejectedErrorOptions,
 	ReplayTargetMismatchError,
+	type ReplayTargetMismatchErrorOptions,
 	SnapshotSchemaMismatchError,
+	type SnapshotSchemaMismatchErrorOptions,
 	SnapshotVersionNotRestoredError,
+	type SnapshotVersionNotRestoredErrorOptions,
 	UnenrolledChangesError,
 	UnmanagedInstanceError,
 	UnprojectableEventError,
@@ -75,7 +86,9 @@ const concreteCases: ReadonlyArray<{
 }> = [
 	{
 		error: () =>
-			new AggregateNotFoundError({ aggregateType: "Order", id: "o-1" }),
+			new AggregateNotFoundError({
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
+			}),
 		code: "AGGREGATE_NOT_FOUND",
 		category: "INFRASTRUCTURE",
 		retryable: false,
@@ -84,8 +97,7 @@ const concreteCases: ReadonlyArray<{
 		error: () =>
 			new ConcurrencyConflictError({
 				reason: "stale_version",
-				aggregateType: "Order",
-				aggregateId: "o-1",
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
 				expectedVersion: 1,
 				actualVersion: 2,
 			}),
@@ -96,8 +108,7 @@ const concreteCases: ReadonlyArray<{
 	{
 		error: () =>
 			new DuplicateAggregateError({
-				aggregateType: "Order",
-				aggregateId: "o-1",
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
 			}),
 		code: "DUPLICATE_AGGREGATE",
 		category: "INFRASTRUCTURE",
@@ -106,8 +117,7 @@ const concreteCases: ReadonlyArray<{
 	{
 		error: () =>
 			new SnapshotSchemaMismatchError({
-				aggregateType: "Order",
-				aggregateId: "o-1",
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
 				expectedSchemaVersion: 2,
 				actualSchemaVersion: 1,
 			}),
@@ -118,8 +128,7 @@ const concreteCases: ReadonlyArray<{
 	{
 		error: () =>
 			new SnapshotVersionNotRestoredError({
-				aggregateType: "Order",
-				aggregateId: "o-1",
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
 				snapshotVersion: 7,
 				restoredVersion: 0,
 			}),
@@ -135,12 +144,12 @@ const concreteCases: ReadonlyArray<{
 	},
 	{
 		error: () =>
-			new MisaddressedEventError({
+			new MisattributedEventError({
 				expected: { aggregateType: "Order", aggregateId: "o-1" },
 				actual: { aggregateId: "o-2" },
 				eventType: "OrderConfirmed",
 			}),
-		code: "MISADDRESSED_EVENT",
+		code: "MISATTRIBUTED_EVENT",
 		category: "WIRING",
 		retryable: false,
 	},
@@ -177,8 +186,7 @@ const concreteCases: ReadonlyArray<{
 	{
 		error: () =>
 			new PendingEventLimitExceededError({
-				aggregateType: "Order",
-				aggregateId: "order-1",
+				identity: { aggregateType: "Order", aggregateId: "order-1" },
 				limit: 2,
 				pending: 2,
 				added: 1,
@@ -223,8 +231,7 @@ const concreteCases: ReadonlyArray<{
 	{
 		error: () =>
 			new InvalidEventStreamPageError({
-				aggregateType: "Order",
-				aggregateId: "o-1",
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
 				reason: "empty_page",
 				fromVersion: 10,
 				targetVersion: 12,
@@ -236,8 +243,7 @@ const concreteCases: ReadonlyArray<{
 	{
 		error: () =>
 			new ReplayTargetMismatchError({
-				aggregateType: "Order",
-				aggregateId: "o-1",
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
 				reason: "pages_short_of_target",
 				fromVersion: 10,
 				targetVersion: 12,
@@ -250,8 +256,7 @@ const concreteCases: ReadonlyArray<{
 	{
 		error: () =>
 			new ReplayRejectedError({
-				aggregateType: "Order",
-				aggregateId: "o-1",
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
 				fromVersion: 10,
 				toVersion: 12,
 				cause: new RowRejectedError(),
@@ -377,8 +382,7 @@ describe("kit errors are StructuredErrors (code = name = the one identifier)", (
 		const status = matchError(
 			new ConcurrencyConflictError({
 				reason: "stale_version",
-				aggregateType: "Order",
-				aggregateId: "o-1",
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
 				expectedVersion: 1,
 				actualVersion: 2,
 			}),
@@ -479,8 +483,7 @@ describe("the no-base-error consumer path is first-class", () => {
 	it("branches with a plain switch on error.code and plain property reads", () => {
 		const error: unknown = new ConcurrencyConflictError({
 			reason: "stale_version",
-			aggregateType: "Order",
-			aggregateId: "o-1",
+			identity: { aggregateType: "Order", aggregateId: "o-1" },
 			expectedVersion: 1,
 			actualVersion: 2,
 		});
@@ -508,8 +511,7 @@ describe("a serialized kit error keeps the fields it declares", () => {
 	it("carries the fields of an infrastructure error", () => {
 		const error = new ConcurrencyConflictError({
 			reason: "stale_version",
-			aggregateType: "Order",
-			aggregateId: "order-1",
+			identity: { aggregateType: "Order", aggregateId: "order-1" },
 			expectedVersion: 3,
 			actualVersion: 5,
 		});
@@ -518,8 +520,7 @@ describe("a serialized kit error keeps the fields it declares", () => {
 			code: "CONCURRENCY_CONFLICT",
 			category: "INFRASTRUCTURE",
 			retryable: true,
-			aggregateType: "Order",
-			aggregateId: "order-1",
+			identity: { aggregateType: "Order", aggregateId: "order-1" },
 			expectedVersion: 3,
 			actualVersion: 5,
 		});
@@ -527,8 +528,7 @@ describe("a serialized kit error keeps the fields it declares", () => {
 
 	it("carries the fields of a wiring error", () => {
 		const error = new InvalidFlushStatementError({
-			aggregateType: "Order",
-			aggregateId: "order-1",
+			identity: { aggregateType: "Order", aggregateId: "order-1" },
 			intent: "update",
 			reason: "no_row_count",
 			received: "1 (bigint)",
@@ -584,8 +584,7 @@ describe("a serialized kit error keeps the fields it declares", () => {
 
 	it("leaves the internals of the envelope out", () => {
 		const error = new ConcurrencyConflictError({
-			aggregateType: "Order",
-			aggregateId: "order-1",
+			identity: { aggregateType: "Order", aggregateId: "order-1" },
 			expectedVersion: 3,
 			reason: "stale_version",
 			actualVersion: 5,
@@ -603,8 +602,7 @@ describe("a serialized kit error keeps the fields it declares", () => {
 	it("does not let a declared field overwrite the envelope", () => {
 		const error = new ConcurrencyConflictError({
 			reason: "stale_version",
-			aggregateType: "Order",
-			aggregateId: "order-1",
+			identity: { aggregateType: "Order", aggregateId: "order-1" },
 			expectedVersion: 3,
 			actualVersion: 5,
 		});
@@ -640,7 +638,7 @@ describe("KitErrorCode stays in sync with the classes", () => {
 			AssertKitCode<InvalidCommandMessageError["code"]>,
 			AssertKitCode<InvalidIntegrationMessageError["code"]>,
 			AssertKitCode<InvalidVersionError["code"]>,
-			AssertKitCode<MisaddressedEventError["code"]>,
+			AssertKitCode<MisattributedEventError["code"]>,
 			AssertKitCode<MissingEntityIdError["code"]>,
 			AssertKitCode<MissingFoldError["code"]>,
 			AssertKitCode<MissingHandlerError["code"]>,
@@ -666,4 +664,191 @@ describe("KitErrorCode stays in sync with the classes", () => {
 		const witness: _Checks | undefined = undefined;
 		expect(witness).toBeUndefined();
 	});
+});
+
+describe("an error that names an aggregate keeps its own copy of the identity", () => {
+	class RowRejected extends DomainError<"ROW_REJECTED"> {
+		constructor() {
+			super({ code: "ROW_REJECTED", message: "the fold rejects this row" });
+		}
+	}
+
+	const identityCarriers: ReadonlyArray<{
+		name: string;
+		build: (identity: { aggregateType: string; aggregateId: string }) => {
+			readonly identity: {
+				readonly aggregateType: string;
+				readonly aggregateId: string;
+			};
+		};
+	}> = [
+		{
+			name: "ConcurrencyConflictError",
+			build: (identity) =>
+				new ConcurrencyConflictError({
+					identity,
+					expectedVersion: 1,
+					reason: "stale_version",
+					actualVersion: 2,
+				}),
+		},
+		{
+			name: "DuplicateAggregateError",
+			build: (identity) => new DuplicateAggregateError({ identity }),
+		},
+		{
+			name: "AggregateNotFoundError",
+			build: (identity) => new AggregateNotFoundError({ identity }),
+		},
+		{
+			name: "SnapshotSchemaMismatchError",
+			build: (identity) =>
+				new SnapshotSchemaMismatchError({
+					identity,
+					expectedSchemaVersion: 2,
+					actualSchemaVersion: 1,
+				}),
+		},
+		{
+			name: "SnapshotVersionNotRestoredError",
+			build: (identity) =>
+				new SnapshotVersionNotRestoredError({
+					identity,
+					snapshotVersion: 3,
+					restoredVersion: 0,
+				}),
+		},
+		{
+			name: "PendingEventLimitExceededError",
+			build: (identity) =>
+				new PendingEventLimitExceededError({
+					identity,
+					limit: 1,
+					pending: 1,
+					added: 1,
+				}),
+		},
+		{
+			name: "InvalidFlushStatementError",
+			build: (identity) =>
+				new InvalidFlushStatementError({
+					identity,
+					intent: "update",
+					reason: "no_row_count",
+				}),
+		},
+		{
+			name: "InvalidEventStreamPageError",
+			build: (identity) =>
+				new InvalidEventStreamPageError({
+					identity,
+					reason: "empty_page",
+					fromVersion: 0,
+					targetVersion: 1,
+				}),
+		},
+		{
+			name: "ReplayTargetMismatchError",
+			build: (identity) =>
+				new ReplayTargetMismatchError({
+					identity,
+					reason: "pages_short_of_target",
+					fromVersion: 0,
+					targetVersion: 2,
+					actualVersion: 1,
+				}),
+		},
+		{
+			name: "ReplayRejectedError",
+			build: (identity) =>
+				new ReplayRejectedError({
+					identity,
+					fromVersion: 0,
+					toVersion: 1,
+					cause: new RowRejected(),
+				}),
+		},
+	];
+
+	it.each(identityCarriers)(
+		"$name holds a frozen copy of the two aggregate identity fields",
+		({ build }) => {
+			const identity = {
+				aggregateType: "Order",
+				aggregateId: "o-1",
+				extra: "x",
+			};
+
+			const error = build(identity);
+			identity.aggregateId = "o-2";
+
+			expect(error.identity).toStrictEqual({
+				aggregateType: "Order",
+				aggregateId: "o-1",
+			});
+			expect(Object.isFrozen(error.identity)).toBe(true);
+		},
+	);
+
+	it.each([
+		["ForeignEventError", ForeignEventError],
+		["MisattributedEventError", MisattributedEventError],
+	] as const)(
+		"%s holds frozen copies of the expected and the actual identity",
+		(_, ErrorClass) => {
+			const expected = {
+				aggregateType: "Order",
+				aggregateId: "o-1",
+				extra: "x",
+			};
+			const actual = { aggregateId: "o-2" };
+
+			const error = new ErrorClass({
+				expected,
+				actual,
+				eventType: "OrderPlaced",
+			});
+			expected.aggregateId = "changed";
+			actual.aggregateId = "changed";
+
+			expect(error.expected).toStrictEqual({
+				aggregateType: "Order",
+				aggregateId: "o-1",
+			});
+			expect(error.actual).toStrictEqual({ aggregateId: "o-2" });
+			expect(Object.isFrozen(error.expected)).toBe(true);
+			expect(Object.isFrozen(error.actual)).toBe(true);
+		},
+	);
+});
+
+// The errors area imports nothing from the kit, so its options types
+// declare the identity shape inline. This pins every copy to
+// AggregateIdentity: a lost readonly or an extra field breaks the typecheck.
+type SameType<X, Y> =
+	(<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2
+		? true
+		: false;
+
+const identityShapesMatchAggregateIdentity: [
+	SameType<ConcurrencyConflictErrorOptions["identity"], AggregateIdentity>,
+	SameType<DuplicateAggregateErrorOptions["identity"], AggregateIdentity>,
+	SameType<AggregateNotFoundErrorOptions["identity"], AggregateIdentity>,
+	SameType<SnapshotSchemaMismatchErrorOptions["identity"], AggregateIdentity>,
+	SameType<
+		SnapshotVersionNotRestoredErrorOptions["identity"],
+		AggregateIdentity
+	>,
+	SameType<
+		PendingEventLimitExceededErrorOptions["identity"],
+		AggregateIdentity
+	>,
+	SameType<InvalidEventStreamPageErrorOptions["identity"], AggregateIdentity>,
+	SameType<ReplayTargetMismatchErrorOptions["identity"], AggregateIdentity>,
+	SameType<ReplayRejectedErrorOptions["identity"], AggregateIdentity>,
+	SameType<AggregateIdentityMismatchOptions["expected"], AggregateIdentity>,
+] = [true, true, true, true, true, true, true, true, true, true];
+
+it("pins every inline identity shape to AggregateIdentity", () => {
+	expect(identityShapesMatchAggregateIdentity.every(Boolean)).toBe(true);
 });

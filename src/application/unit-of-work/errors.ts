@@ -1,4 +1,10 @@
-import { InfrastructureError, KitWiringError } from "../../errors/kit-errors";
+import type { AggregateIdentity } from "../../domain/aggregate/aggregate-identity";
+import {
+	describeAggregateIdentity,
+	detachAggregateIdentity,
+	InfrastructureError,
+	KitWiringError,
+} from "../../errors/kit-errors";
 import type { AggregateWriteIntent } from "./persistence-contract";
 
 /**
@@ -128,8 +134,7 @@ export type FlushStatementReason =
  * error, and the reason stays in the cause chain.
  */
 export class InvalidFlushStatementError extends KitWiringError<"INVALID_FLUSH_STATEMENT"> {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	readonly identity: InvalidFlushStatementErrorOptions["identity"];
 	readonly intent: AggregateWriteIntent;
 	readonly reason: FlushStatementReason;
 	/** What the statement returned instead of a row count. */
@@ -143,8 +148,7 @@ export class InvalidFlushStatementError extends KitWiringError<"INVALID_FLUSH_ST
 			flushStatementReasonMessage(options),
 			options.cause,
 		);
-		this.aggregateType = options.aggregateType;
-		this.aggregateId = options.aggregateId;
+		this.identity = detachAggregateIdentity(options.identity);
 		this.intent = options.intent;
 		this.reason = options.reason;
 		this.received = options.received;
@@ -154,8 +158,8 @@ export class InvalidFlushStatementError extends KitWiringError<"INVALID_FLUSH_ST
 
 /** The fields that describe one defect of the flush statements. */
 export interface InvalidFlushStatementErrorOptions {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	/** The aggregate the error names. */
+	readonly identity: AggregateIdentity;
 	readonly intent: AggregateWriteIntent;
 	readonly reason: FlushStatementReason;
 	readonly received?: string;
@@ -167,7 +171,7 @@ export interface InvalidFlushStatementErrorOptions {
 function flushStatementReasonMessage(
 	options: InvalidFlushStatementErrorOptions,
 ): string {
-	const site = `${options.intent} of ${options.aggregateType}(${options.aggregateId})`;
+	const site = `${options.intent} of ${describeAggregateIdentity(options.identity)}`;
 	switch (options.reason) {
 		case "statement_absent":
 			return (

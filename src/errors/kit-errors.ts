@@ -387,7 +387,7 @@ export class DirectStateMutationError extends KitWiringError<"DIRECT_STATE_MUTAT
 /**
  * Thrown by `Projector.project` when an event cannot be projected
  * safely because its cursor is missing or malformed, or its aggregate
- * address is absent. Applying such an event would break idempotency, so
+ * identity is absent. Applying such an event would break idempotency, so
  * the batch fails. Events written by `withCommit` carry the complete
  * cursor automatically; other sources compose a gap-proof committed-event
  * envelope. A well-formed cursor that does not continue the stored chain
@@ -666,12 +666,13 @@ export class UnreplayableAggregateError extends KitWiringError<"UNREPLAYABLE_AGG
 }
 
 /**
- * Constructor options for {@link MisaddressedEventError} and
- * {@link ForeignEventError}: the address of the aggregate that received the
- * event, and the address fields the event carries. A missing field on the
- * event matches by default, so `actual` names only what the event states.
+ * Constructor options for {@link MisattributedEventError} and
+ * {@link ForeignEventError}: the identity of the aggregate that received the
+ * event, and the aggregate identity fields the event carries. A missing
+ * field on the event matches by default, so `actual` names only what the
+ * event states.
  */
-export interface AggregateAddressMismatchOptions {
+export interface AggregateIdentityMismatchOptions {
 	readonly expected: {
 		readonly aggregateType: string;
 		readonly aggregateId: string;
@@ -683,51 +684,98 @@ export interface AggregateAddressMismatchOptions {
 	readonly eventType: string;
 }
 
-/** The address the event names; a missing field falls back to the receiving aggregate. */
-function describeEventAddress(
-	options: AggregateAddressMismatchOptions,
+/**
+ * Renders an aggregate identity for a kit message as `Type(id)`, the one
+ * format every kit message uses, so a log search finds all of them. Kit
+ * modules only; not part of the package entries.
+ */
+export function describeAggregateIdentity(identity: {
+	readonly aggregateType: string;
+	readonly aggregateId: string;
+}): string {
+	return `${identity.aggregateType}(${identity.aggregateId})`;
+}
+
+/**
+ * A frozen copy of the two aggregate identity fields. An error keeps its own
+ * copy, so it neither shares the caller's object nor carries its other
+ * properties into the log. Kit modules only; not part of the package
+ * entries.
+ */
+export function detachAggregateIdentity(identity: {
+	readonly aggregateType: string;
+	readonly aggregateId: string;
+}): { readonly aggregateType: string; readonly aggregateId: string } {
+	return Object.freeze({
+		aggregateType: identity.aggregateType,
+		aggregateId: identity.aggregateId,
+	});
+}
+
+function detachPartialAggregateIdentity(
+	identity: AggregateIdentityMismatchOptions["actual"],
+): AggregateIdentityMismatchOptions["actual"] {
+	return Object.freeze({
+		...(identity.aggregateType === undefined
+			? {}
+			: { aggregateType: identity.aggregateType }),
+		...(identity.aggregateId === undefined
+			? {}
+			: { aggregateId: identity.aggregateId }),
+	});
+}
+
+/** The identity the event names; a missing field falls back to the receiving aggregate. */
+function describeEventIdentity(
+	options: AggregateIdentityMismatchOptions,
 ): string {
 	const { expected, actual } = options;
-	return `${actual.aggregateType ?? expected.aggregateType} ${actual.aggregateId ?? expected.aggregateId}`;
+	return describeAggregateIdentity({
+		aggregateType: actual.aggregateType ?? expected.aggregateType,
+		aggregateId: actual.aggregateId ?? expected.aggregateId,
+	});
 }
 
 /**
  * Thrown by `EventSourcedAggregate.apply()` when a NEW event carries an
  * `aggregateId` or `aggregateType` naming a different aggregate: a
  * deterministic programming bug at the call site (a hand-built or
- * copied event addressed elsewhere), caught before the event can be
- * recorded and poison the own stream. Events with MISSING address
- * fields do not trip this: `apply()` stamps them from the aggregate,
+ * copied event that belongs elsewhere), caught before the event can be
+ * recorded and poison the own stream. Events with MISSING aggregate
+ * identity fields do not trip this: `apply()` stamps them from the aggregate,
  * the same guarantee `createEvent` gives. A wiring error, distinct
  * from {@link ForeignEventError} on purpose: a wrong new event is a
  * bug in today's code, a wrong PERSISTED row is corrupted or miswired
  * infrastructure, and handlers for one must not absorb the other.
  */
-export class MisaddressedEventError extends KitWiringError<"MISADDRESSED_EVENT"> {
-	/** Address of the aggregate that received the event. */
-	readonly expected: AggregateAddressMismatchOptions["expected"];
-	/** Address fields the event carries. */
-	readonly actual: AggregateAddressMismatchOptions["actual"];
+export class MisattributedEventError extends KitWiringError<"MISATTRIBUTED_EVENT"> {
+	/** Identity of the aggregate that received the event. */
+	readonly expected: AggregateIdentityMismatchOptions["expected"];
+	/** Aggregate identity fields the event carries. */
+	readonly actual: AggregateIdentityMismatchOptions["actual"];
 	readonly eventType: string;
 
-	constructor(options: AggregateAddressMismatchOptions) {
+	constructor(options: AggregateIdentityMismatchOptions) {
 		super(
-			"MISADDRESSED_EVENT",
-			`New event "${options.eventType}" is addressed to ` +
-				`${describeEventAddress(options)} but was applied on ` +
-				`${options.expected.aggregateType} ${options.expected.aggregateId}: ` +
-				"fix the call site (createEvent stamps the right address).",
+			"MISATTRIBUTED_EVENT",
+			`New event "${options.eventType}" belongs to ` +
+				`${describeEventIdentity(options)} but was applied on ` +
+				`${describeAggregateIdentity(options.expected)}: ` +
+				"fix the call site (createEvent stamps the right identity).",
 		);
-		this.expected = options.expected;
-		this.actual = options.actual;
+		this.expected = detachAggregateIdentity(options.expected);
+		this.actual = detachPartialAggregateIdentity(options.actual);
 		this.eventType = options.eventType;
 	}
 }
 
 /** Constructor options for {@link SnapshotVersionNotRestoredError}. */
 export interface SnapshotVersionNotRestoredErrorOptions {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	/** The aggregate the error names. */
+	readonly identity: {
+		readonly aggregateType: string;
+		readonly aggregateId: string;
+	};
 	/** The version the snapshot carries. */
 	readonly snapshotVersion: number;
 	/** The version the factory's aggregate reports. */
@@ -743,23 +791,21 @@ export interface SnapshotVersionNotRestoredErrorOptions {
  * channel would mask it as perpetual silent refolding.
  */
 export class SnapshotVersionNotRestoredError extends KitWiringError<"SNAPSHOT_VERSION_NOT_RESTORED"> {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	readonly identity: SnapshotVersionNotRestoredErrorOptions["identity"];
 	readonly snapshotVersion: number;
 	readonly restoredVersion: number;
 
 	constructor(options: SnapshotVersionNotRestoredErrorOptions) {
 		super(
 			"SNAPSHOT_VERSION_NOT_RESTORED",
-			`SnapshotModel.reconstitute for ${options.aggregateType} ` +
-				`${options.aggregateId} returned an aggregate at version ` +
+			`SnapshotModel.reconstitute for ${describeAggregateIdentity(options.identity)} ` +
+				"returned an aggregate at version " +
 				`${options.restoredVersion} for a snapshot at version ` +
 				`${options.snapshotVersion}. Reconstitution must restore ` +
 				"the persisted version; call markReconstituted(version) inside " +
 				"the aggregate factory.",
 		);
-		this.aggregateType = options.aggregateType;
-		this.aggregateId = options.aggregateId;
+		this.identity = detachAggregateIdentity(options.identity);
 		this.snapshotVersion = options.snapshotVersion;
 		this.restoredVersion = options.restoredVersion;
 	}
@@ -862,8 +908,11 @@ export class DuplicateEventIdError extends KitWiringError<"DUPLICATE_EVENT_ID"> 
 
 /** Constructor options for {@link PendingEventLimitExceededError}. */
 export interface PendingEventLimitExceededErrorOptions {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	/** The aggregate the error names. */
+	readonly identity: {
+		readonly aggregateType: string;
+		readonly aggregateId: string;
+	};
 	/** The configured `maxPendingEvents`. */
 	readonly limit: number;
 	/** Events pending before the rejected recording. */
@@ -882,8 +931,7 @@ export interface PendingEventLimitExceededErrorOptions {
  * per decision.
  */
 export class PendingEventLimitExceededError extends KitWiringError<"PENDING_EVENT_LIMIT_EXCEEDED"> {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	readonly identity: PendingEventLimitExceededErrorOptions["identity"];
 	readonly limit: number;
 	readonly pending: number;
 	readonly added: number;
@@ -891,14 +939,13 @@ export class PendingEventLimitExceededError extends KitWiringError<"PENDING_EVEN
 	constructor(options: PendingEventLimitExceededErrorOptions) {
 		super(
 			"PENDING_EVENT_LIMIT_EXCEEDED",
-			`Aggregate ${options.aggregateType}(${options.aggregateId}) holds ` +
+			`Aggregate ${describeAggregateIdentity(options.identity)} holds ` +
 				`${options.pending} pending event(s) and cannot record ` +
 				`${options.added} more: maxPendingEvents is ${options.limit}. ` +
 				"A decision that emits this many facts points at a missing " +
 				"aggregate boundary.",
 		);
-		this.aggregateType = options.aggregateType;
-		this.aggregateId = options.aggregateId;
+		this.identity = detachAggregateIdentity(options.identity);
 		this.limit = options.limit;
 		this.pending = options.pending;
 		this.added = options.added;
@@ -936,34 +983,34 @@ export class PendingEventBatchMismatchError extends KitWiringError<"PENDING_EVEN
  * the persisted row belongs to someone else (a miswired stream read,
  * ids colliding across aggregate types, a corrupted store). An
  * `InfrastructureError`, NOT a `DomainError` (same posture as
- * {@link SnapshotSchemaMismatchError}): a wrong address is data
+ * {@link SnapshotSchemaMismatchError}): a wrong aggregate identity is data
  * corruption or wiring, never an expected business rejection, so it
  * must not be absorbed by generic domain error handling or presented
  * as a 4xx. It therefore PROPAGATES as a throw through the replay
  * methods' `Result` contract (which reserves `Err` for `DomainError`),
  * after the usual all-or-nothing rollback. History events without the
- * optional address fields pass unchecked (the fields are optional on
+ * optional aggregate identity fields pass unchecked (the fields are optional on
  * the event shape); new events are covered by
- * {@link MisaddressedEventError}.
+ * {@link MisattributedEventError}.
  */
 export class ForeignEventError extends InfrastructureError<"FOREIGN_EVENT"> {
-	/** Address of the aggregate that received the event. */
-	readonly expected: AggregateAddressMismatchOptions["expected"];
-	/** Address fields the event carries. */
-	readonly actual: AggregateAddressMismatchOptions["actual"];
+	/** Identity of the aggregate that received the event. */
+	readonly expected: AggregateIdentityMismatchOptions["expected"];
+	/** Aggregate identity fields the event carries. */
+	readonly actual: AggregateIdentityMismatchOptions["actual"];
 	readonly eventType: string;
 
-	constructor(options: AggregateAddressMismatchOptions) {
+	constructor(options: AggregateIdentityMismatchOptions) {
 		super({
 			code: "FOREIGN_EVENT",
 			message:
 				`Persisted event "${options.eventType}" belongs to ` +
-				`${describeEventAddress(options)}, not to ` +
-				`${options.expected.aggregateType} ${options.expected.aggregateId}: ` +
-				"the stream row addresses a different aggregate.",
+				`${describeEventIdentity(options)}, not to ` +
+				`${describeAggregateIdentity(options.expected)}: ` +
+				"the stream row belongs to a different aggregate.",
 		});
-		this.expected = options.expected;
-		this.actual = options.actual;
+		this.expected = detachAggregateIdentity(options.expected);
+		this.actual = detachPartialAggregateIdentity(options.actual);
 		this.eventType = options.eventType;
 	}
 }
@@ -979,8 +1026,11 @@ export type EventStreamPageReason =
 
 /** Constructor options for {@link InvalidEventStreamPageError}. */
 export interface InvalidEventStreamPageErrorOptions {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	/** The aggregate the error names. */
+	readonly identity: {
+		readonly aggregateType: string;
+		readonly aggregateId: string;
+	};
 	/** How the page breaks the contract; see {@link EventStreamPageReason}. */
 	readonly reason: EventStreamPageReason;
 	/** The exclusive cursor the page followed. */
@@ -1095,8 +1145,7 @@ function eventStreamPageReasonMessage(
  * the replay, because the replay counts one version per event.
  */
 export class InvalidEventStreamPageError extends InfrastructureError<"INVALID_EVENT_STREAM_PAGE"> {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	readonly identity: InvalidEventStreamPageErrorOptions["identity"];
 	readonly reason: EventStreamPageReason;
 	readonly fromVersion: number;
 	readonly targetVersion: number | undefined;
@@ -1106,13 +1155,12 @@ export class InvalidEventStreamPageError extends InfrastructureError<"INVALID_EV
 	readonly limit: number | undefined;
 
 	constructor(options: InvalidEventStreamPageErrorOptions) {
-		const stream = `${options.aggregateType}(${options.aggregateId})`;
+		const stream = `${describeAggregateIdentity(options.identity)}`;
 		super({
 			code: "INVALID_EVENT_STREAM_PAGE",
 			message: eventStreamPageReasonMessage(stream, options),
 		});
-		this.aggregateType = options.aggregateType;
-		this.aggregateId = options.aggregateId;
+		this.identity = detachAggregateIdentity(options.identity);
 		this.reason = options.reason;
 		this.fromVersion = options.fromVersion;
 		this.targetVersion = options.targetVersion;
@@ -1130,8 +1178,11 @@ export type ReplayTargetMismatchReason =
 
 /** Constructor options for {@link ReplayTargetMismatchError}. */
 export interface ReplayTargetMismatchErrorOptions {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	/** The aggregate the error names. */
+	readonly identity: {
+		readonly aggregateType: string;
+		readonly aggregateId: string;
+	};
 	/** The check that failed; see {@link ReplayTargetMismatchReason}. */
 	readonly reason: ReplayTargetMismatchReason;
 	/** The cursor the read started at; the replay target must start here. */
@@ -1187,19 +1238,17 @@ function replayTargetMismatchMessage(
  * and an adapter that pages on its own must do the same.
  */
 export class ReplayTargetMismatchError extends InfrastructureError<"REPLAY_TARGET_MISMATCH"> {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	readonly identity: ReplayTargetMismatchErrorOptions["identity"];
 	readonly reason: ReplayTargetMismatchReason;
 	readonly fromVersion: number;
 	readonly targetVersion: number;
 	readonly actualVersion: number;
 
 	constructor(options: ReplayTargetMismatchErrorOptions) {
-		const stream = `${options.aggregateType}(${options.aggregateId})`;
+		const stream = `${describeAggregateIdentity(options.identity)}`;
 		const message = replayTargetMismatchMessage(stream, options);
 		super({ code: "REPLAY_TARGET_MISMATCH", message });
-		this.aggregateType = options.aggregateType;
-		this.aggregateId = options.aggregateId;
+		this.identity = detachAggregateIdentity(options.identity);
 		this.reason = options.reason;
 		this.fromVersion = options.fromVersion;
 		this.targetVersion = options.targetVersion;
@@ -1209,8 +1258,11 @@ export class ReplayTargetMismatchError extends InfrastructureError<"REPLAY_TARGE
 
 /** Constructor options for {@link ReplayRejectedError}. */
 export interface ReplayRejectedErrorOptions {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	/** The aggregate the error names. */
+	readonly identity: {
+		readonly aggregateType: string;
+		readonly aggregateId: string;
+	};
 	/**
 	 * The version the aggregate held before the rejected page. With
 	 * `toVersion`, it bounds the window `(fromVersion, toVersion]` of the
@@ -1235,14 +1287,13 @@ export interface ReplayRejectedErrorOptions {
  * empty history before the first page.
  */
 export class ReplayRejectedError extends InfrastructureError<"REPLAY_REJECTED"> {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	readonly identity: ReplayRejectedErrorOptions["identity"];
 	readonly fromVersion: number;
 	readonly toVersion: number;
 	declare readonly cause: DomainError;
 
 	constructor(options: ReplayRejectedErrorOptions) {
-		const stream = `${options.aggregateType}(${options.aggregateId})`;
+		const stream = `${describeAggregateIdentity(options.identity)}`;
 		const rejected = `${options.cause.code}: ${options.cause.message}`;
 		super({
 			code: "REPLAY_REJECTED",
@@ -1254,8 +1305,7 @@ export class ReplayRejectedError extends InfrastructureError<"REPLAY_REJECTED"> 
 						`(${options.fromVersion}, ${options.toVersion}] with ${rejected}`,
 			cause: options.cause,
 		});
-		this.aggregateType = options.aggregateType;
-		this.aggregateId = options.aggregateId;
+		this.identity = detachAggregateIdentity(options.identity);
 		this.fromVersion = options.fromVersion;
 		this.toVersion = options.toVersion;
 	}
@@ -1544,24 +1594,25 @@ export class AggregateDeletedError extends KitWiringError<"AGGREGATE_DELETED"> {
  * Not retryable: retrying won't make the row appear.
  */
 export interface AggregateNotFoundErrorOptions {
-	readonly aggregateType: string;
-	readonly id: string;
+	/** The aggregate the error names. */
+	readonly identity: {
+		readonly aggregateType: string;
+		readonly aggregateId: string;
+	};
 	/** Optional lower-level error to preserve in the cause chain. */
 	readonly cause?: unknown;
 }
 
 export class AggregateNotFoundError extends InfrastructureError<"AGGREGATE_NOT_FOUND"> {
-	readonly aggregateType: string;
-	readonly id: string;
+	readonly identity: AggregateNotFoundErrorOptions["identity"];
 
 	constructor(options: AggregateNotFoundErrorOptions) {
 		super({
 			code: "AGGREGATE_NOT_FOUND",
-			message: `Aggregate not found: ${options.aggregateType}(${options.id})`,
+			message: `Aggregate not found: ${describeAggregateIdentity(options.identity)}`,
 			cause: options.cause,
 		});
-		this.aggregateType = options.aggregateType;
-		this.id = options.id;
+		this.identity = detachAggregateIdentity(options.identity);
 	}
 }
 
@@ -1585,24 +1636,25 @@ export class AggregateNotFoundError extends InfrastructureError<"AGGREGATE_NOT_F
  * request as already-applied.
  */
 export interface DuplicateAggregateErrorOptions {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	/** The aggregate the error names. */
+	readonly identity: {
+		readonly aggregateType: string;
+		readonly aggregateId: string;
+	};
 	/** Optional driver-level error to preserve in the cause chain. */
 	readonly cause?: unknown;
 }
 
 export class DuplicateAggregateError extends InfrastructureError<"DUPLICATE_AGGREGATE"> {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	readonly identity: DuplicateAggregateErrorOptions["identity"];
 
 	constructor(options: DuplicateAggregateErrorOptions) {
 		super({
 			code: "DUPLICATE_AGGREGATE",
-			message: `Duplicate aggregate: ${options.aggregateType}(${options.aggregateId}) already exists`,
+			message: `Duplicate aggregate: ${describeAggregateIdentity(options.identity)} already exists`,
 			cause: options.cause,
 		});
-		this.aggregateType = options.aggregateType;
-		this.aggregateId = options.aggregateId;
+		this.identity = detachAggregateIdentity(options.identity);
 	}
 }
 
@@ -1622,15 +1674,17 @@ export class DuplicateAggregateError extends InfrastructureError<"DUPLICATE_AGGR
  * truth.
  */
 export interface SnapshotSchemaMismatchErrorOptions {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	/** The aggregate the error names. */
+	readonly identity: {
+		readonly aggregateType: string;
+		readonly aggregateId: string;
+	};
 	readonly expectedSchemaVersion: number;
 	readonly actualSchemaVersion: number;
 }
 
 export class SnapshotSchemaMismatchError extends InfrastructureError<"SNAPSHOT_SCHEMA_MISMATCH"> {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	readonly identity: SnapshotSchemaMismatchErrorOptions["identity"];
 	readonly expectedSchemaVersion: number;
 	readonly actualSchemaVersion: number;
 
@@ -1638,14 +1692,13 @@ export class SnapshotSchemaMismatchError extends InfrastructureError<"SNAPSHOT_S
 		super({
 			code: "SNAPSHOT_SCHEMA_MISMATCH",
 			message:
-				`Snapshot schema mismatch on ${options.aggregateType}(${options.aggregateId}): ` +
+				`Snapshot schema mismatch on ${describeAggregateIdentity(options.identity)}: ` +
 				`the snapshot model expects schema ${options.expectedSchemaVersion}, ` +
 				`the stored snapshot carries ${options.actualSchemaVersion}. Override ` +
 				`the model's migrate function to upgrade old snapshots, or discard the snapshot ` +
 				`and refold from the full event stream.`,
 		});
-		this.aggregateType = options.aggregateType;
-		this.aggregateId = options.aggregateId;
+		this.identity = detachAggregateIdentity(options.identity);
 		this.expectedSchemaVersion = options.expectedSchemaVersion;
 		this.actualSchemaVersion = options.actualSchemaVersion;
 	}
@@ -1686,8 +1739,11 @@ export type ConcurrencyConflictReason =
 	| "version_unknown";
 
 export type ConcurrencyConflictErrorOptions = {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	/** The aggregate the error names. */
+	readonly identity: {
+		readonly aggregateType: string;
+		readonly aggregateId: string;
+	};
 	readonly expectedVersion: number;
 	/** Optional driver-level error to preserve in the cause chain. */
 	readonly cause?: unknown;
@@ -1724,8 +1780,7 @@ export type ConcurrencyConflictErrorOptions = {
  * but `version_unchanged`, which names a defect of the adapter.
  */
 export class ConcurrencyConflictError extends InfrastructureError<"CONCURRENCY_CONFLICT"> {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	readonly identity: ConcurrencyConflictErrorOptions["identity"];
 	readonly expectedVersion: number;
 	/** The stored version, or `null` when none exists to name. */
 	readonly actualVersion: number | null;
@@ -1743,8 +1798,7 @@ export class ConcurrencyConflictError extends InfrastructureError<"CONCURRENCY_C
 			// repeats it, so that one reason is not retryable.
 			retryable: options.reason !== "version_unchanged",
 		});
-		this.aggregateType = options.aggregateType;
-		this.aggregateId = options.aggregateId;
+		this.identity = detachAggregateIdentity(options.identity);
 		this.expectedVersion = options.expectedVersion;
 		this.actualVersion = options.actualVersion ?? null;
 		this.reason = options.reason;
@@ -1754,7 +1808,7 @@ export class ConcurrencyConflictError extends InfrastructureError<"CONCURRENCY_C
 function concurrencyConflictMessage(
 	options: ConcurrencyConflictErrorOptions,
 ): string {
-	const site = `${options.aggregateType}(${options.aggregateId})`;
+	const site = `${describeAggregateIdentity(options.identity)}`;
 	switch (options.reason) {
 		case "stale_version":
 			return (
@@ -1965,7 +2019,7 @@ export type KitErrorCode =
 	| "DUPLICATE_EVENT_ID"
 	| "DUPLICATE_HANDLER_REGISTRATION"
 	| "ERROR_MAPPER_FAILED"
-	| "EVENT_ADDRESS_INVALID"
+	| "EVENT_AGGREGATE_IDENTITY_INVALID"
 	| "EVENT_BUS_CLOSED"
 	| "EVENT_HARVEST_FAILED"
 	| "EVENT_ID_INVALID"
@@ -1998,7 +2052,7 @@ export type KitErrorCode =
 	| "INVALID_REPOSITORY_ADAPTER"
 	| "INVALID_REPOSITORY_DEFINITION"
 	| "INVALID_VERSION"
-	| "MISADDRESSED_EVENT"
+	| "MISATTRIBUTED_EVENT"
 	| "MISSING_ENTITY_ID"
 	| "MISSING_FOLD"
 	| "MISSING_HANDLER"

@@ -9,7 +9,10 @@ import {
 	type PendingDomainEvent,
 } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
-import { EventHarvestError } from "../../errors/kit-errors";
+import {
+	describeAggregateIdentity,
+	EventHarvestError,
+} from "../../errors/kit-errors";
 import { abortReason } from "../../internal/async/abort";
 import {
 	DEFAULT_EXECUTION_TIMEOUT_MS,
@@ -588,15 +591,17 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 							recordedEvent.type,
 						);
 					}
-					// Backstop behind the aggregate's own address check: the
-					// envelope source is copied from the event, so an event that
-					// names another aggregate must never become this commit.
+					// Backstop behind the aggregate identity check of the aggregate
+					// itself: the envelope source is copied from the event, so an
+					// event that names another aggregate must never become this commit.
 					if (aggregateId !== enrolledId || aggregateType !== enrolledType) {
 						throw new EventHarvestError(
-							`withCommit: event "${recordedEvent.type}" is addressed to ` +
-								`${aggregateType} ${aggregateId} but was enrolled under ` +
-								`${enrolledType} ${enrolledId}. The aggregate base ` +
-								"classes stamp the address on every recording path; an " +
+							`withCommit: event "${recordedEvent.type}" belongs to ` +
+								`${describeAggregateIdentity({ aggregateType, aggregateId })} but ` +
+								"was enrolled under " +
+								`${describeAggregateIdentity({ aggregateType: enrolledType, aggregateId: enrolledId })}. ` +
+								"The aggregate base " +
+								"classes stamp the aggregate identity on every recording path; an " +
 								"instance from another package copy must stamp it the " +
 								"same way.",
 							recordedEvent.type,

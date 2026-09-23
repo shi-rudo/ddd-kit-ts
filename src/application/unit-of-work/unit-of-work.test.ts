@@ -1128,8 +1128,7 @@ describe("UnitOfWork", () => {
 			const { uow } = createUow();
 			const conflict = new ConcurrencyConflictError({
 				reason: "stale_version",
-				aggregateType: "Order",
-				aggregateId: "o-1",
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
 				expectedVersion: 3,
 				actualVersion: 4,
 			});
@@ -2393,8 +2392,7 @@ describe("UnitOfWork", () => {
 		it("callback failed AND scope rejected with an unrelated error: RollbackError carrying both", async () => {
 			const original = new ConcurrencyConflictError({
 				reason: "stale_version",
-				aggregateType: "Order",
-				aggregateId: "o-1",
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
 				expectedVersion: 3,
 				actualVersion: 4,
 			});
@@ -2755,8 +2753,7 @@ describe("UnitOfWork", () => {
 	describe("cross-copy cooperation", () => {
 		it("passes a wiring error from flush to the caller, without the mapper", async () => {
 			const wiringDefect = new InvalidFlushStatementError({
-				aggregateType: "MockAggregate",
-				aggregateId: "o-1",
+				identity: { aggregateType: "MockAggregate", aggregateId: "o-1" },
 				intent: "update",
 				reason: "statement_absent",
 			});

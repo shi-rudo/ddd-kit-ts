@@ -10,7 +10,9 @@ import { toPublicErrorView } from "./public-error-view";
 describe("toPublicErrorView()", () => {
 	it("maps AggregateNotFoundError to a safe view that does NOT leak the id", () => {
 		const view = toPublicErrorView(
-			new AggregateNotFoundError({ aggregateType: "Order", id: "o-1" }),
+			new AggregateNotFoundError({
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
+			}),
 		);
 
 		expect(view.code).toBe("AGGREGATE_NOT_FOUND");
@@ -25,8 +27,7 @@ describe("toPublicErrorView()", () => {
 			toPublicErrorView(
 				new ConcurrencyConflictError({
 					reason: "stale_version",
-					aggregateType: "Order",
-					aggregateId: "o-1",
+					identity: { aggregateType: "Order", aggregateId: "o-1" },
 					expectedVersion: 3,
 					actualVersion: 5,
 				}),
@@ -35,8 +36,7 @@ describe("toPublicErrorView()", () => {
 		expect(
 			toPublicErrorView(
 				new DuplicateAggregateError({
-					aggregateType: "Order",
-					aggregateId: "o-1",
+					identity: { aggregateType: "Order", aggregateId: "o-1" },
 				}),
 			).message,
 		).toContain("already exists");
@@ -86,7 +86,9 @@ describe("toPublicErrorView()", () => {
 		// resolves to the base locale instead of claiming a locale the
 		// message is not actually in.
 		const view = toPublicErrorView(
-			new AggregateNotFoundError({ aggregateType: "Order", id: "o-1" }),
+			new AggregateNotFoundError({
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
+			}),
 			{
 				locale: "de-DE",
 			},

@@ -1,4 +1,4 @@
-import type { AggregateAddress } from "../../domain/aggregate/aggregate-address";
+import type { AggregateIdentity } from "../../domain/aggregate/aggregate-identity";
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
 
 /** Options for {@link EventStore.append}. */
@@ -114,14 +114,14 @@ export interface EventStreamReader<Evt extends AnyDomainEvent> {
 	 * mutable live internal state.
 	 */
 	readStream(
-		stream: AggregateAddress,
+		stream: AggregateIdentity,
 		options: ReadStreamOptions,
 	): Promise<StreamReadResult<Evt>>;
 }
 
 /**
  * Driven port for event-sourced aggregate persistence: an append-only
- * store with one stream per aggregate. Each stream is addressed by the
+ * store with one stream per aggregate. Each stream is identified by the
  * qualified tuple `(aggregateType, aggregateId)`, because aggregate ids
  * are type-scoped rather than globally unique.
  *
@@ -137,7 +137,7 @@ export interface EventStreamReader<Evt extends AnyDomainEvent> {
  * Repository usage (see the event-sourcing guide):
  *
  * ```ts
- * private stream(id: OrderId): AggregateAddress<OrderId> {
+ * private stream(id: OrderId): AggregateIdentity<OrderId> {
  *   return { aggregateType: "Order", aggregateId: id };
  * }
  *
@@ -233,7 +233,7 @@ export interface EventStore<Evt extends AnyDomainEvent>
 	 * it changes the stream key and therefore requires a data migration.
 	 */
 	append(
-		stream: AggregateAddress,
+		stream: AggregateIdentity,
 		events: ReadonlyArray<Evt>,
 		options: EventStoreAppendOptions,
 	): Promise<void>;

@@ -1,4 +1,4 @@
-import type { AggregateAddress } from "../../domain/aggregate/aggregate-address";
+import type { AggregateIdentity } from "../../domain/aggregate/aggregate-identity";
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import { InvalidEventStreamPageError } from "../../errors/kit-errors";
 import { abortReason } from "../../internal/async/abort";
@@ -185,7 +185,7 @@ function decideTargetVersion(
  */
 export async function readStreamPages<Evt extends AnyDomainEvent>(
 	reader: EventStreamReader<Evt>,
-	stream: AggregateAddress,
+	stream: AggregateIdentity,
 	options: ReadStreamPagesOptions,
 ): Promise<StreamPages<Evt>> {
 	assertPositiveSafeInteger("readStreamPages", "limit", options.limit);
@@ -199,11 +199,11 @@ export async function readStreamPages<Evt extends AnyDomainEvent>(
 		);
 	}
 	throwIfAborted(options.signal);
-	const address: AggregateAddress = {
+	const identity: AggregateIdentity = {
 		aggregateType: stream.aggregateType,
 		aggregateId: stream.aggregateId,
 	};
-	const first = await reader.readStream(address, {
+	const first = await reader.readStream(identity, {
 		fromVersion,
 		limit: options.limit,
 		...(options.toVersion === undefined
@@ -212,7 +212,7 @@ export async function readStreamPages<Evt extends AnyDomainEvent>(
 		...(options.signal === undefined ? {} : { signal: options.signal }),
 	});
 	if (!first.exists) return { exists: false, reachable: false };
-	assertValidHead(address, first.lastVersion, fromVersion);
+	assertValidHead(identity, first.lastVersion, fromVersion);
 	const pinned = decideTargetVersion({
 		fromVersion,
 		toVersion: options.toVersion,
@@ -228,27 +228,27 @@ export async function readStreamPages<Evt extends AnyDomainEvent>(
 	}
 	if (fromVersion < pinned.targetVersion) {
 		assertPageNotEmpty(
-			address,
+			identity,
 			first.events.length,
 			fromVersion,
 			pinned.targetVersion,
 		);
 	}
 	assertPageWithinWindow(
-		address,
+		identity,
 		first.events.length,
 		fromVersion,
 		pinned.targetVersion,
 	);
 	assertPageWithinLimit(
-		address,
+		identity,
 		first.events.length,
 		options.limit,
 		fromVersion,
 		pinned.targetVersion,
 	);
 	const window: PinnedWindow = {
-		stream: address,
+		stream: identity,
 		fromVersion,
 		firstPageLastVersion: first.lastVersion,
 		targetVersion: pinned.targetVersion,
@@ -259,7 +259,7 @@ export async function readStreamPages<Evt extends AnyDomainEvent>(
 	return {
 		exists: true,
 		reachable: true,
-		stream: address,
+		stream: identity,
 		fromVersion,
 		targetVersion: pinned.targetVersion,
 		pages: {
@@ -273,7 +273,7 @@ export async function readStreamPages<Evt extends AnyDomainEvent>(
 }
 
 interface PinnedWindow {
-	readonly stream: AggregateAddress;
+	readonly stream: AggregateIdentity;
 	readonly fromVersion: number;
 	readonly firstPageLastVersion: number;
 	readonly targetVersion: number;
@@ -301,7 +301,7 @@ async function* readPinnedPages<Evt extends AnyDomainEvent>(
 		});
 		if (!page.exists) {
 			throw new InvalidEventStreamPageError({
-				...window.stream,
+				identity: window.stream,
 				reason: "stream_vanished",
 				fromVersion: cursor,
 				targetVersion: window.targetVersion,
