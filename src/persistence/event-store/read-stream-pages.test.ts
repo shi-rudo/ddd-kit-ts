@@ -256,6 +256,23 @@ describe("readStreamPages", () => {
 		expect(store.reads).toBe(0);
 	});
 
+	it("rejects with an Error when an aborted signal carries no reason", async () => {
+		const store = await seededStore(countedUpTo(3));
+		const signalWithoutReason = {
+			aborted: true,
+			reason: undefined,
+		} as unknown as AbortSignal;
+
+		const rejection = await readStreamPages(store, stream, {
+			limit: 2,
+			signal: signalWithoutReason,
+		}).catch((error: unknown) => error);
+
+		expect(rejection).toBeInstanceOf(Error);
+		expect(rejection).toMatchObject({ message: "readStreamPages aborted" });
+		expect(store.reads).toBe(0);
+	});
+
 	it("stops paging with the abort reason when the signal aborts between pages", async () => {
 		const store = await seededStore(countedUpTo(5));
 		const controller = new AbortController();

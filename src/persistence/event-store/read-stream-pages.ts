@@ -1,6 +1,7 @@
 import type { AggregateAddress } from "../../domain/aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import { InvalidEventStreamPageError } from "../../errors/kit-errors";
+import { abortReason } from "../../internal/async/abort";
 import {
 	assertNonNegativeSafeInteger,
 	assertPositiveSafeInteger,
@@ -309,5 +310,5 @@ async function* continueToPinnedTarget<Evt extends AnyDomainEvent>(
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
-	if (signal?.aborted) throw signal.reason;
+	if (signal?.aborted) throw abortReason(signal, "readStreamPages aborted");
 }

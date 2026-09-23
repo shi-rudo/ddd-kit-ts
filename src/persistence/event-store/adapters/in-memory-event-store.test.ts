@@ -312,6 +312,23 @@ describe("InMemoryEventStore", () => {
 		).rejects.toBe(controller.signal.reason);
 	});
 
+	it("rejects a read with an Error when an aborted signal carries no reason", async () => {
+		const store = new InMemoryEventStore<OrderEvent>();
+		const signalWithoutReason = {
+			aborted: true,
+			reason: undefined,
+		} as unknown as AbortSignal;
+
+		const rejection = await store
+			.readStream(streamA, { limit: 10, signal: signalWithoutReason })
+			.catch((error: unknown) => error);
+
+		expect(rejection).toBeInstanceOf(Error);
+		expect(rejection).toMatchObject({
+			message: "InMemoryEventStore.readStream aborted",
+		});
+	});
+
 	it("treats an empty append as a no-op", async () => {
 		const store = new InMemoryEventStore<OrderEvent>();
 

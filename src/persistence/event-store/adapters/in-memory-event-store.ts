@@ -7,6 +7,7 @@ import {
 	ConcurrencyConflictError,
 	InMemoryCapacityExceededError,
 } from "../../../errors/kit-errors";
+import { abortReason } from "../../../internal/async/abort";
 import { assertPositiveSafeInteger } from "../../../internal/validate";
 import type {
 	EventStore,
@@ -164,7 +165,12 @@ export class InMemoryEventStore<Evt extends AnyDomainEvent>
 		}
 		assertStreamPosition("fromVersion", options.fromVersion);
 		assertStreamPosition("toVersion", options.toVersion);
-		if (options.signal?.aborted) throw options.signal.reason;
+		if (options.signal?.aborted) {
+			throw abortReason(
+				options.signal,
+				"InMemoryEventStore.readStream aborted",
+			);
+		}
 		const events = this.streams.get(encodeAggregateAddress(stream));
 		if (events === undefined) {
 			return { exists: false, lastVersion: 0, events: [] };
