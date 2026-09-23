@@ -7,14 +7,12 @@ export function assertValidHead(
 	fromVersion: number,
 	targetVersion?: number,
 ): asserts lastVersion is number {
-	if (typeof lastVersion === "number" && Number.isSafeInteger(lastVersion)) {
-		if (lastVersion >= 1) return;
-	}
+	if (Number.isSafeInteger(lastVersion) && (lastVersion as number) >= 1) return;
 	throw new InvalidEventStreamPageError({
 		...stream,
 		reason: "invalid_head",
 		fromVersion,
-		...(targetVersion === undefined ? {} : { targetVersion }),
+		targetVersion,
 		lastVersion,
 	});
 }
