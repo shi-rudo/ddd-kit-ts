@@ -513,6 +513,49 @@ describe("readStreamPages", () => {
 		});
 	});
 
+	it("rejects a first page that holds more events than the limit", async () => {
+		const reader = scriptedReader({
+			exists: true,
+			lastVersion: 5,
+			events: countedUpTo(3),
+		});
+
+		const rejection = await readStreamPages(reader, stream, {
+			limit: 2,
+		}).catch((error: unknown) => error);
+
+		expect(rejection).toBeInstanceOf(InvalidEventStreamPageError);
+		expect(rejection).toMatchObject({
+			...stream,
+			reason: "page_over_limit",
+			fromVersion: 0,
+			targetVersion: 5,
+			eventCount: 3,
+			limit: 2,
+		});
+	});
+
+	it("rejects a continuation page that holds more events than the limit", async () => {
+		const history = countedUpTo(6);
+		const reader = scriptedReader(
+			{ exists: true, lastVersion: 6, events: history.slice(0, 2) },
+			{ exists: true, lastVersion: 6, events: history.slice(2, 5) },
+		);
+		const read = await readReachable(reader, { limit: 2 });
+
+		const rejection = await collectPages(read.pages).catch(
+			(error: unknown) => error,
+		);
+
+		expect(rejection).toBeInstanceOf(InvalidEventStreamPageError);
+		expect(rejection).toMatchObject({
+			reason: "page_over_limit",
+			fromVersion: 2,
+			eventCount: 3,
+			limit: 2,
+		});
+	});
+
 	it("rejects a first page that holds more events than the window up to the head", async () => {
 		const reader = scriptedReader({
 			exists: true,

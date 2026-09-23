@@ -77,13 +77,13 @@ export interface ReplayableStreamPages<Evt extends AnyDomainEvent> {
  * defect wins over a rejection that the data cannot explain.
  *
  * Each page goes through `replayHistory` on the replay target, so
- * allocation stays bounded by the page limit. An empty page, and a page
- * that would run past the target version, throw
- * {@link InvalidEventStreamPageError} before any row of them reaches the
- * aggregate. Events carry no stream position, so only the call can find
- * pages that end short of the target version. After the last page it
- * compares the final version with `read.targetVersion` and throws
- * {@link ReplayTargetMismatchError} on a difference.
+ * allocation stays bounded by the size of a page; `readStreamPages` rejects
+ * a page over its `limit`. An empty page, and a page that would run past
+ * the target version, throw {@link InvalidEventStreamPageError} before any
+ * row of them reaches the aggregate. Events carry no stream position, so
+ * only the call can find pages that end short of the target version. After
+ * the last page it compares the final version with `read.targetVersion` and
+ * throws {@link ReplayTargetMismatchError} on a difference.
  *
  * When the aggregate rejects a stored event with a `DomainError`, the call
  * stops reading and returns {@link ReplayRejectedError} as `Err`. The

@@ -65,3 +65,21 @@ export function assertPageWithinWindow(
 		eventCount,
 	});
 }
+
+export function assertPageWithinLimit(
+	stream: AggregateAddress,
+	eventCount: number,
+	limit: number,
+	fromVersion: number,
+	targetVersion: number,
+): void {
+	if (eventCount <= limit) return;
+	throw new InvalidEventStreamPageError({
+		...stream,
+		reason: "page_over_limit",
+		fromVersion,
+		targetVersion,
+		eventCount,
+		limit,
+	});
+}

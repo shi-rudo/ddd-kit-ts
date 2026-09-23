@@ -80,6 +80,8 @@ defect:
 - `stream_vanished`: a continuation page reports the stream absent.
 - `page_past_target`: the page holds more events than its window has left.
   New.
+- `page_over_limit`: a page of `readStreamPages` holds more events than the
+  `limit` of the read. New.
 - `head_regressed`: a continuation page reports a head below the head of
   the first page. New.
 - `invalid_head`: a page of an existing stream reports a head that is not
@@ -97,7 +99,8 @@ keeps `target_not_at_cursor` and `pages_short_of_target`.
 
 `targetVersion` is optional on the error, because the first page pins no
 target when its head is invalid. The optional fields `lastVersion`,
-`firstPageLastVersion`, and `eventCount` carry what the page reported.
+`firstPageLastVersion`, `eventCount`, and `limit` carry what the page
+reported and what the read asked for.
 `lastVersion` is `unknown`, because an invalid head keeps the value the
 adapter returned.
 Rename the class, the options type, and the code where you construct or

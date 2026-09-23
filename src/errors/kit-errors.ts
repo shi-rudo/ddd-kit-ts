@@ -973,6 +973,7 @@ export type EventStreamPageReason =
 	| "empty_page"
 	| "stream_vanished"
 	| "page_past_target"
+	| "page_over_limit"
 	| "head_regressed"
 	| "invalid_head";
 
@@ -996,8 +997,13 @@ export interface InvalidEventStreamPageErrorOptions {
 	readonly lastVersion?: unknown;
 	/** The stream head the first page reported. Present for `head_regressed`. */
 	readonly firstPageLastVersion?: number;
-	/** The number of events on the page. Present for `page_past_target`. */
+	/**
+	 * The number of events on the page. Present for `page_past_target` and
+	 * `page_over_limit`.
+	 */
 	readonly eventCount?: number;
+	/** The page limit the read asked for. Present for `page_over_limit`. */
+	readonly limit?: number;
 }
 
 function describeReportedHead(head: unknown): string {
@@ -1040,6 +1046,12 @@ function eventStreamPageReasonMessage(
 				`after version ${options.fromVersion}, more than the window ` +
 				`(${options.fromVersion}, ${String(options.targetVersion)}] holds.`
 			);
+		case "page_over_limit":
+			return (
+				`The read of ${stream} returned ${String(options.eventCount)} events ` +
+				`after version ${options.fromVersion}, more than the limit of ` +
+				`${String(options.limit)} it asked for.`
+			);
 		case "head_regressed":
 			return (
 				`readStream reported ${stream} at head ${String(options.lastVersion)} ` +
@@ -1066,7 +1078,8 @@ function eventStreamPageReasonMessage(
  * The `reason` names the defect. `empty_page`: the page holds no event,
  * but events remain before the target version. `stream_vanished`: a
  * continuation page reports the stream absent. `page_past_target`: the
- * page holds more events than its window has left. `head_regressed`: a
+ * page holds more events than its window has left. `page_over_limit`: the
+ * page holds more events than the `limit` of the read. `head_regressed`: a
  * continuation page reports a head below the head of the first page.
  * `invalid_head`: a page of an existing stream reports a head that is not
  * a safe integer of at least 1, for example `0` for a stream without
@@ -1090,6 +1103,7 @@ export class InvalidEventStreamPageError extends InfrastructureError<"INVALID_EV
 	readonly lastVersion: unknown;
 	readonly firstPageLastVersion: number | undefined;
 	readonly eventCount: number | undefined;
+	readonly limit: number | undefined;
 
 	constructor(options: InvalidEventStreamPageErrorOptions) {
 		const stream = `${options.aggregateType}(${options.aggregateId})`;
@@ -1105,6 +1119,7 @@ export class InvalidEventStreamPageError extends InfrastructureError<"INVALID_EV
 		this.lastVersion = options.lastVersion;
 		this.firstPageLastVersion = options.firstPageLastVersion;
 		this.eventCount = options.eventCount;
+		this.limit = options.limit;
 	}
 }
 

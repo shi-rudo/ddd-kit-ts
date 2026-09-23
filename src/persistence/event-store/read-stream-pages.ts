@@ -10,6 +10,7 @@ import type { EventStreamReader, ReadStreamOptions } from "./event-store";
 import {
 	assertHeadNotBehindFirstPage,
 	assertPageNotEmpty,
+	assertPageWithinLimit,
 	assertPageWithinWindow,
 	assertValidHead,
 } from "./event-stream-page-guards";
@@ -172,9 +173,9 @@ function decideTargetVersion(
  * The call checks every page against the `readStream` contract and throws
  * {@link InvalidEventStreamPageError} for a page that breaks it: a head
  * that is not a safe integer of at least 1, an empty page while events
- * remain in the window, a page with more events than its window has left,
- * and a continuation page that reports the stream absent or a head below
- * the head of the first page.
+ * remain in the window, a page with more events than its window has left
+ * or than `limit`, and a continuation page that reports the stream absent
+ * or a head below the head of the first page.
  *
  * Invalid options reject with `RangeError` before any page is read:
  * `limit` and `toVersion` must be positive safe integers, `fromVersion` a
@@ -236,6 +237,13 @@ export async function readStreamPages<Evt extends AnyDomainEvent>(
 	assertPageWithinWindow(
 		address,
 		first.events.length,
+		fromVersion,
+		pinned.targetVersion,
+	);
+	assertPageWithinLimit(
+		address,
+		first.events.length,
+		options.limit,
 		fromVersion,
 		pinned.targetVersion,
 	);
@@ -321,6 +329,13 @@ async function* readPinnedPages<Evt extends AnyDomainEvent>(
 		assertPageWithinWindow(
 			window.stream,
 			page.events.length,
+			cursor,
+			window.targetVersion,
+		);
+		assertPageWithinLimit(
+			window.stream,
+			page.events.length,
+			window.limit,
 			cursor,
 			window.targetVersion,
 		);

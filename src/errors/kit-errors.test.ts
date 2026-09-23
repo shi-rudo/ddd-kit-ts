@@ -83,6 +83,21 @@ describe("InvalidEventStreamPageError", () => {
 		expect(error.message).toContain("(298, 300]");
 	});
 
+	it("names a page over the limit with its size and the limit", () => {
+		const error = new InvalidEventStreamPageError({
+			...stream,
+			reason: "page_over_limit",
+			fromVersion: 256,
+			targetVersion: 300,
+			eventCount: 40,
+			limit: 32,
+		});
+
+		expect(error.limit).toBe(32);
+		expect(error.message).toContain("40 events after version 256");
+		expect(error.message).toContain("limit of 32");
+	});
+
 	it("names a regressed head with both heads", () => {
 		const error = new InvalidEventStreamPageError({
 			...stream,
