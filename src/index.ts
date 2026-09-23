@@ -287,6 +287,7 @@ export {
 	ErrorMapperFailedError,
 	type ErrorMapperFailedErrorOptions,
 	EventHarvestError,
+	type EventStreamPageReason,
 	FoldReturnedNoStateError,
 	ForeignEventError,
 	HostileStateKeyError,
@@ -303,6 +304,8 @@ export {
 	InMemoryCapacityExceededError,
 	type InMemoryCapacityExceededErrorOptions,
 	InvalidCommandMessageError,
+	InvalidEventStreamPageError,
+	type InvalidEventStreamPageErrorOptions,
 	InvalidIntegrationMessageError,
 	InvalidVersionError,
 	isDomainErrorLike,
@@ -314,9 +317,6 @@ export {
 	MissingEntityIdError,
 	MissingFoldError,
 	MissingHandlerError,
-	NonProgressingEventStreamPageError,
-	type NonProgressingEventStreamPageErrorOptions,
-	type NonProgressingEventStreamPageReason,
 	PendingEventBatchMismatchError,
 	PendingEventLimitExceededError,
 	type PendingEventLimitExceededErrorOptions,
@@ -325,6 +325,8 @@ export {
 	ProjectionOrderViolationError,
 	ProjectionReceiptViolationError,
 	ReentrantEventRecordingError,
+	ReplayRejectedError,
+	type ReplayRejectedErrorOptions,
 	ReplayTargetMismatchError,
 	type ReplayTargetMismatchErrorOptions,
 	type ReplayTargetMismatchReason,
@@ -435,14 +437,19 @@ export type {
 } from "./persistence/event-store/event-store";
 export {
 	type AbsentStreamPages,
+	type PinnedTargetVersion,
+	type PinTargetVersionOptions,
+	pinTargetVersion,
 	type ReachableStreamPages,
 	type ReadStreamPagesOptions,
-	type ReplayableStreamPages,
 	readStreamPages,
-	reconstituteAggregateFromStreamPages,
 	type StreamPages,
 	type UnreachableStreamPages,
-} from "./persistence/event-store/stream-pages";
+} from "./persistence/event-store/read-stream-pages";
+export {
+	type ReplayableStreamPages,
+	reconstituteAggregateFromStreamPages,
+} from "./persistence/event-store/reconstitute-from-stream-pages";
 export {
 	type AggregateClass,
 	IdentityMap,

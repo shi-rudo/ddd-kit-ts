@@ -7,6 +7,7 @@ import {
 	ConcurrencyConflictError,
 	InMemoryCapacityExceededError,
 } from "../../../errors/kit-errors";
+import { abortReason } from "../../../internal/async/abort";
 import { assertPositiveSafeInteger } from "../../../internal/validate";
 import type {
 	EventStore,
@@ -44,9 +45,10 @@ function assertStreamPosition(
  * `InMemoryCapacityExceededError`; histories are never silently evicted.
  * Implements the full port contract: expectedVersion-guarded appends
  * (throwing `ConcurrencyConflictError` on mismatch), atomic rejected
- * appends, explicit missing/existing stream state with the actual head,
+ * appends, explicit absent/existing stream state with the actual head,
  * append-order reads, mandatory page bounds, and `(fromVersion, toVersion]`
- * slicing. Invalid limits or positions reject with `RangeError`.
+ * slicing. Invalid limits or positions reject with `RangeError`. A read
+ * with an aborted `signal` rejects with its `reason`.
  *
  * For production, back the port with a durable store whose append and
  * the aggregate transaction share atomicity (a table with a
@@ -163,6 +165,12 @@ export class InMemoryEventStore<Evt extends AnyDomainEvent>
 		}
 		assertStreamPosition("fromVersion", options.fromVersion);
 		assertStreamPosition("toVersion", options.toVersion);
+		if (options.signal?.aborted) {
+			throw abortReason(
+				options.signal,
+				"InMemoryEventStore.readStream aborted",
+			);
+		}
 		const events = this.streams.get(encodeAggregateAddress(stream));
 		if (events === undefined) {
 			return { exists: false, lastVersion: 0, events: [] };
@@ -174,7 +182,7 @@ export class InMemoryEventStore<Evt extends AnyDomainEvent>
 			fromVersion + options.limit,
 		);
 		// Cloned, not sliced: slice() copies the ARRAY but hands out live
-		// references to the stored elements, and a reader mutating one would
+		// references to the stored elements, and a caller mutating one would
 		// silently corrupt every later replay.
 		return {
 			exists: true,

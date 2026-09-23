@@ -135,9 +135,8 @@ async findById(id: OrderId): Promise<Order | undefined> {
 }
 ```
 
-For event sourcing, read the stream in pages toward the pinned target and
-fold
-them into a fresh replay target:
+For event sourcing, read the stream in pages up to the pinned target version
+and replay them into a fresh replay target:
 
 ```ts
 const read = await readStreamPages(eventStore, address, { limit: 256 });
@@ -151,13 +150,13 @@ if (loaded.isErr()) throw loaded.error;
 return tracking.trackLoaded(loaded.value);
 ```
 
-`readStreamPages` pins the first page's `lastVersion` as the target and
-pages toward it. This gives the load one stable append-only prefix even if another
-writer appends while it is running. `reconstituteAggregateFromStreamPages`
-folds every page and throws `ReplayTargetMismatchError` when the replay does
-not end there. Never identity-map a partly replayed aggregate: the aggregate
-exists only in the `Ok`, so there is none to map. The recipe with the refold
-fallback and the long form are in
+`readStreamPages` pins the first page's `lastVersion` as the target version
+and pages up to it. This gives the load one stable append-only prefix even
+if another writer appends while it is running.
+`reconstituteAggregateFromStreamPages` replays every page and throws
+`ReplayTargetMismatchError` when the replay does not end there. Never
+identity-map a partly replayed aggregate: the aggregate exists only in the
+`Ok`, so there is none to map. The recipe and the long form are in
 [Event Sourcing -> Loading from history](./event-sourcing.md#loading-from-history).
 
 ## Adapter-owned persistence models
@@ -684,37 +683,38 @@ const snapshot = captureAggregateSnapshot(
 await snapshotStore.save(address, snapshot);
 ```
 
-Loading creates a fresh aggregate. For event sourcing, replay the tail after
-`snapshot.version` on that fresh instance and let the kit check that it ends
-at the stream head:
+Loading creates a fresh aggregate. For event sourcing, replay the events after
+`snapshot.version` on that fresh instance and let the kit check that the
+replay ends at the stream head:
 
 ```ts
-const discardSnapshotAndRefold = async (): Promise<Order | undefined> => {
-  const refolded = await replayFromZero(orderId);
+const discardSnapshotAndReplay = async (): Promise<Order | undefined> => {
+  const replayed = await replayFromZero(orderId);
   await snapshotStore.delete(address);
-  return refolded;
+  return replayed;
 };
 
-const tail = await readStreamPages(eventStore, address, {
+const read = await readStreamPages(eventStore, address, {
   fromVersion: snapshot.version,
   limit: 256,
 });
-if (!tail.reachable) return discardSnapshotAndRefold();
+if (!read.reachable) return discardSnapshotAndReplay();
 
-const restored = await reconstituteAggregateFromStreamPages(
+const reconstituted = await reconstituteAggregateFromStreamPages(
   () => reconstituteAggregateFromSnapshot(orderSnapshots, orderId, snapshot),
-  tail,
+  read,
 );
-if (restored.isErr()) return discardSnapshotAndRefold();
-const order = restored.value;
+if (reconstituted.isErr()) return discardSnapshotAndReplay();
+const order = reconstituted.value;
 ```
 
 A snapshot beyond the head outlived its stream. `readStreamPages` reports
-that window as `reachable: false`, and the check before the fold discards
-it. `readStreamPages` reads a longer tail page by page. A tail that does not
-bridge the snapshot to the pinned target throws
-`ReplayTargetMismatchError`, because the adapter contradicted its contract. The
-complete recipe with the coded discard set is in
+that window as `reachable: false`, and the check before the replay discards
+the snapshot. `readStreamPages` reads the events after the snapshot page by
+page. Pages that end short of the target version throw
+`ReplayTargetMismatchError`, and a page that runs past it throws
+`InvalidEventStreamPageError`: in both cases the adapter broke its contract.
+The complete recipe with the coded discard set is in
 [Event Sourcing -> Snapshots](./event-sourcing.md#snapshots).
 
 `captureAggregateSnapshot` supplies no hidden clock and performs no I/O. It
@@ -724,7 +724,7 @@ value objects to persistence DTOs explicitly.
 
 A missing stored schema version means schema `1`. A mismatch without a
 `migrate` function throws `SnapshotSchemaMismatchError`. The usual event-store
-fallback is to discard the derived snapshot and refold the stream from zero.
+fallback is to discard the derived snapshot and replay the stream from zero.
 
 ## Domain deletion versus physical removal
 

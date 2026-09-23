@@ -968,70 +968,164 @@ export class ForeignEventError extends InfrastructureError<"FOREIGN_EVENT"> {
 	}
 }
 
-/** The condition a {@link NonProgressingEventStreamPageError} reports. */
-export type NonProgressingEventStreamPageReason =
+/** How a page of a stream read breaks the `readStream` contract. */
+export type EventStreamPageReason =
 	| "empty_page"
-	| "stream_vanished";
+	| "stream_vanished"
+	| "page_past_target"
+	| "page_over_limit"
+	| "head_regressed"
+	| "invalid_head";
 
-/** Constructor options for {@link NonProgressingEventStreamPageError}. */
-export interface NonProgressingEventStreamPageErrorOptions {
+/** Constructor options for {@link InvalidEventStreamPageError}. */
+export interface InvalidEventStreamPageErrorOptions {
 	readonly aggregateType: string;
 	readonly aggregateId: string;
-	/** The condition; see {@link NonProgressingEventStreamPageReason}. */
-	readonly reason: NonProgressingEventStreamPageReason;
+	/** How the page breaks the contract; see {@link EventStreamPageReason}. */
+	readonly reason: EventStreamPageReason;
 	/** The exclusive cursor the page followed. */
 	readonly fromVersion: number;
-	/** Pinned inclusive target the replay still has to reach. */
-	readonly targetVersion: number;
+	/**
+	 * The pinned inclusive target version. Absent for `invalid_head` on the
+	 * first page: that page pins no target.
+	 */
+	readonly targetVersion?: number;
+	/**
+	 * The stream head the page reported, as the adapter returned it. Present
+	 * for `head_regressed` and `invalid_head`.
+	 */
+	readonly lastVersion?: unknown;
+	/** The stream head the first page reported. Present for `head_regressed`. */
+	readonly firstPageLastVersion?: number;
+	/**
+	 * The number of events on the page. Present for `page_past_target` and
+	 * `page_over_limit`.
+	 */
+	readonly eventCount?: number;
+	/** The page limit the read asked for. Present for `page_over_limit`. */
+	readonly limit?: number;
+}
+
+function describeReportedHead(head: unknown): string {
+	if (typeof head === "number" && Number.isFinite(head)) return String(head);
+	return `${showReportedHead(head)} of type ${typeof head}`;
+}
+
+// Object.prototype.toString never converts its receiver: String() throws for
+// an object without a prototype, and the error must still build.
+function showReportedHead(head: unknown): string {
+	if (typeof head === "string") return JSON.stringify(head);
+	if (typeof head === "object" && head !== null) {
+		return Object.prototype.toString.call(head);
+	}
+	return String(head);
+}
+
+function eventStreamPageReasonMessage(
+	stream: string,
+	options: InvalidEventStreamPageErrorOptions,
+): string {
+	const target = `target version ${String(options.targetVersion)}`;
+	switch (options.reason) {
+		case "empty_page":
+			return (
+				`The read of ${stream} returned an empty page after version ` +
+				`${options.fromVersion} toward ${target}. A page holds at least one ` +
+				"event while events remain."
+			);
+		case "stream_vanished":
+			return (
+				`readStream reported ${stream} absent after version ` +
+				`${options.fromVersion} while the replay had not reached ${target}. ` +
+				"A stream is append-only, and only a physical removal deletes it; " +
+				"check for a removal that ran during the read."
+			);
+		case "page_past_target":
+			return (
+				`The read of ${stream} returned ${String(options.eventCount)} events ` +
+				`after version ${options.fromVersion}, more than the window ` +
+				`(${options.fromVersion}, ${String(options.targetVersion)}] holds.`
+			);
+		case "page_over_limit":
+			return (
+				`The read of ${stream} returned ${String(options.eventCount)} events ` +
+				`after version ${options.fromVersion}, more than the limit of ` +
+				`${String(options.limit)} it asked for.`
+			);
+		case "head_regressed":
+			return (
+				`readStream reported ${stream} at head ${String(options.lastVersion)} ` +
+				`after version ${options.fromVersion}, below the head ` +
+				`${String(options.firstPageLastVersion)} of the first page. A stream ` +
+				"is append-only, so its head never moves back."
+			);
+		case "invalid_head":
+			return (
+				`readStream reported ${stream} with head ` +
+				`${describeReportedHead(options.lastVersion)} after version ` +
+				`${options.fromVersion}. The head of an existing stream is a safe ` +
+				"integer of at least 1; report a stream without events as absent."
+			);
+	}
 }
 
 /**
- * Thrown when a page of a stream read cannot advance the replay. The
- * `reason` names the condition. `empty_page`: the page holds no event; a
- * page holds at least one event while events remain, and the read ends at
- * the target. `readStreamPages` reports it for a continuation page of the
- * store, and `reconstituteAggregateFromStreamPages` for a page of an
- * adapter that pages on its own. `stream_vanished`: `readStream` reported
- * the stream absent between two pages; a stream is append-only, so
- * something deleted it during the replay.
+ * Thrown when a page of a stream read breaks the `readStream` contract.
+ * `readStreamPages` checks every page it reads, and
+ * `reconstituteAggregateFromStreamPages` checks every page an adapter that
+ * pages on its own hands over. Both throw this error for the same defect.
  *
- * Neither case is retryable. For an EventStore adapter, run
- * `createEventStoreContractTests` against it and fix its windowing; for an
- * adapter that pages on its own, fix its paging.
+ * The `reason` names the defect. `empty_page`: the page holds no event,
+ * but events remain before the target version. `stream_vanished`: a
+ * continuation page reports the stream absent. `page_past_target`: the
+ * page holds more events than its window has left. `page_over_limit`: the
+ * page holds more events than the `limit` of the read. `head_regressed`: a
+ * continuation page reports a head below the head of the first page.
+ * `invalid_head`: a page of an existing stream reports a head that is not
+ * a safe integer of at least 1, for example `0` for a stream without
+ * events, or a string from a driver that returns big integers as text.
+ *
+ * No case is retryable. Fix the adapter: run `createEventStoreContractTests`
+ * against an EventStore adapter, and `createReplayableStreamPagesContractTests`
+ * against an adapter that pages on its own. Two causes lie outside the
+ * adapter. A stream is append-only, and only a physical removal deletes it
+ * (the repository guide, "Domain deletion versus physical removal"), so a
+ * removal that runs during the read gives `stream_vanished`. An upcaster
+ * that splits one stored event into several gives `page_past_target` at
+ * the replay, because the replay counts one version per event.
  */
-export class NonProgressingEventStreamPageError extends InfrastructureError<"NON_PROGRESSING_EVENT_STREAM_PAGE"> {
+export class InvalidEventStreamPageError extends InfrastructureError<"INVALID_EVENT_STREAM_PAGE"> {
 	readonly aggregateType: string;
 	readonly aggregateId: string;
-	readonly reason: NonProgressingEventStreamPageReason;
+	readonly reason: EventStreamPageReason;
 	readonly fromVersion: number;
-	readonly targetVersion: number;
+	readonly targetVersion: number | undefined;
+	readonly lastVersion: unknown;
+	readonly firstPageLastVersion: number | undefined;
+	readonly eventCount: number | undefined;
+	readonly limit: number | undefined;
 
-	constructor(options: NonProgressingEventStreamPageErrorOptions) {
+	constructor(options: InvalidEventStreamPageErrorOptions) {
 		const stream = `${options.aggregateType}(${options.aggregateId})`;
-		const message =
-			options.reason === "empty_page"
-				? `The read of ${stream} returned an empty page after version ` +
-					`${options.fromVersion} toward target version ${options.targetVersion}. ` +
-					"A page holds at least one event while events remain, and the read " +
-					"ends at the target; fix the paging of the read. For an EventStore " +
-					"adapter, run the EventStore contract suite."
-				: `The stream ${stream} vanished after version ${options.fromVersion} ` +
-					`while the replay had not reached target ${options.targetVersion}: ` +
-					"readStream reported it absent. A stream is append-only; check for a " +
-					"concurrent deletion.";
-		super({ code: "NON_PROGRESSING_EVENT_STREAM_PAGE", message });
+		super({
+			code: "INVALID_EVENT_STREAM_PAGE",
+			message: eventStreamPageReasonMessage(stream, options),
+		});
 		this.aggregateType = options.aggregateType;
 		this.aggregateId = options.aggregateId;
 		this.reason = options.reason;
 		this.fromVersion = options.fromVersion;
 		this.targetVersion = options.targetVersion;
+		this.lastVersion = options.lastVersion;
+		this.firstPageLastVersion = options.firstPageLastVersion;
+		this.eventCount = options.eventCount;
+		this.limit = options.limit;
 	}
 }
 
 /** The check a {@link ReplayTargetMismatchError} reports. */
 export type ReplayTargetMismatchReason =
 	| "target_not_at_cursor"
-	| "pages_outside_window"
 	| "pages_short_of_target";
 
 /** Constructor options for {@link ReplayTargetMismatchError}. */
@@ -1047,34 +1141,10 @@ export interface ReplayTargetMismatchErrorOptions {
 	 * `toVersion` on a point-in-time read.
 	 */
 	readonly targetVersion: number;
-	/**
-	 * Version the aggregate held when the check ran; for
-	 * `pages_outside_window`, the version the offending page would reach.
-	 */
+	/** Version the aggregate held when the check ran. */
 	readonly actualVersion: number;
 }
 
-/**
- * Thrown by `reconstituteAggregateFromStreamPages`, or by a load recipe
- * that folds on its own, when the replay target does not line up with the
- * read. Events carry no stream position, so the aggregate cannot detect a
- * tail that overlaps or misses its restored version, or a page that lies
- * outside the requested window. Only the caller, which pinned the target,
- * can compare.
- *
- * The `reason` names the check that failed. `target_not_at_cursor`: the
- * replay target stands at a version other than the `fromVersion` the read
- * used, found before any page is folded; a reconstitution factory reports
- * the wrong version. `pages_outside_window`: a page would carry the replay
- * past the target, found before that page is folded; the read returned a
- * page outside the requested window. `pages_short_of_target`: the pages
- * ended before the target; the read stopped early, or the stream has a
- * gap. For an EventStore adapter, run `createEventStoreContractTests` and
- * `createEsRepositoryContractTests` against it and fix its windowing.
- * None of the cases is retryable. A snapshot beyond its stream does not
- * reach the fold: `readStreamPages` reports that window as unreachable
- * first, and an adapter that pages on its own must do the same.
- */
 function replayTargetMismatchMessage(
 	stream: string,
 	options: ReplayTargetMismatchErrorOptions,
@@ -1086,23 +1156,36 @@ function replayTargetMismatchMessage(
 				`but the read continues after version ${options.fromVersion}. The ` +
 				"reconstitution factory reports a version other than the read cursor."
 			);
-		case "pages_outside_window":
-			return (
-				`A page of the read for ${stream} runs past the pinned target version ` +
-				`${options.targetVersion}: the replay would reach version ` +
-				`${options.actualVersion}. The read returned a page outside the window ` +
-				`(${options.fromVersion}, ${options.targetVersion}].`
-			);
 		case "pages_short_of_target":
 			return (
 				`Replay of ${stream} ended at version ${options.actualVersion}, short of ` +
 				`the pinned target version ${options.targetVersion}. The read stopped ` +
-				`before the target, or the stream has a gap after version ` +
-				`${options.actualVersion}.`
+				`before the target version, the stream has a gap after version ` +
+				`${options.actualVersion}, or an upcaster merged stored events.`
 			);
 	}
 }
 
+/**
+ * Thrown by `reconstituteAggregateFromStreamPages`, or by a load recipe
+ * that replays on its own, when the replay target does not line up with the
+ * read. Events carry no stream position, so the aggregate cannot detect a
+ * tail that overlaps or misses the version it was reconstituted at. Only
+ * the caller, which pinned the target version, can compare. A single page
+ * that breaks its window is an {@link InvalidEventStreamPageError} instead.
+ *
+ * The `reason` names the check that failed. `target_not_at_cursor`: the
+ * replay target stands at a version other than the `fromVersion` the read
+ * used, found before any page is replayed; a reconstitution factory reports
+ * the wrong version. `pages_short_of_target`: the pages ended before the
+ * target version. The read stopped early, the stream has a gap, or an
+ * upcaster merged several stored events into one. For an EventStore
+ * adapter, run `createEventStoreContractTests` and
+ * `createEsRepositoryContractTests` against it and fix its windowing. None
+ * of the cases is retryable. A snapshot beyond its stream does not reach
+ * the replay: `readStreamPages` reports that window as unreachable first,
+ * and an adapter that pages on its own must do the same.
+ */
 export class ReplayTargetMismatchError extends InfrastructureError<"REPLAY_TARGET_MISMATCH"> {
 	readonly aggregateType: string;
 	readonly aggregateId: string;
@@ -1121,6 +1204,60 @@ export class ReplayTargetMismatchError extends InfrastructureError<"REPLAY_TARGE
 		this.fromVersion = options.fromVersion;
 		this.targetVersion = options.targetVersion;
 		this.actualVersion = options.actualVersion;
+	}
+}
+
+/** Constructor options for {@link ReplayRejectedError}. */
+export interface ReplayRejectedErrorOptions {
+	readonly aggregateType: string;
+	readonly aggregateId: string;
+	/**
+	 * The version the aggregate held before the rejected page. With
+	 * `toVersion`, it bounds the window `(fromVersion, toVersion]` of the
+	 * rejected page, not the window of the read.
+	 */
+	readonly fromVersion: number;
+	/** The last stream position of the rejected page (inclusive). */
+	readonly toVersion: number;
+	/** The error the aggregate raised for a stored event of the page. */
+	readonly cause: DomainError;
+}
+
+/**
+ * The `Err` of `reconstituteAggregateFromStreamPages`: the aggregate
+ * rejected a stored event while it replayed a page of the stream.
+ *
+ * The window `(fromVersion, toVersion]` locates the rejected page, and
+ * `cause` holds the `DomainError` of the aggregate. A stored stream that
+ * the domain cannot replay is a defect of the stored data, not a request
+ * the caller can correct. So this is an `InfrastructureError`, and it is
+ * not retryable. An empty window means that the replay target rejected an
+ * empty history before the first page.
+ */
+export class ReplayRejectedError extends InfrastructureError<"REPLAY_REJECTED"> {
+	readonly aggregateType: string;
+	readonly aggregateId: string;
+	readonly fromVersion: number;
+	readonly toVersion: number;
+	declare readonly cause: DomainError;
+
+	constructor(options: ReplayRejectedErrorOptions) {
+		const stream = `${options.aggregateType}(${options.aggregateId})`;
+		const rejected = `${options.cause.code}: ${options.cause.message}`;
+		super({
+			code: "REPLAY_REJECTED",
+			message:
+				options.fromVersion === options.toVersion
+					? `The replay target of ${stream} rejected an empty history at ` +
+						`version ${options.fromVersion} with ${rejected}`
+					: `The aggregate ${stream} rejected a stored event in the page ` +
+						`(${options.fromVersion}, ${options.toVersion}] with ${rejected}`,
+			cause: options.cause,
+		});
+		this.aggregateType = options.aggregateType;
+		this.aggregateId = options.aggregateId;
+		this.fromVersion = options.fromVersion;
+		this.toVersion = options.toVersion;
 	}
 }
 
@@ -1854,6 +1991,7 @@ export type KitErrorCode =
 	| "INVALID_DOMAIN_TRANSITION_GUARD_RESULT"
 	| "INVALID_DOMAIN_TRANSITION_RESULT"
 	| "INVALID_COMMAND_MESSAGE"
+	| "INVALID_EVENT_STREAM_PAGE"
 	| "INVALID_FLUSH_STATEMENT"
 	| "INVALID_INTEGRATION_MESSAGE"
 	| "INVALID_MONEY"
@@ -1868,7 +2006,6 @@ export type KitErrorCode =
 	| "MONEY_PRECISION_LOSS"
 	| "MONEY_SCALE_MISMATCH"
 	| "NESTED_UNIT_OF_WORK"
-	| "NON_PROGRESSING_EVENT_STREAM_PAGE"
 	| "PENDING_EVENT_BATCH_MISMATCH"
 	| "PENDING_EVENT_LIMIT_EXCEEDED"
 	| "PROJECTION_GAP"
@@ -1878,6 +2015,7 @@ export type KitErrorCode =
 	| "PUBLISH_DEPTH_EXCEEDED"
 	| "REENTRANT_DOMAIN_STATE_MACHINE_EVALUATION"
 	| "REENTRANT_EVENT_RECORDING"
+	| "REPLAY_REJECTED"
 	| "REPLAY_TARGET_MISMATCH"
 	| "REPOSITORY_ERROR_MAPPING_FAILED"
 	| "ROLLBACK_FAILED"

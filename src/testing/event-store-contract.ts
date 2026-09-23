@@ -1,7 +1,10 @@
 import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../domain/event/domain-event";
-import type { EventStore } from "../persistence/event-store/event-store";
-import { readStreamPages } from "../persistence/event-store/stream-pages";
+import type {
+	EventStore,
+	ReadStreamOptions,
+} from "../persistence/event-store/event-store";
+import { readStreamPages } from "../persistence/event-store/read-stream-pages";
 import {
 	assert,
 	assertChainContainsKitError,
@@ -53,15 +56,15 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 
 	return [
 		{
-			name: "unknown stream: read reports explicit absence at version zero",
+			name: "absent stream: read reports explicit absence at version zero",
 			run: inEnv(async ({ store }) => {
 				const [firstKey] = harness.createCollidingStreamKeys();
-				const missing = await store.readStream({ ...firstKey }, fixtureRead);
+				const absent = await store.readStream({ ...firstKey }, fixtureRead);
 				assert(
-					!missing.exists &&
-						missing.lastVersion === 0 &&
-						missing.events.length === 0,
-					"an unknown qualified stream must return the explicit missing state",
+					!absent.exists &&
+						absent.lastVersion === 0 &&
+						absent.events.length === 0,
+					"an absent qualified stream must return the explicit absent state",
 				);
 			}),
 		},
@@ -216,7 +219,7 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 			}),
 		},
 		{
-			name: "kit reader: readStreamPages walks the pinned prefix and stops before a later append",
+			name: "readStreamPages: the pages walk the pinned prefix and stop before a later append",
 			run: inEnv(async ({ store }) => {
 				const [firstKey, secondKey] = harness.createCollidingStreamKeys();
 				const events = [1, 2, 3, 4, 5].map((sequence) =>
@@ -231,7 +234,7 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 				);
 				assert(
 					!absent.exists,
-					"the kit reader must report an unknown stream as absent",
+					"readStreamPages must report an absent stream as absent",
 				);
 
 				const read = await readStreamPages(
@@ -267,7 +270,7 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 			}),
 		},
 		{
-			name: "kit reader: toVersion pins a target below the head and a target beyond it is unreachable",
+			name: "readStreamPages: toVersion below the head is the target version and the pages end there",
 			run: inEnv(async ({ store }) => {
 				const [firstKey] = harness.createCollidingStreamKeys();
 				const events = [1, 2, 3, 4, 5].map((sequence) =>
@@ -275,36 +278,101 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 				);
 				await store.append(firstKey, events, { expectedVersion: 0 });
 
-				const asOfThree = await readStreamPages(
+				const pointInTime = await readStreamPages(
 					store,
 					{ ...firstKey },
 					{ toVersion: 3, limit: 2 },
 				);
+
 				assert(
-					asOfThree.reachable,
+					pointInTime.reachable,
 					"a target below the head must be reachable",
 				);
 				assert(
-					asOfThree.targetVersion === 3,
-					"the read must pin toVersion as the target",
+					pointInTime.targetVersion === 3,
+					"the read must pin toVersion as the target version",
 				);
 				const collected: Evt[] = [];
-				for await (const page of asOfThree.pages) collected.push(...page);
+				for await (const page of pointInTime.pages) collected.push(...page);
 				assert(
 					hasSameEventIds(collected, events.slice(0, 3)),
 					"the pages must stop at toVersion",
 				);
+			}),
+		},
+		{
+			name: "readStreamPages: toVersion beyond the head is unreachable and names the head",
+			run: inEnv(async ({ store }) => {
+				const [firstKey] = harness.createCollidingStreamKeys();
+				const events = [1, 2, 3].map((sequence) =>
+					harness.createEvent(firstKey, sequence),
+				);
+				await store.append(firstKey, events, { expectedVersion: 0 });
 
 				const beyondHead = await readStreamPages(
 					store,
 					{ ...firstKey },
 					{ toVersion: 9, limit: 2 },
 				);
+
 				assert(
 					beyondHead.exists &&
 						!beyondHead.reachable &&
 						beyondHead.lastVersion === events.length,
 					"a target beyond the head must be unreachable and name the actual head",
+				);
+			}),
+		},
+		{
+			name: "readStreamPages: a cursor inside the stream reads only the events after it",
+			run: inEnv(async ({ store }) => {
+				const [firstKey] = harness.createCollidingStreamKeys();
+				const events = [1, 2, 3, 4, 5].map((sequence) =>
+					harness.createEvent(firstKey, sequence),
+				);
+				await store.append(firstKey, events, { expectedVersion: 0 });
+
+				const afterTwo = await readStreamPages(
+					store,
+					{ ...firstKey },
+					{ fromVersion: 2, limit: 2 },
+				);
+
+				assert(
+					afterTwo.reachable &&
+						afterTwo.fromVersion === 2 &&
+						afterTwo.targetVersion === events.length,
+					"a cursor inside the stream must be reachable and pin the head as the target version",
+				);
+				const collected: Evt[] = [];
+				for await (const page of afterTwo.pages) collected.push(...page);
+				assert(
+					hasSameEventIds(collected, events.slice(2)),
+					"the pages must hold only the events after the cursor",
+				);
+			}),
+		},
+		{
+			name: "readStreamPages: a cursor beyond the head is unreachable and names the head",
+			run: inEnv(async ({ store }) => {
+				const [firstKey] = harness.createCollidingStreamKeys();
+				const events = [1, 2, 3].map((sequence) =>
+					harness.createEvent(firstKey, sequence),
+				);
+				await store.append(firstKey, events, { expectedVersion: 0 });
+
+				const beyondHead = await readStreamPages(
+					store,
+					{ ...firstKey },
+					{ fromVersion: 9, limit: 2 },
+				);
+
+				assert(
+					beyondHead.exists &&
+						!beyondHead.reachable &&
+						beyondHead.fromVersion === 9 &&
+						beyondHead.lastVersion === events.length,
+					"a cursor beyond the head must be unreachable and name the actual head",
 				);
 			}),
 		},
@@ -443,6 +511,42 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 			}),
 		},
 		{
+			name: "page bounds: an existing stream reports a head of at least 1 and no page holds more events than its window",
+			run: inEnv(async ({ store }) => {
+				const [firstKey] = harness.createCollidingStreamKeys();
+				const events = [1, 2, 3, 4, 5].map((sequence) =>
+					harness.createEvent(firstKey, sequence),
+				);
+				await store.append(firstKey, events, { expectedVersion: 0 });
+				const windows: ReadonlyArray<ReadStreamOptions> = [
+					{ limit: 100 },
+					{ limit: 2 },
+					{ fromVersion: 2, limit: 100 },
+					{ fromVersion: 3, toVersion: 4, limit: 100 },
+					{ fromVersion: 4, toVersion: 99, limit: 100 },
+					{ fromVersion: 99, limit: 100 },
+					{ fromVersion: 3, toVersion: 1, limit: 100 },
+				];
+
+				for (const window of windows) {
+					const page = await store.readStream({ ...firstKey }, window);
+					assert(
+						page.exists && page.lastVersion >= 1,
+						"an existing stream must report a head of at least 1; report a stream without events as absent",
+					);
+					const windowEnd = Math.min(
+						window.toVersion ?? page.lastVersion,
+						page.lastVersion,
+					);
+					const room = Math.max(0, windowEnd - (window.fromVersion ?? 0));
+					assert(
+						page.events.length <= room && page.events.length <= window.limit,
+						`a page must hold at most the ${room} events of its window (${window.fromVersion ?? 0}, ${windowEnd}] and at most the limit ${window.limit}; got ${page.events.length}`,
+					);
+				}
+			}),
+		},
+		{
 			name: "qualified fromVersion: slicing one type cannot observe a colliding raw id",
 			run: inEnv(async ({ store }) => {
 				const [firstKey, secondKey] = harness.createCollidingStreamKeys();
@@ -552,7 +656,7 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 			}),
 		},
 		{
-			name: "OCC: an expectedVersion ahead of an unknown stream conflicts without creating it",
+			name: "OCC: an expectedVersion ahead of an absent stream conflicts without creating it",
 			run: inEnv(async ({ store }) => {
 				const [firstKey] = harness.createCollidingStreamKeys();
 				const rejection = await captureRejection(
