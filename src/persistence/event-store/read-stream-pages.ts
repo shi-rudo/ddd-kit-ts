@@ -161,10 +161,11 @@ function decideTargetVersion(
  * {@link pinTargetVersion}: the target version is `toVersion` when given,
  * else the head, and a window outside the stream is unreachable.
  *
- * The call keeps the first page in memory. Every iteration of `pages`
- * yields that page again and reads the continuation pages from the store
- * again, one page at a time. Each continuation read passes the target
- * version as `toVersion` and starts after the events that the earlier pages
+ * The first iteration of `pages` yields the first page that the call read
+ * and then reads the continuation pages, one page at a time. Every later
+ * iteration reads all pages from the store again, so no two iterations
+ * share an event object. Each of these reads passes the target version as
+ * `toVersion` and starts after the events that the earlier pages
  * returned. Streams are append-only, so an iteration yields one stable
  * prefix even when another writer appends during the replay.
  *
@@ -238,15 +239,15 @@ export async function readStreamPages<Evt extends AnyDomainEvent>(
 		fromVersion,
 		pinned.targetVersion,
 	);
-	const window: PinnedWindow<Evt> = {
+	const window: PinnedWindow = {
 		stream: address,
-		firstPage: first.events,
+		fromVersion,
 		firstPageLastVersion: first.lastVersion,
-		cursorAfterFirstPage: fromVersion + first.events.length,
 		targetVersion: pinned.targetVersion,
 		limit: options.limit,
 		signal: options.signal,
 	};
+	let unreadFirstPage: ReadonlyArray<Evt> | undefined = first.events;
 	return {
 		exists: true,
 		reachable: true,
@@ -254,27 +255,34 @@ export async function readStreamPages<Evt extends AnyDomainEvent>(
 		fromVersion,
 		targetVersion: pinned.targetVersion,
 		pages: {
-			[Symbol.asyncIterator]: () => continueToPinnedTarget(reader, window),
+			[Symbol.asyncIterator]: () => {
+				const firstPage = unreadFirstPage;
+				unreadFirstPage = undefined;
+				return readPinnedPages(reader, window, firstPage);
+			},
 		},
 	};
 }
 
-interface PinnedWindow<Evt extends AnyDomainEvent> {
+interface PinnedWindow {
 	readonly stream: AggregateAddress;
-	readonly firstPage: ReadonlyArray<Evt>;
+	readonly fromVersion: number;
 	readonly firstPageLastVersion: number;
-	readonly cursorAfterFirstPage: number;
 	readonly targetVersion: number;
 	readonly limit: number;
 	readonly signal: AbortSignal | undefined;
 }
 
-async function* continueToPinnedTarget<Evt extends AnyDomainEvent>(
+async function* readPinnedPages<Evt extends AnyDomainEvent>(
 	reader: EventStreamReader<Evt>,
-	window: PinnedWindow<Evt>,
+	window: PinnedWindow,
+	firstPage: ReadonlyArray<Evt> | undefined,
 ): AsyncGenerator<ReadonlyArray<Evt>, void, undefined> {
-	if (window.firstPage.length > 0) yield window.firstPage;
-	let cursor = window.cursorAfterFirstPage;
+	let cursor = window.fromVersion;
+	if (firstPage !== undefined) {
+		if (firstPage.length > 0) yield firstPage;
+		cursor += firstPage.length;
+	}
 	while (cursor < window.targetVersion) {
 		throwIfAborted(window.signal);
 		const page = await reader.readStream(window.stream, {

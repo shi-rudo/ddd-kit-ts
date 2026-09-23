@@ -136,9 +136,10 @@ check. The kit now ships the recipe as tested code.
 reads the first page, decides existence, and pins the target version:
 `toVersion` when given, else `lastVersion`. It returns `{ exists: false,
 reachable: false }` for an absent stream. For an existing stream it returns
-the target version and the pages after the cursor as a lazy iteration. It
-keeps the first page in memory, and every iteration yields it again and
-reads the continuation pages from the store again. A page that breaks the
+the target version and the pages after the cursor as a lazy iteration. The
+first iteration yields the first page it already read; every later
+iteration reads all pages from the store again, so no two iterations share
+an event object. A page that breaks the
 `readStream` contract throws `InvalidEventStreamPageError`.
 
 `reconstituteAggregateFromStreamPages(create, read)` is the paged form of

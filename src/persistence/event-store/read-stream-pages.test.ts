@@ -170,7 +170,7 @@ describe("readStreamPages", () => {
 		expect(afterwards.lastVersion).toBe(6);
 	});
 
-	it("reads the continuation pages again on a second iteration", async () => {
+	it("reads every page from the store again on a later iteration", async () => {
 		const history = countedUpTo(5);
 		const store = await seededStore(history);
 		const read = await readReachable(store, { limit: 2 });
@@ -180,7 +180,21 @@ describe("readStreamPages", () => {
 
 		expect(eventIds(firstPass.flat())).toEqual(eventIds(history));
 		expect(eventIds(secondPass.flat())).toEqual(eventIds(history));
-		expect(store.reads).toBe(5);
+		expect(store.reads).toBe(6);
+	});
+
+	it("gives a later iteration fresh events after the first iteration changed its own", async () => {
+		const store = await seededStore(countedUpTo(3));
+		const read = await readReachable(store, { limit: 2 });
+
+		for await (const page of read.pages) {
+			for (const event of page) (event.payload as { by: number }).by = 0;
+		}
+		const secondPass = await collectPages(read.pages);
+
+		expect(secondPass.flat().map((event) => event.payload.by)).toEqual([
+			1, 2, 3,
+		]);
 	});
 
 	it("yields no page for an empty window and keeps the pinned head", async () => {

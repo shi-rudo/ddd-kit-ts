@@ -446,11 +446,12 @@ branches:
   when the read asked for one, else the head of the first page.
 
 The pages hold the events after the cursor through the target version, in
-append order, one bounded page per iteration. `readStreamPages` keeps the
-first page in memory. Every iteration of `pages` yields that page again and
-reads the continuation pages from the store again, so a second replay of
-one read sees the same prefix. Each continuation read passes the target
-version as `toVersion` and starts after the events that the earlier pages
+append order, one bounded page per iteration. The first iteration of
+`pages` yields the first page that `readStreamPages` read and then reads the
+continuation pages. Every later iteration reads all pages from the store
+again, so a second replay of one read sees the same prefix and shares no
+event object with the first. Each of these reads passes the target version
+as `toVersion` and starts after the events that the earlier pages
 returned. A writer that appends during the load therefore cannot move the
 target version.
 
@@ -490,8 +491,9 @@ page, and it holds the `DomainError` as `cause`. A stored stream that the
 domain cannot replay is a defect of the data, not a request that the client
 can correct. So `ReplayRejectedError` is an `InfrastructureError`, and a
 repository that rethrows `loaded.error` does not report a business
-rejection. Allocation stays bounded by the page limit: the read keeps the
-first page, and each later page goes through `replayHistory` once.
+rejection. Allocation stays bounded by the page limit: each page goes
+through `replayHistory` once, and the read releases the first page after
+the first iteration.
 
 The same recipe in long form, for an adapter that pages on its own, is in
 the [appendix](#appendix-an-adapter-that-pages-on-its-own).
