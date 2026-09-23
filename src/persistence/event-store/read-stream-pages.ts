@@ -137,10 +137,16 @@ export function pinTargetVersion(
 		"lastVersion",
 		options.lastVersion,
 	);
-	const targetVersion = options.toVersion ?? options.lastVersion;
+	return decideTargetVersion(options);
+}
+
+function decideTargetVersion(
+	window: PinTargetVersionOptions,
+): PinnedTargetVersion {
+	const targetVersion = window.toVersion ?? window.lastVersion;
 	if (
-		options.fromVersion > targetVersion ||
-		targetVersion > options.lastVersion
+		window.fromVersion > targetVersion ||
+		targetVersion > window.lastVersion
 	) {
 		return { reachable: false };
 	}
@@ -151,9 +157,9 @@ export function pinTargetVersion(
  * Reads one stream in bounded pages up to a pinned target version.
  *
  * The call reads the first page. That page decides existence and reports
- * the head. {@link pinTargetVersion} then decides the window: the target
- * version is `toVersion` when given, else the head, and a window outside
- * the stream is unreachable.
+ * the head. The call then makes the window decision of
+ * {@link pinTargetVersion}: the target version is `toVersion` when given,
+ * else the head, and a window outside the stream is unreachable.
  *
  * The call keeps the first page in memory. Every iteration of `pages`
  * yields that page again and reads the continuation pages from the store
@@ -204,7 +210,7 @@ export async function readStreamPages<Evt extends AnyDomainEvent>(
 	});
 	if (!first.exists) return { exists: false, reachable: false };
 	assertValidHead(address, first.lastVersion, fromVersion);
-	const pinned = pinTargetVersion({
+	const pinned = decideTargetVersion({
 		fromVersion,
 		toVersion: options.toVersion,
 		lastVersion: first.lastVersion,
