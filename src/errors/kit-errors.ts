@@ -1211,7 +1211,11 @@ export class ReplayTargetMismatchError extends InfrastructureError<"REPLAY_TARGE
 export interface ReplayRejectedErrorOptions {
 	readonly aggregateType: string;
 	readonly aggregateId: string;
-	/** The version the aggregate held before the rejected page. */
+	/**
+	 * The version the aggregate held before the rejected page. With
+	 * `toVersion`, it bounds the window `(fromVersion, toVersion]` of the
+	 * rejected page, not the window of the read.
+	 */
 	readonly fromVersion: number;
 	/** The last stream position of the rejected page (inclusive). */
 	readonly toVersion: number;
