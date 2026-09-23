@@ -1,7 +1,7 @@
 import {
-	type AggregateAddress,
-	encodeAggregateAddress,
-} from "../../domain/aggregate/aggregate-address";
+	type AggregateIdentity,
+	encodeAggregateIdentity,
+} from "../../domain/aggregate/aggregate-identity";
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import {
 	EventHarvestError,
@@ -96,7 +96,7 @@ type EventSourceCursor = {
 };
 
 type DispatchedEventReceipt = {
-	readonly source: AggregateAddress;
+	readonly source: AggregateIdentity;
 	readonly position: EventCommitCandidatePosition;
 };
 
@@ -263,7 +263,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				continue;
 			}
 			const ownedSource = Object.freeze({ ...source });
-			const sourceKey = encodeAggregateAddress(source);
+			const sourceKey = encodeAggregateIdentity(source);
 			const sourceCursor = this.sourceCursors.get(sourceKey);
 			let staleHeadVersion: number | undefined;
 			if (
@@ -407,7 +407,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				continue;
 			}
 			newRecordIds.add(event.eventId);
-			const sourceKey = encodeAggregateAddress(source);
+			const sourceKey = encodeAggregateIdentity(source);
 			if (!this.sourceCursors.has(sourceKey)) newSourceKeys.add(sourceKey);
 		}
 
@@ -444,7 +444,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 		const receiptsInBatch = new Map<
 			string,
 			{
-				readonly source: AggregateAddress;
+				readonly source: AggregateIdentity;
 				readonly position: EventCommitCandidatePosition;
 			}
 		>();
@@ -484,7 +484,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 	): void {
 		const simulatedCursors = new Map<string, EventSourceCursor>();
 		for (const { event, source, position } of events) {
-			const sourceKey = encodeAggregateAddress(source);
+			const sourceKey = encodeAggregateIdentity(source);
 			const cursor =
 				simulatedCursors.get(sourceKey) ?? this.sourceCursors.get(sourceKey);
 			if (
@@ -602,7 +602,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 
 	private rememberDispatched(
 		eventId: string,
-		source: AggregateAddress,
+		source: AggregateIdentity,
 		position: EventCommitCandidatePosition,
 	): void {
 		this.dispatchedEventIds.delete(eventId);
@@ -716,7 +716,7 @@ function assertReceiptShape(
 
 function staleHeadError(
 	event: { readonly eventId: string; readonly type: string },
-	source: AggregateAddress,
+	source: AggregateIdentity,
 	position: EventCommitCandidatePosition,
 	staleHeadVersion: number,
 ): EventHarvestError {
@@ -733,8 +733,8 @@ function staleHeadError(
 
 function assertSameEventSource(
 	event: AnyDomainEvent,
-	received: AggregateAddress,
-	recorded: AggregateAddress,
+	received: AggregateIdentity,
+	recorded: AggregateIdentity,
 ): void {
 	if (
 		received.aggregateType === recorded.aggregateType &&

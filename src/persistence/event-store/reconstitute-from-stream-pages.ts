@@ -1,6 +1,6 @@
 import { err, ok, type Result } from "@shirudo/result";
 import type { ReplayableAggregate } from "../../domain/aggregate/aggregate";
-import type { AggregateAddress } from "../../domain/aggregate/aggregate-address";
+import type { AggregateIdentity } from "../../domain/aggregate/aggregate-identity";
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
 import {
@@ -25,7 +25,7 @@ import {
  */
 export interface ReplayableStreamPages<Evt extends AnyDomainEvent> {
 	/** The qualified stream the pages come from. */
-	readonly stream: AggregateAddress;
+	readonly stream: AggregateIdentity;
 
 	/**
 	 * The cursor the read started at: `fromVersion`, or `0`. The pages hold

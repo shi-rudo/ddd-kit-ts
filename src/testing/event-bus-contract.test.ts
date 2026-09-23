@@ -10,7 +10,7 @@ type ContractPlaced = DomainEvent<"ContractPlaced", { orderId: string }>;
 type ContractShipped = DomainEvent<"ContractShipped", { orderId: string }>;
 type ContractEvent = ContractPlaced | ContractShipped;
 
-const address = {
+const identity = {
 	aggregateType: "ContractOrder",
 	aggregateId: "contract-order",
 };
@@ -24,13 +24,13 @@ describe("event-bus contract suite against the in-memory reference", () => {
 			createDomainEvent(
 				"ContractPlaced",
 				{ orderId: "contract-order" },
-				address,
+				identity,
 			) as ContractPlaced,
 		createSecondEvent: () =>
 			createDomainEvent(
 				"ContractShipped",
 				{ orderId: "contract-order" },
-				address,
+				identity,
 			) as ContractShipped,
 	});
 

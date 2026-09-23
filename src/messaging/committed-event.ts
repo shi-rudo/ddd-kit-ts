@@ -1,4 +1,4 @@
-import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
+import type { AggregateIdentity } from "../domain/aggregate/aggregate-identity";
 import type { AnyDomainEvent } from "../domain/event/domain-event";
 
 /**
@@ -42,7 +42,7 @@ export type EventCommitCandidatePosition = Omit<
  */
 export interface EventCommitCandidate<Evt extends AnyDomainEvent> {
 	readonly event: Evt;
-	readonly source: AggregateAddress;
+	readonly source: AggregateIdentity;
 	readonly position: EventCommitCandidatePosition;
 }
 
@@ -53,6 +53,6 @@ export interface EventCommitCandidate<Evt extends AnyDomainEvent> {
  */
 export interface CommittedDomainEvent<Evt extends AnyDomainEvent> {
 	readonly event: Evt;
-	readonly source: AggregateAddress;
+	readonly source: AggregateIdentity;
 	readonly position: CommitPosition;
 }

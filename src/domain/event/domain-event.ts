@@ -163,7 +163,7 @@ export type AnyDomainEvent = DomainEvent<string, unknown>;
  * A domain event accepted by an aggregate but not yet given its recording
  * identity, recording time, or delivery metadata.
  *
- * The aggregate owns the event type, payload, source address, and payload
+ * The aggregate owns the event type, payload, source identity, and payload
  * schema version because those values describe the business fact it produced.
  * The application shell later turns this value into a {@link DomainEvent}.
  */
@@ -550,7 +550,7 @@ export function adoptUncommittedDomainEvent<T extends object>(copy: T): T {
 /**
  * Attaches shell-owned recording data to an accepted aggregate decision.
  *
- * The decision supplies the domain type, payload, source address, and payload
+ * The decision supplies the domain type, payload, source identity, and payload
  * schema version. The stamp supplies only event identity, recording time, and
  * trace metadata.
  */
@@ -621,7 +621,7 @@ function mintRecordedEvent<T extends string, P>(
 
 /**
  * Brands, freezes, and registers a kit-derived copy of a recorded event
- * (e.g. the address-stamped copy `apply()` creates) as recorded itself.
+ * (e.g. the identity-stamped copy `apply()` creates) as recorded itself.
  * The copy shares the already-frozen payload/metadata of its source,
  * so the mint guarantee carries over. Stamping the cooperative brand
  * before freezing keeps the copy recognizable by another loaded kit
@@ -781,14 +781,14 @@ function assertProducerOwnedEventFields(
 		assertNonBlankEventField(
 			options.aggregateId,
 			"aggregateId",
-			"EVENT_ADDRESS_INVALID",
+			"EVENT_AGGREGATE_IDENTITY_INVALID",
 		);
 	}
 	if (options?.aggregateType !== undefined) {
 		assertNonBlankEventField(
 			options.aggregateType,
 			"aggregateType",
-			"EVENT_ADDRESS_INVALID",
+			"EVENT_AGGREGATE_IDENTITY_INVALID",
 		);
 	}
 }
@@ -796,7 +796,10 @@ function assertProducerOwnedEventFields(
 function assertNonBlankEventField(
 	value: unknown,
 	field: "eventId" | "type" | "aggregateId" | "aggregateType",
-	code: "EVENT_ID_INVALID" | "EVENT_TYPE_INVALID" | "EVENT_ADDRESS_INVALID",
+	code:
+		| "EVENT_ID_INVALID"
+		| "EVENT_TYPE_INVALID"
+		| "EVENT_AGGREGATE_IDENTITY_INVALID",
 ): asserts value is string {
 	if (typeof value !== "string" || value.trim().length === 0) {
 		throw new DomainEventValidationError(

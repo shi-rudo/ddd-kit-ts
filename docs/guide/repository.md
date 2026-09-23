@@ -139,7 +139,7 @@ For event sourcing, read the stream in pages up to the pinned target version
 and replay them into a fresh replay target:
 
 ```ts
-const read = await readStreamPages(eventStore, address, { limit: 256 });
+const read = await readStreamPages(eventStore, identity, { limit: 256 });
 if (!read.reachable) return undefined;
 
 const loaded = await reconstituteAggregateFromStreamPages(
@@ -680,7 +680,7 @@ const snapshot = captureAggregateSnapshot(
   clock(),
 );
 
-await snapshotStore.save(address, snapshot);
+await snapshotStore.save(identity, snapshot);
 ```
 
 Loading creates a fresh aggregate. For event sourcing, replay the events after
@@ -690,11 +690,11 @@ replay ends at the stream head:
 ```ts
 const discardSnapshotAndReplay = async (): Promise<Order | undefined> => {
   const replayed = await replayFromZero(orderId);
-  await snapshotStore.delete(address);
+  await snapshotStore.delete(identity);
   return replayed;
 };
 
-const read = await readStreamPages(eventStore, address, {
+const read = await readStreamPages(eventStore, identity, {
   fromVersion: snapshot.version,
   limit: 256,
 });

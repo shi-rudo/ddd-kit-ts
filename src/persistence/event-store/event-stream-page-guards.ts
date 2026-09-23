@@ -1,8 +1,8 @@
-import type { AggregateAddress } from "../../domain/aggregate/aggregate-address";
+import type { AggregateIdentity } from "../../domain/aggregate/aggregate-identity";
 import { InvalidEventStreamPageError } from "../../errors/kit-errors";
 
 export function assertValidHead(
-	stream: AggregateAddress,
+	stream: AggregateIdentity,
 	lastVersion: unknown,
 	fromVersion: number,
 	targetVersion?: number,
@@ -18,7 +18,7 @@ export function assertValidHead(
 }
 
 export function assertHeadNotBehindFirstPage(
-	stream: AggregateAddress,
+	stream: AggregateIdentity,
 	lastVersion: number,
 	firstPageLastVersion: number,
 	fromVersion: number,
@@ -36,7 +36,7 @@ export function assertHeadNotBehindFirstPage(
 }
 
 export function assertPageNotEmpty(
-	stream: AggregateAddress,
+	stream: AggregateIdentity,
 	eventCount: number,
 	fromVersion: number,
 	targetVersion: number,
@@ -51,7 +51,7 @@ export function assertPageNotEmpty(
 }
 
 export function assertPageWithinWindow(
-	stream: AggregateAddress,
+	stream: AggregateIdentity,
 	eventCount: number,
 	fromVersion: number,
 	targetVersion: number,
@@ -67,7 +67,7 @@ export function assertPageWithinWindow(
 }
 
 export function assertPageWithinLimit(
-	stream: AggregateAddress,
+	stream: AggregateIdentity,
 	eventCount: number,
 	limit: number,
 	fromVersion: number,

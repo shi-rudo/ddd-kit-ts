@@ -1,7 +1,7 @@
 import {
-	type AggregateAddress,
-	encodeAggregateAddress,
-} from "../../domain/aggregate/aggregate-address";
+	type AggregateIdentity,
+	encodeAggregateIdentity,
+} from "../../domain/aggregate/aggregate-identity";
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import {
 	ForeignEventError,
@@ -76,8 +76,8 @@ export interface ProjectionBatchResult {
  *   Because checkpoints advance only across a verified chain, a position
  *   at or behind the watermark is already traversed and can be skipped under
  *   the source's one-logical-event-per-position contract.
- * - **Feeds are complete per aggregate address.** Once a feed supplies one
- *   address, it must supply every committed envelope in that address's cursor
+ * - **Feeds are complete per aggregate identity.** Once a feed supplies one
+ *   identity, it must supply every committed envelope in that identity's cursor
  *   chain. Do not event-type-filter a projector subscription. Irrelevant event
  *   types are explicit no-ops in `Projection.apply`; invoking the handler and
  *   checkpointing their positions preserves continuity.
@@ -96,13 +96,13 @@ export interface ProjectionBatchResult {
  *   redeliveries.
  * - **Malformed envelopes reject loudly.** A missing/empty `eventId`, a
  *   missing/invalid `position`, missing `source.aggregateId` /
- *   `source.aggregateType`, or an optional event address contradicting its
+ *   `source.aggregateType`, or an optional event identity contradicting its
  *   authoritative envelope source fails the batch BEFORE anything is applied.
  *   The domain event remains persistence-agnostic.
  * - **Competing instances serialize by checkpoint key.** The required
  *   {@link ProjectionCheckpointStore.withCheckpointLocks} callback covers the
- *   complete load / apply / save critical section for every addressed
- *   aggregate. The adapter must lock a key even when its checkpoint row does
+ *   complete load / apply / save critical section for every aggregate of
+ *   the batch. The adapter must lock a key even when its checkpoint row does
  *   not exist yet; a plain row lock is insufficient at genesis. Without that
  *   adapter guarantee, only a hard single-projector deployment is safe.
  *
@@ -132,7 +132,7 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 	 * per advanced aggregate. Rejects
 	 * (after rollback) when a handler throws or an envelope carries no
 	 * valid cursor; the caller's at-least-once redelivery retries the batch.
-	 * The input must be a complete, ordered feed per aggregate address; an
+	 * The input must be a complete, ordered feed per aggregate identity; an
 	 * event-type-filtered subscription cannot satisfy the cursor contract.
 	 * An already-aborted signal rejects before validation or transaction setup.
 	 * In-flight cancellation is forwarded to the transaction scope rather than
@@ -212,18 +212,19 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 					eventType: event.type,
 				});
 			}
-			const address: AggregateAddress = { aggregateType, aggregateId };
-			return { event, position, address };
+			const identity: AggregateIdentity = { aggregateType, aggregateId };
+			return { event, position, identity };
 		});
-		const lockAddresses = [
+		const lockIdentities = [
 			...new Map(
 				cursored.map(
-					({ address }) => [encodeAggregateAddress(address), address] as const,
+					({ identity }) =>
+						[encodeAggregateIdentity(identity), identity] as const,
 				),
 			).entries(),
 		]
 			.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-			.map(([, address]) => address);
+			.map(([, identity]) => identity);
 
 		// Everything mutable lives INSIDE the transactional callback: a
 		// retrying scope re-runs it from zero, so a rolled-back attempt
@@ -233,7 +234,7 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 		): Promise<ProjectionBatchResult> => {
 			let applied = 0;
 			let skipped = 0;
-			// Load and validate every addressed checkpoint before any handler
+			// Load and validate every checkpoint of the batch before any handler
 			// runs. Legacy/partial rows therefore cannot turn a batch prefix
 			// into visible work even under the in-memory passthrough scope.
 			const checkpointsAtBatchStart = new Map<
@@ -241,13 +242,13 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 				ProjectionCheckpoint | undefined
 			>();
 			const watermarks = new Map<string, ProjectionPosition | undefined>();
-			for (const { event, address } of cursored) {
-				const key = encodeAggregateAddress(address);
+			for (const { event, identity } of cursored) {
+				const key = encodeAggregateIdentity(identity);
 				if (watermarks.has(key)) continue;
 				const stored = await this.checkpoints.load(
 					ctx,
 					this.projection.name,
-					address,
+					identity,
 				);
 				if (stored !== undefined && !isValidCheckpoint(stored)) {
 					throw new UnprojectableEventError(
@@ -269,9 +270,9 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 			// positions cannot be identity-checked without retaining an unbounded
 			// per-position ledger and continue to rely on the source contract that one
 			// position names one immutable logical event receipt.
-			for (const { event, position, address } of cursored) {
+			for (const { event, position, identity } of cursored) {
 				const stored = checkpointsAtBatchStart.get(
-					encodeAggregateAddress(address),
+					encodeAggregateIdentity(identity),
 				);
 				if (
 					stored !== undefined &&
@@ -300,8 +301,8 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 				string,
 				{ eventId: string; position: ProjectionPosition }
 			>();
-			for (const { event, position, address } of cursored) {
-				const key = addressedPositionKey(address, position);
+			for (const { event, position, identity } of cursored) {
+				const key = identityPositionKey(identity, position);
 				const recorded = batchReceiptsByPosition.get(key);
 				if (recorded !== undefined && recorded.eventId !== event.eventId) {
 					throw new ProjectionIdentityViolationError(
@@ -336,12 +337,12 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 			// receipt, so this skip cannot hide conflicting source data.
 			const newestUnprocessed = new Map<string, ProjectionPosition>();
 			const positionsSeenInBatch = new Set<string>();
-			for (const { event, position, address } of cursored) {
-				const key = encodeAggregateAddress(address);
+			for (const { event, position, identity } of cursored) {
+				const key = encodeAggregateIdentity(identity);
 				const stored = watermarks.get(key);
 				if (stored !== undefined && !isPositionAfter(position, stored))
 					continue;
-				const positionKey = addressedPositionKey(address, position);
+				const positionKey = identityPositionKey(identity, position);
 				if (positionsSeenInBatch.has(positionKey)) continue;
 				positionsSeenInBatch.add(positionKey);
 				const newest = newestUnprocessed.get(key);
@@ -363,11 +364,11 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 			// without relying on checkpoint-store read-your-writes behavior.
 			const advanced = new Map<
 				string,
-				{ address: AggregateAddress; checkpoint: ProjectionCheckpoint }
+				{ identity: AggregateIdentity; checkpoint: ProjectionCheckpoint }
 			>();
 			const toApply: Array<{ event: Evt }> = [];
-			for (const { event, position, address } of cursored) {
-				const key = encodeAggregateAddress(address);
+			for (const { event, position, identity } of cursored) {
+				const key = encodeAggregateIdentity(identity);
 				const watermark = watermarks.get(key);
 				if (watermark !== undefined && !isPositionAfter(position, watermark)) {
 					skipped += 1;
@@ -383,7 +384,7 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 				}
 				watermarks.set(key, position);
 				advanced.set(key, {
-					address,
+					identity,
 					checkpoint: {
 						position,
 						lastAppliedEventId: event.eventId,
@@ -395,11 +396,11 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 			for (const { event } of toApply) {
 				await this.projection.apply(ctx, event);
 			}
-			for (const { address, checkpoint } of advanced.values()) {
+			for (const { identity, checkpoint } of advanced.values()) {
 				await this.checkpoints.save(
 					ctx,
 					this.projection.name,
-					address,
+					identity,
 					checkpoint,
 				);
 			}
@@ -410,7 +411,7 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 				this.checkpoints.withCheckpointLocks(
 					ctx,
 					this.projection.name,
-					lockAddresses,
+					lockIdentities,
 					() => projectWithLocks(ctx),
 				),
 			{ signal: options.signal },
@@ -419,16 +420,20 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 
 	/**
 	 * The wait-for-version query: `true` when this projection has
-	 * processed the addressed aggregate at least up to `position`. Pass the
+	 * processed the given aggregate at least up to `position`. Pass the
 	 * position of the last event the awaited commit emitted (see
 	 * {@link ProjectionCheckpointStore.hasReached} for why the full
 	 * cursor, not just the version).
 	 */
 	hasProcessed(
-		address: AggregateAddress,
+		identity: AggregateIdentity,
 		position: ProjectionPosition,
 	): Promise<boolean> {
-		return this.checkpoints.hasReached(this.projection.name, address, position);
+		return this.checkpoints.hasReached(
+			this.projection.name,
+			identity,
+			position,
+		);
 	}
 
 	/**
@@ -437,7 +442,7 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 	 * `truncate`, the read model with them. Replay the source through
 	 * {@link Projector.project} afterwards. Stop all live consumers for this
 	 * projection before reset and keep them stopped through catch-up replay;
-	 * rebuild is not coordinated by the per-address delivery locks.
+	 * rebuild is not coordinated by the per-identity delivery locks.
 	 */
 	async reset(): Promise<void> {
 		await this.scope.transactional(async (ctx) => {
@@ -535,13 +540,13 @@ function isSamePositionReceipt(
 	);
 }
 
-function addressedPositionKey(
-	address: AggregateAddress,
+function identityPositionKey(
+	identity: AggregateIdentity,
 	position: ProjectionPosition,
 ): string {
 	return JSON.stringify([
-		address.aggregateType,
-		address.aggregateId,
+		identity.aggregateType,
+		identity.aggregateId,
 		position.aggregateVersion,
 		position.commitSequence,
 	]);

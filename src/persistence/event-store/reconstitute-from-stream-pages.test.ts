@@ -4,7 +4,7 @@ import type {
 	ReplayableAggregate,
 	Version,
 } from "../../domain/aggregate/aggregate";
-import type { AggregateAddress } from "../../domain/aggregate/aggregate-address";
+import type { AggregateIdentity } from "../../domain/aggregate/aggregate-identity";
 import { EventSourcedAggregate } from "../../domain/aggregate/event-sourced-aggregate";
 import {
 	type AnyDomainEvent,
@@ -84,13 +84,13 @@ class Counter extends EventSourcedAggregate<
 }
 
 const counterId = "counter-1" as CounterId;
-const stream: AggregateAddress<CounterId> = {
+const stream: AggregateIdentity<CounterId> = {
 	aggregateType: "Counter",
 	aggregateId: counterId,
 };
 
-function counted(by: number, address: AggregateAddress = stream): Counted {
-	return createDomainEvent("Counted", { by }, address);
+function counted(by: number, identity: AggregateIdentity = stream): Counted {
+	return createDomainEvent("Counted", { by }, identity);
 }
 
 function poisoned(): Poisoned {

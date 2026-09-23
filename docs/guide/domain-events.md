@@ -239,7 +239,7 @@ order.confirm(confirmedAt);
 recordPendingEvents(order, domainEvents);
 
 await snapshots.save(
-  orderAddress,
+  orderIdentity,
   captureAggregateSnapshot(orderSnapshots, order, domainEvents.now()),
 );
 ```
@@ -402,11 +402,12 @@ advance it. Only the event source at the persistence boundary can construct the
 complete cursor. Neither `createDomainEvent` nor `withCommit` can infer it from
 the aggregate's OCC baseline.
 
-Inside a committed envelope, `source` is the authoritative persistence address.
+Inside a committed envelope, `source` is the authoritative persistence identity.
 If the bare event also carries optional `aggregateId` or `aggregateType`
 stamps, each present value must match `source`; a projector rejects a
 contradiction as `ForeignEventError` before applying or checkpointing anything.
-An event whose optional address stamps are absent is addressed by the envelope.
+An event whose optional identity stamps are absent takes its identity from
+the envelope.
 
 Together the four fields form a gap-proof per-aggregate cursor. A projector can
 prove that a commit is complete and that the following commit names the

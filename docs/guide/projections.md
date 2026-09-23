@@ -184,14 +184,14 @@ and its `Projector` the complete union delivered by the source.
 
 ## Projectors Need A Complete Source Feed
 
-For every `(aggregateType, aggregateId)` address a projector consumes, its
-input must contain every committed envelope in that address's source chain.
+For every `(aggregateType, aggregateId)` identity a projector consumes, its
+input must contain every committed envelope in that identity's source chain.
 Do not subscribe a projector to an event-type-filtered topic such as only
 `OrderPlaced`: another event from the same commit still owns a cursor position,
 and dropping it would make the next commit correctly fail with
 `ProjectionGapError`.
 
-Route the complete, ordered per-address feed to the projector and explicitly
+Route the complete, ordered per-identity feed to the projector and explicitly
 ignore known facts that do not affect this read model:
 
 ```ts
@@ -242,7 +242,7 @@ interface ProjectionCheckpoint {
   lastAppliedEventId: string;
 }
 
-interface AggregateAddress {
+interface AggregateIdentity {
   aggregateType: string;
   aggregateId: string;
 }
@@ -251,26 +251,26 @@ interface ProjectionCheckpointStore<TCtx> {
   withCheckpointLocks<R>(
     ctx: TCtx,
     projection: string,
-    addresses: ReadonlyArray<AggregateAddress>,
+    identities: ReadonlyArray<AggregateIdentity>,
     work: () => Promise<R>,
   ): Promise<R>;
 
   load(
     ctx: TCtx,
     projection: string,
-    address: AggregateAddress,
+    identity: AggregateIdentity,
   ): Promise<ProjectionCheckpoint | undefined>;
 
   save(
     ctx: TCtx,
     projection: string,
-    address: AggregateAddress,
+    identity: AggregateIdentity,
     checkpoint: ProjectionCheckpoint,
   ): Promise<void>;
 
   hasReached(
     projection: string,
-    address: AggregateAddress,
+    identity: AggregateIdentity,
     position: ProjectionPosition,
   ): Promise<boolean>;
 
@@ -284,7 +284,7 @@ The envelope's `source` is authoritative. Optional `aggregateId` and
 `aggregateType` values repeated on the bare event must match it. A contradiction
 throws `ForeignEventError` before the transaction starts. Missing optional
 event stamps are allowed because the committed envelope already supplies the
-address.
+identity.
 
 `commitSize` proves that every event of the current commit was consumed.
 `previousEventfulAggregateVersion` links the next eventful commit to the
@@ -325,7 +325,7 @@ batch-start checkpoint remain valid late redeliveries. An exact receipt already
 seen earlier in the same batch is also a legal redelivery, even after a later
 position; it is not mistaken for an inversion.
 
-The `aggregateType` in the address is a technical stream category: unique
+The `aggregateType` in the identity is a technical stream category: unique
 across everything feeding one checkpoint store. Two bounded contexts may both
 have an `Order`; if their events share projection infrastructure, qualify the
 name at the source ("sales.order", "fulfillment.order").
@@ -345,7 +345,7 @@ must participate in the same transaction.
 Competing projector instances also need exclusion around the complete
 `load -> apply -> save` path. `Projector` calls the required
 `withCheckpointLocks` port method inside that transaction with a unique,
-canonically sorted address set. The adapter must serialize every
+canonically sorted identity set. The adapter must serialize every
 `(projection, aggregateType, aggregateId)` key even when no checkpoint exists
 yet. `SELECT ... FOR UPDATE` on the checkpoint table alone is wrong at
 genesis: an absent row locks nothing, so two consumers can both observe
@@ -358,11 +358,11 @@ advisory lock for every sorted key before invoking `work`:
 async function withCheckpointLocks<R>(
   tx: DbTx,
   projection: string,
-  addresses: ReadonlyArray<AggregateAddress>,
+  identities: ReadonlyArray<AggregateIdentity>,
   work: () => Promise<R>,
 ): Promise<R> {
   const keys = [...new Set(
-    addresses.map(({ aggregateType, aggregateId }) =>
+    identities.map(({ aggregateType, aggregateId }) =>
       JSON.stringify([projection, aggregateType, aggregateId]),
     ),
   )].sort();
@@ -419,8 +419,8 @@ capability.
 `InMemoryProjectionCheckpointStore` is a test/reference implementation. It is
 not transaction-aware, so it does not prove production rollback behavior.
 Without `maxCheckpoints`, its checkpoint map is unbounded and intended only for
-finite-lifetime tests and demos. A configured limit counts addresses across all
-projection names. New addresses then fail before mutation with
+finite-lifetime tests and demos. A configured limit counts identities across all
+projection names. New identities then fail before mutation with
 `InMemoryCapacityExceededError`, while an existing watermark can still advance
 and `reset(projection)` releases its slots. Checkpoints are never evicted
 automatically because forgetting one changes projection correctness.
@@ -610,7 +610,7 @@ still real: write, outbox, dispatcher, projector, query.
 
 Measure lag at the transport/source boundary — for example oldest pending
 outbox age and depth, broker partition lag, or subscription distance — not by
-counting per-aggregate checkpoint rows. Per-address watermarks prove local
+counting per-aggregate checkpoint rows. Per-identity watermarks prove local
 progress and power bounded waits; without a global source position they cannot
 produce one meaningful global lag number.
 
@@ -648,7 +648,7 @@ enough because several events in one commit can share the same
 `projection.truncate(...)` in one transaction when `truncate` exists.
 Stop every live consumer for that projection before reset and keep them stopped
 until the replay has caught up; reset is an operational exclusivity boundary,
-not an address-scoped delivery operation.
+not an identity-scoped delivery operation.
 
 ```ts
 await projector.reset();

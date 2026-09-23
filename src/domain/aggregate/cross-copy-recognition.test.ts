@@ -77,7 +77,7 @@ describe("recognition across package copies", () => {
 		expect(aggregate.value).toBe(3);
 	});
 
-	it("a second copy of the kit recognizes the address-stamped copy apply mints", async () => {
+	it("a second copy of the kit recognizes the identity-stamped copy apply mints", async () => {
 		const aggregate = new ApplyingAggregate("test-1" as TestId);
 		aggregate.applyEvent(
 			createDomainEvent("ValueUpdated", { newValue: 5 }) as ValueUpdated,

@@ -1,4 +1,4 @@
-import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
+import type { AggregateIdentity } from "../domain/aggregate/aggregate-identity";
 import type { AnyDomainEvent } from "../domain/event/domain-event";
 import type { ReplayableStreamPages } from "../persistence/event-store/reconstitute-from-stream-pages";
 import {
@@ -25,14 +25,14 @@ export interface ReplayableStreamPagesContractEnvironment<
 	Evt extends AnyDomainEvent,
 > {
 	/** Appends events to the end of the stream in the store that the code reads. */
-	append(stream: AggregateAddress, events: ReadonlyArray<Evt>): Promise<void>;
+	append(stream: AggregateIdentity, events: ReadonlyArray<Evt>): Promise<void>;
 
 	/**
 	 * Reads the stream through the code under test. Returns `undefined`
 	 * for an absent stream and for a window that lies outside the stream.
 	 */
 	read(
-		stream: AggregateAddress,
+		stream: AggregateIdentity,
 		window: ReplayableStreamPagesContractWindow,
 	): Promise<ReplayableStreamPages<Evt> | undefined>;
 
@@ -40,16 +40,16 @@ export interface ReplayableStreamPagesContractEnvironment<
 }
 
 /**
- * Inputs the suite needs. `createStream` returns a stream address that no
- * other test uses. `createEvent` returns an event addressed to that
+ * Inputs the suite needs. `createStream` returns a stream identity that no
+ * other test uses. `createEvent` returns an event that belongs to that
  * stream; different sequence values give different event ids.
  */
 export interface ReplayableStreamPagesContractHarness<
 	Evt extends AnyDomainEvent,
 > {
 	createEnvironment(): Promise<ReplayableStreamPagesContractEnvironment<Evt>>;
-	createStream(): AggregateAddress;
-	createEvent(stream: AggregateAddress, sequence: number): Evt;
+	createStream(): AggregateIdentity;
+	createEvent(stream: AggregateIdentity, sequence: number): Evt;
 }
 
 /**
@@ -70,7 +70,7 @@ export function createReplayableStreamPagesContractTests<
 	const seed = async (
 		env: ReplayableStreamPagesContractEnvironment<Evt>,
 		count: number,
-	): Promise<{ stream: AggregateAddress; events: Evt[] }> => {
+	): Promise<{ stream: AggregateIdentity; events: Evt[] }> => {
 		const stream = harness.createStream();
 		const events = Array.from({ length: count }, (_, index) =>
 			harness.createEvent(stream, index + 1),
@@ -80,7 +80,7 @@ export function createReplayableStreamPagesContractTests<
 	};
 	const readOrFail = async (
 		env: ReplayableStreamPagesContractEnvironment<Evt>,
-		stream: AggregateAddress,
+		stream: AggregateIdentity,
 		window: ReplayableStreamPagesContractWindow,
 	): Promise<ReplayableStreamPages<Evt>> => {
 		const read = await env.read({ ...stream }, window);

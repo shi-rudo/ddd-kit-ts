@@ -1,5 +1,5 @@
 import type { Aggregate } from "../domain/aggregate/aggregate";
-import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
+import type { AggregateIdentity } from "../domain/aggregate/aggregate-identity";
 import type {
 	AnyDomainEvent,
 	PendingDomainEvent,
@@ -50,7 +50,7 @@ export interface EsRepositoryContractEnvironment<
 	committedOutboxEvents(): Promise<ReadonlyArray<CommittedDomainEvent<TEvent>>>;
 	failNextOutboxWrite(error: Error): void;
 	committedStreamEvents(
-		stream: AggregateAddress<TAggregate["id"]>,
+		stream: AggregateIdentity<TAggregate["id"]>,
 		options: ReadStreamOptions,
 	): Promise<StreamReadResult<TEvent>>;
 	teardown?(): Promise<void>;
@@ -66,7 +66,7 @@ export interface EsRepositoryContractHarness<
 	/** Fresh aggregate with exactly one recorded creation event. */
 	createAggregate(): TAggregate;
 	createAggregateWithId?(id: TAggregate["id"]): TAggregate;
-	streamKeyFor(id: TAggregate["id"]): AggregateAddress<TAggregate["id"]>;
+	streamKeyFor(id: TAggregate["id"]): AggregateIdentity<TAggregate["id"]>;
 	/** Applies exactly one event and advances the aggregate version by one. */
 	mutate(aggregate: TAggregate): void;
 	snapshotState?(aggregate: TAggregate): unknown;

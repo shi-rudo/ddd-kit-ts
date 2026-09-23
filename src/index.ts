@@ -160,7 +160,7 @@ export {
 	toVersion,
 	type Version,
 } from "./domain/aggregate/aggregate";
-export type { AggregateAddress } from "./domain/aggregate/aggregate-address";
+export type { AggregateIdentity } from "./domain/aggregate/aggregate-identity";
 export type { AggregateConfig } from "./domain/aggregate/base-aggregate";
 export {
 	EventSourcedAggregate,
@@ -269,8 +269,8 @@ export {
 export { voValidated } from "./domain/value-object/vo-validated";
 // Errors
 export {
-	type AggregateAddressMismatchOptions,
 	AggregateDeletedError,
+	type AggregateIdentityMismatchOptions,
 	AggregateNotFoundError,
 	type AggregateNotFoundErrorOptions,
 	CapabilityRegistryConflictError,
@@ -313,7 +313,7 @@ export {
 	isWiringErrorLike,
 	type KitErrorCode,
 	type KitErrorOptions,
-	MisaddressedEventError,
+	MisattributedEventError,
 	MissingEntityIdError,
 	MissingFoldError,
 	MissingHandlerError,

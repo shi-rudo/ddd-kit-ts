@@ -31,7 +31,7 @@ export interface SnapshotModel<
 	TAggregate extends SnapshotAggregate,
 	TSnapshotState,
 > {
-	/** Stable type name used to address schema errors and snapshot storage. */
+	/** Stable type name that names the aggregate in schema errors and snapshot storage. */
 	readonly aggregateType: string;
 
 	/** Current schema version of the stored snapshot DTO. */

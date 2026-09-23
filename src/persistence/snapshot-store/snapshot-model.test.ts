@@ -413,7 +413,7 @@ describe("adapter-owned snapshot models", () => {
 		expect(restored.state).toEqual({ status: "migrated" });
 	});
 
-	it("fails with an addressed schema mismatch when no migration exists", () => {
+	it("fails with a schema mismatch that names the aggregate when no migration exists", () => {
 		expect(() =>
 			reconstituteAggregateFromSnapshot(model, "order-1" as OrderId, {
 				state: { status: "placed" },

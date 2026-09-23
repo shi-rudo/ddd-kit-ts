@@ -29,6 +29,29 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Changed (breaking): AggregateAddress is AggregateIdentity
+
+The pair of aggregate type and aggregate id is the identity of an
+aggregate: the id alone is unique only within its type. The kit called the
+pair an address, which is not a term of domain-driven design and reads like
+the postal address that many domains model. It is now `AggregateIdentity`,
+and every name built on it follows.
+
+| Before | After |
+| --- | --- |
+| `AggregateAddress` | `AggregateIdentity` |
+| `AggregateAddressMismatchOptions` | `AggregateIdentityMismatchOptions` |
+| `MisaddressedEventError` (code `MISADDRESSED_EVENT`) | `MisattributedEventError` (code `MISATTRIBUTED_EVENT`) |
+| `DomainEventValidationCode` `EVENT_ADDRESS_INVALID` | `EVENT_AGGREGATE_IDENTITY_INVALID` |
+| protected `addressNewEvent(event)` on the aggregate base classes | protected `stampNewEventIdentity(event)` |
+
+The fields of the type stay `aggregateType` and `aggregateId`. Parameter
+names that describe a role stay as well: `stream` on the event store,
+`source` on committed events and integration messages, `expected` and
+`actual` on the mismatch errors. Parameters that were named `address` are
+named `identity`. Rename the type and the error where you import or match
+on them. No alias remains.
+
 ### Changed (breaking): the stream-page replay takes a replayable stream read
 
 `reconstituteAggregateFromStreamPages` takes a `ReplayableStreamPages`

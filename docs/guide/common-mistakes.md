@@ -368,7 +368,7 @@ the number of events actually returned, because adapters may return fewer
 than requested. A zero-length page before the target version is a violated
 adapter contract, not end-of-stream. `readStreamPages` throws
 `InvalidEventStreamPageError` for it, and so does the replay for an empty
-page of an adapter that pages on its own. The stream address and both
+page of an adapter that pages on its own. The stream identity and both
 cursors survive into logs and telemetry.
 `reconstituteAggregateFromStreamPages` yields the aggregate only when the
 replay ends at the target version. Add it to the identity map after that,

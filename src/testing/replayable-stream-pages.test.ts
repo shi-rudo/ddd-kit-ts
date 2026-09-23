@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
+import type { AggregateIdentity } from "../domain/aggregate/aggregate-identity";
 import {
 	createDomainEvent,
 	type DomainEvent,
@@ -10,7 +10,7 @@ import { createReplayableStreamPages } from "./replayable-stream-pages";
 type OrderId = Id<"OrderId">;
 type OrderRenamed = DomainEvent<"OrderRenamed", { name: string }>;
 
-const stream: AggregateAddress<OrderId> = {
+const stream: AggregateIdentity<OrderId> = {
 	aggregateType: "Order",
 	aggregateId: "order-1" as OrderId,
 };

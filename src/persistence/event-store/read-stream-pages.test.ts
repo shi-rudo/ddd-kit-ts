@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { AggregateAddress } from "../../domain/aggregate/aggregate-address";
+import type { AggregateIdentity } from "../../domain/aggregate/aggregate-identity";
 import {
 	type AnyDomainEvent,
 	createDomainEvent,
@@ -25,7 +25,7 @@ import {
 type CounterId = Id<"CounterId">;
 type Counted = DomainEvent<"Counted", { by: number }>;
 
-const stream: AggregateAddress<CounterId> = {
+const stream: AggregateIdentity<CounterId> = {
 	aggregateType: "Counter",
 	aggregateId: "counter-1" as CounterId,
 };
@@ -42,19 +42,19 @@ class CountingEventStore<Evt extends AnyDomainEvent>
 	constructor(private readonly inner: EventStore<Evt>) {}
 
 	append(
-		address: AggregateAddress,
+		identity: AggregateIdentity,
 		events: ReadonlyArray<Evt>,
 		options: EventStoreAppendOptions,
 	): Promise<void> {
-		return this.inner.append(address, events, options);
+		return this.inner.append(identity, events, options);
 	}
 
 	readStream(
-		address: AggregateAddress,
+		identity: AggregateIdentity,
 		options: ReadStreamOptions,
 	): Promise<StreamReadResult<Evt>> {
 		this.reads += 1;
-		return this.inner.readStream(address, options);
+		return this.inner.readStream(identity, options);
 	}
 }
 
@@ -82,10 +82,10 @@ class ShortPageReader implements EventStreamReader<Counted> {
 	}
 
 	async readStream(
-		address: AggregateAddress,
+		identity: AggregateIdentity,
 		options: ReadStreamOptions,
 	): Promise<StreamReadResult<Counted>> {
-		const page = await this.inner.readStream(address, options);
+		const page = await this.inner.readStream(identity, options);
 		if (!page.exists) return page;
 		return { ...page, events: page.events.slice(0, 1) };
 	}
@@ -250,7 +250,7 @@ describe("readStreamPages", () => {
 		const history = countedUpTo(3);
 		const store = await seededStore(history);
 		const reader: EventStreamReader<Counted> = {
-			readStream: (address, options) => store.readStream(address, options),
+			readStream: (identity, options) => store.readStream(identity, options),
 		};
 
 		const read = await readReachable(reader, { limit: 2 });
@@ -314,9 +314,9 @@ describe("readStreamPages", () => {
 		const store = await seededStore(countedUpTo(5));
 		const signals: Array<AbortSignal | undefined> = [];
 		const reader: EventStreamReader<Counted> = {
-			readStream: (address, options) => {
+			readStream: (identity, options) => {
 				signals.push(options.signal);
-				return store.readStream(address, options);
+				return store.readStream(identity, options);
 			},
 		};
 		const controller = new AbortController();

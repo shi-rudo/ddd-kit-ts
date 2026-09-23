@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
+import type { AggregateIdentity } from "../domain/aggregate/aggregate-identity";
 import {
 	createDomainEvent,
 	type DomainEvent,
@@ -18,14 +18,14 @@ describe("event-store adapter contract", () => {
 			store: new InMemoryEventStore<ContractStepRecorded>(),
 		}),
 		createCollidingStreamKeys: (): readonly [
-			AggregateAddress,
-			AggregateAddress,
+			AggregateIdentity,
+			AggregateIdentity,
 		] => [
 			{ aggregateType: "ContractAlpha", aggregateId: "shared-1" },
 			{ aggregateType: "ContractBeta", aggregateId: "shared-1" },
 		],
 		createEvent: (
-			stream: AggregateAddress,
+			stream: AggregateIdentity,
 			sequence: number,
 		): ContractStepRecorded =>
 			createDomainEvent("ContractStepRecorded", { sequence }, stream),

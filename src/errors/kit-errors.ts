@@ -387,7 +387,7 @@ export class DirectStateMutationError extends KitWiringError<"DIRECT_STATE_MUTAT
 /**
  * Thrown by `Projector.project` when an event cannot be projected
  * safely because its cursor is missing or malformed, or its aggregate
- * address is absent. Applying such an event would break idempotency, so
+ * identity is absent. Applying such an event would break idempotency, so
  * the batch fails. Events written by `withCommit` carry the complete
  * cursor automatically; other sources compose a gap-proof committed-event
  * envelope. A well-formed cursor that does not continue the stored chain
@@ -666,12 +666,12 @@ export class UnreplayableAggregateError extends KitWiringError<"UNREPLAYABLE_AGG
 }
 
 /**
- * Constructor options for {@link MisaddressedEventError} and
- * {@link ForeignEventError}: the address of the aggregate that received the
- * event, and the address fields the event carries. A missing field on the
+ * Constructor options for {@link MisattributedEventError} and
+ * {@link ForeignEventError}: the identity of the aggregate that received the
+ * event, and the identity fields the event carries. A missing field on the
  * event matches by default, so `actual` names only what the event states.
  */
-export interface AggregateAddressMismatchOptions {
+export interface AggregateIdentityMismatchOptions {
 	readonly expected: {
 		readonly aggregateType: string;
 		readonly aggregateId: string;
@@ -683,9 +683,9 @@ export interface AggregateAddressMismatchOptions {
 	readonly eventType: string;
 }
 
-/** The address the event names; a missing field falls back to the receiving aggregate. */
-function describeEventAddress(
-	options: AggregateAddressMismatchOptions,
+/** The identity the event names; a missing field falls back to the receiving aggregate. */
+function describeEventIdentity(
+	options: AggregateIdentityMismatchOptions,
 ): string {
 	const { expected, actual } = options;
 	return `${actual.aggregateType ?? expected.aggregateType} ${actual.aggregateId ?? expected.aggregateId}`;
@@ -695,28 +695,28 @@ function describeEventAddress(
  * Thrown by `EventSourcedAggregate.apply()` when a NEW event carries an
  * `aggregateId` or `aggregateType` naming a different aggregate: a
  * deterministic programming bug at the call site (a hand-built or
- * copied event addressed elsewhere), caught before the event can be
- * recorded and poison the own stream. Events with MISSING address
+ * copied event that belongs elsewhere), caught before the event can be
+ * recorded and poison the own stream. Events with MISSING identity
  * fields do not trip this: `apply()` stamps them from the aggregate,
  * the same guarantee `createEvent` gives. A wiring error, distinct
  * from {@link ForeignEventError} on purpose: a wrong new event is a
  * bug in today's code, a wrong PERSISTED row is corrupted or miswired
  * infrastructure, and handlers for one must not absorb the other.
  */
-export class MisaddressedEventError extends KitWiringError<"MISADDRESSED_EVENT"> {
-	/** Address of the aggregate that received the event. */
-	readonly expected: AggregateAddressMismatchOptions["expected"];
-	/** Address fields the event carries. */
-	readonly actual: AggregateAddressMismatchOptions["actual"];
+export class MisattributedEventError extends KitWiringError<"MISATTRIBUTED_EVENT"> {
+	/** Identity of the aggregate that received the event. */
+	readonly expected: AggregateIdentityMismatchOptions["expected"];
+	/** Identity fields the event carries. */
+	readonly actual: AggregateIdentityMismatchOptions["actual"];
 	readonly eventType: string;
 
-	constructor(options: AggregateAddressMismatchOptions) {
+	constructor(options: AggregateIdentityMismatchOptions) {
 		super(
-			"MISADDRESSED_EVENT",
-			`New event "${options.eventType}" is addressed to ` +
-				`${describeEventAddress(options)} but was applied on ` +
+			"MISATTRIBUTED_EVENT",
+			`New event "${options.eventType}" belongs to ` +
+				`${describeEventIdentity(options)} but was applied on ` +
 				`${options.expected.aggregateType} ${options.expected.aggregateId}: ` +
-				"fix the call site (createEvent stamps the right address).",
+				"fix the call site (createEvent stamps the right identity).",
 		);
 		this.expected = options.expected;
 		this.actual = options.actual;
@@ -936,31 +936,31 @@ export class PendingEventBatchMismatchError extends KitWiringError<"PENDING_EVEN
  * the persisted row belongs to someone else (a miswired stream read,
  * ids colliding across aggregate types, a corrupted store). An
  * `InfrastructureError`, NOT a `DomainError` (same posture as
- * {@link SnapshotSchemaMismatchError}): a wrong address is data
+ * {@link SnapshotSchemaMismatchError}): a wrong identity is data
  * corruption or wiring, never an expected business rejection, so it
  * must not be absorbed by generic domain error handling or presented
  * as a 4xx. It therefore PROPAGATES as a throw through the replay
  * methods' `Result` contract (which reserves `Err` for `DomainError`),
  * after the usual all-or-nothing rollback. History events without the
- * optional address fields pass unchecked (the fields are optional on
+ * optional identity fields pass unchecked (the fields are optional on
  * the event shape); new events are covered by
- * {@link MisaddressedEventError}.
+ * {@link MisattributedEventError}.
  */
 export class ForeignEventError extends InfrastructureError<"FOREIGN_EVENT"> {
-	/** Address of the aggregate that received the event. */
-	readonly expected: AggregateAddressMismatchOptions["expected"];
-	/** Address fields the event carries. */
-	readonly actual: AggregateAddressMismatchOptions["actual"];
+	/** Identity of the aggregate that received the event. */
+	readonly expected: AggregateIdentityMismatchOptions["expected"];
+	/** Identity fields the event carries. */
+	readonly actual: AggregateIdentityMismatchOptions["actual"];
 	readonly eventType: string;
 
-	constructor(options: AggregateAddressMismatchOptions) {
+	constructor(options: AggregateIdentityMismatchOptions) {
 		super({
 			code: "FOREIGN_EVENT",
 			message:
 				`Persisted event "${options.eventType}" belongs to ` +
-				`${describeEventAddress(options)}, not to ` +
+				`${describeEventIdentity(options)}, not to ` +
 				`${options.expected.aggregateType} ${options.expected.aggregateId}: ` +
-				"the stream row addresses a different aggregate.",
+				"the stream row identities a different aggregate.",
 		});
 		this.expected = options.expected;
 		this.actual = options.actual;
@@ -1965,7 +1965,7 @@ export type KitErrorCode =
 	| "DUPLICATE_EVENT_ID"
 	| "DUPLICATE_HANDLER_REGISTRATION"
 	| "ERROR_MAPPER_FAILED"
-	| "EVENT_ADDRESS_INVALID"
+	| "EVENT_AGGREGATE_IDENTITY_INVALID"
 	| "EVENT_BUS_CLOSED"
 	| "EVENT_HARVEST_FAILED"
 	| "EVENT_ID_INVALID"
@@ -1998,7 +1998,7 @@ export type KitErrorCode =
 	| "INVALID_REPOSITORY_ADAPTER"
 	| "INVALID_REPOSITORY_DEFINITION"
 	| "INVALID_VERSION"
-	| "MISADDRESSED_EVENT"
+	| "MISATTRIBUTED_EVENT"
 	| "MISSING_ENTITY_ID"
 	| "MISSING_FOLD"
 	| "MISSING_HANDLER"

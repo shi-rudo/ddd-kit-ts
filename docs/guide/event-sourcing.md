@@ -154,8 +154,8 @@ replay performs over the stream.
 
 `apply(event)` runs in this order:
 
-1. The address check runs. The aggregate supplies a missing `aggregateId` or
-   `aggregateType`. A foreign address throws `MisaddressedEventError` before
+1. The identity check runs. The aggregate supplies a missing `aggregateId` or
+   `aggregateType`. A foreign identity throws `MisattributedEventError` before
    recording. `ForeignEventError` is the replay error for persisted rows.
 2. `validateEvent(event)` decides whether this event is allowed in the current
    state.
@@ -258,7 +258,7 @@ The kit defines a small driven port for stream persistence:
 ```ts
 interface EventStreamReader<Evt extends AnyDomainEvent> {
   readStream(
-    stream: AggregateAddress,
+    stream: AggregateIdentity,
     options: {
       limit: number;
       fromVersion?: number;
@@ -271,7 +271,7 @@ interface EventStreamReader<Evt extends AnyDomainEvent> {
 interface EventStore<Evt extends AnyDomainEvent>
   extends EventStreamReader<Evt> {
   append(
-    stream: AggregateAddress,
+    stream: AggregateIdentity,
     events: readonly Evt[],
     options: { expectedVersion: number },
   ): Promise<void>;
@@ -411,8 +411,8 @@ that recipe:
 
 ```ts
 async function findById(id: OrderId): Promise<Order | null> {
-  const address = { aggregateType: "Order", aggregateId: id };
-  const read = await readStreamPages(eventStore, address, { limit: 256 });
+  const identity = { aggregateType: "Order", aggregateId: id };
+  const read = await readStreamPages(eventStore, identity, { limit: 256 });
   if (!read.reachable) return null;
 
   const loaded = await reconstituteAggregateFromStreamPages(
@@ -430,7 +430,7 @@ each page read is one round trip to the store. An adapter can clamp `limit`
 to a maximum of its own, and then the load needs more round trips. Measure
 the stream lengths and the event sizes of your system, then set the value.
 
-`readStreamPages(eventStore, address, { fromVersion, toVersion, limit })`
+`readStreamPages(eventStore, identity, { fromVersion, toVersion, limit })`
 reads the first page and decides the state of the stream once, in three
 branches:
 
@@ -441,7 +441,7 @@ branches:
   `toVersion` lies beyond the head. `pinTargetVersion` makes this decision;
   the [point-in-time read](#point-in-time-reconstruction) shows why it never
   clamps.
-- The remaining branch returns the `stream` address, `fromVersion`, the
+- The remaining branch returns the `stream` identity, `fromVersion`, the
   pinned `targetVersion`, and `pages`. The target version is `toVersion`
   when the read asked for one, else the head of the first page.
 
@@ -510,7 +510,7 @@ payload it cannot map). Two groups of failures deliberately do NOT ride the
 rollback, because a code bug must not look like a corrupt stream.
 `UnmintedEventError` belongs to `apply()` only: replay input comes from
 storage rows, and the mint gate does not run on it. And an
-event addressed to a different aggregate (`ForeignEventError`,
+event that belongs to a different aggregate (`ForeignEventError`,
 when a history event carries an `aggregateId` or `aggregateType` that does not
 match the target) is an `InfrastructureError` and THROWS, because a wrong
 stream read is wiring or data corruption, never an expected business
@@ -585,8 +585,8 @@ async function findOrderAtVersion(
   id: OrderId,
   toVersion: number,
 ): Promise<OrderView | null> {
-  const address = { aggregateType: "Order", aggregateId: id };
-  const read = await readStreamPages(eventStore, address, {
+  const identity = { aggregateType: "Order", aggregateId: id };
+  const read = await readStreamPages(eventStore, identity, {
     toVersion,
     limit: 256,
   });
@@ -617,7 +617,7 @@ the caller tells three cases apart from its own inputs:
 ```ts
 if (!read.reachable) {
   if (!read.exists || snapshot.version > read.lastVersion) {
-    await snapshots.delete(address);
+    await snapshots.delete(identity);
   }
   if (!read.exists || toVersion > read.lastVersion) return null;
   return replayFromZeroAt(id, toVersion);
@@ -651,17 +651,17 @@ const SNAPSHOT_DISCARD_CODES: ReadonlySet<string> = new Set<KitErrorCode>([
 ]);
 
 async function findById(id: OrderId): Promise<Order | null> {
-  const address = { aggregateType: "Order", aggregateId: id };
+  const identity = { aggregateType: "Order", aggregateId: id };
   const discardSnapshotAndReplay = async (): Promise<Order | null> => {
     const replayed = await replayFromZero(id);
-    await snapshots.delete(address);
+    await snapshots.delete(identity);
     return replayed;
   };
 
-  const snapshot = await snapshots.load(address);
+  const snapshot = await snapshots.load(identity);
   if (snapshot === undefined) return replayFromZero(id);
 
-  const read = await readStreamPages(eventStore, address, {
+  const read = await readStreamPages(eventStore, identity, {
     fromVersion: snapshot.version,
     limit: 256,
   });
@@ -740,15 +740,15 @@ just replays from zero.
 ```ts
 interface SnapshotStore<TState = unknown> {
   load(
-    address: AggregateAddress,
+    identity: AggregateIdentity,
   ): Promise<AggregateSnapshot<TState> | undefined>;
 
   save(
-    address: AggregateAddress,
+    identity: AggregateIdentity,
     snapshot: AggregateSnapshot<TState>,
   ): Promise<void>;
 
-  delete(address: AggregateAddress): Promise<void>;
+  delete(identity: AggregateIdentity): Promise<void>;
 }
 ```
 
@@ -947,18 +947,18 @@ the stream, the window, and the pages. The cursor check, the target version
 check, and the `Result` boundary stay in the kit:
 
 ```ts
-const head = await streamHead(address); // your own query; 0 when absent
+const head = await streamHead(identity); // your own query; 0 when absent
 if (head === 0) return null;
 const pinned = pinTargetVersion({ fromVersion: 0, lastVersion: head });
 if (!pinned.reachable) return null;
 
 const read: ReplayableStreamPages<OrderEvent> = {
-  stream: address,
+  stream: identity,
   fromVersion: 0,
   targetVersion: pinned.targetVersion,
   pages: {
     [Symbol.asyncIterator]: () =>
-      cursorPages(address, 0, pinned.targetVersion),
+      cursorPages(identity, 0, pinned.targetVersion),
   },
 };
 const loaded = await reconstituteAggregateFromStreamPages(

@@ -588,15 +588,15 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 							recordedEvent.type,
 						);
 					}
-					// Backstop behind the aggregate's own address check: the
+					// Backstop behind the aggregate's own identity check: the
 					// envelope source is copied from the event, so an event that
 					// names another aggregate must never become this commit.
 					if (aggregateId !== enrolledId || aggregateType !== enrolledType) {
 						throw new EventHarvestError(
-							`withCommit: event "${recordedEvent.type}" is addressed to ` +
+							`withCommit: event "${recordedEvent.type}" belongs to ` +
 								`${aggregateType} ${aggregateId} but was enrolled under ` +
 								`${enrolledType} ${enrolledId}. The aggregate base ` +
-								"classes stamp the address on every recording path; an " +
+								"classes stamp the identity on every recording path; an " +
 								"instance from another package copy must stamp it the " +
 								"same way.",
 							recordedEvent.type,

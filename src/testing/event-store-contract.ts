@@ -1,4 +1,4 @@
-import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
+import type { AggregateIdentity } from "../domain/aggregate/aggregate-identity";
 import type { AnyDomainEvent } from "../domain/event/domain-event";
 import type {
 	EventStore,
@@ -27,13 +27,13 @@ export interface EventStoreContractEnvironment<Evt extends AnyDomainEvent> {
  *
  * `createCollidingStreamKeys` must return two valid stream keys with the same
  * raw aggregate id and different aggregate types. `createEvent` must return an
- * event addressed to the supplied key; different sequence values must produce
+ * event that belongs to the supplied key; different sequence values must produce
  * different event ids.
  */
 export interface EventStoreContractHarness<Evt extends AnyDomainEvent> {
 	createEnvironment(): Promise<EventStoreContractEnvironment<Evt>>;
-	createCollidingStreamKeys(): readonly [AggregateAddress, AggregateAddress];
-	createEvent(stream: AggregateAddress, sequence: number): Evt;
+	createCollidingStreamKeys(): readonly [AggregateIdentity, AggregateIdentity];
+	createEvent(stream: AggregateIdentity, sequence: number): Evt;
 }
 
 /**
@@ -120,7 +120,7 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 					firstStream.exists &&
 						firstStream.events.length === 1 &&
 						firstStream.events[0]?.eventId === firstEvent.eventId,
-					"the first aggregate type must retain only its own event; key objects are value addresses, not identity tokens",
+					"the first aggregate type must retain only its own event; key objects compare by value, not by object reference",
 				);
 				assert(
 					secondStream.exists &&

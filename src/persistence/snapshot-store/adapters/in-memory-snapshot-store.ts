@@ -1,8 +1,8 @@
 import type { AggregateSnapshot } from "../../../domain/aggregate/aggregate";
 import {
-	type AggregateAddress,
-	encodeAggregateAddress,
-} from "../../../domain/aggregate/aggregate-address";
+	type AggregateIdentity,
+	encodeAggregateIdentity,
+} from "../../../domain/aggregate/aggregate-identity";
 import { assertPositiveSafeInteger } from "../../../internal/validate";
 import type { SnapshotStore } from "../snapshot-store";
 
@@ -62,9 +62,9 @@ export class InMemorySnapshotStore<TState = unknown>
 	}
 
 	async load(
-		address: AggregateAddress,
+		identity: AggregateIdentity,
 	): Promise<AggregateSnapshot<TState> | undefined> {
-		const key = encodeAggregateAddress(address);
+		const key = encodeAggregateIdentity(identity);
 		const stored = this.snapshots.get(key);
 		if (stored === undefined) return undefined;
 		if (
@@ -82,13 +82,13 @@ export class InMemorySnapshotStore<TState = unknown>
 	}
 
 	async save(
-		address: AggregateAddress,
+		identity: AggregateIdentity,
 		snapshot: AggregateSnapshot<TState>,
 	): Promise<void> {
 		// Clone before changing retention state: an unsupported snapshot value
 		// must not evict a valid entry.
 		const ownedSnapshot = structuredClone(snapshot);
-		const key = encodeAggregateAddress(address);
+		const key = encodeAggregateIdentity(identity);
 		let expiresAtMs: number | undefined;
 		if (this.ttlMs !== undefined) {
 			const nowMs = this.readClock();
@@ -107,8 +107,8 @@ export class InMemorySnapshotStore<TState = unknown>
 		this.snapshots.set(key, { snapshot: ownedSnapshot, expiresAtMs });
 	}
 
-	async delete(address: AggregateAddress): Promise<void> {
-		this.snapshots.delete(encodeAggregateAddress(address));
+	async delete(identity: AggregateIdentity): Promise<void> {
+		this.snapshots.delete(encodeAggregateIdentity(identity));
 	}
 
 	private readClock(): number {

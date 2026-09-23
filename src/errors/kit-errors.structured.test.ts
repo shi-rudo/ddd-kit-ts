@@ -29,7 +29,7 @@ import {
 	InvalidIntegrationMessageError,
 	InvalidVersionError,
 	type KitErrorCode,
-	MisaddressedEventError,
+	MisattributedEventError,
 	MissingEntityIdError,
 	MissingFoldError,
 	MissingHandlerError,
@@ -135,12 +135,12 @@ const concreteCases: ReadonlyArray<{
 	},
 	{
 		error: () =>
-			new MisaddressedEventError({
+			new MisattributedEventError({
 				expected: { aggregateType: "Order", aggregateId: "o-1" },
 				actual: { aggregateId: "o-2" },
 				eventType: "OrderConfirmed",
 			}),
-		code: "MISADDRESSED_EVENT",
+		code: "MISATTRIBUTED_EVENT",
 		category: "WIRING",
 		retryable: false,
 	},
@@ -640,7 +640,7 @@ describe("KitErrorCode stays in sync with the classes", () => {
 			AssertKitCode<InvalidCommandMessageError["code"]>,
 			AssertKitCode<InvalidIntegrationMessageError["code"]>,
 			AssertKitCode<InvalidVersionError["code"]>,
-			AssertKitCode<MisaddressedEventError["code"]>,
+			AssertKitCode<MisattributedEventError["code"]>,
 			AssertKitCode<MissingEntityIdError["code"]>,
 			AssertKitCode<MissingFoldError["code"]>,
 			AssertKitCode<MissingHandlerError["code"]>,

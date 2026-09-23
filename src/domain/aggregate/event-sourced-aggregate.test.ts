@@ -7,7 +7,7 @@ import {
 	FoldReturnedNoStateError,
 	ForeignEventError,
 	HostileStateKeyError,
-	MisaddressedEventError,
+	MisattributedEventError,
 	MissingFoldError,
 	PendingEventLimitExceededError,
 	UnmintedEventError,
@@ -890,7 +890,7 @@ describe("replay trusts history", () => {
 		}).toThrow(AlreadyActiveError);
 	});
 
-	it("throws on a replayed event addressed to another aggregate id: corruption, not a domain rejection", () => {
+	it("throws on a replayed event of another aggregate id: corruption, not a domain rejection", () => {
 		const agg = new RuleTighteningAggregate("test-1" as TestId, {
 			value: 10,
 			status: "inactive",
@@ -930,11 +930,11 @@ describe("replay trusts history", () => {
 		).toThrow(ForeignEventError);
 	});
 
-	it("throws a wiring error from apply() when a new event is addressed to another aggregate", () => {
-		// Without the guard, a hand-built event with a foreign address
+	it("throws a wiring error from apply() when a new event belongs to another aggregate", () => {
+		// Without the guard, a hand-built event with a foreign identity
 		// would be recorded and committed, and the NEXT load of this
 		// stream would reject it, poisoning the stream. A wiring error
-		// (MisaddressedEventError), not ForeignEventError: a wrong new
+		// (MisattributedEventError), not ForeignEventError: a wrong new
 		// event is a bug in today's code, not corrupted infrastructure.
 		const agg = new RuleTighteningAggregate("test-1" as TestId, {
 			value: 10,
@@ -949,7 +949,7 @@ describe("replay trusts history", () => {
 					{ aggregateId: "someone-else" },
 				) as TestEventUpdated,
 			);
-		}).toThrow(MisaddressedEventError);
+		}).toThrow(MisattributedEventError);
 		expect(() => {
 			agg.testApply(
 				createDomainEvent(
@@ -958,15 +958,15 @@ describe("replay trusts history", () => {
 					{ aggregateId: "test-1", aggregateType: "SomeoneElse" },
 				) as TestEventUpdated,
 			);
-		}).toThrow(MisaddressedEventError);
+		}).toThrow(MisattributedEventError);
 		// Nothing recorded, nothing bumped: the stream stays clean.
 		expect(agg.pendingEvents).toHaveLength(0);
 		expect(agg.version).toBe(0);
 		expect(agg.state.value).toBe(10);
 	});
 
-	it("apply() stamps missing address fields, so recorded events are always fully addressed", () => {
-		// Without the stamp an address-less event mutates state and then
+	it("apply() stamps missing identity fields, so recorded events always carry their full identity", () => {
+		// Without the stamp an identity-less event mutates state and then
 		// fails far away: at harvest (withCommit) or on the next load
 		// (replay guard).
 		const agg = new RuleTighteningAggregate("test-1" as TestId, {
@@ -988,7 +988,7 @@ describe("replay trusts history", () => {
 		expect(Object.isFrozen(recorded)).toBe(true);
 	});
 
-	it("keeps an address-stamped decision uncommitted until the shell records it", () => {
+	it("keeps an identity-stamped decision uncommitted until the shell records it", () => {
 		const agg = new RuleTighteningAggregate("test-1" as TestId, {
 			value: 10,
 			status: "inactive",
@@ -1119,7 +1119,7 @@ describe("replay trusts history", () => {
 		expect(agg.pendingEvents).toHaveLength(0);
 	});
 
-	it("accepts the address-stamped copy apply() mints for address-less events", () => {
+	it("accepts the identity-stamped copy apply() mints for identity-less events", () => {
 		// The stamped copy is kit-derived from a minted event and adopted
 		// into the mint marker; the gate must not reject apply's own work.
 		const agg = new RuleTighteningAggregate("test-1" as TestId, {
@@ -1154,7 +1154,7 @@ describe("replay trusts history", () => {
 		expect(agg.state.value).toBe(7);
 	});
 
-	it("accepts replayed events that carry the matching address", () => {
+	it("accepts replayed events that carry the matching identity", () => {
 		const agg = new RuleTighteningAggregate("test-1" as TestId, {
 			value: 10,
 			status: "inactive",
@@ -1626,7 +1626,7 @@ describe("apply and replay bookkeeping", () => {
 		return capability;
 	};
 
-	it("keeps a fully addressed new event as the same object", () => {
+	it("keeps a fully stamped new event as the same object", () => {
 		const agg = fresh();
 		const event = createDomainEvent(
 			"TestEventUpdated",
@@ -1655,7 +1655,7 @@ describe("apply and replay bookkeeping", () => {
 		expect(agg.pendingEvents).toHaveLength(1);
 	});
 
-	it("stamps the missing half of a partial address and keeps the identity", () => {
+	it("stamps the missing half of a partial identity and keeps the identity", () => {
 		const agg = fresh();
 		const event = createDomainEvent(
 			"TestEventUpdated",
@@ -1672,7 +1672,7 @@ describe("apply and replay bookkeeping", () => {
 		expect(isRecordedDomainEvent(recorded as object)).toBe(true);
 	});
 
-	it("stamps the missing id of a partial address that names only the type", () => {
+	it("stamps the missing id of a partial identity that names only the type", () => {
 		const agg = fresh();
 		const event = createDomainEvent(
 			"TestEventUpdated",

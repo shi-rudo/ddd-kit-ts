@@ -2,7 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
 	DuplicateEventIdError,
 	InvalidVersionError,
-	MisaddressedEventError,
+	MisattributedEventError,
 	MissingEntityIdError,
 	PendingEventBatchMismatchError,
 	PendingEventLimitExceededError,
@@ -686,7 +686,7 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 			}
 		}
 
-		it("stamps the aggregate address and leaves identity and time to the shell", () => {
+		it("stamps the aggregate identity and leaves identity and time to the shell", () => {
 			const agg = new DecidingAggregate("r-1" as TestId, {
 				value: 0,
 				status: "inactive",
@@ -1159,15 +1159,15 @@ describe("createEvent options and pending-event bookkeeping", () => {
 	});
 });
 
-describe("event address on the state-stored path", () => {
+describe("event identity on the state-stored path", () => {
 	type Noted = DomainEvent<"Noted", { value: number }>;
 
-	class AddressedAggregate extends StateStoredAggregate<
+	class IdentityStampedAggregate extends StateStoredAggregate<
 		TestState,
 		TestId,
 		Noted
 	> {
-		protected readonly aggregateType = "AddressedAggregate";
+		protected readonly aggregateType = "IdentityStampedAggregate";
 
 		constructor(id: TestId, initialState: TestState) {
 			super(id, initialState);
@@ -1189,21 +1189,26 @@ describe("event address on the state-stored path", () => {
 		}
 	}
 
-	const fresh = (): AddressedAggregate =>
-		new AddressedAggregate("test-1" as TestId, {
+	const fresh = (): IdentityStampedAggregate =>
+		new IdentityStampedAggregate("test-1" as TestId, {
 			value: 0,
 			status: "inactive",
 		});
 
-	it("rejects a committed event addressed to another aggregate before the state moves", () => {
+	it("rejects a committed event of another aggregate before the state moves", () => {
 		const aggregate = fresh();
 		const foreign = createDomainEvent(
 			"Noted",
 			{ value: 1 },
-			{ aggregateId: "someone-else", aggregateType: "AddressedAggregate" },
+			{
+				aggregateId: "someone-else",
+				aggregateType: "IdentityStampedAggregate",
+			},
 		);
 
-		expect(() => aggregate.commitWith(foreign)).toThrow(MisaddressedEventError);
+		expect(() => aggregate.commitWith(foreign)).toThrow(
+			MisattributedEventError,
+		);
 
 		expect(aggregate.state.value).toBe(0);
 		expect(aggregate.version).toBe(0);
@@ -1218,33 +1223,33 @@ describe("event address on the state-stored path", () => {
 			{ aggregateId: "test-1", aggregateType: "Other" },
 		);
 
-		expect(() => aggregate.record(foreign)).toThrow(MisaddressedEventError);
+		expect(() => aggregate.record(foreign)).toThrow(MisattributedEventError);
 
 		expect(aggregate.pendingEvents).toHaveLength(0);
 	});
 
-	it("stamps a missing address from the aggregate on commit", () => {
+	it("stamps a missing identity from the aggregate on commit", () => {
 		const aggregate = fresh();
 
 		aggregate.commitWith(createDomainEvent("Noted", { value: 1 }));
 
 		const recorded = aggregate.pendingEvents[0];
 		expect(recorded?.aggregateId).toBe("test-1");
-		expect(recorded?.aggregateType).toBe("AddressedAggregate");
+		expect(recorded?.aggregateType).toBe("IdentityStampedAggregate");
 		expect(recorded?.payload).toEqual({ value: 1 });
 	});
 
-	it("keeps a fully addressed event as the same object", () => {
+	it("keeps a fully stamped event as the same object", () => {
 		const aggregate = fresh();
-		const addressed = createDomainEvent(
+		const stamped = createDomainEvent(
 			"Noted",
 			{ value: 1 },
-			{ aggregateId: "test-1", aggregateType: "AddressedAggregate" },
+			{ aggregateId: "test-1", aggregateType: "IdentityStampedAggregate" },
 		);
 
-		aggregate.record(addressed);
+		aggregate.record(stamped);
 
-		expect(aggregate.pendingEvents[0]).toBe(addressed);
+		expect(aggregate.pendingEvents[0]).toBe(stamped);
 	});
 
 	it("keeps a createEvent decision as the same object", () => {
@@ -1254,7 +1259,7 @@ describe("event address on the state-stored path", () => {
 
 		const decision = aggregate.pendingEvents[0];
 		expect(decision?.aggregateId).toBe("test-1");
-		expect(decision?.aggregateType).toBe("AddressedAggregate");
+		expect(decision?.aggregateType).toBe("IdentityStampedAggregate");
 		expect(aggregate.state.value).toBe(5);
 	});
 });

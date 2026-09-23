@@ -3,7 +3,7 @@ import type {
 	ProjectionCheckpointStore,
 	ProjectionPosition,
 } from "../application/projections/ports";
-import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
+import type { AggregateIdentity } from "../domain/aggregate/aggregate-identity";
 import {
 	assert,
 	assertEqual,
@@ -97,7 +97,7 @@ const pos = (
 	previousEventfulAggregateVersion,
 });
 
-const order = (aggregateId: string): AggregateAddress => ({
+const order = (aggregateId: string): AggregateIdentity => ({
 	aggregateType: "Order",
 	aggregateId,
 });
@@ -159,7 +159,7 @@ export function createProjectionCheckpointStoreContractTests<TCtx>(
 						);
 					}
 					const contenders = 8;
-					const address = order("o-locked");
+					const identity = order("o-locked");
 					const advanceOnce = async (
 						expectedVersion: number | undefined,
 						nextVersion: number,
@@ -171,12 +171,12 @@ export function createProjectionCheckpointStoreContractTests<TCtx>(
 									env.store.withCheckpointLocks(
 										ctx,
 										"order-list",
-										[address],
+										[identity],
 										async () => {
 											const stored = await env.store.load(
 												ctx,
 												"order-list",
-												address,
+												identity,
 											);
 											if (
 												expectedVersion === undefined
@@ -190,7 +190,7 @@ export function createProjectionCheckpointStoreContractTests<TCtx>(
 											await env.store.save(
 												ctx,
 												"order-list",
-												address,
+												identity,
 												checkpoint(pos(nextVersion, 0), `evt-v${nextVersion}`),
 											);
 											return true;
@@ -212,7 +212,7 @@ export function createProjectionCheckpointStoreContractTests<TCtx>(
 						"exactly one competing callback may advance an existing checkpoint key from the observed watermark",
 					);
 					const stored = await env.run((ctx) =>
-						env.store.load(ctx, "order-list", address),
+						env.store.load(ctx, "order-list", identity),
 					);
 					assert(
 						stored?.position.aggregateVersion === 2,
@@ -224,13 +224,13 @@ export function createProjectionCheckpointStoreContractTests<TCtx>(
 		{
 			name: "checkpoint locks release after a rejected critical section",
 			run: inEnv(async (env) => {
-				const address = order("o-rejected-lock");
+				const identity = order("o-rejected-lock");
 				const rejection = await captureRejection(
 					env.run((ctx) =>
 						env.store.withCheckpointLocks(
 							ctx,
 							"order-list",
-							[address],
+							[identity],
 							async () => {
 								throw new Error("projection failed");
 							},
@@ -247,7 +247,7 @@ export function createProjectionCheckpointStoreContractTests<TCtx>(
 					env.store.withCheckpointLocks(
 						ctx,
 						"order-list",
-						[address],
+						[identity],
 						async () => {
 							retried = true;
 						},
@@ -411,17 +411,17 @@ export function createProjectionCheckpointStoreContractTests<TCtx>(
 			}),
 		},
 		{
-			name: "address encoding is collision-free even with separator-like characters in either half",
+			name: "identity encoding is collision-free even with separator-like characters in either half",
 			run: inEnv(async (env) => {
 				// The two classic composite-key collisions: a separator
 				// smuggled into the type vs. into the id. Whatever encoding
 				// the adapter uses (composite column, JSON tuple, nested
-				// key), these addresses must keep distinct watermarks.
-				const inType: AggregateAddress = {
+				// key), these identities must keep distinct watermarks.
+				const inType: AggregateIdentity = {
 					aggregateType: "A\u0000B",
 					aggregateId: "C",
 				};
-				const inId: AggregateAddress = {
+				const inId: AggregateIdentity = {
 					aggregateType: "A",
 					aggregateId: "B\u0000C",
 				};
@@ -443,7 +443,7 @@ export function createProjectionCheckpointStoreContractTests<TCtx>(
 				assert(
 					first?.position.aggregateVersion === 10 &&
 						second?.position.aggregateVersion === 1,
-					"two addresses that differ only in where a hostile separator sits must not share a watermark",
+					"two identities that differ only in where a hostile separator sits must not share a watermark",
 				);
 			}),
 		},

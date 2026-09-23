@@ -191,7 +191,7 @@ port:
 interface OutboxRecord<Evt extends AnyDomainEvent> {
   dispatchId: string;
   event: Evt;
-  source: AggregateAddress;
+  source: AggregateIdentity;
   position: CommitPosition;
   attempts?: number;
 }
@@ -247,7 +247,7 @@ create table event_source_head (
 );
 ```
 
-That idempotency rule assumes the ID still addresses the same qualified source
+That idempotency rule assumes the ID still identifies the same qualified source
 and candidate commit position. The same `eventId` arriving for another
 `aggregateType`, `aggregateId`, aggregate version, commit sequence, or commit
 size is a caller bug, not a redelivery. Do not overwrite the existing row.
@@ -538,7 +538,7 @@ meantime. The worker never resubmits the same timed-out store call.
 Broker mapping is usually straightforward:
 
 For a `Projector`, all mappings below mean a complete feed per aggregate
-address. Partition or group by the aggregate source, but do not filter its
+identity. Partition or group by the aggregate source, but do not filter its
 subscription by `event.type`: even a projection-irrelevant envelope occupies a
 commit cursor position and must reach `Projection.apply` as an explicit no-op.
 Type-filtered topics are suitable only for consumers that do not use the

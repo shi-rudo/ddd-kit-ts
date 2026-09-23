@@ -164,7 +164,7 @@ const INDEX_SURFACE = [
 	"InvalidRepositoryAdapterError",
 	"InvalidRepositoryDefinitionError",
 	"InvalidVersionError",
-	"MisaddressedEventError",
+	"MisattributedEventError",
 	"MissingEntityIdError",
 	"MissingFoldError",
 	"MissingHandlerError",

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
-	type AggregateAddress,
-	encodeAggregateAddress,
-} from "../domain/aggregate/aggregate-address";
+	type AggregateIdentity,
+	encodeAggregateIdentity,
+} from "../domain/aggregate/aggregate-identity";
 import {
 	createDomainEvent,
 	type DomainEvent,
@@ -39,10 +39,10 @@ function harnessOver(
 /** Pages over stored rows on its own, as the guide appendix shows. */
 function readOnItsOwn(
 	rows: Map<string, StepRecorded[]>,
-	stream: AggregateAddress,
+	stream: AggregateIdentity,
 	window: ReplayableStreamPagesContractWindow,
 ): ReplayableStreamPages<StepRecorded> | undefined {
-	const key = encodeAggregateAddress(stream);
+	const key = encodeAggregateIdentity(stream);
 	const head = rows.get(key)?.length ?? 0;
 	if (head === 0) return undefined;
 	const pinned = pinTargetVersion({
@@ -115,7 +115,7 @@ describe("replayable stream pages contract: an adapter that pages on its own", (
 			const rows = new Map<string, StepRecorded[]>();
 			return {
 				append: async (stream, events) => {
-					const key = encodeAggregateAddress(stream);
+					const key = encodeAggregateIdentity(stream);
 					rows.set(key, [...(rows.get(key) ?? []), ...events]);
 				},
 				read: async (stream, window) => readOnItsOwn(rows, stream, window),

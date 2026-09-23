@@ -40,8 +40,8 @@ class MockAggregate extends StateStoredAggregate<
 		events: TestEvent[],
 		version: number,
 		restoredVersion?: number,
-		// The aggregate takes the address its events carry, so a fixture
-		// event addressed "first" builds aggregate "first".
+		// The aggregate takes the identity its events carry, so a fixture
+		// event that belongs to "first" builds aggregate "first".
 		id: TestId = (events[0]?.aggregateId ?? "agg-1") as TestId,
 	) {
 		super(id, {});
@@ -309,8 +309,8 @@ describe("withCommit", () => {
 		expect(aggregate.pendingEvents).toHaveLength(0);
 	});
 
-	it("rejects a harvested event addressed to another aggregate than the enrolled one", async () => {
-		// The aggregate base classes stamp and check the address themselves;
+	it("rejects a harvested event of another aggregate than the enrolled one", async () => {
+		// The aggregate base classes stamp and check the identity themselves;
 		// this backstop covers an instance whose recording path did not.
 		const stray = unstampedOrder([
 			createDomainEvent(
@@ -326,7 +326,7 @@ describe("withCommit", () => {
 				{ outbox, scope: createMockScope() },
 				async (_ctx, enrollment) => enrolledResult(enrollment, "ok", [stray]),
 			),
-		).rejects.toThrow(/addressed to MockOrder agg-2/);
+		).rejects.toThrow(/belongs to MockOrder agg-2/);
 
 		expect(outbox.added).toEqual([]);
 	});
@@ -347,7 +347,7 @@ describe("withCommit", () => {
 				async (_ctx, enrollment) => enrolledResult(enrollment, "ok", [stray]),
 			),
 		).rejects.toThrow(
-			/addressed to Customer agg-1 but was enrolled under MockOrder agg-1/,
+			/belongs to Customer agg-1 but was enrolled under MockOrder agg-1/,
 		);
 
 		expect(outbox.added).toEqual([]);
@@ -1017,7 +1017,7 @@ describe("withCommit", () => {
 	});
 
 	it("throws if a harvested event is missing aggregateId (harvest guard)", async () => {
-		// The aggregate base classes stamp a missing address; an instance
+		// The aggregate base classes stamp a missing identity; an instance
 		// from another package copy may not. The harvest guard catches the
 		// gap with a diagnostic message naming the event type and the
 		// missing field, because downstream routing relies on the source.
