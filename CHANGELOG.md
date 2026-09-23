@@ -42,7 +42,11 @@ the property.
 
 The property is named `aggregateIdentity`, not `identity`, because it is
 reserved on every aggregate, and some domains use `identity` as a business
-term.
+term. `IdentityMap.set` accepts only objects that carry an
+`aggregateIdentity`, since it registers aggregates. The internal lifecycle
+capability no longer carries the aggregate type, and its registry key moves
+to a new version: an aggregate built by an older copy of the kit is not
+recognized as managed.
 
 ### Changed (breaking): kit errors carry the aggregate identity as one value
 

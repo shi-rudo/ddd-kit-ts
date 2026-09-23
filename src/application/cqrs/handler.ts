@@ -554,15 +554,15 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 					(record.version as number) <= (record.persistedVersion as number)
 				) {
 					throw new EventHarvestError(
-						`withCommit: aggregate ${String(agg.id)} recorded events but ` +
+						`withCommit: aggregate ${describeAggregateIdentity(agg.aggregateIdentity)} recorded events but ` +
 							`did not advance its version beyond the persisted version ` +
 							`(${String(record.persistedVersion)}). An eventful commit needs a unique ` +
 							`cursor; use StateStoredAggregate.setState(currentState, event) instead ` +
 							`of addDomainEvent(event) alone.`,
 					);
 				}
-				const enrolledId = String(agg.id);
-				const enrolledType = record.eventLifecycle.aggregateType();
+				const enrolledId = String(agg.aggregateIdentity.aggregateId);
+				const enrolledType = agg.aggregateIdentity.aggregateType;
 				return record.events.map((event, index) => {
 					if (!isRecordedDomainEvent(event)) {
 						throw new EventHarvestError(

@@ -163,7 +163,6 @@ export abstract class BaseAggregate<
 			},
 			persistedVersion: () => this._persistedVersion,
 			pendingEventCount: () => this._pendingEvents.length,
-			aggregateType: () => this.aggregateType,
 		});
 		registerPendingEventRecordingCapability(this, {
 			record: (createStamp) => this.recordPendingDecisions(createStamp),

@@ -32,7 +32,6 @@ export function unstampedAggregate<
 		discardPendingEvents: () => {},
 		persistedVersion: () => undefined,
 		pendingEventCount: () => events.length,
-		aggregateType: () => aggregateType,
 	});
 	return instance;
 }
