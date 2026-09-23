@@ -683,12 +683,27 @@ export interface AggregateIdentityMismatchOptions {
 	readonly eventType: string;
 }
 
+/**
+ * Renders an aggregate identity for a kit message as `Type(id)`, the one
+ * format every kit message uses, so a log search finds all of them. Kit
+ * modules only; not part of the package entries.
+ */
+export function describeAggregateIdentity(identity: {
+	readonly aggregateType: string;
+	readonly aggregateId: string;
+}): string {
+	return `${identity.aggregateType}(${identity.aggregateId})`;
+}
+
 /** The identity the event names; a missing field falls back to the receiving aggregate. */
 function describeEventIdentity(
 	options: AggregateIdentityMismatchOptions,
 ): string {
 	const { expected, actual } = options;
-	return `${actual.aggregateType ?? expected.aggregateType} ${actual.aggregateId ?? expected.aggregateId}`;
+	return describeAggregateIdentity({
+		aggregateType: actual.aggregateType ?? expected.aggregateType,
+		aggregateId: actual.aggregateId ?? expected.aggregateId,
+	});
 }
 
 /**
@@ -715,7 +730,7 @@ export class MisattributedEventError extends KitWiringError<"MISATTRIBUTED_EVENT
 			"MISATTRIBUTED_EVENT",
 			`New event "${options.eventType}" belongs to ` +
 				`${describeEventIdentity(options)} but was applied on ` +
-				`${options.expected.aggregateType} ${options.expected.aggregateId}: ` +
+				`${describeAggregateIdentity(options.expected)}: ` +
 				"fix the call site (createEvent stamps the right identity).",
 		);
 		this.expected = options.expected;
@@ -753,8 +768,8 @@ export class SnapshotVersionNotRestoredError extends KitWiringError<"SNAPSHOT_VE
 	constructor(options: SnapshotVersionNotRestoredErrorOptions) {
 		super(
 			"SNAPSHOT_VERSION_NOT_RESTORED",
-			`SnapshotModel.reconstitute for ${options.identity.aggregateType} ` +
-				`${options.identity.aggregateId} returned an aggregate at version ` +
+			`SnapshotModel.reconstitute for ${describeAggregateIdentity(options.identity)} ` +
+				"returned an aggregate at version " +
 				`${options.restoredVersion} for a snapshot at version ` +
 				`${options.snapshotVersion}. Reconstitution must restore ` +
 				"the persisted version; call markReconstituted(version) inside " +
@@ -894,7 +909,7 @@ export class PendingEventLimitExceededError extends KitWiringError<"PENDING_EVEN
 	constructor(options: PendingEventLimitExceededErrorOptions) {
 		super(
 			"PENDING_EVENT_LIMIT_EXCEEDED",
-			`Aggregate ${options.identity.aggregateType}(${options.identity.aggregateId}) holds ` +
+			`Aggregate ${describeAggregateIdentity(options.identity)} holds ` +
 				`${options.pending} pending event(s) and cannot record ` +
 				`${options.added} more: maxPendingEvents is ${options.limit}. ` +
 				"A decision that emits this many facts points at a missing " +
@@ -961,8 +976,8 @@ export class ForeignEventError extends InfrastructureError<"FOREIGN_EVENT"> {
 			message:
 				`Persisted event "${options.eventType}" belongs to ` +
 				`${describeEventIdentity(options)}, not to ` +
-				`${options.expected.aggregateType} ${options.expected.aggregateId}: ` +
-				"the stream row identities a different aggregate.",
+				`${describeAggregateIdentity(options.expected)}: ` +
+				"the stream row belongs to a different aggregate.",
 		});
 		this.expected = options.expected;
 		this.actual = options.actual;
@@ -1110,7 +1125,7 @@ export class InvalidEventStreamPageError extends InfrastructureError<"INVALID_EV
 	readonly limit: number | undefined;
 
 	constructor(options: InvalidEventStreamPageErrorOptions) {
-		const stream = `${options.identity.aggregateType}(${options.identity.aggregateId})`;
+		const stream = `${describeAggregateIdentity(options.identity)}`;
 		super({
 			code: "INVALID_EVENT_STREAM_PAGE",
 			message: eventStreamPageReasonMessage(stream, options),
@@ -1200,7 +1215,7 @@ export class ReplayTargetMismatchError extends InfrastructureError<"REPLAY_TARGE
 	readonly actualVersion: number;
 
 	constructor(options: ReplayTargetMismatchErrorOptions) {
-		const stream = `${options.identity.aggregateType}(${options.identity.aggregateId})`;
+		const stream = `${describeAggregateIdentity(options.identity)}`;
 		const message = replayTargetMismatchMessage(stream, options);
 		super({ code: "REPLAY_TARGET_MISMATCH", message });
 		this.identity = options.identity;
@@ -1248,7 +1263,7 @@ export class ReplayRejectedError extends InfrastructureError<"REPLAY_REJECTED"> 
 	declare readonly cause: DomainError;
 
 	constructor(options: ReplayRejectedErrorOptions) {
-		const stream = `${options.identity.aggregateType}(${options.identity.aggregateId})`;
+		const stream = `${describeAggregateIdentity(options.identity)}`;
 		const rejected = `${options.cause.code}: ${options.cause.message}`;
 		super({
 			code: "REPLAY_REJECTED",
@@ -1564,7 +1579,7 @@ export class AggregateNotFoundError extends InfrastructureError<"AGGREGATE_NOT_F
 	constructor(options: AggregateNotFoundErrorOptions) {
 		super({
 			code: "AGGREGATE_NOT_FOUND",
-			message: `Aggregate not found: ${options.identity.aggregateType}(${options.identity.aggregateId})`,
+			message: `Aggregate not found: ${describeAggregateIdentity(options.identity)}`,
 			cause: options.cause,
 		});
 		this.identity = options.identity;
@@ -1606,7 +1621,7 @@ export class DuplicateAggregateError extends InfrastructureError<"DUPLICATE_AGGR
 	constructor(options: DuplicateAggregateErrorOptions) {
 		super({
 			code: "DUPLICATE_AGGREGATE",
-			message: `Duplicate aggregate: ${options.identity.aggregateType}(${options.identity.aggregateId}) already exists`,
+			message: `Duplicate aggregate: ${describeAggregateIdentity(options.identity)} already exists`,
 			cause: options.cause,
 		});
 		this.identity = options.identity;
@@ -1647,7 +1662,7 @@ export class SnapshotSchemaMismatchError extends InfrastructureError<"SNAPSHOT_S
 		super({
 			code: "SNAPSHOT_SCHEMA_MISMATCH",
 			message:
-				`Snapshot schema mismatch on ${options.identity.aggregateType}(${options.identity.aggregateId}): ` +
+				`Snapshot schema mismatch on ${describeAggregateIdentity(options.identity)}: ` +
 				`the snapshot model expects schema ${options.expectedSchemaVersion}, ` +
 				`the stored snapshot carries ${options.actualSchemaVersion}. Override ` +
 				`the model's migrate function to upgrade old snapshots, or discard the snapshot ` +
@@ -1763,7 +1778,7 @@ export class ConcurrencyConflictError extends InfrastructureError<"CONCURRENCY_C
 function concurrencyConflictMessage(
 	options: ConcurrencyConflictErrorOptions,
 ): string {
-	const site = `${options.identity.aggregateType}(${options.identity.aggregateId})`;
+	const site = `${describeAggregateIdentity(options.identity)}`;
 	switch (options.reason) {
 		case "stale_version":
 			return (

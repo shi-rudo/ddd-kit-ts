@@ -7,6 +7,7 @@ import { SnapshotTimeValidationError } from "../../domain/event/domain-event-err
 import type { Id } from "../../domain/identity/id";
 import { deepFreeze } from "../../domain/value-object/value-object";
 import {
+	describeAggregateIdentity,
 	isDomainErrorLike,
 	SnapshotCorruptedError,
 	SnapshotSchemaMismatchError,
@@ -149,7 +150,7 @@ export function reconstituteAggregateFromSnapshot<
 		version = toVersion(snapshot.version);
 	} catch (error) {
 		throw new SnapshotCorruptedError(
-			`Snapshot of ${model.aggregateType} ${String(id)} carries the ` +
+			`Snapshot of ${describeAggregateIdentity({ aggregateType: model.aggregateType, aggregateId: String(id) })} carries the ` +
 				`invalid version ${String(snapshot.version)}. Discard the derived ` +
 				"snapshot and refold from the stream.",
 			error,
@@ -181,7 +182,7 @@ export function reconstituteAggregateFromSnapshot<
 		// plain instanceof; the corruption channel must catch it regardless.
 		if (isDomainErrorLike(error)) {
 			throw new SnapshotCorruptedError(
-				`Snapshot of ${model.aggregateType} ${String(id)} (schema ` +
+				`Snapshot of ${describeAggregateIdentity({ aggregateType: model.aggregateType, aggregateId: String(id) })} (schema ` +
 					`${storedSchemaVersion}, version ${String(snapshot.version)}) was ` +
 					"rejected during reconstitution. Discard the derived snapshot and " +
 					"refold from the stream.",

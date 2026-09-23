@@ -11,8 +11,10 @@ import {
 	DomainError,
 	DuplicateAggregateError,
 	EventHarvestError,
+	ForeignEventError,
 	InfrastructureError,
 	InvalidEventStreamPageError,
+	MisattributedEventError,
 	MissingFoldError,
 	MissingHandlerError,
 	ReplayRejectedError,
@@ -194,6 +196,31 @@ describe("ReplayRejectedError", () => {
 		});
 
 		expect(error.message).toContain("rejected an empty history at version 4");
+	});
+});
+
+describe("aggregate identity mismatch messages", () => {
+	const mismatch = {
+		expected: { aggregateType: "Order", aggregateId: "o-1" },
+		actual: { aggregateId: "o-2" },
+		eventType: "OrderPlaced",
+	};
+
+	it("names both aggregates of a foreign persisted row in one format", () => {
+		const error = new ForeignEventError(mismatch);
+
+		expect(error.message).toContain("belongs to Order(o-2), not to Order(o-1)");
+		expect(error.message).toContain(
+			"the stream row belongs to a different aggregate",
+		);
+	});
+
+	it("names both aggregates of a misattributed new event in one format", () => {
+		const error = new MisattributedEventError(mismatch);
+
+		expect(error.message).toContain(
+			"belongs to Order(o-2) but was applied on Order(o-1)",
+		);
 	});
 });
 

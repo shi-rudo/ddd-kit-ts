@@ -9,7 +9,10 @@ import {
 	type PendingDomainEvent,
 } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
-import { EventHarvestError } from "../../errors/kit-errors";
+import {
+	describeAggregateIdentity,
+	EventHarvestError,
+} from "../../errors/kit-errors";
 import { abortReason } from "../../internal/async/abort";
 import {
 	DEFAULT_EXECUTION_TIMEOUT_MS,
@@ -594,8 +597,10 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 					if (aggregateId !== enrolledId || aggregateType !== enrolledType) {
 						throw new EventHarvestError(
 							`withCommit: event "${recordedEvent.type}" belongs to ` +
-								`${aggregateType} ${aggregateId} but was enrolled under ` +
-								`${enrolledType} ${enrolledId}. The aggregate base ` +
+								`${describeAggregateIdentity({ aggregateType, aggregateId })} but ` +
+								"was enrolled under " +
+								`${describeAggregateIdentity({ aggregateType: enrolledType, aggregateId: enrolledId })}. ` +
+								"The aggregate base " +
 								"classes stamp the identity on every recording path; an " +
 								"instance from another package copy must stamp it the " +
 								"same way.",

@@ -4,6 +4,7 @@ import {
 } from "../../domain/aggregate/aggregate-identity";
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import {
+	describeAggregateIdentity,
 	EventHarvestError,
 	InMemoryCapacityExceededError,
 } from "../../errors/kit-errors";
@@ -285,7 +286,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				if (sourceCursor.commitSize !== position.commitSize) {
 					throw new EventHarvestError(
 						`InMemoryOutbox rejected event "${event.eventId}" for ` +
-							`${source.aggregateType} ${source.aggregateId}: aggregate version ` +
+							`${describeAggregateIdentity(source)}: aggregate version ` +
 							`${position.aggregateVersion} was already recorded with commitSize ` +
 							`${sourceCursor.commitSize}, not ${position.commitSize}.`,
 						event.type,
@@ -297,7 +298,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				if (positionOwner !== undefined && positionOwner !== event.eventId) {
 					throw new EventHarvestError(
 						`InMemoryOutbox rejected event "${event.eventId}" for ` +
-							`${source.aggregateType} ${source.aggregateId}: source position ` +
+							`${describeAggregateIdentity(source)}: source position ` +
 							`(${position.aggregateVersion}, ${position.commitSequence}) is ` +
 							`already owned by event "${positionOwner}". One qualified source ` +
 							"position must identify exactly one immutable event.",
@@ -530,7 +531,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 			if (cursor.commitSize !== position.commitSize) {
 				throw new EventHarvestError(
 					`InMemoryOutbox rejected event "${event.eventId}" for ` +
-						`${source.aggregateType} ${source.aggregateId}: aggregate version ` +
+						`${describeAggregateIdentity(source)}: aggregate version ` +
 						`${position.aggregateVersion} was already recorded with commitSize ` +
 						`${cursor.commitSize}, not ${position.commitSize}.`,
 					event.type,
@@ -542,7 +543,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 			if (positionOwner !== undefined && positionOwner !== event.eventId) {
 				throw new EventHarvestError(
 					`InMemoryOutbox rejected event "${event.eventId}" for ` +
-						`${source.aggregateType} ${source.aggregateId}: source position ` +
+						`${describeAggregateIdentity(source)}: source position ` +
 						`(${position.aggregateVersion}, ${position.commitSequence}) is ` +
 						`already owned by event "${positionOwner}". One qualified source ` +
 						"position must identify exactly one immutable event.",
@@ -722,7 +723,7 @@ function staleHeadError(
 ): EventHarvestError {
 	return new EventHarvestError(
 		`InMemoryOutbox rejected stale event "${event.eventId}" for ` +
-			`${source.aggregateType} ${source.aggregateId} at aggregate version ` +
+			`${describeAggregateIdentity(source)} at aggregate version ` +
 			`${position.aggregateVersion}: the event-source head is already ` +
 			`${staleHeadVersion}. The dispatched-id receipt may have ` +
 			"expired; use a durable outbox with a transactional eventId unique key " +
@@ -744,8 +745,8 @@ function assertSameEventSource(
 	}
 	throw new EventHarvestError(
 		`InMemoryOutbox rejected eventId collision for "${event.eventId}": ` +
-			`it already belongs to ${recorded.aggregateType} ${recorded.aggregateId}, ` +
-			`but was received for ${received.aggregateType} ${received.aggregateId}. ` +
+			`it already belongs to ${describeAggregateIdentity(recorded)}, ` +
+			`but was received for ${describeAggregateIdentity(received)}. ` +
 			"An eventId must identify one immutable event across all aggregate sources.",
 		event.type,
 	);

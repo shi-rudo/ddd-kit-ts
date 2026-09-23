@@ -1,4 +1,8 @@
-import { InfrastructureError, KitWiringError } from "../../errors/kit-errors";
+import {
+	describeAggregateIdentity,
+	InfrastructureError,
+	KitWiringError,
+} from "../../errors/kit-errors";
 import type { AggregateWriteIntent } from "./persistence-contract";
 
 /**
@@ -168,7 +172,7 @@ export interface InvalidFlushStatementErrorOptions {
 function flushStatementReasonMessage(
 	options: InvalidFlushStatementErrorOptions,
 ): string {
-	const site = `${options.intent} of ${options.identity.aggregateType}(${options.identity.aggregateId})`;
+	const site = `${options.intent} of ${describeAggregateIdentity(options.identity)}`;
 	switch (options.reason) {
 		case "statement_absent":
 			return (

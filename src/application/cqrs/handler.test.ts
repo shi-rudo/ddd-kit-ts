@@ -326,7 +326,7 @@ describe("withCommit", () => {
 				{ outbox, scope: createMockScope() },
 				async (_ctx, enrollment) => enrolledResult(enrollment, "ok", [stray]),
 			),
-		).rejects.toThrow(/belongs to MockOrder agg-2/);
+		).rejects.toThrow(/belongs to MockOrder\(agg-2\)/);
 
 		expect(outbox.added).toEqual([]);
 	});
@@ -347,7 +347,7 @@ describe("withCommit", () => {
 				async (_ctx, enrollment) => enrolledResult(enrollment, "ok", [stray]),
 			),
 		).rejects.toThrow(
-			/belongs to Customer agg-1 but was enrolled under MockOrder agg-1/,
+			/belongs to Customer\(agg-1\) but was enrolled under MockOrder\(agg-1\)/,
 		);
 
 		expect(outbox.added).toEqual([]);
