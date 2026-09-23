@@ -35,8 +35,9 @@ An aggregate id is unique only together with its aggregate type, so the
 pair is one value: `AggregateIdentity`. Ten kit errors split it into two
 fields, and every reader had to put them together again. They now carry
 one `identity` field of the shape `{ aggregateType, aggregateId }`, the same
-field on every error, so a handler, a log query, or an alert finds the
-aggregate under one name.
+field on each of them. Each error keeps a frozen copy of the two fields, not
+the caller's object. Every kit message renders an aggregate identity as
+`Type(id)`, so a log search finds all of them.
 
 The errors are `ConcurrencyConflictError`, `DuplicateAggregateError`,
 `AggregateNotFoundError`, `SnapshotSchemaMismatchError`,
