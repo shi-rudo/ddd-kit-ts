@@ -60,7 +60,7 @@ export interface ReplayableStreamPages<Evt extends AnyDomainEvent> {
  *
  * This is the paged form of `reconstituteAggregateFromHistory`.
  * `createReplayTarget` builds the replay target: a fresh instance for a
- * full replay, or an instance restored from a snapshot for a read that
+ * full replay, or an instance reconstituted from a snapshot for a read that
  * starts at `snapshot.version`. `read` is the reachable branch of a kit
  * read, or the value that an adapter that pages on its own built.
  *
