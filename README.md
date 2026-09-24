@@ -13,9 +13,8 @@ It is not an application framework. You keep your HTTP layer, database, queue,
 ORM, and runtime choices. The kit gives your domain model a strong center and
 clear boundaries around persistence and side effects.
 
-> **Version 3.0** moves persistence into an explicit Unit of Work and makes
-> every kit error a structured error with one code. To upgrade from 2.x,
-> follow the [v3 migration guide](./docs/guide/migrating-to-v3.md).
+> **Release candidate: 3.0** (`3.0.0-rc`, npm dist-tag `next`). Latest stable
+> release is 2.2.
 >
 > The public API follows [Semantic Versioning](https://semver.org/). Breaking
 > changes bump the major version and are documented with migration notes in the

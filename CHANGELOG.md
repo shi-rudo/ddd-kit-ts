@@ -7,8 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [3.0.0] - 2026-09-24
-
 Version 3.0.0 contains all changes since 2.2.0 in one breaking window. It
 moves persistence into an explicit Unit of Work and makes every kit error a
 structured error with one code. It adds the parts that an event-driven
