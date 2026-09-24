@@ -47,8 +47,6 @@ export type VersionedFlushStatements<
 	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 	TChangeSet,
 > = {
-	/** The aggregate type that the raised errors name. */
-	readonly aggregateType: string;
 	/**
 	 * Inserts the rows of a new aggregate and stamps `write.version`. The
 	 * store's unique constraint on the aggregate id rejects a second insert.
@@ -141,12 +139,9 @@ export function versionedFlush<
 	write: AggregatePersistenceWrite<TAggregate, TChangeSet>,
 ) => Promise<void> {
 	const versionedWrites = versionedWritesOf(statements);
-	const aggregateType = statements.aggregateType;
 	const runInsert = insertWriter(statements);
-	const { update: runUpdate, remove: runRemove } = versionedWriters(
-		aggregateType,
-		versionedWrites,
-	);
+	const { update: runUpdate, remove: runRemove } =
+		versionedWriters(versionedWrites);
 	return async (transaction, write) => {
 		switch (write.intent) {
 			case "add":
@@ -174,7 +169,7 @@ function insertWriter<
 >(
 	statements: VersionedFlushStatements<TCtx, TAggregate, TChangeSet>,
 ): IntentWriter<TAggregate, TChangeSet, TCtx> {
-	const { aggregateType, insert, isDuplicate } = statements;
+	const { insert, isDuplicate } = statements;
 
 	return async (transaction, write) => {
 		try {
@@ -185,7 +180,7 @@ function insertWriter<
 				duplicate = isDuplicate(error);
 			} catch (classifierCause) {
 				throw new InvalidFlushStatementError({
-					identity: { aggregateType, aggregateId: write.aggregateId },
+					identity: write.aggregateIdentity,
 					intent: "add",
 					reason: "duplicate_check_failed",
 					cause: error,
@@ -194,7 +189,7 @@ function insertWriter<
 			}
 			if (!duplicate) throw error;
 			throw new DuplicateAggregateError({
-				identity: { aggregateType, aggregateId: write.aggregateId },
+				identity: write.aggregateIdentity,
 				cause: error,
 			});
 		}
@@ -236,14 +231,13 @@ function versionedWriters<
 	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 	TChangeSet,
 >(
-	aggregateType: string,
 	versionedWrites:
 		| VersionedWriteStatements<TCtx, TAggregate, TChangeSet>
 		| undefined,
 ): Record<"update" | "remove", IntentWriter<TAggregate, TChangeSet, TCtx>> {
 	return {
-		update: versionedWriter(aggregateType, versionedWrites, "update"),
-		remove: versionedWriter(aggregateType, versionedWrites, "remove"),
+		update: versionedWriter(versionedWrites, "update"),
+		remove: versionedWriter(versionedWrites, "remove"),
 	};
 }
 
@@ -256,7 +250,6 @@ function versionedWriter<
 	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 	TChangeSet,
 >(
-	aggregateType: string,
 	versionedWrites:
 		| VersionedWriteStatements<TCtx, TAggregate, TChangeSet>
 		| undefined,
@@ -269,7 +262,7 @@ function versionedWriter<
 		received?: string,
 	) =>
 		new InvalidFlushStatementError({
-			identity: { aggregateType, aggregateId: write.aggregateId },
+			identity: write.aggregateIdentity,
 			intent,
 			reason,
 			received,
@@ -298,10 +291,10 @@ function versionedWriter<
 		const stored = await readCurrentVersion(
 			versionedWrites,
 			transaction,
-			write.aggregateId,
+			write.aggregateIdentity.aggregateId,
 		);
 		throw new ConcurrencyConflictError({
-			identity: { aggregateType, aggregateId: write.aggregateId },
+			identity: write.aggregateIdentity,
 			expectedVersion: write.expectedVersion,
 			cause: stored.read ? undefined : stored.readFailure,
 			...storedVersionOf(stored, write.expectedVersion),

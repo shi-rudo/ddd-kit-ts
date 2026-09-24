@@ -431,7 +431,7 @@ describe("UnitOfWork", () => {
 			expect(writes).toHaveLength(2);
 			expect(writes[0]).toMatchObject({
 				intent: "update",
-				aggregateId: "state",
+				aggregateIdentity: { aggregateId: "state" },
 				expectedVersion: 1,
 				version: 2,
 				changes: { value: 2, empty: false },
@@ -439,7 +439,7 @@ describe("UnitOfWork", () => {
 			});
 			expect(writes[1]).toMatchObject({
 				intent: "update",
-				aggregateId: "event",
+				aggregateIdentity: { aggregateId: "event" },
 				expectedVersion: 1,
 				version: 2,
 				changes: { value: undefined, empty: true },
@@ -475,7 +475,7 @@ describe("UnitOfWork", () => {
 						create: (_tx: undefined, tracking) =>
 							new FakeOrderRepository(undefined, tracking),
 						flush: async (_tx: undefined, write) => {
-							flushed.push(write.aggregateId);
+							flushed.push(write.aggregateIdentity.aggregateId);
 						},
 					}),
 				},

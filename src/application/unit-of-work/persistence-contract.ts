@@ -1,4 +1,5 @@
 import type { Aggregate, Version } from "../../domain/aggregate/aggregate";
+import type { AggregateIdentity } from "../../domain/aggregate/aggregate-identity";
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
 import type { InfrastructureError } from "../../errors/kit-errors";
@@ -104,7 +105,8 @@ export interface AggregatePersistenceWrite<
 	TChangeSet,
 > {
 	readonly intent: AggregateWriteIntent;
-	readonly aggregateId: TAggregate["id"];
+	/** The aggregate type and the id of the written aggregate. */
+	readonly aggregateIdentity: AggregateIdentity<TAggregate["id"]>;
 	readonly expectedVersion: Version | undefined;
 	readonly version: Version;
 	readonly changes: PersistenceChanges<TChangeSet>;

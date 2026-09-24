@@ -336,7 +336,7 @@ describe("UnitOfWork repository definition", () => {
 		expect(mapError).toHaveBeenCalledWith(
 			driverError,
 			expect.objectContaining({
-				aggregateId: "order-1",
+				aggregateIdentity: { aggregateType: "Order", aggregateId: "order-1" },
 				intent: "add",
 			}),
 		);

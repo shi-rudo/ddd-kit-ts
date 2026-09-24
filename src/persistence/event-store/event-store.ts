@@ -157,7 +157,7 @@ export interface EventStreamReader<Evt extends AnyDomainEvent> {
  * }
  *
  * flush(write: AggregatePersistenceWrite<Order, number | undefined>) {
- *   return this.eventStore.append(this.stream(write.aggregateId), write.events, {
+ *   return this.eventStore.append(write.aggregateIdentity, write.events, {
  *     expectedVersion: write.expectedVersion ?? 0,
  *   });
  * }

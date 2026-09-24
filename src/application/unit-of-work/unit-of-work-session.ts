@@ -520,7 +520,7 @@ export class Session<Evt extends AnyDomainEvent> {
 			}
 			const write = Object.freeze({
 				intent: registration.intent,
-				aggregateId: entry.aggregate.id,
+				aggregateIdentity: entry.aggregate.aggregateIdentity,
 				expectedVersion: entry.expectedVersion,
 				version: registration.version,
 				changes: registration.changes,
@@ -529,12 +529,7 @@ export class Session<Evt extends AnyDomainEvent> {
 			try {
 				await entry.definition.flush(transaction, write);
 			} catch (error) {
-				throw mapRepositoryPersistenceError(
-					entry.definition,
-					error,
-					write,
-					entry.aggregate.aggregateIdentity,
-				);
+				throw mapRepositoryPersistenceError(entry.definition, error, write);
 			}
 		}
 	}
@@ -565,7 +560,6 @@ function mapRepositoryPersistenceError<Evt extends AnyDomainEvent>(
 	definition: RuntimePersistenceDefinition<Evt>,
 	error: unknown,
 	write: AggregatePersistenceWrite<Aggregate<Id<string>, Evt>, unknown>,
-	identity: AggregateIdentity,
 ): InfrastructureError {
 	// A wiring error states a defect of the definition, not a store failure.
 	// The mapper must return an InfrastructureError, so passing it in would
@@ -576,7 +570,7 @@ function mapRepositoryPersistenceError<Evt extends AnyDomainEvent>(
 		mapped = definition.mapError(error, write);
 	} catch (mapperError) {
 		throw new RepositoryErrorMappingFailedError({
-			identity,
+			identity: write.aggregateIdentity,
 			intent: write.intent,
 			persistenceError: error,
 			mapperError,
@@ -588,7 +582,7 @@ function mapRepositoryPersistenceError<Evt extends AnyDomainEvent>(
 	// blames a correct mapper.
 	if (isInfrastructureErrorLike(mapped)) return mapped;
 	throw new RepositoryErrorMappingFailedError({
-		identity,
+		identity: write.aggregateIdentity,
 		intent: write.intent,
 		persistenceError: error,
 		mapperError: new TypeError(

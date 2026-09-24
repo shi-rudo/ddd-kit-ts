@@ -213,7 +213,7 @@ const eventSourcedOrders = defineRepository<ForStoringOrders>()({
     new EventSourcedOrderReadAdapter(tx, tracking),
   flush: async (tx: EventStoreTx, write) => {
     await tx.eventStore.append(
-      { aggregateType: "Order", aggregateId: write.aggregateId },
+      write.aggregateIdentity,
       write.events,
       { expectedVersion: write.expectedVersion ?? 0 },
     );

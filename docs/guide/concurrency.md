@@ -103,7 +103,6 @@ store statements and owns the error branches:
 
 ```ts
 flush: versionedFlush({
-  aggregateType: "Order",
   insert: (tx: DrizzleTx, write) => insertOrder(tx, write),
   isDuplicate: isUniqueViolation,
   update: async (tx, write) => {
@@ -114,7 +113,7 @@ flush: versionedFlush({
         version: write.version,
       })
       .where(and(
-        eq(orders.id, write.aggregateId),
+        eq(orders.id, write.aggregateIdentity.aggregateId),
         eq(orders.version, write.expectedVersion),
       ));
     return result.rowsAffected;

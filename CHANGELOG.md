@@ -51,6 +51,18 @@ capability no longer carries the aggregate type, and its registry key moves
 to a new version: an aggregate built by an older copy of the kit is not
 recognized as managed.
 
+The persistence write carries the same value. `AggregatePersistenceWrite`
+has `aggregateIdentity` in place of `aggregateId`. A flush passes
+`write.aggregateIdentity` as it is to an error or to `EventStore.append`,
+and reads the id from it for a row key. `versionedFlush` takes the
+aggregate type from the write, so its `aggregateType` option is gone.
+
+| Before | After |
+| --- | --- |
+| `write.aggregateId` | `write.aggregateIdentity.aggregateId` |
+| `{ aggregateType: "Order", aggregateId: write.aggregateId }` | `write.aggregateIdentity` |
+| `versionedFlush({ aggregateType: "Order", insert, isDuplicate })` | `versionedFlush({ insert, isDuplicate })` |
+
 ### Changed (breaking): kit errors carry the aggregate identity as one value
 
 An aggregate id is unique only together with its aggregate type, so the
@@ -409,7 +421,7 @@ Every adapter wrote those branches again, and a wrong branch stays silent until
 two writers meet.
 
 `versionedFlush` builds the flush from the store statements and owns the
-branches. The consumer supplies `aggregateType`, `insert`, `isDuplicate`, and,
+branches. The consumer supplies `insert`, `isDuplicate`, and,
 for a definition that updates or removes, `update`, `remove`, and
 `currentVersion`. A definition with `physicalRemoval: true` supplies `remove`.
 A definition with `appendOnly: true` omits `update`. The compiler requires
