@@ -32,9 +32,6 @@ jobs:
       - name: Lint
         run: pnpm lint
 
-      - name: Beads snapshot order
-        run: node scripts/beads-snapshot.mjs --check
-
       - name: Test
         run: pnpm test
 

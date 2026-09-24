@@ -114,9 +114,9 @@ bd close bd-42 --reason "Completed" --json
 `.beads/issues.jsonl` is the tracked snapshot of the issues. bd does not
 write it on its own: `bd export` writes to stdout, so refresh the snapshot
 with `bd export > .beads/issues.jsonl` before a commit that carries issue
-changes. The pre-commit hook sorts the dependencies of every issue into one
-order, and CI rejects a snapshot in another order. Without the hook, run
-`node scripts/beads-snapshot.mjs` before the commit.
+changes. Use bd 1.2.0 or later: an older bd writes the dependencies of an
+issue in an order that changes between sessions, and a snapshot commit then
+shows issues that did not change.
 
 ### Important Rules
 
