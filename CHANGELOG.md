@@ -42,8 +42,11 @@ the property.
 
 The property is named `aggregateIdentity`, not `identity`, because it is
 reserved on every aggregate, and some domains use `identity` as a business
-term. `IdentityMap.set` accepts only objects that carry an
-`aggregateIdentity`, since it registers aggregates. The internal lifecycle
+term. `IdentityMap.set(type, aggregate)` takes the id from the
+`aggregateIdentity` of the aggregate, so the id and the instance cannot
+disagree; the `id` argument is gone. The unit of work rejects an instance
+that the kit does not manage with `UnmanagedInstanceError` before it
+registers it. The internal lifecycle
 capability no longer carries the aggregate type, and its registry key moves
 to a new version: an aggregate built by an older copy of the kit is not
 recognized as managed.
@@ -52,7 +55,7 @@ recognized as managed.
 
 An aggregate id is unique only together with its aggregate type, so the
 pair is one value: `AggregateIdentity`. Ten kit errors split it into two
-fields, and every reader had to put them together again. Seven more named
+fields, and every reader had to put them together again. Nine more named
 the aggregate by its id alone, which does not say which aggregate it is.
 Every kit error that names one aggregate now carries one `identity` field
 of the shape `{ aggregateType, aggregateId }`. Each error keeps a frozen
@@ -69,7 +72,8 @@ identity; a catch block reads the fields from `identity`.
 
 The errors that named only the id are `AggregateDeletedError`,
 `AggregateTrackingError`, `DirectStateMutationError`,
-`PendingEventBatchMismatchError`, `RepositoryErrorMappingFailedError`,
+`DuplicateEventIdError`, `PendingEventBatchMismatchError`,
+`ReentrantEventRecordingError`, `RepositoryErrorMappingFailedError`,
 `UnenrolledChangesError`, and `UnreplayableAggregateError`. The kit throws
 them with the identity of the aggregate. They take an options object now,
 like the other kit errors, so only code that constructs them, for example
@@ -81,6 +85,7 @@ a test double, changes.
 | `new AggregateNotFoundError({ aggregateType, id })` | `new AggregateNotFoundError({ identity: { aggregateType, aggregateId: id } })` |
 | `new AggregateDeletedError(aggregateId)` | `new AggregateDeletedError({ identity })` |
 | `new UnreplayableAggregateError(aggregateId, reason)` | `new UnreplayableAggregateError({ identity, reason })` |
+| `new DuplicateEventIdError(aggregateId, eventId)` | `new DuplicateEventIdError({ identity, eventId })` |
 | `new AggregateTrackingError(aggregateId, operation, reason, registeredIntent, { appendOnly })` | `new AggregateTrackingError({ identity, operation, reason, registeredIntent, appendOnly })` |
 | `error.aggregateType`, `error.aggregateId` | `error.identity.aggregateType`, `error.identity.aggregateId` |
 | `error.id` on `AggregateNotFoundError` | `error.identity.aggregateId` |

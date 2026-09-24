@@ -1340,7 +1340,12 @@ describe("one identity per pending fact on the state-stored path", () => {
 		const recorded = noted("fact-1");
 		aggregate.record(recorded);
 
-		expect(() => aggregate.record(recorded)).toThrow(DuplicateEventIdError);
+		expect(() => aggregate.record(recorded)).toThrow(
+			expect.objectContaining({
+				constructor: DuplicateEventIdError,
+				identity: aggregate.aggregateIdentity,
+			}),
+		);
 
 		expect(aggregate.pendingEvents).toHaveLength(1);
 	});

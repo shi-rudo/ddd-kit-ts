@@ -203,7 +203,9 @@ export abstract class BaseAggregate<
 			this._pendingEvents !== stamped ||
 			this._pendingEvents.length !== stampedCount
 		) {
-			throw new ReentrantEventRecordingError(String(this.id));
+			throw new ReentrantEventRecordingError({
+				identity: this.aggregateIdentity,
+			});
 		}
 		// One identity per decision: a reused stamp would mint two facts
 		// sharing one eventId, and idempotent consumers keyed on it would
@@ -212,7 +214,10 @@ export abstract class BaseAggregate<
 		for (const event of recorded) {
 			const eventId = (event as AnyDomainEvent).eventId;
 			if (seenEventIds.has(eventId)) {
-				throw new DuplicateEventIdError(String(this.id), eventId);
+				throw new DuplicateEventIdError({
+					identity: this.aggregateIdentity,
+					eventId,
+				});
 			}
 			seenEventIds.add(eventId);
 		}
@@ -390,7 +395,10 @@ export abstract class BaseAggregate<
 		for (const event of batch) {
 			if (!isRecordedDomainEvent(event)) continue;
 			if (pendingIds.has(event.eventId)) {
-				throw new DuplicateEventIdError(String(this.id), event.eventId);
+				throw new DuplicateEventIdError({
+					identity: this.aggregateIdentity,
+					eventId: event.eventId,
+				});
 			}
 			pendingIds.add(event.eventId);
 		}
@@ -408,10 +416,7 @@ export abstract class BaseAggregate<
 		const pending = this._pendingEvents.length;
 		if (pending + added <= limit) return;
 		throw new PendingEventLimitExceededError({
-			identity: {
-				aggregateType: this.aggregateType,
-				aggregateId: String(this.id),
-			},
+			identity: this.aggregateIdentity,
 			limit,
 			pending,
 			added,

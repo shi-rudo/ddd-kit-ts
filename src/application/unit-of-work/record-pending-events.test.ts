@@ -125,7 +125,12 @@ describe("recordPendingEvents", () => {
 					occurredAt: new Date("2027-04-05T06:07:08.000Z"),
 				};
 			}),
-		).toThrow(ReentrantEventRecordingError);
+		).toThrow(
+			expect.objectContaining({
+				constructor: ReentrantEventRecordingError,
+				identity: aggregate.aggregateIdentity,
+			}),
+		);
 
 		// Recording stayed atomic: every decision, including the re-entrant
 		// one, remains pending and unrecorded.
@@ -145,7 +150,13 @@ describe("recordPendingEvents", () => {
 				eventId: "event-reused",
 				occurredAt: new Date("2027-04-05T06:07:08.000Z"),
 			})),
-		).toThrow(DuplicateEventIdError);
+		).toThrow(
+			expect.objectContaining({
+				constructor: DuplicateEventIdError,
+				identity: aggregate.aggregateIdentity,
+				eventId: "event-reused",
+			}),
+		);
 
 		// Recording stayed atomic: both decisions remain unrecorded.
 		expect(aggregate.pendingEvents).toHaveLength(2);

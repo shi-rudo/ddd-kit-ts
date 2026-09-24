@@ -880,6 +880,15 @@ export class UnmintedEventError extends KitWiringError<"UNMINTED_EVENT"> {
 	}
 }
 
+/** Constructor options for {@link ReentrantEventRecordingError}. */
+export interface ReentrantEventRecordingErrorOptions {
+	/** The aggregate the error names. */
+	readonly identity: {
+		readonly aggregateType: string;
+		readonly aggregateId: string;
+	};
+}
+
 /**
  * Thrown by `recordPendingEvents` when the aggregate's pending-event list
  * changes while its events are being stamped: a stamp provider that
@@ -891,15 +900,30 @@ export class UnmintedEventError extends KitWiringError<"UNMINTED_EVENT"> {
  * stamp providers free of domain decisions.
  */
 export class ReentrantEventRecordingError extends KitWiringError<"REENTRANT_EVENT_RECORDING"> {
-	constructor(aggregateId: string) {
+	readonly identity: ReentrantEventRecordingErrorOptions["identity"];
+
+	constructor(options: ReentrantEventRecordingErrorOptions) {
 		super(
 			"REENTRANT_EVENT_RECORDING",
-			`Pending events of aggregate ${aggregateId} changed while ` +
+			"Pending events of aggregate " +
+				`${describeAggregateIdentity(options.identity)} changed while ` +
 				"recordPendingEvents was stamping them. A stamp provider must not " +
 				"trigger new decisions on the aggregate being recorded; make every " +
 				"domain decision first, then record.",
 		);
+		this.identity = detachAggregateIdentity(options.identity);
 	}
+}
+
+/** Constructor options for {@link DuplicateEventIdError}. */
+export interface DuplicateEventIdErrorOptions {
+	/** The aggregate the error names. */
+	readonly identity: {
+		readonly aggregateType: string;
+		readonly aggregateId: string;
+	};
+	/** The event id two pending events would have shared. */
+	readonly eventId: string;
 }
 
 /**
@@ -914,18 +938,21 @@ export class ReentrantEventRecordingError extends KitWiringError<"REENTRANT_EVEN
  * identity per fact.
  */
 export class DuplicateEventIdError extends KitWiringError<"DUPLICATE_EVENT_ID"> {
-	constructor(
-		aggregateId: string,
-		/** The identity two pending events would have shared. */
-		public readonly eventId: string,
-	) {
+	readonly identity: DuplicateEventIdErrorOptions["identity"];
+	/** The event id two pending events would have shared. */
+	readonly eventId: string;
+
+	constructor(options: DuplicateEventIdErrorOptions) {
 		super(
 			"DUPLICATE_EVENT_ID",
-			`Two pending events of aggregate ${aggregateId} carry the same ` +
-				`eventId "${eventId}". Each fact needs its own identity: append ` +
-				"a recorded event once, and return a fresh stamp per decision " +
-				"from the stamp provider.",
+			"Two pending events of aggregate " +
+				`${describeAggregateIdentity(options.identity)} carry the same ` +
+				`eventId "${options.eventId}". Each fact needs its own event id: ` +
+				"append a recorded event once, and return a fresh stamp per " +
+				"decision from the stamp provider.",
 		);
+		this.identity = detachAggregateIdentity(options.identity);
+		this.eventId = options.eventId;
 	}
 }
 
