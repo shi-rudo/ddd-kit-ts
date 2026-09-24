@@ -1,5 +1,4 @@
 import type { Aggregate, Version } from "../../domain/aggregate/aggregate";
-import type { AggregateIdentity } from "../../domain/aggregate/aggregate-identity";
 import { requirePendingEventLifecycleReadView } from "../../domain/aggregate/pending-event-lifecycle";
 import type {
 	AnyDomainEvent,
