@@ -31,7 +31,7 @@ describe("IdentityMap", () => {
 		expect(map.has(Restaurant, id)).toBe(false);
 		expect(map.get(Restaurant, id)).toBeUndefined();
 
-		map.set(Restaurant, id, restaurant);
+		map.set(Restaurant, restaurant);
 
 		expect(map.has(Restaurant, id)).toBe(true);
 		// get() returns the instance typed as Restaurant - no cast needed.
@@ -44,17 +44,33 @@ describe("IdentityMap", () => {
 		const id = "r-1" as RestaurantId;
 		const restaurant = new Restaurant(id);
 
-		map.set(Restaurant, id, restaurant);
-		expect(() => map.set(Restaurant, id, restaurant)).not.toThrow();
+		map.set(Restaurant, restaurant);
+		expect(() => map.set(Restaurant, restaurant)).not.toThrow();
 		expect(map.get(Restaurant, id)).toBe(restaurant);
+	});
+
+	it("names the aggregate type, not the class name, in the identity-map violation", () => {
+		class LegacyRestaurantRecord {
+			constructor(public readonly id: RestaurantId) {}
+			get aggregateIdentity() {
+				return { aggregateType: "Restaurant", aggregateId: this.id };
+			}
+		}
+		const map = new IdentityMap();
+		const id = "r-1" as RestaurantId;
+		map.set(LegacyRestaurantRecord, new LegacyRestaurantRecord(id));
+
+		expect(() =>
+			map.set(LegacyRestaurantRecord, new LegacyRestaurantRecord(id)),
+		).toThrow(/different instance is already registered for Restaurant\(r-1\)/);
 	});
 
 	it("registering a DIFFERENT instance for an occupied type+id throws (identity-map violation)", () => {
 		const map = new IdentityMap();
 		const id = "r-1" as RestaurantId;
-		map.set(Restaurant, id, new Restaurant(id));
+		map.set(Restaurant, new Restaurant(id));
 
-		expect(() => map.set(Restaurant, id, new Restaurant(id))).toThrow(
+		expect(() => map.set(Restaurant, new Restaurant(id))).toThrow(
 			/different instance is already registered for Restaurant\(r-1\)/,
 		);
 	});
@@ -64,8 +80,8 @@ describe("IdentityMap", () => {
 		const restaurant = new Restaurant("123" as RestaurantId);
 		const booking = new Booking("123" as BookingId);
 
-		map.set(Restaurant, restaurant.id, restaurant);
-		map.set(Booking, booking.id, booking);
+		map.set(Restaurant, restaurant);
+		map.set(Booking, booking);
 
 		expect(map.get(Restaurant, "123" as RestaurantId)).toBe(restaurant);
 		expect(map.get(Booking, "123" as BookingId)).toBe(booking);
@@ -74,7 +90,7 @@ describe("IdentityMap", () => {
 	it("delete removes the entry and reports absence", () => {
 		const map = new IdentityMap();
 		const id = "r-1" as RestaurantId;
-		map.set(Restaurant, id, new Restaurant(id));
+		map.set(Restaurant, new Restaurant(id));
 
 		map.delete(Restaurant, id);
 
@@ -85,25 +101,21 @@ describe("IdentityMap", () => {
 	it("set after delete of the same type+id throws AggregateDeletedError (deletion is final)", () => {
 		const map = new IdentityMap();
 		const id = "r-1" as RestaurantId;
-		map.set(Restaurant, id, new Restaurant(id));
+		map.set(Restaurant, new Restaurant(id));
 		map.delete(Restaurant, id);
 
-		expect(() => map.set(Restaurant, id, new Restaurant(id))).toThrow(
+		expect(() => map.set(Restaurant, new Restaurant(id))).toThrow(
 			AggregateDeletedError,
 		);
 	});
 
 	it("the tombstone is type-scoped: deleting Restaurant(123) does not block Booking(123)", () => {
 		const map = new IdentityMap();
-		map.set(
-			Restaurant,
-			"123" as RestaurantId,
-			new Restaurant("123" as RestaurantId),
-		);
+		map.set(Restaurant, new Restaurant("123" as RestaurantId));
 		map.delete(Restaurant, "123" as RestaurantId);
 
 		const booking = new Booking("123" as BookingId);
-		expect(() => map.set(Booking, booking.id, booking)).not.toThrow();
+		expect(() => map.set(Booking, booking)).not.toThrow();
 		expect(map.get(Booking, booking.id)).toBe(booking);
 	});
 
@@ -112,7 +124,7 @@ describe("IdentityMap", () => {
 		const id = "r-9" as RestaurantId;
 
 		expect(() => map.delete(Restaurant, id)).not.toThrow();
-		expect(() => map.set(Restaurant, id, new Restaurant(id))).toThrow(
+		expect(() => map.set(Restaurant, new Restaurant(id))).toThrow(
 			AggregateDeletedError,
 		);
 	});
@@ -135,7 +147,7 @@ describe("IdentityMap", () => {
 		const id = "g-1" as RestaurantId;
 		const agg = GuardedAggregate.reconstitute(id);
 
-		map.set(GuardedAggregate, id, agg);
+		map.set(GuardedAggregate, agg);
 
 		expect(map.get(GuardedAggregate, id)).toBe(agg);
 		expect(map.has(GuardedAggregate, id)).toBe(true);
@@ -149,7 +161,7 @@ describe("IdentityMap", () => {
 
 		expect(map.isDeleted(Restaurant, id)).toBe(false); // never loaded
 
-		map.set(Restaurant, id, new Restaurant(id));
+		map.set(Restaurant, new Restaurant(id));
 		expect(map.isDeleted(Restaurant, id)).toBe(false); // live
 
 		map.delete(Restaurant, id);
@@ -170,7 +182,7 @@ describe("IdentityMap", () => {
 	it("clear empties stores AND tombstones", () => {
 		const map = new IdentityMap();
 		const id = "r-1" as RestaurantId;
-		map.set(Restaurant, id, new Restaurant(id));
+		map.set(Restaurant, new Restaurant(id));
 		map.delete(Restaurant, id);
 
 		map.clear();
@@ -178,7 +190,7 @@ describe("IdentityMap", () => {
 		expect(map.has(Restaurant, id)).toBe(false);
 		// Tombstones are per-operation state; after clear (= a new
 		// lifetime) the type+id is registrable again.
-		expect(() => map.set(Restaurant, id, new Restaurant(id))).not.toThrow();
+		expect(() => map.set(Restaurant, new Restaurant(id))).not.toThrow();
 	});
 });
 
@@ -197,7 +209,7 @@ describe("clear() resets the pending-event baselines", () => {
 		const aggregate = new EventfulAggregate(id);
 		aggregate.pendingEvents = [{}, {}];
 
-		map.set(EventfulAggregate, id, aggregate);
+		map.set(EventfulAggregate, aggregate);
 		map.clear();
 
 		// The instance was flushed elsewhere; a REUSED map must capture the
@@ -205,7 +217,7 @@ describe("clear() resets the pending-event baselines", () => {
 		// which would hide the next recorded event from the
 		// UnenrolledChangesError safety net.
 		aggregate.pendingEvents = [];
-		map.set(EventfulAggregate, id, aggregate);
+		map.set(EventfulAggregate, aggregate);
 		aggregate.pendingEvents = [{}];
 
 		expect(map.instancesWithNewPendingEvents()).toHaveLength(1);

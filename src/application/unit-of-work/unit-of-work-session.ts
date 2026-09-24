@@ -1,5 +1,6 @@
 import type { Aggregate, Version } from "../../domain/aggregate/aggregate";
 import type { AggregateIdentity } from "../../domain/aggregate/aggregate-identity";
+import { requirePendingEventLifecycleReadView } from "../../domain/aggregate/pending-event-lifecycle";
 import type {
 	AnyDomainEvent,
 	PendingDomainEvent,
@@ -133,6 +134,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		definition: RuntimePersistenceDefinition<Evt>,
 	): TAggregate {
 		this.assertOpen("tracking.trackLoaded");
+		requirePendingEventLifecycleReadView(aggregate, "tracking.trackLoaded");
 		// Ownership is checked BEFORE identity-map registration: a rejected
 		// instance must not stay registered under the second definition's
 		// class key with no tracking entry behind it.
@@ -145,7 +147,7 @@ export class Session<Evt extends AnyDomainEvent> {
 				registeredIntent: existing.registration?.intent,
 			});
 		}
-		this._identityMap.set(definition.aggregate, aggregate.id, aggregate);
+		this._identityMap.set(definition.aggregate, aggregate);
 		if (existing) return aggregate;
 
 		const entry: TrackedAggregate<Evt> = {
@@ -165,6 +167,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void {
 		this.assertOpen("repository.add");
+		requirePendingEventLifecycleReadView(aggregate, "repository.add");
 		this.assertNotRemoved(aggregate, definition);
 		const existing = this._trackingByAggregate.get(aggregate);
 		if (existing && existing.definition !== definition) {
@@ -188,7 +191,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		let entry = existing;
 		const newlyTracked = !entry;
 		if (!entry) {
-			this._identityMap.set(definition.aggregate, aggregate.id, aggregate);
+			this._identityMap.set(definition.aggregate, aggregate);
 			entry = {
 				aggregate,
 				lifecycle: "new",
@@ -226,6 +229,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void {
 		this.assertOpen("repository.update");
+		requirePendingEventLifecycleReadView(aggregate, "repository.update");
 		const entry = this.loadedEntryFor(aggregate, "update", definition);
 		this.registerWrite(entry, "update", definition);
 	}
@@ -235,6 +239,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void {
 		this.assertOpen("repository.remove");
+		requirePendingEventLifecycleReadView(aggregate, "repository.remove");
 		// Idempotent by reference, like add and update: a repeated remove of
 		// the SAME instance re-declares the same final lifecycle outcome
 		// (collection semantics; the enrollment layer already returns the
