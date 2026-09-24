@@ -7,3 +7,13 @@ if command -v bd >/dev/null 2>&1; then
   _bd_exit=$?; if [ $_bd_exit -ne 0 ]; then exit $_bd_exit; fi
 fi
 # --- END BEADS INTEGRATION v0.59.0 ---
+
+# Sorts the beads snapshot before it is committed; see scripts/beads-snapshot.mjs.
+if git diff --cached --name-only | grep -qx '.beads/issues.jsonl'; then
+  if ! git diff --quiet -- .beads/issues.jsonl; then
+    echo "pre-commit: .beads/issues.jsonl has unstaged changes. Stage the whole snapshot, then commit again." >&2
+    exit 1
+  fi
+  node scripts/beads-snapshot.mjs || exit 1
+  git add .beads/issues.jsonl || exit 1
+fi
