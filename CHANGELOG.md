@@ -209,6 +209,10 @@ immutable. Run one kit version per process during a cutover.
   `MatchedRows` type the statements. A defect in a statement throws
   `InvalidFlushStatementError`, a wiring error that reaches the caller
   unchanged.
+- `classifyConcurrencyConflict` builds the conflict of an update or a remove
+  whose compare-and-set matched no row. It reads the stored version and names
+  the reason, and a read that fails becomes the cause. `versionedFlush` uses
+  it, and a hand-written flush throws its result.
 - `ConcurrencyConflictError` names the write that failed in `intent`, `update`
   or `remove`. A conflict from an event store append has `intent: null`,
   because the store does not know the write.

@@ -1,4 +1,5 @@
 import type { Aggregate, Version } from "../../domain/aggregate/aggregate";
+import type { AggregateIdentity } from "../../domain/aggregate/aggregate-identity";
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
 import {
@@ -9,7 +10,10 @@ import {
 	type FlushStatementReason,
 	InvalidFlushStatementError,
 } from "./errors";
-import type { AggregatePersistenceWrite } from "./persistence-contract";
+import type {
+	AggregatePersistenceWrite,
+	AggregateWriteIntent,
+} from "./persistence-contract";
 
 /**
  * The count of rows that one compare-and-set statement matched. It counts the
@@ -288,19 +292,53 @@ function versionedWriter<
 		}
 		if (matchedRows > 0) return;
 
-		const stored = await readCurrentVersion(
-			versionedWrites,
-			transaction,
-			write.aggregateIdentity.aggregateId,
-		);
-		throw new ConcurrencyConflictError({
+		throw await classifyConcurrencyConflict({
 			identity: write.aggregateIdentity,
 			intent,
 			expectedVersion: write.expectedVersion,
-			cause: stored.read ? undefined : stored.readFailure,
-			...storedVersionOf(stored, write.expectedVersion),
+			currentVersion: () =>
+				versionedWrites.currentVersion(
+					transaction,
+					write.aggregateIdentity.aggregateId,
+				),
 		});
 	};
+}
+
+/** Options of {@link classifyConcurrencyConflict}. */
+export interface ClassifyConcurrencyConflictOptions {
+	/** The aggregate of the write whose compare-and-set matched no row. */
+	readonly identity: AggregateIdentity;
+	readonly intent: Exclude<AggregateWriteIntent, "add">;
+	/** The version that the compare-and-set predicate used. */
+	readonly expectedVersion: number;
+	/**
+	 * Reads the version that the store holds now, or `undefined` when the
+	 * aggregate no longer exists.
+	 */
+	readonly currentVersion: () =>
+		| number
+		| undefined
+		| Promise<number | undefined>;
+}
+
+/**
+ * Builds the conflict of an update or a remove whose compare-and-set matched
+ * no row. It reads the stored version and names the reason of the conflict.
+ * The zero row count already proves the conflict, so the read is diagnostic:
+ * a read that fails becomes `version_unknown`, with the failure as the cause.
+ */
+export async function classifyConcurrencyConflict(
+	options: ClassifyConcurrencyConflictOptions,
+): Promise<ConcurrencyConflictError> {
+	const stored = await readStoredVersion(options.currentVersion);
+	return new ConcurrencyConflictError({
+		identity: options.identity,
+		intent: options.intent,
+		expectedVersion: options.expectedVersion,
+		cause: stored.read ? undefined : stored.readFailure,
+		...storedVersionOf(stored, options.expectedVersion),
+	});
 }
 
 /**
@@ -332,28 +370,11 @@ function describeMatchedRows(value: unknown): string | undefined {
 		: `${String(value)} (${typeof value})`;
 }
 
-/**
- * Reads the stored version for the `actualVersion` of a conflict. The zero
- * row count already proves the conflict, so a failed read must not replace
- * it. Such a read reports no version and travels as the conflict's cause.
- */
-async function readCurrentVersion<
-	TCtx,
-	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
-	TChangeSet,
->(
-	versionedWrites: VersionedWriteStatements<TCtx, TAggregate, TChangeSet>,
-	transaction: TCtx,
-	aggregateId: TAggregate["id"],
+async function readStoredVersion(
+	currentVersion: ClassifyConcurrencyConflictOptions["currentVersion"],
 ): Promise<VersionRead> {
 	try {
-		return {
-			read: true,
-			currentVersion: await versionedWrites.currentVersion(
-				transaction,
-				aggregateId,
-			),
-		};
+		return { read: true, currentVersion: await currentVersion() };
 	} catch (readFailure) {
 		return { read: false, readFailure };
 	}

@@ -205,6 +205,7 @@ const INDEX_SURFACE = [
 	"canTransitionDomainState",
 	"captureAggregateSnapshot",
 	"capturePersistenceBaseline",
+	"classifyConcurrencyConflict",
 	"copyMetadata",
 	"createDomainEvent",
 	"createDomainEventFactory",

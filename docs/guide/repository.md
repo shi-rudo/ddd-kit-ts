@@ -445,8 +445,8 @@ branches:
   error propagates unchanged and reaches `mapError`.
 - `update` and `remove` run the compare-and-set and return the count of
   matched rows. On zero rows the helper reads `currentVersion` and raises
-  `ConcurrencyConflictError` with `expectedVersion` and a `reason` that names
-  what the read found.
+  `ConcurrencyConflictError` with the `intent`, `expectedVersion`, and a
+  `reason` that names what the read found.
 - The helper runs `update` for every update, also for an empty change set,
   because the new version must reach the store. The statement above spreads
   `write.changes.value`, so an empty change set writes the version only.
@@ -563,10 +563,12 @@ flush: async (tx: DrizzleTx, write) => {
     : await deleteOrder(tx, write, expectedVersion);
   if (matchedRows > 0) return;
 
-  throw new ConcurrencyConflictError({
+  throw await classifyConcurrencyConflict({
     identity: write.aggregateIdentity,
+    intent: write.intent,
     expectedVersion,
-    ...(await orderConflictReason(tx, write.aggregateIdentity.aggregateId, expectedVersion)),
+    currentVersion: () =>
+      loadOrderVersion(tx, write.aggregateIdentity.aggregateId),
   });
 },
 ```
@@ -577,31 +579,13 @@ turns a stale update into an insert. It narrows `expectedVersion` itself: the
 receipt types it as optional, because an `add` carries none, and the conflict
 needs a number. `versionedFlush` does that narrowing for you.
 
-The conflict needs a reason, and a hand-written flush names all four:
-
-```ts
-async function orderConflictReason(
-  tx: DrizzleTx,
-  aggregateId: OrderId,
-  expectedVersion: number,
-) {
-  let currentVersion: number | undefined;
-  try {
-    currentVersion = await loadOrderVersion(tx, aggregateId);
-  } catch (readFailure) {
-    return { reason: "version_unknown" as const, cause: readFailure };
-  }
-
-  if (currentVersion === undefined) return { reason: "aggregate_absent" as const };
-  return currentVersion === expectedVersion
-    ? { reason: "version_unchanged" as const, actualVersion: currentVersion }
-    : { reason: "stale_version" as const, actualVersion: currentVersion };
-}
-```
-
-The `version_unchanged` branch is the one an adapter forgets, and it is the
-one that stops a retry of a write that can never succeed. `versionedFlush`
-classifies the same four cases for you.
+`classifyConcurrencyConflict` reads the stored version and names the reason
+of the conflict: `stale_version`, `version_unchanged`, `aggregate_absent`, or
+`version_unknown` when the read fails. The zero row count already proves the
+conflict, so a failed read travels as the cause and never replaces it.
+`versionedFlush` uses the same function. Do not classify by hand: the
+`version_unchanged` case is the one a copy forgets, and it is the one that
+stops a retry of a write that can never succeed.
 
 ## Event-sourced flush
 

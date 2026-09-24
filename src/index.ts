@@ -148,6 +148,8 @@ export {
 	type UnitOfWorkDeps,
 } from "./application/unit-of-work/unit-of-work";
 export {
+	type ClassifyConcurrencyConflictOptions,
+	classifyConcurrencyConflict,
 	type MatchedRows,
 	type VersionedFlushStatements,
 	type VersionedWrite,
