@@ -169,6 +169,10 @@ skills-lock.json
 # Dolt database files (added by bd init)
 .dolt/
 *.db
+.beads-credential-key
+.beads/proxieddb/
+# Workspace gate files of bd; one of them sits beside .beads.
+*.gate.lock*
 # NOTE: .beads/ itself is intentionally tracked — config.yaml, hooks/,
 # metadata.json, and README.md are shared project conventions. Beads'
 # own .beads/.gitignore handles the per-file ignores (Dolt files,

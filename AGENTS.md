@@ -109,13 +109,14 @@ bd close bd-42 --reason "Completed" --json
    - `bd create "Found bug" --description="Details about what was found" -p 1 --deps discovered-from:<parent-id>`
 5. **Complete**: `bd close <id> --reason "Done"`
 
-### Auto-Sync
+### The tracked snapshot
 
-bd automatically syncs with git:
-
-- Exports to `.beads/issues.jsonl` after changes (5s debounce)
-- Imports from JSONL when newer (e.g., after `git pull`)
-- No manual export/import needed!
+`.beads/issues.jsonl` is the tracked snapshot of the issues. bd does not
+write it on its own: `bd export` writes to stdout, so refresh the snapshot
+with `bd export > .beads/issues.jsonl` before a commit that carries issue
+changes. Use bd 1.2.0 or later: an older bd writes the dependencies of an
+issue in an order that changes between sessions, and a snapshot commit then
+shows issues that did not change.
 
 ### Important Rules
 
