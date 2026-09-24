@@ -365,14 +365,6 @@ export class FoldReturnedNoStateError extends KitWiringError<"FOLD_RETURNED_NO_S
 	}
 }
 
-/**
- * Thrown by `EventSourcedAggregate.setState`: on an event-sourced aggregate
- * the state changes only through `apply()`, where the fact is recorded and
- * the version advances with it. A direct state write would leave the
- * instance ahead of its stream with nothing to replay. A wiring error: a
- * deterministic bug in the aggregate's own code, the remedy is an event
- * and a handler.
- */
 /** Constructor options for {@link DirectStateMutationError}. */
 export interface DirectStateMutationErrorOptions {
 	/** The aggregate the error names. */
@@ -382,6 +374,14 @@ export interface DirectStateMutationErrorOptions {
 	};
 }
 
+/**
+ * Thrown by `EventSourcedAggregate.setState`: on an event-sourced aggregate
+ * the state changes only through `apply()`, where the fact is recorded and
+ * the version advances with it. A direct state write would leave the
+ * instance ahead of its stream with nothing to replay. A wiring error: a
+ * deterministic bug in the aggregate's own code, the remedy is an event
+ * and a handler.
+ */
 export class DirectStateMutationError extends KitWiringError<"DIRECT_STATE_MUTATION"> {
 	readonly identity: DirectStateMutationErrorOptions["identity"];
 
@@ -644,6 +644,17 @@ export class InvalidVersionError extends KitWiringError<"INVALID_VERSION"> {
 	}
 }
 
+/** Constructor options for {@link UnreplayableAggregateError}. */
+export interface UnreplayableAggregateErrorOptions {
+	/** The aggregate the error names. */
+	readonly identity: {
+		readonly aggregateType: string;
+		readonly aggregateId: string;
+	};
+	/** Why the aggregate cannot take a replay, with the safe remedy. */
+	readonly reason: string;
+}
+
 /**
  * Thrown by `EventSourcedAggregate.replayHistory` when the replay target
  * carries unflushed `pendingEvents`. Replaying persisted facts onto that
@@ -663,17 +674,6 @@ export class InvalidVersionError extends KitWiringError<"INVALID_VERSION"> {
  * commit an actually saved instance through application orchestration, or
  * discard a dirty instance and replay into a fresh one.
  */
-/** Constructor options for {@link UnreplayableAggregateError}. */
-export interface UnreplayableAggregateErrorOptions {
-	/** The aggregate the error names. */
-	readonly identity: {
-		readonly aggregateType: string;
-		readonly aggregateId: string;
-	};
-	/** Why the aggregate cannot take a replay, with the safe remedy. */
-	readonly reason: string;
-}
-
 export class UnreplayableAggregateError extends KitWiringError<"UNREPLAYABLE_AGGREGATE"> {
 	readonly identity: UnreplayableAggregateErrorOptions["identity"];
 
@@ -975,15 +975,6 @@ export class PendingEventLimitExceededError extends KitWiringError<"PENDING_EVEN
 	}
 }
 
-/**
- * Thrown by the post-commit acknowledgement of an aggregate when the
- * committed batch is not the prefix of its pending events any more. The
- * batch is longer than the pending list, or an event in it is not the
- * pending event at the same position. Acknowledging such a batch would
- * drop decisions the commit never persisted or keep events it did. The
- * pending list stays untouched. A wiring error in application commit
- * orchestration: acknowledge exactly the batch that was enrolled, once.
- */
 /** Constructor options for {@link PendingEventBatchMismatchError}. */
 export interface PendingEventBatchMismatchErrorOptions {
 	/** The aggregate the error names. */
@@ -997,6 +988,15 @@ export interface PendingEventBatchMismatchErrorOptions {
 	readonly pendingLength: number;
 }
 
+/**
+ * Thrown by the post-commit acknowledgement of an aggregate when the
+ * committed batch is not the prefix of its pending events any more. The
+ * batch is longer than the pending list, or an event in it is not the
+ * pending event at the same position. Acknowledging such a batch would
+ * drop decisions the commit never persisted or keep events it did. The
+ * pending list stays untouched. A wiring error in application commit
+ * orchestration: acknowledge exactly the batch that was enrolled, once.
+ */
 export class PendingEventBatchMismatchError extends KitWiringError<"PENDING_EVENT_BATCH_MISMATCH"> {
 	readonly identity: PendingEventBatchMismatchErrorOptions["identity"];
 	readonly batchLength: number;
@@ -1557,6 +1557,17 @@ export class ErrorMapperFailedError extends KitWiringError<"ERROR_MAPPER_FAILED"
 	}
 }
 
+/** Constructor options for {@link UnenrolledChangesError}. */
+export interface UnenrolledChangesErrorOptions {
+	/** The aggregate the error names. */
+	readonly identity: {
+		readonly aggregateType: string;
+		readonly aggregateId: string;
+	};
+	/** Whether the repository of the aggregate is append-only. */
+	readonly appendOnly?: boolean;
+}
+
 /**
  * Thrown at the end of a `UnitOfWork.run` when an aggregate that was
  * loaded into the identity map changed but no `update` intent was registered.
@@ -1580,17 +1591,6 @@ export class ErrorMapperFailedError extends KitWiringError<"ERROR_MAPPER_FAILED"
  * message names the rule instead: a loaded append-only aggregate must not
  * change.
  */
-/** Constructor options for {@link UnenrolledChangesError}. */
-export interface UnenrolledChangesErrorOptions {
-	/** The aggregate the error names. */
-	readonly identity: {
-		readonly aggregateType: string;
-		readonly aggregateId: string;
-	};
-	/** Whether the repository of the aggregate is append-only. */
-	readonly appendOnly?: boolean;
-}
-
 export class UnenrolledChangesError extends KitWiringError<"UNENROLLED_CHANGES"> {
 	readonly identity: UnenrolledChangesErrorOptions["identity"];
 
@@ -1608,6 +1608,15 @@ export class UnenrolledChangesError extends KitWiringError<"UNENROLLED_CHANGES">
 	}
 }
 
+/** Constructor options for {@link AggregateDeletedError}. */
+export interface AggregateDeletedErrorOptions {
+	/** The aggregate the error names. */
+	readonly identity: {
+		readonly aggregateType: string;
+		readonly aggregateId: string;
+	};
+}
+
 /**
  * Thrown when an aggregate removed within the current unit of work is added,
  * updated, or tracked again in the same operation. Removal is final within an
@@ -1618,15 +1627,6 @@ export class UnenrolledChangesError extends KitWiringError<"UNENROLLED_CHANGES">
  * {@link MissingHandlerError}): a programming bug that should crash
  * loud, not be absorbed by a generic infrastructure-error handler.
  */
-/** Constructor options for {@link AggregateDeletedError}. */
-export interface AggregateDeletedErrorOptions {
-	/** The aggregate the error names. */
-	readonly identity: {
-		readonly aggregateType: string;
-		readonly aggregateId: string;
-	};
-}
-
 export class AggregateDeletedError extends KitWiringError<"AGGREGATE_DELETED"> {
 	readonly identity: AggregateDeletedErrorOptions["identity"];
 
