@@ -17,7 +17,7 @@ bd ready              # Find available work
 bd show <id>          # View issue details
 bd update <id> --claim  # Claim work atomically
 bd close <id>         # Complete work
-bd sync               # Sync with git
+bd export > .beads/issues.jsonl  # Refresh the tracked snapshot
 ```
 
 ## Non-Interactive Shell Commands
@@ -111,12 +111,13 @@ bd close bd-42 --reason "Completed" --json
 
 ### The tracked snapshot
 
-`.beads/issues.jsonl` is the tracked snapshot of the issues. bd does not
-write it on its own: `bd export` writes to stdout, so refresh the snapshot
-with `bd export > .beads/issues.jsonl` before a commit that carries issue
-changes. Use bd 1.2.0 or later: an older bd writes the dependencies of an
-issue in an order that changes between sessions, and a snapshot commit then
-shows issues that did not change.
+beads runs in embedded mode, with no Dolt server and no Dolt remote.
+`.beads/issues.jsonl` is the tracked snapshot of the issues, and the only
+copy in git. bd does not write it on its own: `bd export` writes to stdout,
+so refresh the snapshot with `bd export > .beads/issues.jsonl` before a
+commit that carries issue changes. Use bd 1.2.0 or later: an older bd writes
+the dependencies of an issue in an order that changes between sessions, and
+a snapshot commit then shows issues that did not change.
 
 ### Important Rules
 
@@ -142,7 +143,7 @@ For more details, see README.md and docs/QUICKSTART.md.
 4. **PUSH TO REMOTE** - This is MANDATORY:
    ```bash
    git pull --rebase
-   bd sync
+   bd export > .beads/issues.jsonl   # then commit the snapshot
    git push
    git status  # MUST show "up to date with origin"
    ```

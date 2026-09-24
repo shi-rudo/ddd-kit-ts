@@ -173,6 +173,8 @@ skills-lock.json
 .beads/proxieddb/
 # Workspace gate files of bd; one of them sits beside .beads.
 *.gate.lock*
+# The auto-import stamp of bd is state of one machine.
+.beads/.auto-import-issues.jsonl
 # NOTE: .beads/ itself is intentionally tracked — config.yaml, hooks/,
 # metadata.json, and README.md are shared project conventions. Beads'
 # own .beads/.gitignore handles the per-file ignores (Dolt files,
