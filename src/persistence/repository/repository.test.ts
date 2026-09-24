@@ -40,6 +40,10 @@ describe("Aggregate interface contract", () => {
 	it("exposes persistence facts without lifecycle mutation authority", () => {
 		const stub: Aggregate<OrderId> = {
 			id: "o-1" as OrderId,
+			aggregateIdentity: {
+				aggregateType: "Order",
+				aggregateId: "o-1" as OrderId,
+			},
 			version: 0 as Version,
 			pendingEvents: [],
 		};
@@ -109,6 +113,10 @@ describe("Repository contract", () => {
 			const persistence = new OrderPersistence();
 			const order: Order = {
 				id: "o-1" as OrderId,
+				aggregateIdentity: {
+					aggregateType: "Order",
+					aggregateId: "o-1" as OrderId,
+				},
 				version: 1 as never,
 				customerId: "c-1",
 				total: 100,
@@ -183,6 +191,10 @@ describe("Repository contract", () => {
 			const repository = new OrderRepository();
 			const order = {
 				id: "o-1" as OrderId,
+				aggregateIdentity: {
+					aggregateType: "Order",
+					aggregateId: "o-1" as OrderId,
+				},
 				version: 1 as never,
 				customerId: "c-1",
 				total: 100,

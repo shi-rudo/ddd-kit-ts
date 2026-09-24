@@ -555,7 +555,6 @@ const invoices = defineRepository<ForStoringInvoices>()({
   create: (tx: PgTx, tracking: RepositoryTracking<Invoice>) =>
     new PgInvoiceReadAdapter(tx, tracking),
   flush: versionedFlush({
-    aggregateType: "Invoice",
     insert: (tx: PgTx, write) => insertInvoice(tx, write),
     isDuplicate: isUniqueViolation,
     update: async (tx, write) => {
@@ -569,7 +568,7 @@ const invoices = defineRepository<ForStoringInvoices>()({
                 total_scale = $6
           where id = $1 and version = $7`,
         [
-          write.aggregateId,
+          write.aggregateIdentity.aggregateId,
           write.version,
           status,
           total.amountMinor.toString(),

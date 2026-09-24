@@ -21,11 +21,6 @@ export interface PendingEventLifecycleReadView {
 	 * consumer does not need.
 	 */
 	pendingEventCount(): number;
-	/**
-	 * The aggregate's declared type; it is protected on the aggregate and
-	 * absent from `Aggregate`.
-	 */
-	aggregateType(): string;
 }
 
 /**
@@ -59,7 +54,7 @@ export interface PendingEventLifecycleCapability
 // fails the UnmanagedInstanceError check at enrollment instead of
 // half-working through a shape it does not fully implement.
 const persistenceCapabilityRegistryKey = Symbol.for(
-	"@shirudo/ddd-kit/pending-event-lifecycle-registry/v6",
+	"@shirudo/ddd-kit/pending-event-lifecycle-registry/v7",
 );
 
 const { registry: capabilities, require } =

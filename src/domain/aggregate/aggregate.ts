@@ -2,6 +2,7 @@ import type { Result } from "@shirudo/result";
 import { type DomainError, InvalidVersionError } from "../../errors/kit-errors";
 import type { AnyDomainEvent, PendingDomainEvent } from "../event/domain-event";
 import type { Id } from "../identity/id";
+import type { AggregateIdentity } from "./aggregate-identity";
 
 // --- Aggregate types ---
 
@@ -83,6 +84,8 @@ export interface Aggregate<
 	TEvent extends AnyDomainEvent = AnyDomainEvent,
 > {
 	readonly id: TId;
+	/** The aggregate type and the id: the full identity of the aggregate. */
+	readonly aggregateIdentity: AggregateIdentity<TId>;
 	readonly version: Version;
 	readonly pendingEvents: ReadonlyArray<PendingDomainEvent<TEvent>>;
 }

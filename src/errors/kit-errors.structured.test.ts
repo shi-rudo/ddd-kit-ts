@@ -12,6 +12,7 @@ import type {
 } from "../messaging/event-bus/errors";
 import {
 	AggregateDeletedError,
+	type AggregateDeletedErrorOptions,
 	type AggregateIdentityMismatchOptions,
 	AggregateNotFoundError,
 	type AggregateNotFoundErrorOptions,
@@ -19,9 +20,11 @@ import {
 	ConcurrencyConflictError,
 	type ConcurrencyConflictErrorOptions,
 	DirectStateMutationError,
+	type DirectStateMutationErrorOptions,
 	DomainError,
 	DuplicateAggregateError,
 	type DuplicateAggregateErrorOptions,
+	type DuplicateEventIdErrorOptions,
 	ErrorMapperFailedError,
 	EventHarvestError,
 	FoldReturnedNoStateError,
@@ -40,12 +43,14 @@ import {
 	MissingFoldError,
 	MissingHandlerError,
 	PendingEventBatchMismatchError,
+	type PendingEventBatchMismatchErrorOptions,
 	PendingEventLimitExceededError,
 	type PendingEventLimitExceededErrorOptions,
 	ProjectionGapError,
 	ProjectionIdentityViolationError,
 	ProjectionOrderViolationError,
 	ProjectionReceiptViolationError,
+	type ReentrantEventRecordingErrorOptions,
 	ReplayRejectedError,
 	type ReplayRejectedErrorOptions,
 	ReplayTargetMismatchError,
@@ -55,10 +60,12 @@ import {
 	SnapshotVersionNotRestoredError,
 	type SnapshotVersionNotRestoredErrorOptions,
 	UnenrolledChangesError,
+	type UnenrolledChangesErrorOptions,
 	UnmanagedInstanceError,
 	UnprojectableEventError,
 	UnregisteredHandlerError,
 	UnreplayableAggregateError,
+	type UnreplayableAggregateErrorOptions,
 } from "./kit-errors";
 
 // The structured-error contract for every kit error (decided 2026-07-05):
@@ -166,7 +173,10 @@ const concreteCases: ReadonlyArray<{
 		retryable: false,
 	},
 	{
-		error: () => new DirectStateMutationError("order-1"),
+		error: () =>
+			new DirectStateMutationError({
+				identity: { aggregateType: "Order", aggregateId: "order-1" },
+			}),
 		code: "DIRECT_STATE_MUTATION",
 		category: "WIRING",
 		retryable: false,
@@ -178,7 +188,12 @@ const concreteCases: ReadonlyArray<{
 		retryable: false,
 	},
 	{
-		error: () => new PendingEventBatchMismatchError("order-1", 2, 1),
+		error: () =>
+			new PendingEventBatchMismatchError({
+				identity: { aggregateType: "Order", aggregateId: "order-1" },
+				batchLength: 2,
+				pendingLength: 1,
+			}),
 		code: "PENDING_EVENT_BATCH_MISMATCH",
 		category: "WIRING",
 		retryable: false,
@@ -357,7 +372,11 @@ const concreteCases: ReadonlyArray<{
 		retryable: false,
 	},
 	{
-		error: () => new UnreplayableAggregateError("o-1", "it is dirty"),
+		error: () =>
+			new UnreplayableAggregateError({
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
+				reason: "it is dirty",
+			}),
 		code: "UNREPLAYABLE_AGGREGATE",
 		category: "WIRING",
 		retryable: false,
@@ -417,8 +436,16 @@ describe("kit errors are StructuredErrors (code = name = the one identifier)", (
 		expect(
 			new EventHarvestError("event without aggregateId", "OrderConfirmed").code,
 		).toBe("EVENT_HARVEST_FAILED");
-		expect(new UnenrolledChangesError("o-1").code).toBe("UNENROLLED_CHANGES");
-		expect(new AggregateDeletedError("o-1").code).toBe("AGGREGATE_DELETED");
+		expect(
+			new UnenrolledChangesError({
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
+			}).code,
+		).toBe("UNENROLLED_CHANGES");
+		expect(
+			new AggregateDeletedError({
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
+			}).code,
+		).toBe("AGGREGATE_DELETED");
 	});
 });
 
@@ -568,7 +595,9 @@ describe("a serialized kit error keeps the fields it declares", () => {
 	});
 
 	it("keeps name, message and code of a field that holds an error", () => {
-		const rollbackCause = new AggregateDeletedError("order-1");
+		const rollbackCause = new AggregateDeletedError({
+			identity: { aggregateType: "Order", aggregateId: "order-1" },
+		});
 		const error = new RollbackError(
 			new Error("callback failed"),
 			rollbackCause,
@@ -847,7 +876,35 @@ const identityShapesMatchAggregateIdentity: [
 	SameType<ReplayTargetMismatchErrorOptions["identity"], AggregateIdentity>,
 	SameType<ReplayRejectedErrorOptions["identity"], AggregateIdentity>,
 	SameType<AggregateIdentityMismatchOptions["expected"], AggregateIdentity>,
-] = [true, true, true, true, true, true, true, true, true, true];
+	SameType<DirectStateMutationErrorOptions["identity"], AggregateIdentity>,
+	SameType<UnreplayableAggregateErrorOptions["identity"], AggregateIdentity>,
+	SameType<
+		PendingEventBatchMismatchErrorOptions["identity"],
+		AggregateIdentity
+	>,
+	SameType<UnenrolledChangesErrorOptions["identity"], AggregateIdentity>,
+	SameType<AggregateDeletedErrorOptions["identity"], AggregateIdentity>,
+	SameType<ReentrantEventRecordingErrorOptions["identity"], AggregateIdentity>,
+	SameType<DuplicateEventIdErrorOptions["identity"], AggregateIdentity>,
+] = [
+	true,
+	true,
+	true,
+	true,
+	true,
+	true,
+	true,
+	true,
+	true,
+	true,
+	true,
+	true,
+	true,
+	true,
+	true,
+	true,
+	true,
+];
 
 it("pins every inline identity shape to AggregateIdentity", () => {
 	expect(identityShapesMatchAggregateIdentity.every(Boolean)).toBe(true);

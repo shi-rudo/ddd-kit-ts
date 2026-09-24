@@ -1,4 +1,6 @@
 import type { Aggregate, Version } from "../../domain/aggregate/aggregate";
+import type { AggregateIdentity } from "../../domain/aggregate/aggregate-identity";
+import { requirePendingEventLifecycleReadView } from "../../domain/aggregate/pending-event-lifecycle";
 import type {
 	AnyDomainEvent,
 	PendingDomainEvent,
@@ -132,19 +134,20 @@ export class Session<Evt extends AnyDomainEvent> {
 		definition: RuntimePersistenceDefinition<Evt>,
 	): TAggregate {
 		this.assertOpen("tracking.trackLoaded");
+		requirePendingEventLifecycleReadView(aggregate, "tracking.trackLoaded");
 		// Ownership is checked BEFORE identity-map registration: a rejected
 		// instance must not stay registered under the second definition's
 		// class key with no tracking entry behind it.
 		const existing = this._trackingByAggregate.get(aggregate);
 		if (existing && existing.definition !== definition) {
-			throw new AggregateTrackingError(
-				String(aggregate.id),
-				"load",
-				"different_repository",
-				existing.registration?.intent,
-			);
+			throw new AggregateTrackingError({
+				identity: aggregate.aggregateIdentity,
+				operation: "load",
+				reason: "different_repository",
+				registeredIntent: existing.registration?.intent,
+			});
 		}
-		this._identityMap.set(definition.aggregate, aggregate.id, aggregate);
+		this._identityMap.set(definition.aggregate, aggregate);
 		if (existing) return aggregate;
 
 		const entry: TrackedAggregate<Evt> = {
@@ -164,30 +167,31 @@ export class Session<Evt extends AnyDomainEvent> {
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void {
 		this.assertOpen("repository.add");
+		requirePendingEventLifecycleReadView(aggregate, "repository.add");
 		this.assertNotRemoved(aggregate, definition);
 		const existing = this._trackingByAggregate.get(aggregate);
 		if (existing && existing.definition !== definition) {
-			throw new AggregateTrackingError(
-				String(aggregate.id),
-				"add",
-				"different_repository",
-				existing.registration?.intent,
-			);
+			throw new AggregateTrackingError({
+				identity: aggregate.aggregateIdentity,
+				operation: "add",
+				reason: "different_repository",
+				registeredIntent: existing.registration?.intent,
+			});
 		}
 		if (existing?.lifecycle === "loaded") {
-			throw new AggregateTrackingError(
-				String(aggregate.id),
-				"add",
-				"loaded_as_new",
-				existing.registration?.intent,
-				{ appendOnly: definition.appendOnly === true },
-			);
+			throw new AggregateTrackingError({
+				identity: aggregate.aggregateIdentity,
+				operation: "add",
+				reason: "loaded_as_new",
+				registeredIntent: existing.registration?.intent,
+				appendOnly: definition.appendOnly === true,
+			});
 		}
 
 		let entry = existing;
 		const newlyTracked = !entry;
 		if (!entry) {
-			this._identityMap.set(definition.aggregate, aggregate.id, aggregate);
+			this._identityMap.set(definition.aggregate, aggregate);
 			entry = {
 				aggregate,
 				lifecycle: "new",
@@ -225,6 +229,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void {
 		this.assertOpen("repository.update");
+		requirePendingEventLifecycleReadView(aggregate, "repository.update");
 		const entry = this.loadedEntryFor(aggregate, "update", definition);
 		this.registerWrite(entry, "update", definition);
 	}
@@ -234,6 +239,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void {
 		this.assertOpen("repository.remove");
+		requirePendingEventLifecycleReadView(aggregate, "repository.remove");
 		// Idempotent by reference, like add and update: a repeated remove of
 		// the SAME instance re-declares the same final lifecycle outcome
 		// (collection semantics; the enrollment layer already returns the
@@ -288,32 +294,32 @@ export class Session<Evt extends AnyDomainEvent> {
 		// branching on the machine-readable reason must not get not_loaded
 		// for the identical violation on the update/remove path.
 		if (entry && entry.definition !== definition) {
-			throw new AggregateTrackingError(
-				String(aggregate.id),
-				operation,
-				"different_repository",
-				entry.registration?.intent,
-			);
+			throw new AggregateTrackingError({
+				identity: aggregate.aggregateIdentity,
+				operation: operation,
+				reason: "different_repository",
+				registeredIntent: entry.registration?.intent,
+			});
 		}
 		// An add()-registered aggregate IS tracked, just not "loaded": report
 		// the real conflict with the registered intent. The not_loaded advice
 		// ("load it through the repository") is impossible for an aggregate
 		// that has no row yet and would actively mislead.
 		if (entry && entry.lifecycle === "new" && entry.definition === definition) {
-			throw new AggregateTrackingError(
-				String(aggregate.id),
-				operation,
-				"conflicting_intent",
-				entry.registration?.intent,
-			);
+			throw new AggregateTrackingError({
+				identity: aggregate.aggregateIdentity,
+				operation: operation,
+				reason: "conflicting_intent",
+				registeredIntent: entry.registration?.intent,
+			});
 		}
 		if (entry?.lifecycle !== "loaded" || entry.definition !== definition) {
-			throw new AggregateTrackingError(
-				String(aggregate.id),
-				operation,
-				"not_loaded",
-				entry?.registration?.intent,
-			);
+			throw new AggregateTrackingError({
+				identity: aggregate.aggregateIdentity,
+				operation: operation,
+				reason: "not_loaded",
+				registeredIntent: entry?.registration?.intent,
+			});
 		}
 		return entry;
 	}
@@ -323,7 +329,9 @@ export class Session<Evt extends AnyDomainEvent> {
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void {
 		if (this._identityMap.isDeleted(definition.aggregate, aggregate.id)) {
-			throw new AggregateDeletedError(String(aggregate.id));
+			throw new AggregateDeletedError({
+				identity: aggregate.aggregateIdentity,
+			});
 		}
 	}
 
@@ -333,12 +341,12 @@ export class Session<Evt extends AnyDomainEvent> {
 	): boolean {
 		if (entry.registration !== undefined) {
 			if (entry.registration.intent !== intent) {
-				throw new AggregateTrackingError(
-					String(entry.aggregate.id),
-					intent,
-					"conflicting_intent",
-					entry.registration.intent,
-				);
+				throw new AggregateTrackingError({
+					identity: entry.aggregate.aggregateIdentity,
+					operation: intent,
+					reason: "conflicting_intent",
+					registeredIntent: entry.registration.intent,
+				});
 			}
 			this.assertUnchangedAfterRegistration(entry);
 			return false;
@@ -385,12 +393,12 @@ export class Session<Evt extends AnyDomainEvent> {
 			!sameEvents ||
 			persistenceChanged
 		) {
-			throw new AggregateTrackingError(
-				String(entry.aggregate.id),
-				"commit",
-				"mutated_after_registration",
-				registration.intent,
-			);
+			throw new AggregateTrackingError({
+				identity: entry.aggregate.aggregateIdentity,
+				operation: "commit",
+				reason: "mutated_after_registration",
+				registeredIntent: registration.intent,
+			});
 		}
 	}
 
@@ -409,7 +417,9 @@ export class Session<Evt extends AnyDomainEvent> {
 			this.isRemovedInstance(aggregate) ||
 			this._identityMap.isDeleted(definition.aggregate, aggregate.id)
 		) {
-			throw new AggregateDeletedError(String(aggregate.id));
+			throw new AggregateDeletedError({
+				identity: aggregate.aggregateIdentity,
+			});
 		}
 		const token = this.commitEnrollment.enrollSaved(aggregate, {
 			expectedVersion,
@@ -466,7 +476,8 @@ export class Session<Evt extends AnyDomainEvent> {
 				(entry.aggregate.version !== entry.expectedVersion ||
 					persistenceProjectionDrifted(entry.baseline, entry.aggregate))
 			) {
-				throw new UnenrolledChangesError(String(entry.aggregate.id), {
+				throw new UnenrolledChangesError({
+					identity: entry.aggregate.aggregateIdentity,
 					appendOnly: entry.definition.appendOnly === true,
 				});
 			}
@@ -485,11 +496,12 @@ export class Session<Evt extends AnyDomainEvent> {
 			// Events were recorded on a loaded aggregate after it was
 			// registered, yet it has no write intent: a forgotten update whose
 			// events would be silently dropped.
-			const id = (instance as { id?: unknown }).id;
-			throw new UnenrolledChangesError(String(id), {
+			const aggregate = instance as Aggregate<Id<string>, Evt>;
+			throw new UnenrolledChangesError({
+				identity: aggregate.aggregateIdentity,
 				appendOnly:
-					this._trackingByAggregate.get(instance as Aggregate<Id<string>, Evt>)
-						?.definition.appendOnly === true,
+					this._trackingByAggregate.get(aggregate)?.definition.appendOnly ===
+					true,
 			});
 		}
 	}
@@ -500,15 +512,15 @@ export class Session<Evt extends AnyDomainEvent> {
 		for (const entry of this._registeredWrites) {
 			const registration = entry.registration;
 			if (registration === undefined) {
-				throw new AggregateTrackingError(
-					String(entry.aggregate.id),
-					"commit",
-					"mutated_after_registration",
-				);
+				throw new AggregateTrackingError({
+					identity: entry.aggregate.aggregateIdentity,
+					operation: "commit",
+					reason: "mutated_after_registration",
+				});
 			}
 			const write = Object.freeze({
 				intent: registration.intent,
-				aggregateId: entry.aggregate.id,
+				aggregateIdentity: entry.aggregate.aggregateIdentity,
 				expectedVersion: entry.expectedVersion,
 				version: registration.version,
 				changes: registration.changes,
@@ -558,7 +570,7 @@ function mapRepositoryPersistenceError<Evt extends AnyDomainEvent>(
 		mapped = definition.mapError(error, write);
 	} catch (mapperError) {
 		throw new RepositoryErrorMappingFailedError({
-			aggregateId: String(write.aggregateId),
+			identity: write.aggregateIdentity,
 			intent: write.intent,
 			persistenceError: error,
 			mapperError,
@@ -570,7 +582,7 @@ function mapRepositoryPersistenceError<Evt extends AnyDomainEvent>(
 	// blames a correct mapper.
 	if (isInfrastructureErrorLike(mapped)) return mapped;
 	throw new RepositoryErrorMappingFailedError({
-		aggregateId: String(write.aggregateId),
+		identity: write.aggregateIdentity,
 		intent: write.intent,
 		persistenceError: error,
 		mapperError: new TypeError(

@@ -762,6 +762,11 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 			expect(() =>
 				lifecycleOf(aggregate).acknowledge(reversed, 1 as Version),
 			).toThrow(PendingEventBatchMismatchError);
+			expect(() =>
+				lifecycleOf(aggregate).acknowledge(reversed, 1 as Version),
+			).toThrow(
+				expect.objectContaining({ identity: aggregate.aggregateIdentity }),
+			);
 
 			expect(aggregate.pendingEvents).toHaveLength(2);
 		});
@@ -787,7 +792,7 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 			expect(caught).toBeInstanceOf(PendingEventBatchMismatchError);
 			const mismatch = caught as PendingEventBatchMismatchError;
 			expect(mismatch.code).toBe("PENDING_EVENT_BATCH_MISMATCH");
-			expect(mismatch.aggregateId).toBe("test-1");
+			expect(mismatch.identity.aggregateId).toBe("test-1");
 			expect(mismatch.batchLength).toBe(2);
 			expect(mismatch.pendingLength).toBe(1);
 			expect(aggregate.pendingEvents).toHaveLength(1);
@@ -1335,7 +1340,12 @@ describe("one identity per pending fact on the state-stored path", () => {
 		const recorded = noted("fact-1");
 		aggregate.record(recorded);
 
-		expect(() => aggregate.record(recorded)).toThrow(DuplicateEventIdError);
+		expect(() => aggregate.record(recorded)).toThrow(
+			expect.objectContaining({
+				constructor: DuplicateEventIdError,
+				identity: aggregate.aggregateIdentity,
+			}),
+		);
 
 		expect(aggregate.pendingEvents).toHaveLength(1);
 	});
@@ -1533,5 +1543,56 @@ describe("one version write path", () => {
 
 		expect(aggregate.state.value).toBe(1);
 		expect(aggregate.version).toBe(Number.MAX_SAFE_INTEGER);
+	});
+});
+
+describe("aggregate identity", () => {
+	it("exposes the aggregate type and the id as one frozen value", () => {
+		const aggregate = TestAggregate.create("test-1" as TestId, 1);
+
+		expect(aggregate.aggregateIdentity).toStrictEqual({
+			aggregateType: "TestAggregate",
+			aggregateId: "test-1",
+		});
+		expect(Object.isFrozen(aggregate.aggregateIdentity)).toBe(true);
+	});
+
+	it("returns the same value on every read", () => {
+		const aggregate = TestAggregate.create("test-1" as TestId, 1);
+
+		expect(aggregate.aggregateIdentity).toBe(aggregate.aggregateIdentity);
+	});
+});
+
+describe("aggregate identity of a frozen aggregate", () => {
+	it("reads the identity without writing to the instance", () => {
+		const aggregate = Object.freeze(
+			TestAggregate.create("test-1" as TestId, 1),
+		);
+
+		expect(aggregate.aggregateIdentity).toStrictEqual({
+			aggregateType: "TestAggregate",
+			aggregateId: "test-1",
+		});
+	});
+});
+
+describe("aggregate identity read before the subclass declares its type", () => {
+	class EarlyReader extends StateStoredAggregate<TestState, TestId> {
+		readonly identityDuringConstruction = this.aggregateIdentity;
+		protected readonly aggregateType = "EarlyReader";
+
+		constructor(id: TestId) {
+			super(id, { value: 0, status: "inactive" });
+		}
+	}
+
+	it("returns the complete identity once construction finished", () => {
+		const aggregate = new EarlyReader("test-1" as TestId);
+
+		expect(aggregate.aggregateIdentity).toStrictEqual({
+			aggregateType: "EarlyReader",
+			aggregateId: "test-1",
+		});
 	});
 });

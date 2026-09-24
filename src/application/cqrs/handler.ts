@@ -231,7 +231,7 @@ function createCommitTokenScope<
 			}
 			if (record.disposition === "deleted" && disposition === "saved") {
 				throw new EventHarvestError(
-					`withCommit: aggregate ${String(aggregate.id)} was enrolled as ` +
+					`withCommit: aggregate ${describeAggregateIdentity(aggregate.aggregateIdentity)} was enrolled as ` +
 						"saved after it was enrolled as deleted in the same transaction.",
 				);
 			}
@@ -243,7 +243,7 @@ function createCommitTokenScope<
 				options.expectedVersion !== record.expectedVersion
 			) {
 				throw new EventHarvestError(
-					`withCommit: aggregate ${String(aggregate.id)} was re-enrolled ` +
+					`withCommit: aggregate ${describeAggregateIdentity(aggregate.aggregateIdentity)} was re-enrolled ` +
 						`with expectedVersion ${String(options.expectedVersion)}, but its ` +
 						`enrollment recorded ${String(record.expectedVersion)}. Duplicate ` +
 						"enrollment must assert the same OCC baseline or none.",
@@ -251,7 +251,7 @@ function createCommitTokenScope<
 			}
 			if (enrollmentDiverged(record)) {
 				throw new EventHarvestError(
-					`withCommit: aggregate ${String(aggregate.id)} changed after its ` +
+					`withCommit: aggregate ${describeAggregateIdentity(aggregate.aggregateIdentity)} changed after its ` +
 						"commit batch was enrolled. Register persistence intent last.",
 				);
 			}
@@ -364,7 +364,7 @@ function createCommitTokenScope<
 				// inside the transaction instead.
 				if (enrollmentDiverged(record)) {
 					throw new EventHarvestError(
-						`withCommit: aggregate ${String(record.aggregate.id)} changed ` +
+						`withCommit: aggregate ${describeAggregateIdentity(record.aggregate.aggregateIdentity)} changed ` +
 							"after its commit batch was enrolled; events recorded after " +
 							"enrollment are not part of the attested write and would be " +
 							"silently dropped. Make domain decisions first, write, and " +
@@ -547,22 +547,22 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 			// The aggregate's event remains untouched and is what the in-process
 			// domain bus receives.
 			const candidates = commitRecords.flatMap((record) => {
-				const agg = record.aggregate;
+				const enrolled = record.aggregate.aggregateIdentity;
 				if (
 					record.events.length > 0 &&
 					record.persistedVersion !== undefined &&
 					(record.version as number) <= (record.persistedVersion as number)
 				) {
 					throw new EventHarvestError(
-						`withCommit: aggregate ${String(agg.id)} recorded events but ` +
+						`withCommit: aggregate ${describeAggregateIdentity(enrolled)} recorded events but ` +
 							`did not advance its version beyond the persisted version ` +
 							`(${String(record.persistedVersion)}). An eventful commit needs a unique ` +
 							`cursor; use StateStoredAggregate.setState(currentState, event) instead ` +
 							`of addDomainEvent(event) alone.`,
 					);
 				}
-				const enrolledId = String(agg.id);
-				const enrolledType = record.eventLifecycle.aggregateType();
+				const enrolledId = enrolled.aggregateId;
+				const enrolledType = enrolled.aggregateType;
 				return record.events.map((event, index) => {
 					if (!isRecordedDomainEvent(event)) {
 						throw new EventHarvestError(

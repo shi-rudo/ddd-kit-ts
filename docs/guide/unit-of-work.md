@@ -120,7 +120,7 @@ const orderRepositoryDefinition = defineRepository<ForStoringOrders>()({
   },
   mapError: (error, write) => {
     if (error instanceof InfrastructureError) return error;
-    return new OrderStoreUnavailableError(write.aggregateId, error);
+    return new OrderStoreUnavailableError(write.aggregateIdentity, error);
   },
 });
 

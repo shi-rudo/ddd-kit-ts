@@ -29,35 +29,83 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Changed (breaking): an aggregate exposes its full identity
+
+An aggregate id is unique only within its type, so the full identity of an
+aggregate is the pair of both. The aggregate showed only its `id` in public,
+while every event it records already carried `aggregateType`. The
+`Aggregate` interface now has a read-only `aggregateIdentity:
+AggregateIdentity<TId>`. The base classes build it from `aggregateType` and
+`id` and freeze it, so an aggregate built on them needs no change. A
+hand-written implementation of `Aggregate`, for example a test stub, adds
+the property.
+
+The property is named `aggregateIdentity`, not `identity`, because it is
+reserved on every aggregate, and some domains use `identity` as a business
+term. `IdentityMap.set(type, aggregate)` takes the id from the
+`aggregateIdentity` of the aggregate, so the id and the instance cannot
+disagree; the `id` argument is gone. The unit of work rejects an instance
+that the kit does not manage with `UnmanagedInstanceError` before it
+registers it. The internal lifecycle
+capability no longer carries the aggregate type, and its registry key moves
+to a new version: an aggregate built by an older copy of the kit is not
+recognized as managed.
+
+The persistence write carries the same value. `AggregatePersistenceWrite`
+has `aggregateIdentity` in place of `aggregateId`. A flush passes
+`write.aggregateIdentity` as it is to an error or to `EventStore.append`,
+and reads the id from it for a row key. `versionedFlush` takes the
+aggregate type from the write, so its `aggregateType` option is gone.
+
+| Before | After |
+| --- | --- |
+| `write.aggregateId` | `write.aggregateIdentity.aggregateId` |
+| `{ aggregateType: "Order", aggregateId: write.aggregateId }` | `write.aggregateIdentity` |
+| `versionedFlush({ aggregateType: "Order", insert, isDuplicate })` | `versionedFlush({ insert, isDuplicate })` |
+
 ### Changed (breaking): kit errors carry the aggregate identity as one value
 
 An aggregate id is unique only together with its aggregate type, so the
 pair is one value: `AggregateIdentity`. Ten kit errors split it into two
-fields, and every reader had to put them together again. They now carry
-one `identity` field of the shape `{ aggregateType, aggregateId }`, the same
-field on each of them. Each error keeps a frozen copy of the two fields, not
-the caller's object. Every kit message renders an aggregate identity as
-`Type(id)`, so a log search finds all of them.
+fields, and every reader had to put them together again. Nine more named
+the aggregate by its id alone, which does not say which aggregate it is.
+Every kit error that names one aggregate now carries one `identity` field
+of the shape `{ aggregateType, aggregateId }`. Each error keeps a frozen
+copy of the two fields, not the caller's object. Every kit message renders
+an aggregate identity as `Type(id)`, so a log search finds all of them.
 
-The errors are `ConcurrencyConflictError`, `DuplicateAggregateError`,
-`AggregateNotFoundError`, `SnapshotSchemaMismatchError`,
-`SnapshotVersionNotRestoredError`, `PendingEventLimitExceededError`,
-`InvalidFlushStatementError`, `InvalidEventStreamPageError`,
-`ReplayTargetMismatchError`, and `ReplayRejectedError`. An adapter that
-throws one of them passes the identity; a catch block that reads the fields
-reads them from `identity`.
+The errors that split the pair are `ConcurrencyConflictError`,
+`DuplicateAggregateError`, `AggregateNotFoundError`,
+`SnapshotSchemaMismatchError`, `SnapshotVersionNotRestoredError`,
+`PendingEventLimitExceededError`, `InvalidFlushStatementError`,
+`InvalidEventStreamPageError`, `ReplayTargetMismatchError`, and
+`ReplayRejectedError`. An adapter that throws one of them passes the
+identity; a catch block reads the fields from `identity`.
+
+The errors that named only the id are `AggregateDeletedError`,
+`AggregateTrackingError`, `DirectStateMutationError`,
+`DuplicateEventIdError`, `PendingEventBatchMismatchError`,
+`ReentrantEventRecordingError`, `RepositoryErrorMappingFailedError`,
+`UnenrolledChangesError`, and `UnreplayableAggregateError`. The kit throws
+them with the identity of the aggregate. They take an options object now,
+like the other kit errors, so only code that constructs them, for example
+a test double, changes.
 
 | Before | After |
 | --- | --- |
 | `new ConcurrencyConflictError({ aggregateType, aggregateId, expectedVersion, reason, actualVersion })` | `new ConcurrencyConflictError({ identity: { aggregateType, aggregateId }, expectedVersion, reason, actualVersion })` |
 | `new AggregateNotFoundError({ aggregateType, id })` | `new AggregateNotFoundError({ identity: { aggregateType, aggregateId: id } })` |
+| `new AggregateDeletedError(aggregateId)` | `new AggregateDeletedError({ identity })` |
+| `new UnreplayableAggregateError(aggregateId, reason)` | `new UnreplayableAggregateError({ identity, reason })` |
+| `new DuplicateEventIdError(aggregateId, eventId)` | `new DuplicateEventIdError({ identity, eventId })` |
+| `new AggregateTrackingError(aggregateId, operation, reason, registeredIntent, { appendOnly })` | `new AggregateTrackingError({ identity, operation, reason, registeredIntent, appendOnly })` |
 | `error.aggregateType`, `error.aggregateId` | `error.identity.aggregateType`, `error.identity.aggregateId` |
 | `error.id` on `AggregateNotFoundError` | `error.identity.aggregateId` |
 
-The other errors change the same way as `ConcurrencyConflictError`. An
-`AggregateIdentity` value passes as it is, for example
-`new DuplicateAggregateError({ identity: stream })`. The log object of a
-serialized error carries the nested `identity`.
+The other errors change the same way. An `AggregateIdentity` value passes
+as it is, for example `new DuplicateAggregateError({ identity: stream })`
+or `new AggregateDeletedError({ identity: order.aggregateIdentity })`. The
+log object of a serialized error carries the nested `identity`.
 
 ### Changed (breaking): AggregateAddress is AggregateIdentity
 
@@ -373,7 +421,7 @@ Every adapter wrote those branches again, and a wrong branch stays silent until
 two writers meet.
 
 `versionedFlush` builds the flush from the store statements and owns the
-branches. The consumer supplies `aggregateType`, `insert`, `isDuplicate`, and,
+branches. The consumer supplies `insert`, `isDuplicate`, and,
 for a definition that updates or removes, `update`, `remove`, and
 `currentVersion`. A definition with `physicalRemoval: true` supplies `remove`.
 A definition with `appendOnly: true` omits `update`. The compiler requires

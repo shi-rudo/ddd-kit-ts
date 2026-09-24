@@ -336,7 +336,7 @@ describe("UnitOfWork repository definition", () => {
 		expect(mapError).toHaveBeenCalledWith(
 			driverError,
 			expect.objectContaining({
-				aggregateId: "order-1",
+				aggregateIdentity: { aggregateType: "Order", aggregateId: "order-1" },
 				intent: "add",
 			}),
 		);
@@ -359,7 +359,7 @@ describe("UnitOfWork repository definition", () => {
 			category: "WIRING",
 			cause: driverError,
 			mapperCause: mapperError,
-			aggregateId: "order-1",
+			identity: order.aggregateIdentity,
 			intent: "add",
 		});
 	});
@@ -377,7 +377,7 @@ describe("UnitOfWork repository definition", () => {
 		expect(rejection).toMatchObject({
 			constructor: RepositoryErrorMappingFailedError,
 			cause: driverError,
-			aggregateId: "order-1",
+			identity: { aggregateType: "Order", aggregateId: "order-1" },
 			intent: "add",
 		});
 		expect(

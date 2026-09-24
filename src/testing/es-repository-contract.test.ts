@@ -459,14 +459,14 @@ function flushEsOrder(
 	write: AggregatePersistenceWrite<ContractEsOrder, number | undefined>,
 ): void {
 	const expectedVersion = write.expectedVersion ?? 0;
-	const key = streamMapKey(orderStream(write.aggregateId));
+	const key = streamMapKey(orderStream(write.aggregateIdentity.aggregateId));
 	const stream = db.streams.get(key) ?? [];
 	if (stream.length !== expectedVersion) {
 		throw new ConcurrencyConflictError({
 			reason: "stale_version",
 			identity: {
 				aggregateType: "ContractEsOrder",
-				aggregateId: write.aggregateId,
+				aggregateId: write.aggregateIdentity.aggregateId,
 			},
 			expectedVersion,
 			actualVersion: stream.length,
@@ -539,7 +539,9 @@ describe("event-sourced repository contract test suite (in-memory reference adap
 		await expectMutantFails(
 			{
 				flush: (db, transaction, write) => {
-					const key = streamMapKey(orderStream(write.aggregateId));
+					const key = streamMapKey(
+						orderStream(write.aggregateIdentity.aggregateId),
+					);
 					const stream = db.streams.get(key) ?? [];
 					transaction.mutated = true;
 					db.streams.set(key, [

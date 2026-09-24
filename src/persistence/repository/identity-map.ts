@@ -1,6 +1,10 @@
+import type { AggregateIdentity } from "../../domain/aggregate/aggregate-identity";
 import { pendingEventLifecycleReadViewFor } from "../../domain/aggregate/pending-event-lifecycle";
 import type { Id } from "../../domain/identity/id";
-import { AggregateDeletedError } from "../../errors/kit-errors";
+import {
+	AggregateDeletedError,
+	describeAggregateIdentity,
+} from "../../errors/kit-errors";
 
 /**
  * A class reference used as the type key of the identity map. Keying
@@ -103,7 +107,8 @@ export class IdentityMap {
 	}
 
 	/**
-	 * Registers the hydrated instance for type+id.
+	 * Registers the hydrated instance under its class and the id of its
+	 * `aggregateIdentity`.
 	 *
 	 * - Re-registering the SAME instance is a no-op (idempotent).
 	 * - Registering a DIFFERENT instance for an occupied type+id throws:
@@ -115,13 +120,15 @@ export class IdentityMap {
 	 *   work throws `AggregateDeletedError`: deletion is final within
 	 *   the operation.
 	 */
-	public set<TAgg>(
+	public set<TAgg extends { readonly aggregateIdentity: AggregateIdentity }>(
 		type: AggregateClass<TAgg>,
-		id: Id<string>,
 		aggregate: TAgg,
 	): void {
+		const id = aggregate.aggregateIdentity.aggregateId;
 		if (this._deleted.get(type)?.has(id)) {
-			throw new AggregateDeletedError(String(id));
+			throw new AggregateDeletedError({
+				identity: aggregate.aggregateIdentity,
+			});
 		}
 		let store = this._stores.get(type);
 		if (store === undefined) {
@@ -131,10 +138,11 @@ export class IdentityMap {
 		const existing = store.get(id);
 		if (existing !== undefined && existing !== aggregate) {
 			throw new Error(
-				`IdentityMap: a different instance is already registered for ` +
-					`${type.name}(${String(id)}). Check get() before hydrating - ` +
-					`two live instances of one aggregate break the one-instance-per-` +
-					`unit-of-work contract that exactly-once event harvest relies on.`,
+				"IdentityMap: a different instance is already registered for " +
+					`${describeAggregateIdentity(aggregate.aggregateIdentity)}. Check get() ` +
+					"before hydrating: two live instances of one aggregate break the " +
+					"one-instance-per-unit-of-work contract that exactly-once event " +
+					"harvest relies on.",
 			);
 		}
 		store.set(id, aggregate);

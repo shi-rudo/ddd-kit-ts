@@ -25,6 +25,7 @@ import {
 } from "../event/domain-event";
 import type { Id } from "../identity/id";
 import { type Aggregate, toVersion, type Version } from "./aggregate";
+import type { AggregateIdentity } from "./aggregate-identity";
 import { registerPendingEventLifecycleCapability } from "./pending-event-lifecycle";
 import {
 	type PendingEventStampFactory,
@@ -99,6 +100,27 @@ export abstract class BaseAggregate<
 	 */
 	protected abstract readonly aggregateType: string;
 
+	// A private field, because Object.freeze on the aggregate does not block
+	// it. Only a complete identity is kept: a subclass field initializer can
+	// read the getter before the subclass sets aggregateType.
+	#aggregateIdentity: AggregateIdentity<TId> | undefined;
+
+	/**
+	 * The full identity of the aggregate: its declared `aggregateType` and
+	 * its `id`, as one frozen value. The id alone is unique only within the
+	 * type, so this value names the aggregate unambiguously.
+	 */
+	public get aggregateIdentity(): AggregateIdentity<TId> {
+		if (this.#aggregateIdentity !== undefined) return this.#aggregateIdentity;
+		const identity = Object.freeze({
+			aggregateType: this.aggregateType,
+			aggregateId: this.id,
+		});
+		if (identity.aggregateType !== undefined)
+			this.#aggregateIdentity = identity;
+		return identity;
+	}
+
 	private _version: Version = 0 as Version;
 
 	/**
@@ -141,7 +163,6 @@ export abstract class BaseAggregate<
 			},
 			persistedVersion: () => this._persistedVersion,
 			pendingEventCount: () => this._pendingEvents.length,
-			aggregateType: () => this.aggregateType,
 		});
 		registerPendingEventRecordingCapability(this, {
 			record: (createStamp) => this.recordPendingDecisions(createStamp),
@@ -182,7 +203,9 @@ export abstract class BaseAggregate<
 			this._pendingEvents !== stamped ||
 			this._pendingEvents.length !== stampedCount
 		) {
-			throw new ReentrantEventRecordingError(String(this.id));
+			throw new ReentrantEventRecordingError({
+				identity: this.aggregateIdentity,
+			});
 		}
 		// One identity per decision: a reused stamp would mint two facts
 		// sharing one eventId, and idempotent consumers keyed on it would
@@ -191,7 +214,10 @@ export abstract class BaseAggregate<
 		for (const event of recorded) {
 			const eventId = (event as AnyDomainEvent).eventId;
 			if (seenEventIds.has(eventId)) {
-				throw new DuplicateEventIdError(String(this.id), eventId);
+				throw new DuplicateEventIdError({
+					identity: this.aggregateIdentity,
+					eventId,
+				});
 			}
 			seenEventIds.add(eventId);
 		}
@@ -232,11 +258,11 @@ export abstract class BaseAggregate<
 			events.length > this._pendingEvents.length ||
 			events.some((event, index) => event !== this._pendingEvents[index])
 		) {
-			throw new PendingEventBatchMismatchError(
-				String(this.id),
-				events.length,
-				this._pendingEvents.length,
-			);
+			throw new PendingEventBatchMismatchError({
+				identity: this.aggregateIdentity,
+				batchLength: events.length,
+				pendingLength: this._pendingEvents.length,
+			});
 		}
 		this._pendingEvents = this._pendingEvents.slice(events.length);
 	}
@@ -312,7 +338,10 @@ export abstract class BaseAggregate<
 	 * ```
 	 */
 	protected markReconstituted(version: Version): void {
-		assertReplayTargetHasNoPendingEvents(this.id, this._pendingEvents.length);
+		assertReplayTargetHasNoPendingEvents(
+			this.aggregateIdentity,
+			this._pendingEvents.length,
+		);
 		const restored = toVersion(version);
 		if (restored < this._version) {
 			throw new InvalidVersionError(
@@ -366,7 +395,10 @@ export abstract class BaseAggregate<
 		for (const event of batch) {
 			if (!isRecordedDomainEvent(event)) continue;
 			if (pendingIds.has(event.eventId)) {
-				throw new DuplicateEventIdError(String(this.id), event.eventId);
+				throw new DuplicateEventIdError({
+					identity: this.aggregateIdentity,
+					eventId: event.eventId,
+				});
 			}
 			pendingIds.add(event.eventId);
 		}
@@ -384,10 +416,7 @@ export abstract class BaseAggregate<
 		const pending = this._pendingEvents.length;
 		if (pending + added <= limit) return;
 		throw new PendingEventLimitExceededError({
-			identity: {
-				aggregateType: this.aggregateType,
-				aggregateId: String(this.id),
-			},
+			identity: this.aggregateIdentity,
 			limit,
 			pending,
 			added,
@@ -525,15 +554,16 @@ export abstract class BaseAggregate<
  * the public API.
  */
 export function assertReplayTargetHasNoPendingEvents(
-	id: unknown,
+	identity: AggregateIdentity,
 	pending: number,
 ): void {
 	if (pending > 0) {
-		throw new UnreplayableAggregateError(
-			String(id),
-			`it carries ${pending} unflushed pending event(s) that are not ` +
+		throw new UnreplayableAggregateError({
+			identity,
+			reason:
+				`it carries ${pending} unflushed pending event(s) that are not ` +
 				"part of the persisted stream; discard this dirty instance and " +
 				"reconstitute a fresh aggregate before restoring persisted history",
-		);
+		});
 	}
 }

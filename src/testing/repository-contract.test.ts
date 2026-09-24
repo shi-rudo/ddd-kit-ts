@@ -466,33 +466,44 @@ class UniqueViolation extends Error {
  */
 function flushOrder(db: InMemoryDb): OrderFlush {
 	return versionedFlush({
-		aggregateType: "ContractOrder",
 		insert: (transaction: InMemoryTransaction, write) => {
-			if (db.rows.has(write.aggregateId)) {
-				throw new UniqueViolation(write.aggregateId);
+			if (db.rows.has(write.aggregateIdentity.aggregateId)) {
+				throw new UniqueViolation(write.aggregateIdentity.aggregateId);
 			}
 			const inserted = write.changes.value;
 			if (!inserted) throw new Error("add produced an empty change set");
 			transaction.mutated = true;
-			db.rows.set(write.aggregateId, structuredClone(inserted));
+			db.rows.set(
+				write.aggregateIdentity.aggregateId,
+				structuredClone(inserted),
+			);
 		},
 		isDuplicate: (error) => error instanceof UniqueViolation,
 		update: (transaction, write) => {
-			if (db.rows.get(write.aggregateId)?.version !== write.expectedVersion) {
+			if (
+				db.rows.get(write.aggregateIdentity.aggregateId)?.version !==
+				write.expectedVersion
+			) {
 				return 0;
 			}
 			transaction.mutated = true;
 			if (!write.changes.empty && write.changes.value) {
-				db.rows.set(write.aggregateId, structuredClone(write.changes.value));
+				db.rows.set(
+					write.aggregateIdentity.aggregateId,
+					structuredClone(write.changes.value),
+				);
 			}
 			return 1;
 		},
 		remove: (transaction, write) => {
-			if (db.rows.get(write.aggregateId)?.version !== write.expectedVersion) {
+			if (
+				db.rows.get(write.aggregateIdentity.aggregateId)?.version !==
+				write.expectedVersion
+			) {
 				return 0;
 			}
 			transaction.mutated = true;
-			db.rows.delete(write.aggregateId);
+			db.rows.delete(write.aggregateIdentity.aggregateId);
 			return 1;
 		},
 		currentVersion: (_transaction, id) => db.rows.get(id)?.version,
@@ -589,7 +600,7 @@ describe("repository contract test suite (in-memory reference adapter)", () => {
 		const change = write.changes.value;
 		if (!change) return;
 		transaction.mutated = true;
-		db.rows.set(write.aggregateId, structuredClone(change));
+		db.rows.set(write.aggregateIdentity.aggregateId, structuredClone(change));
 	};
 
 	it("the suite EXPOSES a broken adapter: a repository without the version predicate fails the mandatory test", async () => {
@@ -609,7 +620,7 @@ describe("repository contract test suite (in-memory reference adapter)", () => {
 						return reference(transaction, write);
 					}
 					transaction.mutated = true;
-					db.rows.delete(write.aggregateId);
+					db.rows.delete(write.aggregateIdentity.aggregateId);
 				};
 			},
 			"stale remove conflicts",

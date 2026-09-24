@@ -327,6 +327,10 @@ async function expectTrackingFailure(
 		category: "WIRING",
 		retryable: false,
 		reason,
+		identity: {
+			aggregateType: expect.any(String),
+			aggregateId: expect.any(String),
+		},
 	});
 }
 
@@ -427,7 +431,7 @@ describe("UnitOfWork", () => {
 			expect(writes).toHaveLength(2);
 			expect(writes[0]).toMatchObject({
 				intent: "update",
-				aggregateId: "state",
+				aggregateIdentity: { aggregateId: "state" },
 				expectedVersion: 1,
 				version: 2,
 				changes: { value: 2, empty: false },
@@ -435,7 +439,7 @@ describe("UnitOfWork", () => {
 			});
 			expect(writes[1]).toMatchObject({
 				intent: "update",
-				aggregateId: "event",
+				aggregateIdentity: { aggregateId: "event" },
 				expectedVersion: 1,
 				version: 2,
 				changes: { value: undefined, empty: true },
@@ -445,12 +449,16 @@ describe("UnitOfWork", () => {
 			expect(Object.isFrozen(writes[0]?.events)).toBe(true);
 			expect(outbox.added).toEqual([[stamped(event, 2)]]);
 
-			await expect(
-				uow.run(async ({ repositories }) => {
+			const unenrolled = await uow
+				.run(async ({ repositories }) => {
 					repositories.projected.load(unregisteredState);
 					unregisteredState.changePersistenceOnly(2);
-				}),
-			).rejects.toBeInstanceOf(UnenrolledChangesError);
+				})
+				.catch((error: unknown) => error);
+			expect(unenrolled).toBeInstanceOf(UnenrolledChangesError);
+			expect(unenrolled).toMatchObject({
+				identity: unregisteredState.aggregateIdentity,
+			});
 		});
 
 		it("flushes writes in registration order rather than load order", async () => {
@@ -467,7 +475,7 @@ describe("UnitOfWork", () => {
 						create: (_tx: undefined, tracking) =>
 							new FakeOrderRepository(undefined, tracking),
 						flush: async (_tx: undefined, write) => {
-							flushed.push(write.aggregateId);
+							flushed.push(write.aggregateIdentity.aggregateId);
 						},
 					}),
 				},
@@ -818,24 +826,35 @@ describe("UnitOfWork", () => {
 		});
 
 		it("a failed add leaves no phantom in the identity map", async () => {
+			const rejected = createMockAggregate("o-1");
+			const captureFailure = new Error("capture failed");
 			let tracking!: RepositoryTracking<MockAggregate>;
-			const { uow } = createUow({
-				onTracking: (captured) => {
-					tracking = captured;
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: createMockOutbox(),
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: MockAggregate,
+						// The capture runs after the identity map registered the instance.
+						persistence: {
+							...versionPersistenceModel<MockAggregate>(),
+							capture: (order) => {
+								if (order === rejected) throw captureFailure;
+								return order.version;
+							},
+						},
+						physicalRemoval: true,
+						flush: async () => {},
+						create: (tx: undefined, captured) => {
+							tracking = captured;
+							return new FakeOrderRepository(tx, captured);
+						},
+					}),
 				},
 			});
-			// A structural lookalike without the kit lifecycle: enrollment
-			// rejects it after the identity map already registered it.
-			const impostor = {
-				id: "o-1",
-				version: 1,
-				pendingEvents: [],
-			} as unknown as MockAggregate;
 
 			await uow.run(async ({ repositories }) => {
-				expect(() => repositories.orders.add(impostor)).toThrow(
-					UnmanagedInstanceError,
-				);
+				expect(() => repositories.orders.add(rejected)).toThrow(captureFailure);
 				// Rolled back: findById must not serve the failed instance.
 				expect(
 					tracking.identityMap.get(MockAggregate, "o-1" as TestId),
@@ -845,6 +864,33 @@ describe("UnitOfWork", () => {
 				return undefined;
 			});
 		});
+
+		it.each(["trackLoaded", "update", "remove"] as const)(
+			"%s rejects an instance the kit does not manage before it tracks it",
+			async (operation) => {
+				let tracking!: RepositoryTracking<MockAggregate>;
+				const { uow } = createUow({
+					onTracking: (captured) => {
+						tracking = captured;
+					},
+				});
+				const impostor = {
+					id: "o-1",
+					version: 1,
+					pendingEvents: [],
+				} as unknown as MockAggregate;
+
+				await uow.run(async ({ repositories }) => {
+					expect(() => repositories.orders[operation](impostor)).toThrow(
+						UnmanagedInstanceError,
+					);
+					expect(
+						tracking.identityMap.get(MockAggregate, "o-1" as TestId),
+					).toBeUndefined();
+					return undefined;
+				});
+			},
+		);
 
 		it("hands adapters a frozen read-only identity-map view", async () => {
 			let tracking!: RepositoryTracking<MockAggregate>;
@@ -1674,14 +1720,16 @@ describe("UnitOfWork", () => {
 			const first = createMockAggregate("o-1");
 			const second = createMockAggregate("o-1");
 
-			await expect(
-				uow.run(async ({ repositories }) => {
+			const deleted = await uow
+				.run(async ({ repositories }) => {
 					repositories.orders.trackLoaded(first);
 					repositories.orders.remove(first);
 					repositories.orders.trackLoaded(second);
 					return undefined;
-				}),
-			).rejects.toBeInstanceOf(AggregateDeletedError);
+				})
+				.catch((error: unknown) => error);
+			expect(deleted).toBeInstanceOf(AggregateDeletedError);
+			expect(deleted).toMatchObject({ identity: second.aggregateIdentity });
 		});
 
 		it("saving an aggregate after deleting it in the same unit of work throws AggregateDeletedError", async () => {

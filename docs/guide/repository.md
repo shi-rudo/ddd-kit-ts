@@ -286,11 +286,10 @@ const orders = defineRepository<ForStoringOrders>()({
   create: (tx: DrizzleTx, tracking: RepositoryTracking<Order>) =>
     new DrizzleOrderReadAdapter(tx, tracking),
   flush: versionedFlush({
-    aggregateType: "Order",
     insert: async (tx: DrizzleTx, write) => {
       const row = requireOrderRow(write.changes);
       await tx.insert(orderTable).values({
-        id: write.aggregateId,
+        id: write.aggregateIdentity.aggregateId,
         state: row.state,
         version: write.version,
       });
@@ -301,7 +300,7 @@ const orders = defineRepository<ForStoringOrders>()({
         .update(orderTable)
         .set({ ...write.changes.value, version: write.version })
         .where(and(
-          eq(orderTable.id, write.aggregateId),
+          eq(orderTable.id, write.aggregateIdentity.aggregateId),
           eq(orderTable.version, write.expectedVersion),
         ));
       return result.rowsAffected;
@@ -310,7 +309,7 @@ const orders = defineRepository<ForStoringOrders>()({
       const result = await tx
         .delete(orderTable)
         .where(and(
-          eq(orderTable.id, write.aggregateId),
+          eq(orderTable.id, write.aggregateIdentity.aggregateId),
           eq(orderTable.version, write.expectedVersion),
         ));
       return result.rowsAffected;
@@ -319,7 +318,7 @@ const orders = defineRepository<ForStoringOrders>()({
   }),
   mapError: (error, write) => {
     if (error instanceof InfrastructureError) return error;
-    return new OrderStoreUnavailableError(write.aggregateId, error);
+    return new OrderStoreUnavailableError(write.aggregateIdentity, error);
   },
 });
 ```
@@ -363,13 +362,12 @@ const ledgerEntries = defineRepository<ForAppendingLedgerEntries>()({
   appendOnly: true,
   create: (_tx: DrizzleTx) => ({}),
   flush: versionedFlush({
-    aggregateType: "LedgerEntry",
     insert: (tx: DrizzleTx, write) => insertLedgerEntry(tx, write),
     isDuplicate: isUniqueViolation,
   }),
   mapError: (error, write) => {
     if (error instanceof InfrastructureError) return error;
-    return new LedgerStoreUnavailableError(write.aggregateId, error);
+    return new LedgerStoreUnavailableError(write.aggregateIdentity, error);
   },
 });
 ```
@@ -548,7 +546,7 @@ flush: async (tx: DrizzleTx, write) => {
     } catch (error) {
       if (!isUniqueViolation(error)) throw error;
       throw new DuplicateAggregateError({
-        identity: { aggregateType: "Order", aggregateId: write.aggregateId },
+        identity: write.aggregateIdentity,
         cause: error,
       });
     }
@@ -566,9 +564,9 @@ flush: async (tx: DrizzleTx, write) => {
   if (matchedRows > 0) return;
 
   throw new ConcurrencyConflictError({
-    identity: { aggregateType: "Order", aggregateId: write.aggregateId },
+    identity: write.aggregateIdentity,
     expectedVersion,
-    ...(await orderConflictReason(tx, write.aggregateId, expectedVersion)),
+    ...(await orderConflictReason(tx, write.aggregateIdentity.aggregateId, expectedVersion)),
   });
 },
 ```
@@ -631,7 +629,7 @@ const eventSourcedOrders = defineRepository<ForAppendingOrderEvents>()({
     new EventSourcedOrderReadAdapter(tx, tracking),
   flush: async (tx: EventStoreTx, write) => {
     await tx.eventStore.append(
-      { aggregateType: "Order", aggregateId: write.aggregateId },
+      write.aggregateIdentity,
       write.events,
       { expectedVersion: write.expectedVersion ?? 0 },
     );

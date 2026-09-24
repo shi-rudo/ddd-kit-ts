@@ -23,6 +23,7 @@ export function unstampedAggregate<
 ): Aggregate<TId, TEvent> {
 	const instance = {
 		id,
+		aggregateIdentity: Object.freeze({ aggregateType, aggregateId: id }),
 		version: 1 as Version,
 		pendingEvents: events,
 	};
@@ -31,7 +32,6 @@ export function unstampedAggregate<
 		discardPendingEvents: () => {},
 		persistedVersion: () => undefined,
 		pendingEventCount: () => events.length,
-		aggregateType: () => aggregateType,
 	});
 	return instance;
 }

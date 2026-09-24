@@ -39,7 +39,7 @@ function writeFor(
 ): AggregatePersistenceWrite<Order, OrderRow | undefined> {
 	return Object.freeze({
 		intent,
-		aggregateId: orderId,
+		aggregateIdentity: { aggregateType: "Order", aggregateId: orderId },
 		expectedVersion,
 		version: ((expectedVersion ?? -1) + 1) as Version,
 		changes: { value: { name: "renamed", version: 1 }, empty: false },
@@ -69,7 +69,6 @@ function recordingStatements(
 		Order,
 		OrderRow | undefined
 	> = {
-		aggregateType: "Order",
 		insert: (tx, write) => {
 			calls.push(`insert ${tx.name} ${write.intent}`);
 			answers.insert?.();
@@ -428,7 +427,6 @@ describe("versionedFlush", () => {
 	it("accepts statements with insert only, as an append-only definition supplies them", async () => {
 		const calls: string[] = [];
 		const flush = versionedFlush<Transaction, Order, OrderRow | undefined>({
-			aggregateType: "Order",
 			insert: () => {
 				calls.push("insert");
 			},
