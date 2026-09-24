@@ -826,24 +826,35 @@ describe("UnitOfWork", () => {
 		});
 
 		it("a failed add leaves no phantom in the identity map", async () => {
+			const rejected = createMockAggregate("o-1");
+			const captureFailure = new Error("capture failed");
 			let tracking!: RepositoryTracking<MockAggregate>;
-			const { uow } = createUow({
-				onTracking: (captured) => {
-					tracking = captured;
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: createMockOutbox(),
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: MockAggregate,
+						// The capture runs after the identity map registered the instance.
+						persistence: {
+							...versionPersistenceModel<MockAggregate>(),
+							capture: (order) => {
+								if (order === rejected) throw captureFailure;
+								return order.version;
+							},
+						},
+						physicalRemoval: true,
+						flush: async () => {},
+						create: (tx: undefined, captured) => {
+							tracking = captured;
+							return new FakeOrderRepository(tx, captured);
+						},
+					}),
 				},
 			});
-			// A structural lookalike without the kit lifecycle: enrollment
-			// rejects it after the identity map already registered it.
-			const impostor = {
-				id: "o-1",
-				version: 1,
-				pendingEvents: [],
-			} as unknown as MockAggregate;
 
 			await uow.run(async ({ repositories }) => {
-				expect(() => repositories.orders.add(impostor)).toThrow(
-					UnmanagedInstanceError,
-				);
+				expect(() => repositories.orders.add(rejected)).toThrow(captureFailure);
 				// Rolled back: findById must not serve the failed instance.
 				expect(
 					tracking.identityMap.get(MockAggregate, "o-1" as TestId),
@@ -853,6 +864,33 @@ describe("UnitOfWork", () => {
 				return undefined;
 			});
 		});
+
+		it.each(["trackLoaded", "update", "remove"] as const)(
+			"%s rejects an instance the kit does not manage before it tracks it",
+			async (operation) => {
+				let tracking!: RepositoryTracking<MockAggregate>;
+				const { uow } = createUow({
+					onTracking: (captured) => {
+						tracking = captured;
+					},
+				});
+				const impostor = {
+					id: "o-1",
+					version: 1,
+					pendingEvents: [],
+				} as unknown as MockAggregate;
+
+				await uow.run(async ({ repositories }) => {
+					expect(() => repositories.orders[operation](impostor)).toThrow(
+						UnmanagedInstanceError,
+					);
+					expect(
+						tracking.identityMap.get(MockAggregate, "o-1" as TestId),
+					).toBeUndefined();
+					return undefined;
+				});
+			},
+		);
 
 		it("hands adapters a frozen read-only identity-map view", async () => {
 			let tracking!: RepositoryTracking<MockAggregate>;
