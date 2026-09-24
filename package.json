@@ -102,7 +102,7 @@
 		"url": "https://github.com/shi-rudo/ddd-kit-ts/issues"
 	},
 	"peerDependencies": {
-		"@shirudo/base-error": "^8.0.0",
+		"@shirudo/base-error": "^8.3.0",
 		"@shirudo/result": "^1.0.0"
 	}
 }
