@@ -47,10 +47,6 @@ export interface AggregateConfig<TState = unknown>
 	readonly maxPendingEvents?: number;
 }
 
-// Outside the instance on purpose: the getter must not write to an
-// aggregate, which can be frozen, and each aggregate keeps one stable value.
-const aggregateIdentities = new WeakMap<object, AggregateIdentity>();
-
 /**
  * Shared base for both `StateStoredAggregate` (state-stored) and
  * `EventSourcedAggregate`. Carries the lifecycle machinery that's
@@ -104,20 +100,24 @@ export abstract class BaseAggregate<
 	 */
 	protected abstract readonly aggregateType: string;
 
+	// A private field, because Object.freeze on the aggregate does not block
+	// it. Only a complete identity is kept: a subclass field initializer can
+	// read the getter before the subclass sets aggregateType.
+	#aggregateIdentity: AggregateIdentity<TId> | undefined;
+
 	/**
 	 * The full identity of the aggregate: its declared `aggregateType` and
 	 * its `id`, as one frozen value. The id alone is unique only within the
-	 * type, so this value names the aggregate wherever it leaves the model:
-	 * in store addresses, commit envelopes, and errors.
+	 * type, so this value names the aggregate unambiguously.
 	 */
 	public get aggregateIdentity(): AggregateIdentity<TId> {
-		const known = aggregateIdentities.get(this);
-		if (known !== undefined) return known as AggregateIdentity<TId>;
+		if (this.#aggregateIdentity !== undefined) return this.#aggregateIdentity;
 		const identity = Object.freeze({
 			aggregateType: this.aggregateType,
 			aggregateId: this.id,
 		});
-		aggregateIdentities.set(this, identity);
+		if (identity.aggregateType !== undefined)
+			this.#aggregateIdentity = identity;
 		return identity;
 	}
 

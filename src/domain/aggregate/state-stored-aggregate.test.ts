@@ -1571,3 +1571,23 @@ describe("aggregate identity of a frozen aggregate", () => {
 		});
 	});
 });
+
+describe("aggregate identity read before the subclass declares its type", () => {
+	class EarlyReader extends StateStoredAggregate<TestState, TestId> {
+		readonly identityDuringConstruction = this.aggregateIdentity;
+		protected readonly aggregateType = "EarlyReader";
+
+		constructor(id: TestId) {
+			super(id, { value: 0, status: "inactive" });
+		}
+	}
+
+	it("returns the complete identity once construction finished", () => {
+		const aggregate = new EarlyReader("test-1" as TestId);
+
+		expect(aggregate.aggregateIdentity).toStrictEqual({
+			aggregateType: "EarlyReader",
+			aggregateId: "test-1",
+		});
+	});
+});
