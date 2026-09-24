@@ -295,6 +295,7 @@ function versionedWriter<
 		);
 		throw new ConcurrencyConflictError({
 			identity: write.aggregateIdentity,
+			intent,
 			expectedVersion: write.expectedVersion,
 			cause: stored.read ? undefined : stored.readFailure,
 			...storedVersionOf(stored, write.expectedVersion),

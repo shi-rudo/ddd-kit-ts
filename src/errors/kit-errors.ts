@@ -1834,6 +1834,11 @@ export type ConcurrencyConflictErrorOptions = {
 		readonly aggregateType: string;
 		readonly aggregateId: string;
 	};
+	/**
+	 * The write that failed. Absent when the layer that raises the conflict
+	 * does not know the write, for example an event store append.
+	 */
+	readonly intent?: "update" | "remove";
 	readonly expectedVersion: number;
 	/** Optional driver-level error to preserve in the cause chain. */
 	readonly cause?: unknown;
@@ -1871,6 +1876,8 @@ export type ConcurrencyConflictErrorOptions = {
  */
 export class ConcurrencyConflictError extends InfrastructureError<"CONCURRENCY_CONFLICT"> {
 	readonly identity: ConcurrencyConflictErrorOptions["identity"];
+	/** The write that failed, or `null` when the raising layer does not know it. */
+	readonly intent: "update" | "remove" | null;
 	readonly expectedVersion: number;
 	/** The stored version, or `null` when none exists to name. */
 	readonly actualVersion: number | null;
@@ -1889,6 +1896,7 @@ export class ConcurrencyConflictError extends InfrastructureError<"CONCURRENCY_C
 			retryable: options.reason !== "version_unchanged",
 		});
 		this.identity = detachAggregateIdentity(options.identity);
+		this.intent = options.intent ?? null;
 		this.expectedVersion = options.expectedVersion;
 		this.actualVersion = options.actualVersion ?? null;
 		this.reason = options.reason;
@@ -1898,7 +1906,11 @@ export class ConcurrencyConflictError extends InfrastructureError<"CONCURRENCY_C
 function concurrencyConflictMessage(
 	options: ConcurrencyConflictErrorOptions,
 ): string {
-	const site = `${describeAggregateIdentity(options.identity)}`;
+	const aggregate = describeAggregateIdentity(options.identity);
+	const site =
+		options.intent === undefined
+			? aggregate
+			: `${options.intent} of ${aggregate}`;
 	switch (options.reason) {
 		case "stale_version":
 			return (

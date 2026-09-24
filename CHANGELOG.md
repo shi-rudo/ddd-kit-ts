@@ -209,6 +209,9 @@ immutable. Run one kit version per process during a cutover.
   `MatchedRows` type the statements. A defect in a statement throws
   `InvalidFlushStatementError`, a wiring error that reaches the caller
   unchanged.
+- `ConcurrencyConflictError` names the write that failed in `intent`, `update`
+  or `remove`. A conflict from an event store append has `intent: null`,
+  because the store does not know the write.
 - `defineRepository` accepts an append-only port with `appendOnly: true`,
   for a fact that the domain never changes after `add`.
 - A violated port constraint or wiring constraint is one compiler error that

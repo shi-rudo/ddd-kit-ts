@@ -158,6 +158,7 @@ describe("versionedFlush", () => {
 		expect(rejection).toMatchObject({
 			reason: "stale_version",
 			identity: { aggregateType: "Order", aggregateId: orderId },
+			intent: "update",
 			expectedVersion: 3,
 			actualVersion: 5,
 			retryable: true,
@@ -212,7 +213,11 @@ describe("versionedFlush", () => {
 		).catch((error: unknown) => error);
 
 		expect(rejection).toBeInstanceOf(ConcurrencyConflictError);
-		expect(rejection).toMatchObject({ expectedVersion: 3, actualVersion: 4 });
+		expect(rejection).toMatchObject({
+			intent: "remove",
+			expectedVersion: 3,
+			actualVersion: 4,
+		});
 	});
 
 	it("passes an update error through untouched", async () => {

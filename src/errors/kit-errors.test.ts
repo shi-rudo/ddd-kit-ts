@@ -425,6 +425,32 @@ describe("ConcurrencyConflictError", () => {
 		expect(e.message).toContain("stored version 5");
 	});
 
+	it("names the write that failed in its intent and its message", () => {
+		const e = new ConcurrencyConflictError({
+			reason: "aggregate_absent",
+			identity: { aggregateType: "Order", aggregateId: "o-1" },
+			intent: "remove",
+			expectedVersion: 3,
+		});
+
+		expect(e.intent).toBe("remove");
+		expect(e.message).toContain("remove of Order(o-1)");
+		expect(e.toJSON()).toMatchObject({ intent: "remove" });
+	});
+
+	it("reports the intent as null when the layer that raised it does not know the write", () => {
+		const e = new ConcurrencyConflictError({
+			reason: "stale_version",
+			identity: { aggregateType: "Order", aggregateId: "o-1" },
+			expectedVersion: 0,
+			actualVersion: 2,
+		});
+
+		expect(e.intent).toBeNull();
+		expect(e.message).toContain("Concurrency conflict on Order(o-1):");
+		expect(e.toJSON()).toMatchObject({ intent: null });
+	});
+
 	it("marks itself retryable so isRetryable picks it up: the OCC reload-and-retry pattern", () => {
 		const e = new ConcurrencyConflictError({
 			reason: "stale_version",
