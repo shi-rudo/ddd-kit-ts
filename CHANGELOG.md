@@ -29,6 +29,15 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Changed (breaking): the peer @shirudo/base-error starts at 8.3.0
+
+The kit errors add their fields to the log object. Before 8.1.0,
+`redactAllow` in `@shirudo/base-error` does not mask fields that a subclass
+adds, so the fields of a kit error leave a log unmasked under an allow-list.
+The peer range is now `^8.3.0`, the version that the kit is tested with.
+Update `@shirudo/base-error` to 8.3.0 or later; the update is a minor
+version within the same major.
+
 ### Changed (breaking): an aggregate exposes its full identity
 
 An aggregate id is unique only within its type, so the full identity of an
