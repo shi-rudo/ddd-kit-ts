@@ -2291,6 +2291,56 @@ describe("UnitOfWork", () => {
 			});
 		});
 
+		it("a load whose baseline capture fails leaves no instance in the identity map", async () => {
+			const event = testEvent("o-1");
+			const rows = new Map([["o-1", [event]]]);
+			let captureFails = true;
+			const outbox = createMockOutbox();
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox,
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: OrderAggregate,
+						persistence: {
+							...versionPersistenceModel<OrderAggregate>(),
+							capture: (order: OrderAggregate) => {
+								if (captureFails) {
+									captureFails = false;
+									throw new Error("capture failed");
+								}
+								return order.version;
+							},
+						},
+						flush: async () => {},
+						create: (_tx: undefined, tracking) =>
+							new CachingOrderRepository(rows, tracking),
+					}),
+				},
+			});
+
+			await uow.run(async ({ repositories }) => {
+				await expect(
+					repositories.orders.findById("o-1" as TestId),
+				).rejects.toThrow("capture failed");
+				expect(
+					repositories.orders.trackedIdentities.has(
+						OrderAggregate,
+						"o-1" as TestId,
+					),
+				).toBe(false);
+
+				const order = (await repositories.orders.findById(
+					"o-1" as TestId,
+				)) as OrderAggregate;
+				order.change(event);
+				repositories.orders.update(order);
+				return undefined;
+			});
+
+			expect(outbox.added).toEqual([[stamped(event, 2)]]);
+		});
+
 		it("tracking.identityMap access after close throws TransactionClosedError", async () => {
 			const { uow } = createCachingUow(new Map());
 			let repository!: Pick<CachingOrderRepository, "trackedIdentities">;

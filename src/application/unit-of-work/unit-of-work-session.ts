@@ -155,9 +155,10 @@ export class Session<Evt extends AnyDomainEvent> {
 		if (tracked !== undefined && tracked !== aggregate) {
 			return this.trackLoaded(tracked, definition);
 		}
-		// Ownership is checked BEFORE identity-map registration: a rejected
-		// instance must not stay registered under the second definition's
-		// class key with no tracking entry behind it.
+		// Ownership and the baseline capture both come BEFORE identity-map
+		// registration: an instance that a check or a capture rejects must
+		// not stay in the map with no tracking entry behind it, because
+		// findById would serve it.
 		const existing = this._trackingByAggregate.get(aggregate);
 		if (existing && existing.definition !== definition) {
 			throw new AggregateTrackingError({
@@ -167,15 +168,22 @@ export class Session<Evt extends AnyDomainEvent> {
 				registeredIntent: existing.registration?.intent,
 			});
 		}
-		this._identityMap.set(definition.aggregate, aggregate);
-		if (existing) return aggregate;
+		if (existing) {
+			this._identityMap.set(definition.aggregate, aggregate);
+			return aggregate;
+		}
 
+		const baseline = capturePersistenceBaseline(
+			definition.persistence,
+			aggregate,
+		);
+		this._identityMap.set(definition.aggregate, aggregate);
 		const entry: TrackedAggregate<Evt> = {
 			aggregate,
 			lifecycle: "loaded",
 			expectedVersion: aggregate.version,
 			definition,
-			baseline: capturePersistenceBaseline(definition.persistence, aggregate),
+			baseline,
 		};
 		this._trackingByAggregate.set(aggregate, entry);
 		this._trackedAggregates.add(entry);
