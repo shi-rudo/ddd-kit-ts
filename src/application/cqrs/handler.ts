@@ -20,7 +20,7 @@ import {
 	runBoundedExecution,
 } from "../../internal/async/execution";
 import { reportToObserver } from "../../internal/observer";
-import { assertNonNegativeFinite } from "../../internal/validate";
+import { assertTimerDelay } from "../../internal/validate";
 import type { EventCommitCandidate } from "../../messaging/committed-event";
 import type { EventBus } from "../../messaging/event-bus/ports";
 import type { OutboxWriter } from "../../messaging/outbox/ports";
@@ -545,11 +545,7 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 ): Promise<R> {
 	const postCommitTimeoutMs =
 		deps.postCommitTimeoutMs ?? DEFAULT_EXECUTION_TIMEOUT_MS;
-	assertNonNegativeFinite(
-		"withCommit",
-		"postCommitTimeoutMs",
-		postCommitTimeoutMs,
-	);
+	assertTimerDelay("withCommit", "postCommitTimeoutMs", postCommitTimeoutMs);
 
 	// Pre-flight: an already-aborted caller never opens a transaction.
 	// Throwing the signal's reason matches the web AbortSignal convention;

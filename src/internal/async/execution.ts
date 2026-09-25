@@ -1,4 +1,4 @@
-import { assertNonNegativeFinite } from "../validate";
+import { assertNonNegativeFinite, assertTimerDelay } from "../validate";
 import { abortReason } from "./abort";
 
 /** Cancellation and deadline controls for one bounded shell operation. */
@@ -65,13 +65,16 @@ export function runBoundedExecution<T>(
 	operation: (context: ExecutionContext) => Promise<T> | T,
 ): Promise<T> {
 	if (options.deadlineAt === undefined) {
-		assertNonNegativeFinite(label, "timeoutMs", options.timeoutMs);
+		assertTimerDelay(label, "timeoutMs", options.timeoutMs);
 	} else {
 		assertNonNegativeFinite(label, "deadlineAt", options.deadlineAt);
 	}
 	const startedAt = Date.now();
 	const deadlineAt = options.deadlineAt ?? startedAt + options.timeoutMs;
 	const timeoutMs = Math.max(0, deadlineAt - startedAt);
+	if (options.deadlineAt !== undefined) {
+		assertTimerDelay(label, "the time until deadlineAt", timeoutMs);
+	}
 	const timeoutError = (): DOMException =>
 		new DOMException(`${label} timed out after ${timeoutMs}ms`, "TimeoutError");
 	const controller = new AbortController();

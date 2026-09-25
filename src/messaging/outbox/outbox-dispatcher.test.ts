@@ -902,6 +902,23 @@ describe("OutboxDispatcher", () => {
 		).toThrow("storageTimeoutMs");
 	});
 
+	it("rejects a delay above the largest timer delay at construction", () => {
+		const outbox = new InMemoryOutbox<TestEvent>();
+		const sink: OutboxSink<TestEvent> = { publish: async () => {} };
+		expect(() =>
+			fastDispatcher({ outbox, sink, pollIntervalMs: 2 ** 31 }),
+		).toThrow("pollIntervalMs");
+		expect(() => fastDispatcher({ outbox, sink, maxDelayMs: 2 ** 31 })).toThrow(
+			"maxDelayMs",
+		);
+		expect(() =>
+			fastDispatcher({ outbox, sink, deliveryTimeoutMs: 2 ** 31 }),
+		).toThrow("deliveryTimeoutMs");
+		expect(() =>
+			fastDispatcher({ outbox, sink, storageTimeoutMs: 2 ** 31 }),
+		).toThrow("storageTimeoutMs");
+	});
+
 	describe("drainOnce", () => {
 		it("dispatches the whole backlog in one pass and reports drained", async () => {
 			const outbox = new InMemoryOutbox<TestEvent>();

@@ -1501,6 +1501,41 @@ describe("withCommit", () => {
 			expect(opened).toBe(false);
 		});
 
+		it("rejects a post-commit budget above the largest timer delay before opening the transaction", async () => {
+			let opened = false;
+			const scope: TransactionScope<undefined> = {
+				transactional: async () => {
+					opened = true;
+					throw new Error("must not open");
+				},
+			};
+
+			await expect(
+				withCommit(
+					{
+						outbox: createMockOutbox(),
+						scope,
+						postCommitTimeoutMs: 2 ** 31,
+					},
+					async () => ({ result: undefined, commits: [] }),
+				),
+			).rejects.toThrow(/postCommitTimeoutMs/);
+			expect(opened).toBe(false);
+		});
+
+		it("accepts the largest timer delay as a post-commit budget", async () => {
+			const result = await withCommit(
+				{
+					outbox: createMockOutbox(),
+					scope: createMockScope(),
+					postCommitTimeoutMs: 2 ** 31 - 1,
+				},
+				async () => ({ result: "committed", commits: [] }),
+			);
+
+			expect(result).toBe("committed");
+		});
+
 		it("reports an application observer failure via onPersistError with the failing aggregate", async () => {
 			const event = createDomainEvent(
 				"OrderCreated",

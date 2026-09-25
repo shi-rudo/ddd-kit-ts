@@ -346,6 +346,16 @@ describe("RetryingTransactionScope", () => {
 		).toThrow(/maxDelayMs/);
 	});
 
+	it("rejects a delay above the largest timer delay at construction", () => {
+		const inner = passthroughScope();
+		expect(
+			() => new RetryingTransactionScope(inner, { baseDelayMs: 2 ** 31 }),
+		).toThrow(/baseDelayMs/);
+		expect(
+			() => new RetryingTransactionScope(inner, { maxDelayMs: 2 ** 31 }),
+		).toThrow(/maxDelayMs/);
+	});
+
 	it("honors a custom isRetryable predicate", async () => {
 		class FlakyDriverError extends Error {}
 		const inner = flakyScope(1, () => new FlakyDriverError("deadlock 1213"));

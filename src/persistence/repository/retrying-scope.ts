@@ -7,8 +7,8 @@ import {
 import { sleepRejectingOnAbort } from "../../internal/async/sleep";
 import { reportToObserver } from "../../internal/observer";
 import {
-	assertNonNegativeFinite,
 	assertPositiveInteger,
+	assertTimerDelay,
 } from "../../internal/validate";
 import type { TransactionalOptions, TransactionScope } from "./scope";
 
@@ -123,16 +123,12 @@ export class RetryingTransactionScope<TCtx> implements TransactionScope<TCtx> {
 			"maxAttempts",
 			this.maxAttempts,
 		);
-		assertNonNegativeFinite(
+		assertTimerDelay(
 			"RetryingTransactionScope",
 			"baseDelayMs",
 			this.baseDelayMs,
 		);
-		assertNonNegativeFinite(
-			"RetryingTransactionScope",
-			"maxDelayMs",
-			this.maxDelayMs,
-		);
+		assertTimerDelay("RetryingTransactionScope", "maxDelayMs", this.maxDelayMs);
 		this.isRetryable = policy.isRetryable ?? someChainRetryable;
 		this.sleep = policy.sleep ?? defaultSleep;
 		// Wrapped like the poll loop's jitter: an injected source that throws

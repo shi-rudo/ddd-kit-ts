@@ -200,6 +200,25 @@ describe("EventBusImpl", () => {
 			);
 		});
 
+		it("rejects a publication timeout above the largest timer delay", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+
+			await expect(bus.publish([], { timeoutMs: 2 ** 31 })).rejects.toThrow(
+				/timeoutMs/,
+			);
+		});
+
+		it.each([2 ** 31, -1, Number.NaN])(
+			"once() rejects the invalid timeout %s instead of timing out at once",
+			async (timeoutMs) => {
+				const bus = new EventBusImpl<OrderEvent>();
+
+				await expect(bus.once("OrderCreated", { timeoutMs })).rejects.toThrow(
+					/timeoutMs/,
+				);
+			},
+		);
+
 		it("should call all handlers for an event type", async () => {
 			const bus = new EventBusImpl<OrderEvent>();
 			const calls: string[] = [];

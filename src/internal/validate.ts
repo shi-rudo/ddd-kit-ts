@@ -17,6 +17,26 @@ export function assertNonNegativeFinite(
 	}
 }
 
+/**
+ * The largest delay that `setTimeout` honors. A larger delay does not wait
+ * longer: the runtime fires the timer after about 1 ms.
+ */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+/** Guard for time options that a timer waits for, in milliseconds. */
+export function assertTimerDelay(
+	context: string,
+	field: string,
+	value: number,
+): void {
+	if (!Number.isFinite(value) || value < 0 || value > MAX_TIMER_DELAY_MS) {
+		throw new RangeError(
+			`${context}: ${field} must be a finite number of milliseconds from 0 ` +
+				`to ${MAX_TIMER_DELAY_MS}, got ${value}`,
+		);
+	}
+}
+
 /** Guard for count options that must be a whole number of at least 1. */
 export function assertPositiveInteger(
 	context: string,
