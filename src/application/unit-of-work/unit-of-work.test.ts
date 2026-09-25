@@ -2798,6 +2798,83 @@ describe("UnitOfWork", () => {
 		});
 	});
 
+	describe("registration window", () => {
+		function uowWithGatedFlush() {
+			let enterFlush!: () => void;
+			const flushEntered = new Promise<void>((resolve) => {
+				enterFlush = resolve;
+			});
+			let releaseFlush!: () => void;
+			const flushReleased = new Promise<void>((resolve) => {
+				releaseFlush = resolve;
+			});
+			const flushed: string[] = [];
+			const outbox = createMockOutbox();
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox,
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						physicalRemoval: true,
+						flush: async (_tx: undefined, write) => {
+							enterFlush();
+							await flushReleased;
+							flushed.push(write.aggregateIdentity.aggregateId);
+						},
+						create: (_tx: undefined, tracking) => ({
+							trackLoaded: (loaded: MockAggregate) =>
+								tracking.trackLoaded(loaded),
+						}),
+					}),
+				},
+			});
+			return { uow, outbox, flushed, flushEntered, releaseFlush };
+		}
+
+		it.each(["add", "update", "remove"] as const)(
+			"rejects a late %s while the flush runs, and fails the run before it commits",
+			async (operation) => {
+				const { uow, outbox, flushed, flushEntered, releaseFlush } =
+					uowWithGatedFlush();
+				const late = createMockAggregate("late-1", [testEvent("late-1")]);
+				let lateCall: unknown = "not attempted";
+
+				const rejection = await uow
+					.run(async ({ repositories }) => {
+						const orders = repositories.orders;
+						if (operation !== "add") orders.trackLoaded(late);
+						orders.add(createMockAggregate("first-1", [testEvent("first-1")]));
+						void flushEntered.then(() => {
+							try {
+								orders[operation](late);
+								lateCall = "accepted";
+							} catch (error) {
+								lateCall = error;
+							}
+							releaseFlush();
+						});
+						return undefined;
+					})
+					.then(
+						() => "committed",
+						(error: unknown) => error,
+					);
+
+				expect(lateCall).toBeInstanceOf(AggregateTrackingError);
+				expect(lateCall).toMatchObject({
+					reason: "registered_during_flush",
+					operation,
+				});
+				expect(rejection).toBe(lateCall);
+				expect(flushed).toEqual(["first-1"]);
+				expect(outbox.added).toEqual([]);
+				expect(persistedVersionOf(late)).toBeUndefined();
+			},
+		);
+	});
+
 	describe("conflict attribution", () => {
 		const identity = { aggregateType: "MockAggregate", aggregateId: "o-1" };
 

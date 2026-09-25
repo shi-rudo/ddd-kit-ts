@@ -98,6 +98,13 @@ export class Session<Evt extends AnyDomainEvent> {
 	>();
 	private readonly _trackedAggregates = new Set<TrackedAggregate<Evt>>();
 	private _closed = false;
+	/**
+	 * Set when the flush starts. A write registered after that point would be
+	 * committed and harvested without its flush, so it is rejected, and the
+	 * first rejection also fails the run.
+	 */
+	private _writesSealed = false;
+	private _registrationDuringFlush: AggregateTrackingError | undefined;
 
 	constructor(private readonly commitEnrollment: CommitEnrollment<Evt>) {}
 
@@ -172,6 +179,7 @@ export class Session<Evt extends AnyDomainEvent> {
 	): void {
 		this.assertOpen("repository.add");
 		requirePendingEventLifecycleReadView(aggregate, "repository.add");
+		this.assertWritesOpen(aggregate, "add");
 		this.assertNotRemoved(aggregate, definition);
 		const existing = this._trackingByAggregate.get(aggregate);
 		if (existing && existing.definition !== definition) {
@@ -234,6 +242,7 @@ export class Session<Evt extends AnyDomainEvent> {
 	): void {
 		this.assertOpen("repository.update");
 		requirePendingEventLifecycleReadView(aggregate, "repository.update");
+		this.assertWritesOpen(aggregate, "update");
 		const entry = this.loadedEntryFor(aggregate, "update", definition);
 		this.registerWrite(entry, "update", definition);
 	}
@@ -244,6 +253,7 @@ export class Session<Evt extends AnyDomainEvent> {
 	): void {
 		this.assertOpen("repository.remove");
 		requirePendingEventLifecycleReadView(aggregate, "repository.remove");
+		this.assertWritesOpen(aggregate, "remove");
 		// Idempotent by reference, like add and update: a repeated remove of
 		// the SAME instance re-declares the same final lifecycle outcome
 		// (collection semantics; the enrollment layer already returns the
@@ -467,6 +477,9 @@ export class Session<Evt extends AnyDomainEvent> {
 	 * transaction.
 	 */
 	public assertReadyToCommit(): void {
+		if (this._registrationDuringFlush !== undefined) {
+			throw this._registrationDuringFlush;
+		}
 		for (const entry of this._trackedAggregates) {
 			if (entry.registration !== undefined) {
 				this.assertUnchangedAfterRegistration(entry);
@@ -513,6 +526,7 @@ export class Session<Evt extends AnyDomainEvent> {
 	/** Flushes every registered receipt in deterministic registration order. */
 	public async flush(transaction: unknown): Promise<void> {
 		this.assertOpen("unitOfWork.flush");
+		this._writesSealed = true;
 		for (const entry of this._registeredWrites) {
 			const registration = entry.registration;
 			if (registration === undefined) {
@@ -558,6 +572,20 @@ export class Session<Evt extends AnyDomainEvent> {
 		if (this._closed) {
 			throw new TransactionClosedError(operation);
 		}
+	}
+
+	private assertWritesOpen(
+		aggregate: Aggregate<Id<string>, Evt>,
+		operation: "add" | "update" | "remove",
+	): void {
+		if (!this._writesSealed) return;
+		const rejection = new AggregateTrackingError({
+			identity: aggregate.aggregateIdentity,
+			operation,
+			reason: "registered_during_flush",
+		});
+		this._registrationDuringFlush ??= rejection;
+		throw rejection;
 	}
 }
 /**

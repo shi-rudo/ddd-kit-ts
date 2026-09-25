@@ -666,16 +666,14 @@ export class UnitOfWork<
 						// the transaction, so the unit of work rolls back.
 						s.assertReadyToCommit();
 						await s.flush(tx);
-						// A flush may yield to the event loop. Re-check before the
-						// transaction is allowed to commit so leaked concurrent work
-						// cannot mutate an already registered aggregate mid-flush.
+						// The flush closes registration and may yield to the event
+						// loop. Re-check before the transaction may commit: leaked
+						// work that changed a registered aggregate, or that tried to
+						// register a write, fails the run here.
 						s.assertReadyToCommit();
 						workCompleted = true;
-						// Seal immediately: the aggregates snapshot below is what
-						// gets harvested. A late registration from work still in
-						// flight must throw
-						// TransactionClosedError instead of being silently
-						// accepted-but-never-harvested.
+						// The tokens below are what gets harvested; after close, any
+						// use of the session throws TransactionClosedError.
 						const commits = s.commitTokens;
 						s.close();
 						return { result, commits };

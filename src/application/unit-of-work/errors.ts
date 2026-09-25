@@ -250,7 +250,8 @@ export type AggregateTrackingReason =
 	| "loaded_as_new"
 	| "different_repository"
 	| "conflicting_intent"
-	| "mutated_after_registration";
+	| "mutated_after_registration"
+	| "registered_during_flush";
 
 /**
  * A deterministic violation of the Unit of Work's aggregate lifecycle.
@@ -324,6 +325,12 @@ function trackingReasonMessage(options: AggregateTrackingErrorOptions): string {
 				`Aggregate ${aggregate} changed after ${registeredIntent ?? "write"} ` +
 				"was registered. Make domain decisions first and call add, update, or " +
 				"remove last so persisted state and recorded events cannot diverge."
+			);
+		case "registered_during_flush":
+			return (
+				`Aggregate ${aggregate} cannot be registered for ${operation}: the ` +
+				"unit of work already flushes its writes, so this write cannot join " +
+				"the transaction. Await every repository call inside the run() callback."
 			);
 	}
 }
