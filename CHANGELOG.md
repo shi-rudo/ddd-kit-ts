@@ -41,8 +41,10 @@ immutable. Run one kit version per process during a cutover.
 - `UnitOfWork` takes repository definitions from
   `defineRepository<Port>()({ aggregate, persistence, create, flush, mapError })`.
   The port type argument is explicit, and the Unit of Work installs `add`,
-  `update`, and `remove` on the facade. A read adapter returns a loaded
-  aggregate through `tracking.trackLoaded`. `UnitOfWorkSession`,
+  `update`, and `remove` on the facade. A member of the adapter that returns
+  the adapter itself returns the facade. A read adapter returns the result of
+  `tracking.trackLoaded`: when two loads of one id overlap, the first tracked
+  instance wins. `UnitOfWorkSession`,
   `RepositoryFactories`, and the `rawTransaction` and `session` fields of the
   work context are gone. Every definition supplies `mapError`, which turns a
   flush failure into an `InfrastructureError`.
@@ -55,7 +57,9 @@ immutable. Run one kit version per process during a cutover.
 - The flush receives a sealed `AggregatePersistenceWrite` with the intent,
   `aggregateIdentity`, `expectedVersion`, `version`, the change set, and the
   exact event batch. A change to the aggregate after its registration
-  rejects the transaction.
+  rejects the transaction, also while the outbox write runs. Registration
+  closes when the flush starts: a later `add`, `update`, or `remove` fails
+  the run. `withCommit` hands the outbox a frozen array of candidates.
 - Snapshots move out of the aggregate into an adapter-owned
   `SnapshotModel`. `createSnapshot`, `restoreFromSnapshot`,
   `restoreFromSnapshotWithEvents`, the snapshot schema members, and the
@@ -221,14 +225,26 @@ immutable. Run one kit version per process during a cutover.
   observed. It sets the intent on the conflict object itself, found by its
   code in the cause chain, so a conflict that the flush wraps, or one from
   another copy of the kit, gets it too, and `mapError` receives the error
-  that the flush threw. A conflict outside a unit of work has
-  `intent: null`.
+  that the flush threw. A conflict that `mapError` returns gets the intent as
+  well. A conflict outside a unit of work has `intent: null`.
 - `defineRepository` accepts an append-only port with `appendOnly: true`,
   for a fact that the domain never changes after `add`.
+- `TransactionalOptions.onAttemptStart`. `RetryingTransactionScope` calls it
+  before each attempt, and `UnitOfWork.run` labels a failure by the attempt
+  that raised it. A retry that cannot open its transaction reaches the
+  caller unchanged. The facade of a failed attempt closes before the retry
+  waits. A repository factory that throws counts as a failed attempt, so
+  `RollbackError` keeps its error when the rollback fails too.
 - A violated port constraint or wiring constraint is one compiler error that
-  names it. The runtime checks the definition and the adapter and throws
-  `InvalidRepositoryDefinitionError`, `InvalidRepositoryAdapterError`,
-  `AggregateTrackingError`, or `RepositoryErrorMappingFailedError`.
+  names it. A port whose `add`, `update`, or `remove` returns a value, for
+  example a promise, is such a violation. The runtime checks the definition
+  and the adapter and throws `InvalidRepositoryDefinitionError`,
+  `InvalidRepositoryAdapterError`, `AggregateTrackingError`, or
+  `RepositoryErrorMappingFailedError`. `defineRepository` throws a
+  `TypeError` for a persistence model without its members and for a
+  lifecycle flag that is not a boolean. `AggregateTrackingError` has the
+  reasons `registered_during_flush` and `identity_already_tracked`, and it
+  names the operation that failed.
 - `SnapshotModel` with `defineSnapshotModel`, `captureAggregateSnapshot`, and
   `reconstituteAggregateFromSnapshot`. The `SnapshotStore` port and
   `InMemorySnapshotStore`, with an optional LRU bound and a time to live. A
@@ -276,6 +292,11 @@ immutable. Run one kit version per process during a cutover.
   reliability. `createOutboxContractTests` proves an outbox adapter.
 - `withCommit` composes every event into an `EventCommitCandidate`, and the
   outbox persists a `CommittedDomainEvent` with a gap-proof `CommitPosition`.
+  An identity whose aggregate committed events cannot be created again after
+  a removal: its new versions restart below the source head, and the outbox
+  rejects them. `InMemoryOutbox` names this cause in its error, and it still
+  dedupes a retry at the source head after the receipt of the event
+  expired.
 - `IntegrationMessage` is the JSON-safe broker contract, with
   `createIntegrationMessage`, `encodeIntegrationMessage`,
   `decodeIntegrationMessage`, and `integrationMessageToCommittedEvent`.
@@ -354,6 +375,10 @@ immutable. Run one kit version per process during a cutover.
   object, for example a generator or a `WeakRef`, by identity.
 - A throwing retry classifier in `RetryingTransactionScope` no longer
   replaces the transaction error.
+- A time option that a timer waits for throws a `RangeError` unless it is a
+  finite number from 0 to 2147483647 milliseconds. Before, a larger value
+  fired the timer after about 1 ms. `EventBus.once` checks its `timeoutMs`
+  too.
 - `toPublicErrorView` degrades to the fallback view on any throw, and it no
   longer trusts a duck-typed `publicIssues()` method.
 - `analyzeDomainMachineDefinition` honors a prepared definition. The domain

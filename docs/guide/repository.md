@@ -394,12 +394,19 @@ Property '"defineRepository: the port declares remove, so the definition must se
 ```
 
 A port without `add` fails with the same form of error. So does a port whose
-`add`, `update`, or `remove` does not accept the aggregate of the definition.
+`add`, `update`, or `remove` does not accept the aggregate of the definition,
+or returns a value such as a promise or `this`: the installed registration
+returns nothing.
 An optional `update?` or `remove?` fails as well: the port must declare the
 member as required. A port that extends `ContractRepository` from the testing
 entry inherits an optional `update`, so redeclare `update` on that port. A
 port that is a function type or a union fails the same way. Both options take
 the literal `true`; a value typed `boolean` fails the pairing.
+
+`defineRepository` also checks the definition when it runs. It throws a
+`TypeError` for a persistence model without `capture`, `changes`, or
+`isEmpty`, for a `captureEquals` that is not a function, and for an
+`appendOnly` or `physicalRemoval` that is not a boolean.
 
 `mapError` is the storage boundary's last translation step. Known failures
 such as `DuplicateAggregateError` and `ConcurrencyConflictError` pass through.
@@ -410,7 +417,8 @@ or returns a raw value, the Unit of Work raises
 That keeps ORM error types out of use cases without hiding the original cause.
 
 The mapper never sees a wiring error. A flush that raises one, for example
-`InvalidFlushStatementError`, reaches the caller unchanged. Such an error
+`InvalidFlushStatementError`, reaches the caller unchanged, also when the flush
+wraps it in another error. Such an error
 states a defect of the definition, and a mapper can only return an
 `InfrastructureError`, which would make a caller retry a write that can never
 succeed. Use `isWiringErrorLike` to recognise the family across kit copies.
@@ -740,6 +748,12 @@ The removal and its event/outbox batch commit atomically. After commit, the
 kit discards the exact pending batch because there is no saved row to observe.
 The identity map is tombstoned immediately, so the same identity cannot be
 loaded or re-registered later in that run.
+
+A later run cannot create the identity again either, once its aggregate
+committed events. The outbox keeps the head of that event source. The versions
+of a new aggregate under the same identity restart below that head, so the
+outbox rejects its events. The kit does not support a re-created identity.
+Give the new aggregate a new id.
 
 Bulk retention cleanup is a different port. Do not hydrate thousands of
 aggregates only to delete rows with no business decision. Define an

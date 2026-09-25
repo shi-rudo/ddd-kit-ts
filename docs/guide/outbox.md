@@ -103,6 +103,7 @@ logs or metrics, and let the outbox deliver the durable copy.
 ```ts
 interface TransactionalOptions {
   readonly signal?: AbortSignal;
+  readonly onAttemptStart?: () => void;
 }
 
 interface TransactionScope<TCtx> {
@@ -112,6 +113,12 @@ interface TransactionScope<TCtx> {
   ): Promise<T>;
 }
 ```
+
+A scope that can open more than one transaction for one call, for example a
+retrying scope, calls `onAttemptStart` before each attempt opens its
+transaction. `UnitOfWork.run` uses it to label a failure by the attempt that
+raised it. `RetryingTransactionScope` calls it. A scope that opens one
+transaction per call ignores it.
 
 `TCtx` is whatever your persistence layer exposes inside a transaction:
 Drizzle `tx`, Prisma `tx`, a Mongo session, or `undefined` for a fake test
@@ -178,7 +185,9 @@ interface OutboxWriter<Evt extends AnyDomainEvent> {
 ```
 
 `withCommit` calls `add()` inside the same transaction as the aggregate
-write. The candidate contains the aggregate source, current aggregate version,
+write. The candidate array is frozen: the in-process bus publishes the events
+of the same candidates, so an adapter that mutates its input fails the commit.
+The candidate contains the aggregate source, current aggregate version,
 commit sequence, and commit size. The writer owns the durable event-source
 head: it links the candidate to the preceding eventful commit and persists the
 resulting `CommittedDomainEvent`. That is the delivery and continuity
@@ -295,6 +304,11 @@ The first source-head row also needs race-safe insert-or-lock behavior. Use the
 primary key and retry the losing transaction. Do not continue two concurrent
 genesis writes from separate missing-row reads.
 
+Reject a new event whose `aggregateVersion` is below the source head. An
+aggregate that was removed and then created again under the same identity
+produces such events, because its versions restart. The kit does not support a
+re-created identity: give the new aggregate a new id.
+
 For a projection, the four fields form a gap-proof cursor: the consumer can
 reject missing sequences and commits. For general deduplication across all
 event sources, use `eventId`.
@@ -340,8 +354,9 @@ dedupes exact pending, dead-lettered, and recently dispatched re-adds by
 `eventId`, and implements dispatch tracking. A contradictory source or commit
 position rejects instead of being mistaken for a retry. Once a dispatched
 receipt is evicted, a candidate behind the current source head fails with
-`EventHarvestError` rather than rewinding the head. This is intentionally
-fail-safe, not an unbounded idempotency promise. Durable outboxes keep the
+`EventHarvestError` rather than rewinding the head. A retry of an event at the
+current source head still dedupes, because the source cursor names it. This is
+intentionally fail-safe, not an unbounded idempotency promise. Durable outboxes keep the
 event-ID receipt in storage.
 
 It is not a production outbox for a database-backed app. It is not part of

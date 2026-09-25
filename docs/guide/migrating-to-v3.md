@@ -1293,5 +1293,30 @@ A hand-written `Aggregate` adds `aggregateIdentity`; see
 `readStreamPages` and `reconstituteAggregateFromStreamPages` are new. They
 replace a load loop that pages by hand; see
 [Reads report the stream state and come in bounded pages](#reads-report-the-stream-state-and-come-in-bounded-pages).
-The internal capability registry keys changed again, so run one kit version
-per process.
+The internal capability registry keys changed again, and the repository
+definition brand key is `v3`, so run one kit version per process. A
+definition from an earlier copy fails with `InvalidRepositoryDefinitionError`.
+
+Behavior that a use case or an adapter can notice:
+
+- Registration closes when the flush starts. A repository call that the
+  callback did not await and that registers later throws
+  `AggregateTrackingError` with the reason `registered_during_flush`, and
+  the run fails. Await every repository call.
+- A read adapter returns the result of `tracking.trackLoaded`, not its
+  argument. When two loads of one id overlap, the first tracked instance
+  wins. An `add` of a second instance with a tracked identity throws
+  `AggregateTrackingError` with the reason `identity_already_tracked`, not a
+  plain `Error`.
+- A port whose `add`, `update`, or `remove` returns a value, for example a
+  promise or `this`, no longer compiles. `defineRepository` throws a
+  `TypeError` for a persistence model without `capture`, `changes`, or
+  `isEmpty`, and for a lifecycle flag that is not a boolean.
+- The outbox receives a frozen candidate array. An adapter that sorts or
+  changes the array in place fails the commit.
+- A time option above 2147483647 ms throws a `RangeError`, and an invalid
+  time option throws a `RangeError` in place of an `Error`.
+- A custom scope that retries calls `onAttemptStart` from the transactional
+  options before each attempt, so `run()` labels a failure by its attempt.
+- An identity whose aggregate committed events cannot be created again after
+  a removal. Give the new aggregate a new id.
