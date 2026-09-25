@@ -1454,6 +1454,101 @@ describe("UnitOfWork", () => {
 				expect(Object.isFrozen(repository)).toBe(true);
 			});
 		});
+
+		describe("a member that returns the adapter", () => {
+			class LockingOrderRepository {
+				readonly ownWrites: string[] = [];
+
+				lockForUpdate(): this {
+					return this;
+				}
+
+				async reloaded(): Promise<this> {
+					return this;
+				}
+
+				get current(): this {
+					return this;
+				}
+
+				add(order: MockAggregate): void {
+					this.ownWrites.push(order.id);
+				}
+			}
+
+			function uowOverLockingAdapter() {
+				const adapter = new LockingOrderRepository();
+				const flushed: string[] = [];
+				const uow = new UnitOfWork({
+					scope: createMockScope(),
+					outbox: createMockOutbox(),
+					repositories: {
+						orders: defineTestRepository({
+							aggregate: MockAggregate,
+							persistence: versionPersistenceModel<MockAggregate>(),
+							flush: async (_tx: undefined, write) => {
+								flushed.push(
+									`${write.intent} ${write.aggregateIdentity.aggregateId}`,
+								);
+							},
+							create: (_tx: undefined) => adapter,
+						}),
+					},
+				});
+				return { uow, adapter, flushed };
+			}
+
+			it("a fluent method returns the facade, so a chained add goes through the unit of work", async () => {
+				const { uow, adapter, flushed } = uowOverLockingAdapter();
+
+				await uow.run(async ({ repositories }) => {
+					const locked = repositories.orders.lockForUpdate();
+					expect(locked).toBe(repositories.orders);
+					locked.add(createMockAggregate("order-1"));
+				});
+
+				expect(adapter.ownWrites).toEqual([]);
+				expect(flushed).toEqual(["add order-1"]);
+			});
+
+			it("an async method resolves to the facade, so a chained add goes through the unit of work", async () => {
+				const { uow, adapter, flushed } = uowOverLockingAdapter();
+
+				await uow.run(async ({ repositories }) => {
+					const reloaded = await repositories.orders.reloaded();
+					expect(reloaded).toBe(repositories.orders);
+					reloaded.add(createMockAggregate("order-1"));
+				});
+
+				expect(adapter.ownWrites).toEqual([]);
+				expect(flushed).toEqual(["add order-1"]);
+			});
+
+			it("a getter returns the facade, so a chained add goes through the unit of work", async () => {
+				const { uow, adapter, flushed } = uowOverLockingAdapter();
+
+				await uow.run(async ({ repositories }) => {
+					const current = repositories.orders.current;
+					expect(current).toBe(repositories.orders);
+					current.add(createMockAggregate("order-1"));
+				});
+
+				expect(adapter.ownWrites).toEqual([]);
+				expect(flushed).toEqual(["add order-1"]);
+			});
+
+			it("a facade handed out by a fluent method is closed after the run", async () => {
+				const { uow } = uowOverLockingAdapter();
+
+				const escaped = await uow.run(async ({ repositories }) =>
+					repositories.orders.lockForUpdate(),
+				);
+
+				expect(() => escaped.add(createMockAggregate("order-1"))).toThrow(
+					TransactionClosedError,
+				);
+			});
+		});
 	});
 
 	describe("enrollment + post-commit lifecycle", () => {

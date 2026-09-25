@@ -30,7 +30,9 @@ interface RepositoryFacadeSession<Evt extends AnyDomainEvent> {
  * Builds the application-facing repository facade. Standard lifecycle writes
  * are always supplied by the Unit of Work; similarly named adapter methods are
  * never invoked. Other methods are bound to the adapter so classes with private
- * fields keep their normal receiver.
+ * fields keep their normal receiver. A member that returns the adapter itself
+ * (a fluent `this`, also through a promise) returns the facade instead, so the
+ * application never holds the raw adapter.
  */
 export function bindRepositoryWrites<TRepository, Evt extends AnyDomainEvent>(
 	adapter: TRepository,
@@ -52,10 +54,8 @@ export function bindRepositoryWrites<TRepository, Evt extends AnyDomainEvent>(
 	);
 	installRepositoryLifecycleOperations(state);
 	forwardAdapterOwnProperties(state);
-	return new Proxy(
-		state.target,
-		createRepositoryFacadeHandler(state),
-	) as TRepository;
+	state.facade = new Proxy(state.target, createRepositoryFacadeHandler(state));
+	return state.facade as TRepository;
 }
 
 const REPOSITORY_LIFECYCLE_OPERATIONS = ["add", "update", "remove"] as const;
@@ -72,6 +72,7 @@ interface GuardedMethodCacheEntry {
 interface RepositoryFacadeState<Evt extends AnyDomainEvent> {
 	readonly source: object;
 	readonly target: object;
+	facade: object | undefined;
 	readonly session: RepositoryFacadeSession<Evt>;
 	readonly definition: RuntimePersistenceDefinition<Evt>;
 	readonly methodCache: Map<PropertyKey, GuardedMethodCacheEntry>;
@@ -87,6 +88,7 @@ function createRepositoryFacadeState<Evt extends AnyDomainEvent>(
 	return {
 		source,
 		target: Object.create(Reflect.getPrototypeOf(source)) as object,
+		facade: undefined,
 		session,
 		definition,
 		methodCache: new Map(),
@@ -133,7 +135,7 @@ function readRepositorySource<Evt extends AnyDomainEvent>(
 ): unknown {
 	state.session.assertOpen(repositoryOperationName(property));
 	const value = Reflect.get(state.source, property, state.source);
-	if (typeof value !== "function") return value;
+	if (typeof value !== "function") return facadeInPlaceOfSource(state, value);
 	// Cache validity is keyed on the CURRENT source function, not the
 	// property name alone: adapter methods run with `this` bound to the raw
 	// source, so a lazy-init self-assignment replaces the method without any
@@ -144,10 +146,22 @@ function readRepositorySource<Evt extends AnyDomainEvent>(
 	const sourceMethod = value as (...args: unknown[]) => unknown;
 	const guarded = (...args: unknown[]): unknown => {
 		state.session.assertOpen(repositoryOperationName(property));
-		return Reflect.apply(sourceMethod, state.source, args);
+		const result = Reflect.apply(sourceMethod, state.source, args);
+		// Only a native promise: `then` on another thenable can start its
+		// work, for example a query builder that runs its query.
+		return result instanceof Promise
+			? result.then((settled) => facadeInPlaceOfSource(state, settled))
+			: facadeInPlaceOfSource(state, result);
 	};
 	state.methodCache.set(property, { sourceMethod, guarded });
 	return guarded;
+}
+
+function facadeInPlaceOfSource<Evt extends AnyDomainEvent>(
+	state: RepositoryFacadeState<Evt>,
+	value: unknown,
+): unknown {
+	return value === state.source ? state.facade : value;
 }
 
 function defineForwardedRepositoryProperty<Evt extends AnyDomainEvent>(
