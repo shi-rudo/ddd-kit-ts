@@ -1492,6 +1492,35 @@ describe("UnitOfWork", () => {
 			});
 		});
 
+		it("keeps the members of a function-valued property, and lets a class property construct", async () => {
+			class OrderRow {
+				constructor(readonly id: string) {}
+			}
+			const query = Object.assign((status: string) => `all ${status}`, {
+				byStatus: (status: string) => `by ${status}`,
+			});
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: createMockOutbox(),
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						flush: async () => {},
+						create: (_tx: undefined) => ({ query, OrderRow }),
+					}),
+				},
+			});
+
+			await uow.run(async ({ repositories }) => {
+				expect(repositories.orders.query("open")).toBe("all open");
+				expect(repositories.orders.query.byStatus("open")).toBe("by open");
+				const row = new repositories.orders.OrderRow("r-1");
+				expect(row).toBeInstanceOf(OrderRow);
+				expect(row.id).toBe("r-1");
+			});
+		});
+
 		describe("a member that returns the adapter", () => {
 			class LockingOrderRepository {
 				readonly ownWrites: string[] = [];

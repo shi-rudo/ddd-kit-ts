@@ -162,15 +162,23 @@ function readRepositorySource<Evt extends AnyDomainEvent>(
 	const cached = state.methodCache.get(property);
 	if (cached && cached.sourceMethod === value) return cached.guarded;
 	const sourceMethod = value as (...args: unknown[]) => unknown;
-	const guarded = (...args: unknown[]): unknown => {
-		state.session.assertOpen(repositoryOperationName(property));
-		const result = Reflect.apply(sourceMethod, state.source, args);
-		// Only a native promise: `then` on another thenable can start its
-		// work, for example a query builder that runs its query.
-		return result instanceof Promise
-			? result.then((settled) => facadeInPlaceOfSource(state, settled))
-			: facadeInPlaceOfSource(state, result);
-	};
+	// A proxy, not a wrapper function: a callable property can carry its own
+	// members (a query object) or be a class, and both must keep working.
+	const guarded = new Proxy(sourceMethod, {
+		apply: (method, _receiver, args) => {
+			state.session.assertOpen(repositoryOperationName(property));
+			const result = Reflect.apply(method, state.source, args);
+			// Only a native promise: `then` on another thenable can start its
+			// work, for example a query builder that runs its query.
+			return result instanceof Promise
+				? result.then((settled) => facadeInPlaceOfSource(state, settled))
+				: facadeInPlaceOfSource(state, result);
+		},
+		construct: (method, args, newTarget) => {
+			state.session.assertOpen(repositoryOperationName(property));
+			return Reflect.construct(method, args, newTarget);
+		},
+	});
 	state.methodCache.set(property, { sourceMethod, guarded });
 	return guarded;
 }
