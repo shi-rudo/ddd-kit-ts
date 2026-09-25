@@ -3232,6 +3232,59 @@ describe("UnitOfWork", () => {
 				}>()(new PrototypeDefinition() as never),
 			).toThrow(/"create" is missing or not a function/);
 		});
+
+		function defineOrders(definition: object): unknown {
+			return defineExplicitRepository<{
+				add(aggregate: MockAggregate): void;
+				update(aggregate: MockAggregate): void;
+			}>()(definition as never);
+		}
+
+		const completeDefinition = {
+			aggregate: MockAggregate,
+			create: () => ({}),
+			flush: async () => {},
+			mapError: mapTestRepositoryError,
+		};
+
+		it.each(["capture", "changes", "isEmpty"] as const)(
+			"rejects a persistence model without %s",
+			(member) => {
+				const { [member]: _removed, ...persistence } =
+					versionPersistenceModel<MockAggregate>();
+
+				expect(() =>
+					defineOrders({ ...completeDefinition, persistence }),
+				).toThrow(new RegExp(`"persistence\\.${member}" is not a function`));
+			},
+		);
+
+		it("rejects a persistence model whose captureEquals is not a function", () => {
+			const persistence = {
+				...versionPersistenceModel<MockAggregate>(),
+				captureEquals: true,
+			};
+
+			expect(() =>
+				defineOrders({ ...completeDefinition, persistence }),
+			).toThrow(/"persistence\.captureEquals" is not a function/);
+		});
+
+		it.each([
+			["appendOnly", 1],
+			["physicalRemoval", "yes"],
+		] as const)(
+			"rejects %s = %s because it is not a boolean",
+			(flag, value) => {
+				expect(() =>
+					defineOrders({
+						...completeDefinition,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						[flag]: value,
+					}),
+				).toThrow(new RegExp(`"${flag}" must be true or false`));
+			},
+		);
 	});
 
 	describe("registration window", () => {

@@ -385,6 +385,39 @@ function assertRepositoryDefinitionMembers(
 				"with own enumerable properties.",
 		);
 	}
+	assertPersistenceModelMembers(
+		definition.persistence as Record<PropertyKey, unknown>,
+	);
+	for (const key of ["appendOnly", "physicalRemoval"] as const) {
+		const flag = definition[key];
+		if (flag !== undefined && typeof flag !== "boolean") {
+			throw new TypeError(
+				`defineRepository: "${key}" must be true or false, got ${String(flag)}.`,
+			);
+		}
+	}
+}
+
+function assertPersistenceModelMembers(
+	persistence: Record<PropertyKey, unknown>,
+): void {
+	for (const key of ["capture", "changes", "isEmpty"] as const) {
+		if (typeof persistence[key] !== "function") {
+			throw new TypeError(
+				`defineRepository: "persistence.${key}" is not a function. A ` +
+					"PersistenceModel needs capture, changes, and isEmpty.",
+			);
+		}
+	}
+	if (
+		persistence.captureEquals !== undefined &&
+		typeof persistence.captureEquals !== "function"
+	) {
+		throw new TypeError(
+			'defineRepository: "persistence.captureEquals" is not a function. ' +
+				"Omit it, or pass a function that compares two captures.",
+		);
+	}
 }
 
 /**

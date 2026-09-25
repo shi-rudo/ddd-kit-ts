@@ -192,8 +192,8 @@ function installedLifecycleOperations<Evt extends AnyDomainEvent>(
 	definition: RuntimePersistenceDefinition<Evt>,
 ): RepositoryLifecycleOperation[] {
 	const operations: RepositoryLifecycleOperation[] = ["add"];
-	if (!definition.appendOnly) operations.push("update");
-	if (definition.physicalRemoval) operations.push("remove");
+	if (definition.appendOnly !== true) operations.push("update");
+	if (definition.physicalRemoval === true) operations.push("remove");
 	return operations;
 }
 
