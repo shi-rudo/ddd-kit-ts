@@ -74,7 +74,8 @@ export interface InMemoryOutboxOptions {
 	 * candidate commit position) retained for idempotent `add` retries and
 	 * collision detection. Older receipts are evicted in dispatch order; a later
 	 * candidate behind its source head then rejects instead of rewinding the
-	 * cursor.
+	 * cursor. A retry of an event at its source head still dedupes, because the
+	 * source cursor names that event.
 	 * Default `10_000`.
 	 */
 	maxRetainedDispatchedEventIds?: number;
@@ -237,6 +238,17 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 			}
 			const existing = this.pending.get(event.eventId);
 			const deadLetter = this.dead.get(event.eventId);
+			if (
+				existing === undefined &&
+				deadLetter === undefined &&
+				this.recordedAtSourceHead(event, source, position)
+			) {
+				// The receipt was evicted, but the source head still names this
+				// event at this position. It is neither pending nor dead, so it
+				// was dispatched: dedupe it like a retained receipt.
+				this.rememberDispatched(event.eventId, source, position);
+				continue;
+			}
 			if (existing !== undefined) {
 				assertSameEventSource(event, source, existing.source);
 				// A pending record may move to another aggregateVersion only because
@@ -399,11 +411,12 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 	): void {
 		const newRecordIds = new Set<string>();
 		const newSourceKeys = new Set<string>();
-		for (const { event, source } of events) {
+		for (const { event, source, position } of events) {
 			if (
 				this.pending.has(event.eventId) ||
 				this.dead.has(event.eventId) ||
-				this.dispatchedEventIds.has(event.eventId)
+				this.dispatchedEventIds.has(event.eventId) ||
+				this.recordedAtSourceHead(event, source, position)
 			) {
 				continue;
 			}
@@ -599,6 +612,19 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 			// clears it too.
 			this.dead.delete(id);
 		}
+	}
+
+	private recordedAtSourceHead(
+		event: AnyDomainEvent,
+		source: AggregateIdentity,
+		position: EventCommitCandidatePosition,
+	): boolean {
+		const cursor = this.sourceCursors.get(encodeAggregateIdentity(source));
+		return (
+			cursor?.aggregateVersion === position.aggregateVersion &&
+			cursor.commitSize === position.commitSize &&
+			cursor.eventIdsBySequence.get(position.commitSequence) === event.eventId
+		);
 	}
 
 	private rememberDispatched(

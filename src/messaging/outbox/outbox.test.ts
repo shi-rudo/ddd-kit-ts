@@ -527,6 +527,30 @@ describe("InMemoryOutbox", () => {
 		]);
 	});
 
+	it("does not re-queue a dispatched event at the source head after its receipt was evicted", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>({
+			maxRetainedDispatchedEventIds: 1,
+		});
+		const dispatched = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "o-1" },
+			{ eventId: "evt-o1-v1", aggregateId: "o-1", aggregateType: "Order" },
+		);
+		const other = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "o-2" },
+			{ eventId: "evt-o2-v1", aggregateId: "o-2", aggregateType: "Order" },
+		);
+		await outbox.add([candidate(dispatched, 1)]);
+		await outbox.markDispatched([dispatched.eventId]);
+		await outbox.add([candidate(other, 1)]);
+		await outbox.markDispatched([other.eventId]);
+
+		await outbox.add([candidate(dispatched, 1)]);
+
+		expect(await outbox.getPending()).toEqual([]);
+	});
+
 	it("names a re-created identity as a cause when a new event lands below the source head", async () => {
 		const outbox = new InMemoryOutbox<OrderCreated>();
 		const event = (eventId: string) =>
