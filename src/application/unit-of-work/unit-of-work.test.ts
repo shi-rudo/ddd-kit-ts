@@ -3764,6 +3764,52 @@ describe("UnitOfWork", () => {
 			expect(mapperCalls).toBe(0);
 		});
 
+		it("passes a wiring error that the flush wrapped to the caller, without the mapper", async () => {
+			const wiringDefect = new InvalidFlushStatementError({
+				identity: { aggregateType: "MockAggregate", aggregateId: "o-1" },
+				intent: "update",
+				reason: "statement_absent",
+			});
+			let mapperCalls = 0;
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: createMockOutbox(),
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						flush: async () => {
+							throw new Error("order adapter failed", { cause: wiringDefect });
+						},
+						mapError: () => {
+							mapperCalls += 1;
+							return new TestRepositoryError(new Error("store unavailable"));
+						},
+						create: (_tx: undefined, tracking) => ({
+							trackLoaded: (loaded: MockAggregate) =>
+								tracking.trackLoaded(loaded),
+						}),
+					}),
+				},
+			});
+			const aggregate = createMockAggregate("o-1");
+
+			const rejection = await uow
+				.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(aggregate);
+					aggregate.change(testEvent("o-1"));
+					repositories.orders.update(aggregate);
+					return undefined;
+				})
+				.then(
+					() => undefined,
+					(error: unknown) => error,
+				);
+
+			expect(rejection).toBe(wiringDefect);
+			expect(mapperCalls).toBe(0);
+		});
+
 		it("passes a wiring error from another kit copy to the caller as well", async () => {
 			// Structurally a wiring error, but not instanceof this copy's class.
 			class ForeignWiringError extends Error {
