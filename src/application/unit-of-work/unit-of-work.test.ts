@@ -1108,6 +1108,35 @@ describe("UnitOfWork", () => {
 			);
 		});
 
+		it.each(["add", "update"] as const)(
+			"names the operation %s when it repeats after a change",
+			async (operation) => {
+				const { uow } = createUow();
+				const aggregate = createMockAggregate("o-1");
+
+				const rejection = await uow
+					.run(async ({ repositories }) => {
+						if (operation === "update") {
+							repositories.orders.trackLoaded(aggregate);
+						}
+						repositories.orders[operation](aggregate);
+						aggregate.change();
+						repositories.orders[operation](aggregate);
+						return undefined;
+					})
+					.then(
+						() => "committed",
+						(error: unknown) => error,
+					);
+
+				expect(rejection).toBeInstanceOf(AggregateTrackingError);
+				expect(rejection).toMatchObject({
+					operation,
+					reason: "mutated_after_registration",
+				});
+			},
+		);
+
 		it("discards loaded instances when an attempt rolls back", async () => {
 			const { uow } = createUow();
 			const first = createMockAggregate("o-1");

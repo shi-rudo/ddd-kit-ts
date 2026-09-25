@@ -395,7 +395,7 @@ export class Session<Evt extends AnyDomainEvent> {
 					registeredIntent: entry.registration.intent,
 				});
 			}
-			this.assertUnchangedAfterRegistration(entry);
+			this.assertUnchangedAfterRegistration(entry, intent);
 			return false;
 		}
 
@@ -418,7 +418,10 @@ export class Session<Evt extends AnyDomainEvent> {
 		delete entry.registration;
 	}
 
-	private assertUnchangedAfterRegistration(entry: TrackedAggregate<Evt>): void {
+	private assertUnchangedAfterRegistration(
+		entry: TrackedAggregate<Evt>,
+		operation: AggregateWriteIntent | "commit",
+	): void {
 		const registration = entry.registration;
 		if (registration === undefined) return;
 		const currentEvents = entry.aggregate.pendingEvents;
@@ -442,7 +445,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		) {
 			throw new AggregateTrackingError({
 				identity: entry.aggregate.aggregateIdentity,
-				operation: "commit",
+				operation,
 				reason: "mutated_after_registration",
 				registeredIntent: registration.intent,
 			});
@@ -515,7 +518,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		}
 		for (const entry of this._trackedAggregates) {
 			if (entry.registration !== undefined) {
-				this.assertUnchangedAfterRegistration(entry);
+				this.assertUnchangedAfterRegistration(entry, "commit");
 				continue;
 			}
 			// Capture-to-capture drift against the load-time baseline: a
@@ -593,7 +596,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		const registered = [...this._registeredWrites];
 		return () => {
 			for (const entry of registered) {
-				this.assertUnchangedAfterRegistration(entry);
+				this.assertUnchangedAfterRegistration(entry, "commit");
 			}
 		};
 	}
