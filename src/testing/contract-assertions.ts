@@ -3,6 +3,8 @@
  * repository contract suites (state-stored and event-sourced). Internal
  * to the testing entry: not re-exported from `@shirudo/ddd-kit/testing`.
  */
+
+import type { AggregateWriteIntent } from "../application/unit-of-work/persistence-contract";
 import { isRecordedDomainEvent } from "../domain/event/domain-event";
 import { runBoundedExecution } from "../internal/async/execution";
 
@@ -447,7 +449,7 @@ export function assertChainContainsKitError(
  */
 export function assertChainConflictNamesIntent(
 	rejection: unknown,
-	intent: "add" | "update" | "remove",
+	intent: AggregateWriteIntent,
 	message: string,
 ): void {
 	let observed: unknown = "no CONCURRENCY_CONFLICT";
