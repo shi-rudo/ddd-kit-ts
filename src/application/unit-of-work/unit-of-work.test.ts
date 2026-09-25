@@ -2645,6 +2645,45 @@ describe("UnitOfWork", () => {
 			expect((rejection as RollbackError).rollbackCause).toBe(hostile);
 		});
 
+		it("a repository factory that throws, then a failed rollback: RollbackError keeps the factory error", async () => {
+			const factoryFailure = new Error("adapter factory failed");
+			const rollbackFailure = new Error("ROLLBACK failed");
+			const scope: TransactionScope<undefined> = {
+				transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
+					try {
+						return await fn(undefined);
+					} catch {
+						throw rollbackFailure;
+					}
+				},
+			};
+			const uow = new UnitOfWork({
+				scope,
+				outbox: createMockOutbox(),
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						flush: async () => {},
+						create: (_tx: undefined): object => {
+							throw factoryFailure;
+						},
+					}),
+				},
+			});
+
+			const rejection = await uow
+				.run(async () => "unreachable")
+				.then(
+					() => "committed",
+					(error: unknown) => error,
+				);
+
+			expect(rejection).toBeInstanceOf(RollbackError);
+			expect((rejection as RollbackError).cause).toBe(factoryFailure);
+			expect((rejection as RollbackError).rollbackCause).toBe(rollbackFailure);
+		});
+
 		it("callback failed AND scope rejected with an unrelated error: RollbackError carrying both", async () => {
 			const original = new ConcurrencyConflictError({
 				reason: "stale_version",

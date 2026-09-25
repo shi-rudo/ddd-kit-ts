@@ -656,9 +656,9 @@ export class UnitOfWork<
 					const current = startAttempt();
 					attempt = current;
 
-					const repositories = this.buildRepositories(tx, s);
-					const context = makeContext(repositories, s, options?.signal);
 					try {
+						const repositories = this.buildRepositories(tx, s);
+						const context = makeContext(repositories, s, options?.signal);
 						const result = await work(context);
 						// Validate tracking before sealing: a loaded aggregate that
 						// changed without update intent would otherwise be lost.
@@ -765,7 +765,8 @@ function startAttempt(): RunAttempt {
  * returns the error to throw rather than throwing itself, so `run()` reads
  * as orchestration and this decision is unit-testable in isolation.
  *
- * - `workThrew`: the work callback (or `assertReadyToCommit`) threw.
+ * - `workThrew`: the attempt threw before it completed: the repository
+ *   factories, the work callback, or `assertReadyToCommit`.
  *   The scope normally rethrows that error unchanged (rolled back, pass
  *   through so a `ConcurrencyConflictError` & co. stay catchable as-is); a
  *   scope that WRAPS the original is detected via the cause chain and also
