@@ -775,7 +775,7 @@ function makeOutboxWriter(tx: YourTxHandle): OutboxWriter<AnyDomainEvent> {
           tx,
           commit.source,
           commit.aggregateVersion,
-        });
+        );
       }
     },
     endEventSources: async (sources) => {
