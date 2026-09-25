@@ -220,11 +220,19 @@ type PortShapeConstraint<TRepositoryPort> = [
 		: unknown
 	: RepositoryPortViolation<"the port must be an object type, not a function">;
 
+/** @inline */
+type InstalledRegistration<
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
+> = AggregateWriteRegistration<TAggregate> &
+	PhysicalRemovalRegistration<TAggregate>;
+
 /**
- * Checks a lifecycle member that the port declares: it is required, and it
- * accepts the definition's aggregate. An optional member is the trap of a
- * port that extends a type with `update?` or `remove?`, so it gets its own
- * message.
+ * Checks a lifecycle member that the port declares: it is required, it
+ * accepts the definition's aggregate, and it returns what the installed
+ * registration returns. An optional member is the trap of a port that
+ * extends a type with `update?` or `remove?`, so it gets its own message.
+ * The return check exists because TypeScript lets a member that returns a
+ * promise or `this` stand in for one that returns void.
  * @inline
  */
 type MemberAcceptsAggregate<
@@ -233,14 +241,17 @@ type MemberAcceptsAggregate<
 	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 > = undefined extends TRepositoryPort[TMember & keyof TRepositoryPort]
 	? RepositoryPortViolation<`the port's ${TMember} must not be optional`>
-	: [TRepositoryPort] extends [
-				Pick<
-					AggregateWriteRegistration<TAggregate> &
-						PhysicalRemovalRegistration<TAggregate>,
-					TMember
+	: [TRepositoryPort] extends [Pick<InstalledRegistration<TAggregate>, TMember>]
+		? [
+				ReturnType<
+					Extract<
+						TRepositoryPort[TMember & keyof TRepositoryPort],
+						CallableValue
+					>
 				>,
-			]
-		? unknown
+			] extends [ReturnType<InstalledRegistration<TAggregate>[TMember]>]
+			? unknown
+			: RepositoryPortViolation<`the port's ${TMember} must return void`>
 		: RepositoryPortViolation<`the port's ${TMember} must accept the definition's aggregate`>;
 
 /** @inline */

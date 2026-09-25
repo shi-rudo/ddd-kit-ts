@@ -102,6 +102,22 @@ interface ForRemovingOrdersById extends ForStoringOrders {
 	remove(id: OrderId): void;
 }
 
+interface ForStoringOrdersAsynchronously {
+	findById(id: OrderId): Promise<Order | null>;
+	add(order: Order): Promise<void>;
+	update(order: Order): void;
+}
+
+interface ForStoringOrdersFluently {
+	findById(id: OrderId): Promise<Order | null>;
+	add(order: Order): void;
+	update(order: Order): this;
+}
+
+interface ForRemovingOrdersAsynchronously extends ForStoringOrders {
+	remove(order: Order): Promise<void>;
+}
+
 type PaymentEvent = DomainEvent<"PaymentCaptured", { readonly paymentId: string }>;
 
 class Payment extends StateStoredAggregate<
@@ -217,6 +233,10 @@ const probes = {
 	"remove-without-removal": `defineRepository<ForRemovingOrders>()({${adapterWiring}});`,
 	"remove-with-boolean-removal": `defineRepository<ForRemovingOrders>()({
 	physicalRemoval: removalFlag,${adapterWiring}});`,
+	"async-add": `defineRepository<ForStoringOrdersAsynchronously>()({${adapterWiring}});`,
+	"fluent-update": `defineRepository<ForStoringOrdersFluently>()({${adapterWiring}});`,
+	"async-remove": `defineRepository<ForRemovingOrdersAsynchronously>()({
+	physicalRemoval: true,${adapterWiring}});`,
 	"remove-by-id": `defineRepository<ForRemovingOrdersById>()({
 	physicalRemoval: true,${adapterWiring}});`,
 	"union-port": `defineRepository<ForStoringOrders | ForRemovingOrders>()({${adapterWiring}});`,
@@ -386,6 +406,9 @@ describe("defineRepository compile-time diagnostics", () => {
 			"remove-by-id",
 			"the port's remove must accept the definition's aggregate",
 		],
+		["async-add", "the port's add must return void"],
+		["fluent-update", "the port's update must return void"],
+		["async-remove", "the port's remove must return void"],
 		["union-port", "the port must be one object type, not a union"],
 		["callable-port", "the port must be an object type, not a function"],
 	] as const)(
