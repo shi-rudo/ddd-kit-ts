@@ -7,6 +7,7 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 import {
 	AggregateNotFoundError,
+	attributeConflictIntent,
 	ConcurrencyConflictError,
 	DomainError,
 	DuplicateAggregateError,
@@ -20,7 +21,6 @@ import {
 	ReplayRejectedError,
 	UnenrolledChangesError,
 	UnreplayableAggregateError,
-	withWriteIntent,
 } from "./kit-errors";
 
 describe("InvalidEventStreamPageError", () => {
@@ -478,19 +478,19 @@ describe("ConcurrencyConflictError", () => {
 		expect(e.message).toContain("add of Order(o-1)");
 	});
 
-	it("keeps the observed reason, versions, and cause when a write intent is added", () => {
+	it("takes a write intent in place and keeps its reason, versions, cause, and throw site", () => {
 		const readFailure = new Error("connection reset");
-		const observed = new ConcurrencyConflictError({
+		const conflict = new ConcurrencyConflictError({
 			reason: "version_unknown",
 			identity: { aggregateType: "Order", aggregateId: "o-1" },
 			expectedVersion: 3,
 			cause: readFailure,
 		});
+		const throwSite = String(conflict.stack).split("\n").slice(1).join("\n");
 
-		const attributed = withWriteIntent(observed, "update");
+		attributeConflictIntent(conflict, "update");
 
-		expect(attributed).toBeInstanceOf(ConcurrencyConflictError);
-		expect(attributed).toMatchObject({
+		expect(conflict).toMatchObject({
 			intent: "update",
 			reason: "version_unknown",
 			identity: { aggregateType: "Order", aggregateId: "o-1" },
@@ -498,8 +498,12 @@ describe("ConcurrencyConflictError", () => {
 			actualVersion: null,
 			retryable: true,
 		});
-		expect(attributed.cause).toBe(readFailure);
-		expect(attributed.message).toContain("update of Order(o-1)");
+		expect(conflict.cause).toBe(readFailure);
+		expect(conflict.message).toContain("update of Order(o-1)");
+		expect(String(conflict.stack).split("\n")[0]).toContain(
+			"update of Order(o-1)",
+		);
+		expect(String(conflict.stack)).toContain(throwSite);
 	});
 
 	it("marks itself retryable so isRetryable picks it up: the OCC reload-and-retry pattern", () => {

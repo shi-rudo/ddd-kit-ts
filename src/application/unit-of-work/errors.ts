@@ -4,6 +4,7 @@ import {
 	detachAggregateIdentity,
 	InfrastructureError,
 	KitWiringError,
+	rewriteErrorMessage,
 } from "../../errors/kit-errors";
 import type { AggregateWriteIntent } from "./persistence-contract";
 
@@ -174,6 +175,27 @@ export interface InvalidFlushStatementErrorOptions {
 	/** The store failure that the flush was handling, kept for diagnosis. */
 	readonly cause?: unknown;
 	readonly classifierCause?: unknown;
+}
+
+/**
+ * Sets the write intent on a statement defect that its raising code could not
+ * name, and renders the message again.
+ */
+export function attributeFlushStatementIntent(
+	defect: InvalidFlushStatementError,
+	intent: AggregateWriteIntent,
+): void {
+	if (defect.intent === intent) return;
+	Reflect.set(defect, "intent", intent);
+	rewriteErrorMessage(
+		defect,
+		flushStatementReasonMessage({
+			identity: defect.identity,
+			intent,
+			reason: defect.reason,
+			received: defect.received,
+		}),
+	);
 }
 
 function flushStatementReasonMessage(

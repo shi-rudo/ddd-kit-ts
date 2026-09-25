@@ -2904,6 +2904,125 @@ describe("UnitOfWork", () => {
 			expect(rejection).toMatchObject({ intent: "update" });
 		});
 
+		it("names the intent on a conflict that the flush wrapped in its own error", async () => {
+			const conflict = new ConcurrencyConflictError({
+				reason: "stale_version",
+				identity,
+				expectedVersion: 1,
+				actualVersion: 2,
+			});
+			const uow = uowWhoseFlushThrows(new TestRepositoryError(conflict));
+			const aggregate = createMockAggregate("o-1");
+
+			await rejectionOf(
+				uow.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(aggregate);
+					repositories.orders.update(aggregate);
+					return undefined;
+				}),
+			);
+
+			expect(conflict.intent).toBe("update");
+			expect(conflict.message).toContain("update of MockAggregate(o-1)");
+		});
+
+		it("names the intent on a conflict from another kit copy by its code", async () => {
+			const foreign = Object.assign(new Error("foreign copy conflict"), {
+				code: "CONCURRENCY_CONFLICT",
+				category: "INFRASTRUCTURE",
+				retryable: true,
+				intent: null,
+			});
+			const uow = uowWhoseFlushThrows(foreign);
+			const aggregate = createMockAggregate("o-1");
+
+			await rejectionOf(
+				uow.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(aggregate);
+					repositories.orders.update(aggregate);
+					return undefined;
+				}),
+			);
+
+			expect(foreign.intent).toBe("update");
+		});
+
+		it("keeps the class, the extra fields, and the throw site of the conflict", async () => {
+			class StoreConflict extends ConcurrencyConflictError {
+				readonly sqlState = "40001";
+			}
+			const conflict = new StoreConflict({
+				reason: "stale_version",
+				identity,
+				expectedVersion: 1,
+				actualVersion: 2,
+			});
+			const throwSite = String(conflict.stack).split("\n").slice(1).join("\n");
+			const uow = uowWhoseFlushThrows(conflict);
+			const aggregate = createMockAggregate("o-1");
+
+			const rejection = await rejectionOf(
+				uow.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(aggregate);
+					repositories.orders.update(aggregate);
+					return undefined;
+				}),
+			);
+
+			expect(rejection).toBe(conflict);
+			expect(rejection).toBeInstanceOf(StoreConflict);
+			expect(conflict.sqlState).toBe("40001");
+			expect(String(conflict.stack)).toContain(throwSite);
+			expect(String(conflict.stack).split("\n")[0]).toContain(
+				"update of MockAggregate(o-1)",
+			);
+		});
+
+		it("names the intent on an inconsistent conflict instead of failing", async () => {
+			const conflict = new ConcurrencyConflictError({
+				reason: "stale_version",
+				identity,
+				expectedVersion: 1,
+			} as unknown as ConstructorParameters<
+				typeof ConcurrencyConflictError
+			>[0]);
+			const uow = uowWhoseFlushThrows(conflict);
+			const aggregate = createMockAggregate("o-1");
+
+			const rejection = await rejectionOf(
+				uow.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(aggregate);
+					repositories.orders.update(aggregate);
+					return undefined;
+				}),
+			);
+
+			expect(rejection).toBe(conflict);
+			expect(conflict.intent).toBe("update");
+		});
+
+		it("names the intent on a statement defect that did not know the write", async () => {
+			const defect = new InvalidFlushStatementError({
+				identity,
+				reason: "no_version",
+				received: "3 (string)",
+			});
+			const uow = uowWhoseFlushThrows(defect);
+			const aggregate = createMockAggregate("o-1");
+
+			const rejection = await rejectionOf(
+				uow.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(aggregate);
+					repositories.orders.update(aggregate);
+					return undefined;
+				}),
+			);
+
+			expect(rejection).toBe(defect);
+			expect(defect.intent).toBe("update");
+			expect(defect.message).toContain("update of MockAggregate(o-1)");
+		});
+
 		it("keeps the reason, the versions, and the cause of the conflict it attributes", async () => {
 			const readFailure = new Error("connection reset");
 			const conflict = new ConcurrencyConflictError({
@@ -2926,7 +3045,8 @@ describe("UnitOfWork", () => {
 				}),
 			);
 
-			expect(mapped).toBe(rejection);
+			expect(rejection).toBe(conflict);
+			expect(mapped).toBe(conflict);
 			expect(rejection).toMatchObject({
 				intent: "update",
 				reason: "version_unknown",

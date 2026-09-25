@@ -218,7 +218,11 @@ immutable. Run one kit version per process during a cutover.
 - `ConcurrencyConflictError` names the write that failed in `intent`: `add`,
   `update`, or `remove`. The unit of work sets it on every conflict that
   leaves a flush, because a flush or an event store reports only what it
-  observed. A conflict outside a unit of work has `intent: null`.
+  observed. It sets the intent on the conflict object itself, found by its
+  code in the cause chain, so a conflict that the flush wraps, or one from
+  another copy of the kit, gets it too, and `mapError` receives the error
+  that the flush threw. A conflict outside a unit of work has
+  `intent: null`.
 - `defineRepository` accepts an append-only port with `appendOnly: true`,
   for a fact that the domain never changes after `add`.
 - A violated port constraint or wiring constraint is one compiler error that

@@ -1903,34 +1903,55 @@ export class ConcurrencyConflictError extends InfrastructureError<"CONCURRENCY_C
 }
 
 /**
- * Returns the conflict with the given write intent and every observed field
- * of the original: reason, versions, and cause.
+ * Sets the write intent on a conflict that its raising code could not name,
+ * and renders the message again. The conflict keeps its class, its fields,
+ * its cause, and its throw site.
  */
-export function withWriteIntent(
+export function attributeConflictIntent(
 	conflict: ConcurrencyConflictError,
 	intent: NonNullable<ConcurrencyConflictErrorOptions["intent"]>,
-): ConcurrencyConflictError {
-	const shared = {
-		identity: conflict.identity,
-		intent,
-		expectedVersion: conflict.expectedVersion,
-		cause: conflict.cause,
-	};
-	const { reason, actualVersion } = conflict;
-	if (reason === "aggregate_absent" || reason === "version_unknown") {
-		return new ConcurrencyConflictError({ ...shared, reason });
-	}
-	if (actualVersion === null) {
-		throw new TypeError(
-			`withWriteIntent: a ${reason} conflict on ${describeAggregateIdentity(conflict.identity)} carries no actualVersion`,
-		);
-	}
-	return new ConcurrencyConflictError({ ...shared, reason, actualVersion });
+): void {
+	if (conflict.intent === intent) return;
+	Reflect.set(conflict, "intent", intent);
+	rewriteErrorMessage(
+		conflict,
+		concurrencyConflictMessage({
+			identity: conflict.identity,
+			intent,
+			expectedVersion: conflict.expectedVersion,
+			reason: conflict.reason,
+			actualVersion: conflict.actualVersion,
+		}),
+	);
 }
 
-function concurrencyConflictMessage(
-	options: ConcurrencyConflictErrorOptions,
-): string {
+/**
+ * Replaces the message of an error, and the message in the first line of its
+ * stack where the engine lets the kit write it.
+ */
+export function rewriteErrorMessage(error: Error, message: string): void {
+	const header = `${error.name}: ${error.message}`;
+	const stack: unknown = Reflect.get(error, "stack");
+	Reflect.set(error, "message", message);
+	if (typeof stack === "string" && stack.startsWith(header)) {
+		Reflect.set(
+			error,
+			"stack",
+			`${error.name}: ${message}${stack.slice(header.length)}`,
+		);
+	}
+}
+
+/** The fields that the message of a conflict names. */
+type ConcurrencyConflictFacts = Pick<
+	ConcurrencyConflictErrorOptions,
+	"identity" | "intent" | "expectedVersion"
+> & {
+	readonly reason: ConcurrencyConflictReason;
+	readonly actualVersion?: number | null;
+};
+
+function concurrencyConflictMessage(options: ConcurrencyConflictFacts): string {
 	const aggregate = describeAggregateIdentity(options.identity);
 	const site =
 		options.intent == null ? aggregate : `${options.intent} of ${aggregate}`;
