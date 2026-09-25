@@ -2175,11 +2175,15 @@ describe("UnitOfWork", () => {
 					return null;
 				}
 
-				const row = this.rows.get(id);
+				const row = await this.readRow(id);
 				if (!row) return null;
 				this.hydrations += 1;
 				const order = new OrderAggregate(id);
 				return this.tracking.trackLoaded(order);
+			}
+
+			private async readRow(id: TestId): Promise<TestEvent[] | undefined> {
+				return this.rows.get(id);
 			}
 		}
 
@@ -2227,6 +2231,64 @@ describe("UnitOfWork", () => {
 			expect(repos[0]?.hydrations).toBe(1);
 			// One instance → one harvest, one acknowledgement.
 			expect(outbox.added).toEqual([[stamped(event, 2)]]);
+		});
+
+		it("overlapping findById calls for one id return the first tracked instance", async () => {
+			const event = testEvent("o-1");
+			const rows = new Map([["o-1", [event]]]);
+			const { uow, outbox, repos } = createCachingUow(rows);
+
+			await uow.run(async ({ repositories }) => {
+				const [a, b] = await Promise.all([
+					repositories.orders.findById("o-1" as TestId),
+					repositories.orders.findById("o-1" as TestId),
+				]);
+
+				expect(a).not.toBeNull();
+				expect(b).toBe(a);
+
+				(a as OrderAggregate).change(event);
+				repositories.orders.update(a as OrderAggregate);
+				return undefined;
+			});
+
+			expect(repos[0]?.hydrations).toBe(2);
+			expect(outbox.added).toEqual([[stamped(event, 2)]]);
+		});
+
+		it("an overlapping load through a second repository of the same aggregate class names the owning repository", async () => {
+			const rows = new Map([["o-1", [testEvent("o-1")]]]);
+			const definition = () =>
+				defineTestRepository({
+					aggregate: OrderAggregate,
+					persistence: versionPersistenceModel<OrderAggregate>(),
+					flush: async () => {},
+					create: (_tx: undefined, tracking) =>
+						new CachingOrderRepository(rows, tracking),
+				});
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: createMockOutbox(),
+				repositories: { orders: definition(), archive: definition() },
+			});
+
+			const rejection = await uow
+				.run(async ({ repositories }) => {
+					await Promise.all([
+						repositories.orders.findById("o-1" as TestId),
+						repositories.archive.findById("o-1" as TestId),
+					]);
+				})
+				.then(
+					() => "committed",
+					(error: unknown) => error,
+				);
+
+			expect(rejection).toBeInstanceOf(AggregateTrackingError);
+			expect(rejection).toMatchObject({
+				operation: "load",
+				reason: "different_repository",
+			});
 		});
 
 		it("tracking.identityMap access after close throws TransactionClosedError", async () => {

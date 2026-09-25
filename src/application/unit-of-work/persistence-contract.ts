@@ -73,6 +73,10 @@ export interface RepositoryTracking<
 	 * Registers an aggregate restored by a repository before returning it to
 	 * application code. The Unit of Work identity-maps the instance and captures
 	 * its current version as the optimistic-concurrency expectation.
+	 *
+	 * Return the result, not the argument. If the Unit of Work already tracks
+	 * an instance with the same identity, the result is that instance: when
+	 * two loads of one id overlap, the first tracked instance wins.
 	 */
 	trackLoaded(aggregate: TAggregate): TAggregate;
 

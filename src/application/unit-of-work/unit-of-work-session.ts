@@ -146,6 +146,15 @@ export class Session<Evt extends AnyDomainEvent> {
 	): TAggregate {
 		this.assertOpen("tracking.trackLoaded");
 		requirePendingEventLifecycleReadView(aggregate, "tracking.trackLoaded");
+		// Two overlapping loads of one id both pass the identity-map check
+		// and hydrate. The first tracked instance wins, and the second
+		// hydration is discarded.
+		const tracked = this._identityMap.get(definition.aggregate, aggregate.id) as
+			| TAggregate
+			| undefined;
+		if (tracked !== undefined && tracked !== aggregate) {
+			return this.trackLoaded(tracked, definition);
+		}
 		// Ownership is checked BEFORE identity-map registration: a rejected
 		// instance must not stay registered under the second definition's
 		// class key with no tracking entry behind it.
