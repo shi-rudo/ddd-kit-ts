@@ -112,10 +112,28 @@ function isRepositoryLifecycleOperation(property: PropertyKey): boolean {
 }
 
 /**
- * Own-or-inherited presence that stops BEFORE `Object.prototype`: members
- * every object inherits (`toString`, `valueOf`, `constructor`) are language
- * plumbing, not repository surface, and must not trip the facade's
- * session-open assertion.
+ * Whether a property read or `in` probe is language plumbing, not a
+ * repository member: promise resolution probes `then`, JSON.stringify probes
+ * `toJSON`, string interpolation reads `toString`, and inspection utilities
+ * read well-known symbols. Only a property present BELOW Object.prototype is
+ * repository surface, except `constructor`, which every class prototype
+ * carries. Plumbing answers without the session-open assertion, so logging a
+ * leaked facade after close cannot mask the original failure.
+ */
+function isLanguagePlumbing<Evt extends AnyDomainEvent>(
+	state: RepositoryFacadeState<Evt>,
+	property: PropertyKey,
+): boolean {
+	return (
+		property === "constructor" ||
+		(!hasMemberBelowObjectPrototype(state.target, property) &&
+			!hasMemberBelowObjectPrototype(state.source, property))
+	);
+}
+
+/**
+ * Own-or-inherited presence that stops BEFORE `Object.prototype`, where the
+ * members that every object inherits live.
  */
 function hasMemberBelowObjectPrototype(
 	object: object,
@@ -234,21 +252,9 @@ function createRepositoryFacadeHandler<Evt extends AnyDomainEvent>(
 ): ProxyHandler<object> {
 	return {
 		get: (target, property, receiver) => {
-			// Language-level probes are not repository operations: promise
-			// resolution reads `then` on any value returned from run(),
-			// JSON.stringify probes `toJSON`, string interpolation reads
-			// `toString`, and inspection utilities read well-known symbols.
-			// One principled rule instead of one exemption per discovered
-			// probe: only a property present BELOW Object.prototype is
-			// repository surface and gets the session-open assertion.
-			// Everything else is language plumbing and answers normally, so
-			// logging a leaked facade after close cannot mask the original
-			// failure. Member reads keep the loud TransactionClosedError
-			// (a probe cannot leak state; a member read can).
-			if (
-				!hasMemberBelowObjectPrototype(target, property) &&
-				!hasMemberBelowObjectPrototype(state.source, property)
-			) {
+			// Member reads keep the loud TransactionClosedError: a probe
+			// cannot leak state, a member read can.
+			if (isLanguagePlumbing(state, property)) {
 				return Reflect.get(target, property, receiver);
 			}
 			state.session.assertOpen(repositoryOperationName(property));
@@ -263,6 +269,9 @@ function createRepositoryFacadeHandler<Evt extends AnyDomainEvent>(
 		set: (target, property, value, receiver) =>
 			setRepositoryFacadeProperty(state, target, property, value, receiver),
 		has: (target, property) => {
+			if (isLanguagePlumbing(state, property)) {
+				return Reflect.has(target, property);
+			}
 			state.session.assertOpen(repositoryOperationName(property));
 			return (
 				state.writes.has(property) ||

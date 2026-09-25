@@ -2068,6 +2068,27 @@ describe("UnitOfWork", () => {
 			expect(() => facade.tx).toThrow(TransactionClosedError);
 		});
 
+		it("answers a constructor read on a closed class-based facade", async () => {
+			const { uow } = createUow();
+
+			const facade = await uow.run(async ({ repositories }) => {
+				return repositories.orders;
+			});
+
+			expect(facade.constructor).toBe(FakeOrderRepository);
+		});
+
+		it("answers an in probe for an absent property on a closed facade", async () => {
+			const { uow } = createUow();
+
+			const facade = await uow.run(async ({ repositories }) => {
+				return repositories.orders;
+			});
+
+			expect("then" in facade).toBe(false);
+			expect(() => "tx" in facade).toThrow(TransactionClosedError);
+		});
+
 		it("adapter tracking after rollback throws TransactionClosedError", async () => {
 			let leakedTracking!: RepositoryTracking<MockAggregate>;
 			const { uow } = createUow({
