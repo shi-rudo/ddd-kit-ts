@@ -527,6 +527,32 @@ describe("InMemoryOutbox", () => {
 		]);
 	});
 
+	it("names a re-created identity as a cause when a new event lands below the source head", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>();
+		const event = (eventId: string) =>
+			createDomainEvent(
+				"OrderCreated",
+				{ orderId: "o-1" },
+				{ eventId, aggregateId: "o-1", aggregateType: "Order" },
+			);
+		const removed = event("evt-removed-v3");
+		await outbox.add([candidate(removed, 3)]);
+		await outbox.markDispatched([removed.eventId]);
+
+		const rejection = await outbox
+			.add([candidate(event("evt-recreated-v1"), 1)])
+			.then(
+				() => "accepted",
+				(error: unknown) => error,
+			);
+
+		expect(rejection).toBeInstanceOf(EventHarvestError);
+		expect((rejection as EventHarvestError).message).toMatch(
+			/removed and created again under the same identity/,
+		);
+		expect((rejection as EventHarvestError).message).toMatch(/new id/);
+	});
+
 	it("rejects an evicted stale candidate without changing the source head", async () => {
 		const outbox = new InMemoryOutbox<OrderCreated>({
 			maxRetainedDispatchedEventIds: 1,

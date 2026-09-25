@@ -725,9 +725,13 @@ function staleHeadError(
 		`InMemoryOutbox rejected stale event "${event.eventId}" for ` +
 			`${describeAggregateIdentity(source)} at aggregate version ` +
 			`${position.aggregateVersion}: the event-source head is already ` +
-			`${staleHeadVersion}. The dispatched-id receipt may have ` +
-			"expired; use a durable outbox with a transactional eventId unique key " +
-			"for unbounded idempotency.",
+			`${staleHeadVersion}. There are two possible causes. First, the ` +
+			"aggregate was removed and created again under the same identity. " +
+			"The kit does not support this, because the versions of the new " +
+			"aggregate restart below the head. Give the new aggregate a new id. " +
+			"Second, this is a retry of an event whose dispatched-id receipt " +
+			"expired. Use a durable outbox with a transactional eventId unique " +
+			"key for unbounded idempotency.",
 		event.type,
 	);
 }
