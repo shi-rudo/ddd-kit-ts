@@ -209,13 +209,14 @@ immutable. Run one kit version per process during a cutover.
   `MatchedRows` type the statements. A defect in a statement throws
   `InvalidFlushStatementError`, a wiring error that reaches the caller
   unchanged.
-- `classifyConcurrencyConflict` builds the conflict of an update or a remove
-  whose compare-and-set matched no row. It reads the stored version and names
-  the reason, and a read that fails becomes the cause. `versionedFlush` uses
-  it, and a hand-written flush throws its result.
-- `ConcurrencyConflictError` names the write that failed in `intent`, `update`
-  or `remove`. A conflict from an event store append has `intent: null`,
-  because the store does not know the write.
+- `classifyConcurrencyConflict` builds the conflict of a compare-and-set
+  that matched no row. It reads the stored version and names the reason, and
+  a read that fails becomes the cause. `versionedFlush` uses it, and a
+  hand-written flush throws its result.
+- `ConcurrencyConflictError` names the write that failed in `intent`: `add`,
+  `update`, or `remove`. The unit of work sets it on every conflict that
+  leaves a flush, because a flush or an event store reports only what it
+  observed. A conflict outside a unit of work has `intent: null`.
 - `defineRepository` accepts an append-only port with `appendOnly: true`,
   for a fact that the domain never changes after `add`.
 - A violated port constraint or wiring constraint is one compiler error that

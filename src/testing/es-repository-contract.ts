@@ -13,6 +13,7 @@ import type {
 } from "../persistence/event-store/event-store";
 import {
 	assert,
+	assertChainConflictNamesIntent,
 	assertChainContainsKitError,
 	assertEqual,
 	awaitOverlappingCall,
@@ -235,6 +236,11 @@ export function createEsRepositoryContractTests<
 					rejection,
 					["CONCURRENCY_CONFLICT"],
 					`stale append must reject with ConcurrencyConflictError; got ${describeError(rejection)}`,
+				);
+				assertChainConflictNamesIntent(
+					rejection,
+					"update",
+					"the stale append conflict must name the update in its intent",
 				);
 				const finalStream = await environment.committedStreamEvents(
 					streamFor(seeded.id),

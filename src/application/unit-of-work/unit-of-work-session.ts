@@ -7,10 +7,12 @@ import type {
 import type { Id } from "../../domain/identity/id";
 import {
 	AggregateDeletedError,
+	ConcurrencyConflictError,
 	type InfrastructureError,
 	isInfrastructureErrorLike,
 	isWiringErrorLike,
 	UnenrolledChangesError,
+	withWriteIntent,
 } from "../../errors/kit-errors";
 import { IdentityMap } from "../../persistence/repository/identity-map";
 import {
@@ -555,11 +557,25 @@ export class Session<Evt extends AnyDomainEvent> {
 		}
 	}
 }
+/**
+ * A flush and an event store report what they observed; the unit of work
+ * knows which write it asked for. So the intent of a conflict comes from here.
+ */
+function attributeWriteIntent(
+	error: unknown,
+	intent: AggregateWriteIntent,
+): unknown {
+	return error instanceof ConcurrencyConflictError && error.intent !== intent
+		? withWriteIntent(error, intent)
+		: error;
+}
+
 function mapRepositoryPersistenceError<Evt extends AnyDomainEvent>(
 	definition: RuntimePersistenceDefinition<Evt>,
-	error: unknown,
+	flushError: unknown,
 	write: AggregatePersistenceWrite<Aggregate<Id<string>, Evt>, unknown>,
 ): InfrastructureError {
+	const error = attributeWriteIntent(flushError, write.intent);
 	// A wiring error states a defect of the definition, not a store failure.
 	// The mapper must return an InfrastructureError, so passing it in would
 	// relabel a programming defect as a store outage and make it retryable.

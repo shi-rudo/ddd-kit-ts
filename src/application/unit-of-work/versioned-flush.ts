@@ -10,10 +10,7 @@ import {
 	type FlushStatementReason,
 	InvalidFlushStatementError,
 } from "./errors";
-import type {
-	AggregatePersistenceWrite,
-	AggregateWriteIntent,
-} from "./persistence-contract";
+import type { AggregatePersistenceWrite } from "./persistence-contract";
 
 /**
  * The count of rows that one compare-and-set statement matched. It counts the
@@ -294,7 +291,6 @@ function versionedWriter<
 
 		throw await classifyConcurrencyConflict({
 			identity: write.aggregateIdentity,
-			intent,
 			expectedVersion: write.expectedVersion,
 			currentVersion: () =>
 				versionedWrites.currentVersion(
@@ -309,7 +305,6 @@ function versionedWriter<
 export interface ClassifyConcurrencyConflictOptions {
 	/** The aggregate of the write whose compare-and-set matched no row. */
 	readonly identity: AggregateIdentity;
-	readonly intent: Exclude<AggregateWriteIntent, "add">;
 	/** The version that the compare-and-set predicate used. */
 	readonly expectedVersion: number;
 	/**
@@ -323,8 +318,7 @@ export interface ClassifyConcurrencyConflictOptions {
 }
 
 /**
- * Builds the conflict of an update or a remove whose compare-and-set matched
- * no row. It reads the stored version and names the reason of the conflict.
+ * Builds the conflict of a compare-and-set that matched no row. It reads the stored version and names the reason of the conflict.
  * The zero row count already proves the conflict, so the read is diagnostic:
  * a read that fails becomes `version_unknown`, with the failure as the cause.
  */
@@ -334,7 +328,6 @@ export async function classifyConcurrencyConflict(
 	const stored = await readStoredVersion(options.currentVersion);
 	return new ConcurrencyConflictError({
 		identity: options.identity,
-		intent: options.intent,
 		expectedVersion: options.expectedVersion,
 		cause: stored.read ? undefined : stored.readFailure,
 		...storedVersionOf(stored, options.expectedVersion),

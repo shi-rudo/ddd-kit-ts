@@ -20,6 +20,7 @@ import {
 	ReplayRejectedError,
 	UnenrolledChangesError,
 	UnreplayableAggregateError,
+	withWriteIntent,
 } from "./kit-errors";
 
 describe("InvalidEventStreamPageError", () => {
@@ -449,6 +450,56 @@ describe("ConcurrencyConflictError", () => {
 		expect(e.intent).toBeNull();
 		expect(e.message).toContain("Concurrency conflict on Order(o-1):");
 		expect(e.toJSON()).toMatchObject({ intent: null });
+	});
+
+	it("treats an intent of null as a write it does not know", () => {
+		const e = new ConcurrencyConflictError({
+			reason: "stale_version",
+			identity: { aggregateType: "Order", aggregateId: "o-1" },
+			intent: null,
+			expectedVersion: 1,
+			actualVersion: 2,
+		});
+
+		expect(e.intent).toBeNull();
+		expect(e.message).toContain("Concurrency conflict on Order(o-1):");
+		expect(e.message).not.toContain("null of");
+	});
+
+	it("names an add as the write that failed", () => {
+		const e = new ConcurrencyConflictError({
+			reason: "stale_version",
+			identity: { aggregateType: "Order", aggregateId: "o-1" },
+			intent: "add",
+			expectedVersion: 0,
+			actualVersion: 3,
+		});
+
+		expect(e.message).toContain("add of Order(o-1)");
+	});
+
+	it("keeps the observed reason, versions, and cause when a write intent is added", () => {
+		const readFailure = new Error("connection reset");
+		const observed = new ConcurrencyConflictError({
+			reason: "version_unknown",
+			identity: { aggregateType: "Order", aggregateId: "o-1" },
+			expectedVersion: 3,
+			cause: readFailure,
+		});
+
+		const attributed = withWriteIntent(observed, "update");
+
+		expect(attributed).toBeInstanceOf(ConcurrencyConflictError);
+		expect(attributed).toMatchObject({
+			intent: "update",
+			reason: "version_unknown",
+			identity: { aggregateType: "Order", aggregateId: "o-1" },
+			expectedVersion: 3,
+			actualVersion: null,
+			retryable: true,
+		});
+		expect(attributed.cause).toBe(readFailure);
+		expect(attributed.message).toContain("update of Order(o-1)");
 	});
 
 	it("marks itself retryable so isRetryable picks it up: the OCC reload-and-retry pattern", () => {

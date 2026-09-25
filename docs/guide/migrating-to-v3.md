@@ -475,10 +475,10 @@ carries the nested `identity`.
 `actualVersion` is `number | null`. It is required for `stale_version` and
 `version_unchanged` and is `null` for the other two. The `-1` sentinel is
 gone. `retryable` follows the reason: `version_unchanged` is not retryable,
-because a retry repeats a defect of the adapter. An adapter that raises the
-error itself passes `reason: "stale_version"` next to `actualVersion`, or
-`reason: "aggregate_absent"` where it used `-1`. `versionedFlush` classifies
-the four cases for you.
+because a retry repeats a defect of the adapter. Do not classify the
+conflict by hand. `versionedFlush` names the reason, and a hand-written flush
+throws the result of `classifyConcurrencyConflict`, which applies the same
+rule. The unit of work adds the `intent` of the write.
 
 #### `toProblemDetails` returns a result object
 

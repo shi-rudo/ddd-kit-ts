@@ -445,8 +445,8 @@ branches:
   error propagates unchanged and reaches `mapError`.
 - `update` and `remove` run the compare-and-set and return the count of
   matched rows. On zero rows the helper reads `currentVersion` and raises
-  `ConcurrencyConflictError` with the `intent`, `expectedVersion`, and a
-  `reason` that names what the read found.
+  `ConcurrencyConflictError` with `expectedVersion` and a `reason` that names
+  what the read found. The unit of work adds the `intent` of the write.
 - The helper runs `update` for every update, also for an empty change set,
   because the new version must reach the store. The statement above spreads
   `write.changes.value`, so an empty change set writes the version only.
@@ -565,7 +565,6 @@ flush: async (tx: DrizzleTx, write) => {
 
   throw await classifyConcurrencyConflict({
     identity: write.aggregateIdentity,
-    intent: write.intent,
     expectedVersion,
     currentVersion: () =>
       loadOrderVersion(tx, write.aggregateIdentity.aggregateId),

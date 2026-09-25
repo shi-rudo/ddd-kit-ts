@@ -2798,6 +2798,147 @@ describe("UnitOfWork", () => {
 		});
 	});
 
+	describe("conflict attribution", () => {
+		const identity = { aggregateType: "MockAggregate", aggregateId: "o-1" };
+
+		function uowWhoseFlushThrows(
+			failure: unknown,
+			onMapError: (error: unknown) => void = () => {},
+		) {
+			return new UnitOfWork({
+				scope: createMockScope(),
+				outbox: createMockOutbox(),
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						physicalRemoval: true,
+						flush: async () => {
+							throw failure;
+						},
+						mapError: (error) => {
+							onMapError(error);
+							return mapTestRepositoryError(error);
+						},
+						create: (_tx: undefined, tracking) => ({
+							trackLoaded: (loaded: MockAggregate) =>
+								tracking.trackLoaded(loaded),
+						}),
+					}),
+				},
+			});
+		}
+
+		async function rejectionOf(run: Promise<unknown>): Promise<unknown> {
+			return run.then(
+				() => undefined,
+				(error: unknown) => error,
+			);
+		}
+
+		it.each(["update", "remove"] as const)(
+			"names the registered %s on a conflict that the flush raised without an intent",
+			async (intent) => {
+				const conflict = new ConcurrencyConflictError({
+					reason: "stale_version",
+					identity,
+					expectedVersion: 1,
+					actualVersion: 2,
+				});
+				const uow = uowWhoseFlushThrows(conflict);
+				const aggregate = createMockAggregate("o-1");
+
+				const rejection = await rejectionOf(
+					uow.run(async ({ repositories }) => {
+						repositories.orders.trackLoaded(aggregate);
+						repositories.orders[intent](aggregate);
+						return undefined;
+					}),
+				);
+
+				expect(rejection).toBeInstanceOf(ConcurrencyConflictError);
+				expect(rejection).toMatchObject({ intent, reason: "stale_version" });
+			},
+		);
+
+		it("names an add on a conflict from a creation race", async () => {
+			const conflict = new ConcurrencyConflictError({
+				reason: "stale_version",
+				identity,
+				expectedVersion: 0,
+				actualVersion: 3,
+			});
+			const uow = uowWhoseFlushThrows(conflict);
+
+			const rejection = await rejectionOf(
+				uow.run(async ({ repositories }) => {
+					repositories.orders.add(createMockAggregate("o-1"));
+					return undefined;
+				}),
+			);
+
+			expect(rejection).toMatchObject({ intent: "add" });
+			expect((rejection as Error).message).toContain(
+				"add of MockAggregate(o-1)",
+			);
+		});
+
+		it("replaces an intent that disagrees with the registered write", async () => {
+			const conflict = new ConcurrencyConflictError({
+				reason: "aggregate_absent",
+				identity,
+				intent: "remove",
+				expectedVersion: 1,
+			});
+			const uow = uowWhoseFlushThrows(conflict);
+			const aggregate = createMockAggregate("o-1");
+
+			const rejection = await rejectionOf(
+				uow.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(aggregate);
+					repositories.orders.update(aggregate);
+					return undefined;
+				}),
+			);
+
+			expect(rejection).toMatchObject({ intent: "update" });
+		});
+
+		it("keeps the reason, the versions, and the cause of the conflict it attributes", async () => {
+			const readFailure = new Error("connection reset");
+			const conflict = new ConcurrencyConflictError({
+				reason: "version_unknown",
+				identity,
+				expectedVersion: 1,
+				cause: readFailure,
+			});
+			let mapped: unknown;
+			const uow = uowWhoseFlushThrows(conflict, (error) => {
+				mapped = error;
+			});
+			const aggregate = createMockAggregate("o-1");
+
+			const rejection = await rejectionOf(
+				uow.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(aggregate);
+					repositories.orders.update(aggregate);
+					return undefined;
+				}),
+			);
+
+			expect(mapped).toBe(rejection);
+			expect(rejection).toMatchObject({
+				intent: "update",
+				reason: "version_unknown",
+				identity,
+				expectedVersion: 1,
+				actualVersion: null,
+				retryable: true,
+			});
+			expect((rejection as Error).cause).toBe(readFailure);
+		});
+	});
+
 	describe("cross-copy cooperation", () => {
 		it("passes a wiring error from flush to the caller, without the mapper", async () => {
 			const wiringDefect = new InvalidFlushStatementError({

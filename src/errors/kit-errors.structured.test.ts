@@ -914,9 +914,9 @@ it("pins every inline identity shape to AggregateIdentity", () => {
 // The conflict declares its intent inline for the same reason.
 const conflictIntentMatchesWriteIntent: SameType<
 	NonNullable<ConcurrencyConflictErrorOptions["intent"]>,
-	Exclude<AggregateWriteIntent, "add">
+	AggregateWriteIntent
 > = true;
 
-it("pins the inline conflict intent to the write intents that can conflict", () => {
+it("pins the inline conflict intent to the write intents", () => {
 	expect(conflictIntentMatchesWriteIntent).toBe(true);
 });

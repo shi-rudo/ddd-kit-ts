@@ -1834,11 +1834,8 @@ export type ConcurrencyConflictErrorOptions = {
 		readonly aggregateType: string;
 		readonly aggregateId: string;
 	};
-	/**
-	 * The write that failed. Absent when the layer that raises the conflict
-	 * does not know the write, for example an event store append.
-	 */
-	readonly intent?: "update" | "remove";
+	/** The write that failed, or `null` when the raising code does not know it. */
+	readonly intent?: "add" | "update" | "remove" | null;
 	readonly expectedVersion: number;
 	/** Optional driver-level error to preserve in the cause chain. */
 	readonly cause?: unknown;
@@ -1876,8 +1873,10 @@ export type ConcurrencyConflictErrorOptions = {
  */
 export class ConcurrencyConflictError extends InfrastructureError<"CONCURRENCY_CONFLICT"> {
 	readonly identity: ConcurrencyConflictErrorOptions["identity"];
-	/** The write that failed, or `null` when the raising layer does not know it. */
-	readonly intent: "update" | "remove" | null;
+	/** The write that failed, or `null` when the raising code does not know it. */
+	readonly intent: NonNullable<
+		ConcurrencyConflictErrorOptions["intent"]
+	> | null;
 	readonly expectedVersion: number;
 	/** The stored version, or `null` when none exists to name. */
 	readonly actualVersion: number | null;
@@ -1903,14 +1902,38 @@ export class ConcurrencyConflictError extends InfrastructureError<"CONCURRENCY_C
 	}
 }
 
+/**
+ * Returns the conflict with the given write intent and every observed field
+ * of the original: reason, versions, and cause.
+ */
+export function withWriteIntent(
+	conflict: ConcurrencyConflictError,
+	intent: NonNullable<ConcurrencyConflictErrorOptions["intent"]>,
+): ConcurrencyConflictError {
+	const shared = {
+		identity: conflict.identity,
+		intent,
+		expectedVersion: conflict.expectedVersion,
+		cause: conflict.cause,
+	};
+	const { reason, actualVersion } = conflict;
+	if (reason === "aggregate_absent" || reason === "version_unknown") {
+		return new ConcurrencyConflictError({ ...shared, reason });
+	}
+	if (actualVersion === null) {
+		throw new TypeError(
+			`withWriteIntent: a ${reason} conflict on ${describeAggregateIdentity(conflict.identity)} carries no actualVersion`,
+		);
+	}
+	return new ConcurrencyConflictError({ ...shared, reason, actualVersion });
+}
+
 function concurrencyConflictMessage(
 	options: ConcurrencyConflictErrorOptions,
 ): string {
 	const aggregate = describeAggregateIdentity(options.identity);
 	const site =
-		options.intent === undefined
-			? aggregate
-			: `${options.intent} of ${aggregate}`;
+		options.intent == null ? aggregate : `${options.intent} of ${aggregate}`;
 	switch (options.reason) {
 		case "stale_version":
 			return (

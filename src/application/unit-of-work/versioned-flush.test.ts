@@ -159,7 +159,7 @@ describe("versionedFlush", () => {
 		expect(rejection).toMatchObject({
 			reason: "stale_version",
 			identity: { aggregateType: "Order", aggregateId: orderId },
-			intent: "update",
+			intent: null,
 			expectedVersion: 3,
 			actualVersion: 5,
 			retryable: true,
@@ -215,7 +215,7 @@ describe("versionedFlush", () => {
 
 		expect(rejection).toBeInstanceOf(ConcurrencyConflictError);
 		expect(rejection).toMatchObject({
-			intent: "remove",
+			intent: null,
 			expectedVersion: 3,
 			actualVersion: 4,
 		});
@@ -477,7 +477,6 @@ describe("classifyConcurrencyConflict", () => {
 	it("classifies a stored version that differs from the expected one as stale_version", async () => {
 		const conflict = await classifyConcurrencyConflict({
 			identity,
-			intent: "update",
 			expectedVersion: 3,
 			currentVersion: async () => 5,
 		});
@@ -486,7 +485,7 @@ describe("classifyConcurrencyConflict", () => {
 		expect(conflict).toMatchObject({
 			reason: "stale_version",
 			identity,
-			intent: "update",
+			intent: null,
 			expectedVersion: 3,
 			actualVersion: 5,
 			retryable: true,
@@ -496,7 +495,6 @@ describe("classifyConcurrencyConflict", () => {
 	it("classifies a stored version equal to the expected one as version_unchanged, which is not retryable", async () => {
 		const conflict = await classifyConcurrencyConflict({
 			identity,
-			intent: "update",
 			expectedVersion: 3,
 			currentVersion: async () => 3,
 		});
@@ -511,14 +509,13 @@ describe("classifyConcurrencyConflict", () => {
 	it("classifies a missing aggregate as aggregate_absent", async () => {
 		const conflict = await classifyConcurrencyConflict({
 			identity,
-			intent: "remove",
 			expectedVersion: 3,
 			currentVersion: async () => undefined,
 		});
 
 		expect(conflict).toMatchObject({
 			reason: "aggregate_absent",
-			intent: "remove",
+			intent: null,
 			actualVersion: null,
 		});
 	});
@@ -528,7 +525,6 @@ describe("classifyConcurrencyConflict", () => {
 
 		const conflict = await classifyConcurrencyConflict({
 			identity,
-			intent: "update",
 			expectedVersion: 3,
 			currentVersion: async () => {
 				throw readFailure;
@@ -547,7 +543,6 @@ describe("classifyConcurrencyConflict", () => {
 
 		const conflict = await classifyConcurrencyConflict({
 			identity,
-			intent: "update",
 			expectedVersion: 3,
 			currentVersion: () => {
 				throw readFailure;
