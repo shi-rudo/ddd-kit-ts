@@ -2751,6 +2751,52 @@ describe("UnitOfWork", () => {
 			expect(rejection).toBe(openFailure);
 		});
 
+		it("closes the facade of a failed attempt before the retry waits", async () => {
+			const conflict = new Error("attempt one conflicts");
+			let leaked!: { findLater(): unknown };
+			let readDuringBackoff: unknown = "not attempted";
+			const inner: TransactionScope<undefined> = {
+				transactional: <T>(fn: (_ctx: undefined) => Promise<T>) =>
+					fn(undefined),
+			};
+			const scope = new RetryingTransactionScope(inner, {
+				maxAttempts: 2,
+				isRetryable: (error) => error === conflict,
+				sleep: async () => {
+					try {
+						leaked.findLater();
+						readDuringBackoff = "served";
+					} catch (error) {
+						readDuringBackoff = error;
+					}
+				},
+			});
+			const uow = new UnitOfWork({
+				scope,
+				outbox: createMockOutbox(),
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						flush: async () => {},
+						create: (_tx: undefined) => ({ findLater: () => "row" }),
+					}),
+				},
+			});
+			let calls = 0;
+
+			await uow.run(async ({ repositories }) => {
+				calls += 1;
+				if (calls === 1) {
+					leaked = repositories.orders;
+					throw conflict;
+				}
+				return undefined;
+			});
+
+			expect(readDuringBackoff).toBeInstanceOf(TransactionClosedError);
+		});
+
 		it("an abandoned attempt that throws late does not relabel the failure of the live attempt", async () => {
 			const lateFailure = new Error("abandoned attempt fails late");
 			const commitFailure = new Error("live attempt fails at COMMIT");

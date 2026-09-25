@@ -681,6 +681,10 @@ export class UnitOfWork<
 					} catch (error) {
 						current.workThrew = true;
 						current.workError = error;
+						// The scope rolls this attempt back and can wait before a
+						// retry. A leaked facade must not read through the dead
+						// transaction handle meanwhile.
+						s.close();
 						throw error;
 					}
 				},
