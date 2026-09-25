@@ -292,11 +292,12 @@ immutable. Run one kit version per process during a cutover.
   reliability. `createOutboxContractTests` proves an outbox adapter.
 - `withCommit` composes every event into an `EventCommitCandidate`, and the
   outbox persists a `CommittedDomainEvent` with a gap-proof `CommitPosition`.
-  An identity whose aggregate committed events cannot be created again after
-  a removal: its new versions restart below the source head, and the outbox
-  rejects them. `InMemoryOutbox` names this cause in its error, and it still
-  dedupes a retry at the source head after the receipt of the event
-  expired.
+  `OutboxWriter` and `CommandOutboxWriter` have `endEventSources`.
+  `withCommit` ends the event source of every removed aggregate, and the
+  outbox then rejects a new event of that source, so an aggregate created
+  again under a removed identity fails loud. `InMemoryOutbox` implements
+  it, and it still dedupes a retry at the source head after the receipt of
+  the event expired.
 - `IntegrationMessage` is the JSON-safe broker contract, with
   `createIntegrationMessage`, `encodeIntegrationMessage`,
   `decodeIntegrationMessage`, and `integrationMessageToCommittedEvent`.

@@ -1320,3 +1320,9 @@ Behavior that a use case or an adapter can notice:
   options before each attempt, so `run()` labels a failure by its attempt.
 - An identity whose aggregate committed events cannot be created again after
   a removal. Give the new aggregate a new id.
+- `OutboxWriter` and `CommandOutboxWriter` require `endEventSources`. A
+  durable adapter keeps an `ended` flag on the source head, sets it there,
+  and rejects a new event of an ended source. `outboxWriterAcceptingEventLoss`
+  and `routeEventsToCommandOutbox` implement it. A contract harness supplies
+  `endEventSourcesCommitted`, and `endEventSourcesRolledBack` with
+  `providesRolledBackEnds`.

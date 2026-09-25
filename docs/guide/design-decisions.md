@@ -260,7 +260,7 @@ stores the handler result before acknowledging.
 The port's prose is backed by
 `createCommandOutboxContractTests`. Every adapter must prove atomic batches,
 stable order, exact-retry deduplication, rejection of conflicting origin reuse,
-empty-receipt cursor progress, and rollback participation.
+empty-receipt cursor progress, ended sources, and rollback participation.
 
 ## Collection helpers practice structural sharing
 
