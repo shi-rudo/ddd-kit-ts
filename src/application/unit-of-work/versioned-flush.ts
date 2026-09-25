@@ -284,7 +284,7 @@ function versionedWriter<
 			throw statementDefect(
 				write,
 				"no_row_count",
-				describeMatchedRows(matchedRows),
+				describeReceived(matchedRows),
 			);
 		}
 		if (matchedRows > 0) return;
@@ -292,46 +292,81 @@ function versionedWriter<
 		throw await classifyConcurrencyConflict({
 			identity: write.aggregateIdentity,
 			expectedVersion: write.expectedVersion,
-			currentVersion: () =>
-				versionedWrites.currentVersion(
-					transaction,
-					write.aggregateIdentity.aggregateId,
-				),
+			transaction,
+			currentVersion: versionedWrites.currentVersion,
 		});
 	};
 }
 
 /** Options of {@link classifyConcurrencyConflict}. */
-export interface ClassifyConcurrencyConflictOptions {
+export interface ClassifyConcurrencyConflictOptions<
+	TCtx,
+	TAggregateId extends string,
+> {
 	/** The aggregate of the write whose compare-and-set matched no row. */
-	readonly identity: AggregateIdentity;
+	readonly identity: AggregateIdentity<TAggregateId>;
 	/** The version that the compare-and-set predicate used. */
 	readonly expectedVersion: number;
+	readonly transaction: TCtx;
 	/**
 	 * Reads the version that the store holds now, or `undefined` when the
-	 * aggregate no longer exists.
+	 * aggregate no longer exists. It is the same statement as the
+	 * `currentVersion` of {@link VersionedFlushStatements}.
 	 */
-	readonly currentVersion: () =>
-		| number
-		| undefined
-		| Promise<number | undefined>;
+	readonly currentVersion: (
+		transaction: TCtx,
+		aggregateId: TAggregateId,
+	) => number | undefined | Promise<number | undefined>;
 }
 
 /**
- * Builds the conflict of a compare-and-set that matched no row. It reads the stored version and names the reason of the conflict.
- * The zero row count already proves the conflict, so the read is diagnostic:
- * a read that fails becomes `version_unknown`, with the failure as the cause.
+ * Builds the conflict of a compare-and-set that matched no row. It reads the
+ * stored version and names the reason of the conflict. The zero row count
+ * already proves the conflict, so the read is diagnostic: a read that fails
+ * becomes `version_unknown`, with the failure as the cause.
+ *
+ * A version read that returns neither a stored version nor `undefined`, and
+ * an expected version that is no version, are defects of the statements. They
+ * throw {@link InvalidFlushStatementError}.
  */
-export async function classifyConcurrencyConflict(
-	options: ClassifyConcurrencyConflictOptions,
+export async function classifyConcurrencyConflict<
+	TCtx,
+	TAggregateId extends string,
+>(
+	options: ClassifyConcurrencyConflictOptions<TCtx, TAggregateId>,
 ): Promise<ConcurrencyConflictError> {
-	const stored = await readStoredVersion(options.currentVersion);
+	const { identity, expectedVersion } = options;
+	if (!isStoredVersion(expectedVersion)) {
+		throw new InvalidFlushStatementError({
+			identity,
+			reason: "no_expected_version",
+			received: describeReceived(expectedVersion),
+		});
+	}
+	const stored = await readStoredVersion(() =>
+		options.currentVersion(options.transaction, identity.aggregateId),
+	);
+	if (
+		stored.read &&
+		stored.currentVersion !== undefined &&
+		!isStoredVersion(stored.currentVersion)
+	) {
+		throw new InvalidFlushStatementError({
+			identity,
+			reason: "no_version",
+			received: describeReceived(stored.currentVersion),
+		});
+	}
 	return new ConcurrencyConflictError({
-		identity: options.identity,
-		expectedVersion: options.expectedVersion,
+		identity,
+		expectedVersion,
 		cause: stored.read ? undefined : stored.readFailure,
-		...storedVersionOf(stored, options.expectedVersion),
+		...storedVersionOf(stored, expectedVersion),
 	});
+}
+
+function isStoredVersion(value: unknown): value is number {
+	return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
 /**
@@ -355,8 +390,8 @@ function storedVersionOf(
 		: { reason: "stale_version", actualVersion: stored.currentVersion };
 }
 
-/** Names what a statement returned instead of a row count. */
-function describeMatchedRows(value: unknown): string | undefined {
+/** Names a value that the flush received in place of a valid one. */
+function describeReceived(value: unknown): string | undefined {
 	if (value === undefined) return undefined;
 	return typeof value === "number"
 		? String(value)
@@ -364,7 +399,7 @@ function describeMatchedRows(value: unknown): string | undefined {
 }
 
 async function readStoredVersion(
-	currentVersion: ClassifyConcurrencyConflictOptions["currentVersion"],
+	currentVersion: () => number | undefined | Promise<number | undefined>,
 ): Promise<VersionRead> {
 	try {
 		return { read: true, currentVersion: await currentVersion() };

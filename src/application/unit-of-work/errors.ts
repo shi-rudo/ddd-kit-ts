@@ -128,6 +128,7 @@ export type FlushStatementReason =
 	| "statement_absent"
 	| "no_row_count"
 	| "no_expected_version"
+	| "no_version"
 	| "duplicate_check_failed";
 
 /**
@@ -135,16 +136,16 @@ export type FlushStatementReason =
  *
  * This is a wiring error, not a persistence failure: the statements cannot
  * run the write the Unit of Work registered, and a retry repeats the same
- * outcome. {@link versionedFlush} raises it during the commit phase, so the
- * repository's `mapError` receives it like a store failure. A mapper must
- * return an `InfrastructureError`. So the use case receives the mapper's own
- * error, and the reason stays in the cause chain.
+ * outcome. The commit phase hands it to the caller unchanged, never to the
+ * repository's `mapError`, because a mapper returns an `InfrastructureError`
+ * and would relabel the defect as a store failure.
  */
 export class InvalidFlushStatementError extends KitWiringError<"INVALID_FLUSH_STATEMENT"> {
 	readonly identity: InvalidFlushStatementErrorOptions["identity"];
-	readonly intent: AggregateWriteIntent;
+	/** The write, or `null` when the code that found the defect does not know it. */
+	readonly intent: AggregateWriteIntent | null;
 	readonly reason: FlushStatementReason;
-	/** What the statement returned instead of a row count. */
+	/** The value that the flush received in place of a valid one. */
 	readonly received: string | undefined;
 	/** The failure of `isDuplicate`, when the classifier itself threw. */
 	readonly classifierCause: unknown;
@@ -156,7 +157,7 @@ export class InvalidFlushStatementError extends KitWiringError<"INVALID_FLUSH_ST
 			options.cause,
 		);
 		this.identity = detachAggregateIdentity(options.identity);
-		this.intent = options.intent;
+		this.intent = options.intent ?? null;
 		this.reason = options.reason;
 		this.received = options.received;
 		this.classifierCause = options.classifierCause;
@@ -167,7 +168,7 @@ export class InvalidFlushStatementError extends KitWiringError<"INVALID_FLUSH_ST
 export interface InvalidFlushStatementErrorOptions {
 	/** The aggregate the error names. */
 	readonly identity: AggregateIdentity;
-	readonly intent: AggregateWriteIntent;
+	readonly intent?: AggregateWriteIntent | null;
 	readonly reason: FlushStatementReason;
 	readonly received?: string;
 	/** The store failure that the flush was handling, kept for diagnosis. */
@@ -178,27 +179,39 @@ export interface InvalidFlushStatementErrorOptions {
 function flushStatementReasonMessage(
 	options: InvalidFlushStatementErrorOptions,
 ): string {
-	const site = `${options.intent} of ${describeAggregateIdentity(options.identity)}`;
+	const aggregate = describeAggregateIdentity(options.identity);
+	const site =
+		options.intent == null ? aggregate : `${options.intent} of ${aggregate}`;
+	const statement = options.intent ?? "write";
 	switch (options.reason) {
 		case "statement_absent":
 			return (
 				`The Unit of Work registered the ${site}, but the statements carry ` +
-				`no ${options.intent}. ` +
+				`no ${statement} statement. ` +
 				(options.intent === "remove"
 					? "A definition with physicalRemoval: true needs a remove statement."
 					: "A definition without appendOnly: true needs an update statement.")
 			);
 		case "no_row_count":
 			return (
-				`The ${options.intent} statement of the ${site} returned ` +
+				`The ${statement} statement of the ${site} returned ` +
 				`${options.received ?? "no value"}. It must return the count of rows ` +
 				"its predicate matched, so the flush can tell a conflict from a write."
 			);
 		case "no_expected_version":
 			return (
-				`The ${site} carries no expectedVersion. The Unit of Work captures ` +
-				"it when the aggregate is loaded, so this write did not come from a " +
-				"loaded aggregate."
+				`The ${site} carries no valid expectedVersion` +
+				(options.received === undefined ? "" : ` (${options.received})`) +
+				". The Unit of Work captures it when the aggregate is loaded, so " +
+				"this write did not come from a loaded aggregate."
+			);
+		case "no_version":
+			return (
+				`The currentVersion statement of ${site} returned ` +
+				`${options.received ?? "no value"}. It must return the stored ` +
+				"version, a safe integer of at least 0, or undefined when the " +
+				"aggregate does not exist. Convert a bigint or a numeric string " +
+				"with Number()."
 			);
 		case "duplicate_check_failed":
 			return (

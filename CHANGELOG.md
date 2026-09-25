@@ -210,9 +210,11 @@ immutable. Run one kit version per process during a cutover.
   `InvalidFlushStatementError`, a wiring error that reaches the caller
   unchanged.
 - `classifyConcurrencyConflict` builds the conflict of a compare-and-set
-  that matched no row. It reads the stored version and names the reason, and
-  a read that fails becomes the cause. `versionedFlush` uses it, and a
-  hand-written flush throws its result.
+  that matched no row. It reads the stored version with the same
+  `currentVersion` statement that `versionedFlush` takes, names the reason,
+  and turns a read that fails into the cause. A read that returns no version
+  throws `InvalidFlushStatementError` with the reason `no_version`.
+  `versionedFlush` uses it, and a hand-written flush throws its result.
 - `ConcurrencyConflictError` names the write that failed in `intent`: `add`,
   `update`, or `remove`. The unit of work sets it on every conflict that
   leaves a flush, because a flush or an event store reports only what it

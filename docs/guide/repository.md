@@ -566,8 +566,8 @@ flush: async (tx: DrizzleTx, write) => {
   throw await classifyConcurrencyConflict({
     identity: write.aggregateIdentity,
     expectedVersion,
-    currentVersion: () =>
-      loadOrderVersion(tx, write.aggregateIdentity.aggregateId),
+    transaction: tx,
+    currentVersion: loadOrderVersion,
   });
 },
 ```
@@ -578,10 +578,13 @@ turns a stale update into an insert. It narrows `expectedVersion` itself: the
 receipt types it as optional, because an `add` carries none, and the conflict
 needs a number. `versionedFlush` does that narrowing for you.
 
-`classifyConcurrencyConflict` reads the stored version and names the reason
+`classifyConcurrencyConflict` reads the stored version with the same
+`currentVersion` statement that `versionedFlush` takes, and names the reason
 of the conflict: `stale_version`, `version_unchanged`, `aggregate_absent`, or
 `version_unknown` when the read fails. The zero row count already proves the
-conflict, so a failed read travels as the cause and never replaces it.
+conflict, so a failed read travels as the cause and never replaces it. A read
+that returns neither a version nor `undefined` is a defect of the statement
+and throws `InvalidFlushStatementError` with the reason `no_version`.
 `versionedFlush` uses the same function. Do not classify by hand: the
 `version_unchanged` case is the one a copy forgets, and it is the one that
 stops a retry of a write that can never succeed.

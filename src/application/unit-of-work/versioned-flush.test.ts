@@ -347,6 +347,27 @@ describe("versionedFlush", () => {
 		});
 	});
 
+	it("fails with a statement defect when the version read returns no version", async () => {
+		const { statements } = recordingStatements({
+			update: () => 0,
+			currentVersion: () => "3" as unknown as number,
+		});
+
+		const rejection = await versionedFlush(statements)(
+			transaction,
+			writeFor("update", 3 as Version),
+		).catch((error: unknown) => error);
+
+		expect(rejection).toBeInstanceOf(InvalidFlushStatementError);
+		expect(rejection).toMatchObject({
+			reason: "no_version",
+			received: "3 (string)",
+		});
+		expect((rejection as Error).message).toContain(
+			`currentVersion statement of Order(${orderId}) returned 3 (string)`,
+		);
+	});
+
 	it("reports a failed version read even when the statement rejects with undefined", async () => {
 		const { statements } = recordingStatements({ update: () => 0 });
 		const rejectingReader = {
@@ -474,12 +495,33 @@ describe("versionedFlush", () => {
 describe("classifyConcurrencyConflict", () => {
 	const identity = { aggregateType: "Order", aggregateId: orderId };
 
-	it("classifies a stored version that differs from the expected one as stale_version", async () => {
-		const conflict = await classifyConcurrencyConflict({
+	function conflictAfter(
+		currentVersion: (
+			transaction: Transaction,
+			aggregateId: OrderId,
+		) => number | undefined | Promise<number | undefined>,
+	) {
+		return classifyConcurrencyConflict({
 			identity,
 			expectedVersion: 3,
-			currentVersion: async () => 5,
+			transaction,
+			currentVersion,
 		});
+	}
+
+	it("reads the stored version through the statement with the transaction and the aggregate id", async () => {
+		const reads: string[] = [];
+
+		await conflictAfter((tx, aggregateId) => {
+			reads.push(`${tx.name} ${aggregateId}`);
+			return 5;
+		});
+
+		expect(reads).toEqual([`transaction ${orderId}`]);
+	});
+
+	it("classifies a stored version that differs from the expected one as stale_version", async () => {
+		const conflict = await conflictAfter(async () => 5);
 
 		expect(conflict).toBeInstanceOf(ConcurrencyConflictError);
 		expect(conflict).toMatchObject({
@@ -493,11 +535,7 @@ describe("classifyConcurrencyConflict", () => {
 	});
 
 	it("classifies a stored version equal to the expected one as version_unchanged, which is not retryable", async () => {
-		const conflict = await classifyConcurrencyConflict({
-			identity,
-			expectedVersion: 3,
-			currentVersion: async () => 3,
-		});
+		const conflict = await conflictAfter(async () => 3);
 
 		expect(conflict).toMatchObject({
 			reason: "version_unchanged",
@@ -507,15 +545,10 @@ describe("classifyConcurrencyConflict", () => {
 	});
 
 	it("classifies a missing aggregate as aggregate_absent", async () => {
-		const conflict = await classifyConcurrencyConflict({
-			identity,
-			expectedVersion: 3,
-			currentVersion: async () => undefined,
-		});
+		const conflict = await conflictAfter(async () => undefined);
 
 		expect(conflict).toMatchObject({
 			reason: "aggregate_absent",
-			intent: null,
 			actualVersion: null,
 		});
 	});
@@ -523,12 +556,8 @@ describe("classifyConcurrencyConflict", () => {
 	it("keeps the conflict when the version read rejects, and carries the failure as cause", async () => {
 		const readFailure = new Error("connection reset");
 
-		const conflict = await classifyConcurrencyConflict({
-			identity,
-			expectedVersion: 3,
-			currentVersion: async () => {
-				throw readFailure;
-			},
+		const conflict = await conflictAfter(async () => {
+			throw readFailure;
 		});
 
 		expect(conflict).toMatchObject({
@@ -541,15 +570,63 @@ describe("classifyConcurrencyConflict", () => {
 	it("keeps the conflict when the version read throws before it returns a promise", async () => {
 		const readFailure = new Error("no connection");
 
-		const conflict = await classifyConcurrencyConflict({
-			identity,
-			expectedVersion: 3,
-			currentVersion: () => {
-				throw readFailure;
-			},
+		const conflict = await conflictAfter(() => {
+			throw readFailure;
 		});
 
 		expect(conflict).toMatchObject({ reason: "version_unknown" });
 		expect(conflict.cause).toBe(readFailure);
 	});
+
+	it.each([
+		["null", null, "null (object)"],
+		["a numeric string", "3", "3 (string)"],
+		["a bigint", 3n, "3 (bigint)"],
+		["NaN", Number.NaN, "NaN"],
+		["a negative number", -1, "-1"],
+		["a fraction", 1.5, "1.5"],
+	])(
+		"rejects a version read that returns %s as a defect of the statement",
+		async (_label, returned, received) => {
+			const rejection = await conflictAfter(
+				() => returned as unknown as number,
+			).catch((error: unknown) => error);
+
+			expect(rejection).toBeInstanceOf(InvalidFlushStatementError);
+			expect(rejection).toMatchObject({
+				reason: "no_version",
+				received,
+				intent: null,
+				retryable: false,
+			});
+		},
+	);
+
+	it.each([
+		["undefined", undefined, undefined],
+		["a negative number", -1, "-1"],
+		["NaN", Number.NaN, "NaN"],
+	])(
+		"rejects an expected version that is %s before it reads the stored version",
+		async (_label, expectedVersion, received) => {
+			let reads = 0;
+
+			const rejection = await classifyConcurrencyConflict({
+				identity,
+				expectedVersion: expectedVersion as unknown as number,
+				transaction,
+				currentVersion: () => {
+					reads += 1;
+					return 5;
+				},
+			}).catch((error: unknown) => error);
+
+			expect(rejection).toBeInstanceOf(InvalidFlushStatementError);
+			expect(rejection).toMatchObject({
+				reason: "no_expected_version",
+				received,
+			});
+			expect(reads).toBe(0);
+		},
+	);
 });
