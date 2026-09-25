@@ -277,6 +277,33 @@ describe("RetryingTransactionScope", () => {
 		expect(inner.attempts).toBe(1); // failed once, aborted during backoff
 	});
 
+	it("announces each attempt before it opens the transaction", async () => {
+		const steps: string[] = [];
+		let opened = 0;
+		const inner: TransactionScope<undefined> = {
+			transactional: async <T>(fn: (ctx: undefined) => Promise<T>) => {
+				opened += 1;
+				steps.push(`open ${opened}`);
+				if (opened < 3) throw conflict();
+				return fn(undefined);
+			},
+		};
+		const scope = new RetryingTransactionScope(inner, { sleep: instantSleep });
+
+		await scope.transactional(async () => "ok", {
+			onAttemptStart: () => steps.push("attempt starts"),
+		});
+
+		expect(steps).toEqual([
+			"attempt starts",
+			"open 1",
+			"attempt starts",
+			"open 2",
+			"attempt starts",
+			"open 3",
+		]);
+	});
+
 	it("forwards the transactional options (signal) to the inner scope", async () => {
 		let received: AbortSignal | undefined;
 		const inner: TransactionScope<undefined> = {

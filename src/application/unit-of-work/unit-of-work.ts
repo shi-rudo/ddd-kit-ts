@@ -626,10 +626,10 @@ export class UnitOfWork<
 		this._active = true;
 
 		let session: Session<Evt> | undefined;
-		let workCompleted = false;
-		let workThrew = false;
-		let workError: unknown;
-		let checkRegistrations: (() => void) | undefined;
+		// The attempt that the scope runs now. Each callback writes only to
+		// its own record, so an abandoned attempt that settles late cannot
+		// relabel the failure of the live one.
+		let attempt = startAttempt();
 
 		try {
 			return await withCheckedCommit<Evt, R, TCtx>(
@@ -653,10 +653,8 @@ export class UnitOfWork<
 					session?.close();
 					const s = new Session<Evt>(enrollment);
 					session = s;
-					workCompleted = false;
-					workThrew = false;
-					workError = undefined;
-					checkRegistrations = undefined;
+					const current = startAttempt();
+					attempt = current;
 
 					const repositories = this.buildRepositories(tx, s);
 					const context = makeContext(repositories, s, options?.signal);
@@ -673,28 +671,28 @@ export class UnitOfWork<
 						// work that changed a registered aggregate, or that tried to
 						// register a write, fails the run here.
 						s.assertReadyToCommit();
-						workCompleted = true;
+						current.workCompleted = true;
 						// The tokens below are what gets harvested; after close, any
 						// use of the session throws TransactionClosedError.
 						const commits = s.commitTokens;
-						checkRegistrations = s.registrationsCheck();
+						const checkBeforeCommit = s.registrationsCheck();
 						s.close();
-						return { result, commits };
+						return { result, commits, checkBeforeCommit };
 					} catch (error) {
-						workThrew = true;
-						workError = error;
+						current.workThrew = true;
+						current.workError = error;
 						throw error;
 					}
 				},
-				() => checkRegistrations?.(),
+				// A scope that retries announces each attempt before it opens
+				// the transaction. A failure to open that attempt then finds a
+				// fresh record, not the flags of the attempt before it.
+				() => {
+					attempt = startAttempt();
+				},
 			);
 		} catch (error) {
-			throw classifyRunError(error, {
-				workThrew,
-				workCompleted,
-				workError,
-				signal: options?.signal,
-			});
+			throw classifyRunError(error, attempt, options?.signal);
 		} finally {
 			session?.close();
 			this._active = false;
@@ -746,9 +744,20 @@ function makeContext<TRepos, Evt extends AnyDomainEvent>(
 	};
 }
 
+/** What one scope attempt of `run()` reached: the flags that label its failure. */
+interface RunAttempt {
+	workCompleted: boolean;
+	workThrew: boolean;
+	workError: unknown;
+}
+
+function startAttempt(): RunAttempt {
+	return { workCompleted: false, workThrew: false, workError: undefined };
+}
+
 /**
  * Classifies a `withCommit` rejection into the error `run()` should throw,
- * using the flags captured inside the work wrapper. Pure and total: it
+ * using the record of the attempt that the scope ran last. Pure and total: it
  * returns the error to throw rather than throwing itself, so `run()` reads
  * as orchestration and this decision is unit-testable in isolation.
  *
@@ -773,12 +782,8 @@ function makeContext<TRepos, Evt extends AnyDomainEvent>(
  */
 function classifyRunError(
 	error: unknown,
-	state: {
-		readonly workThrew: boolean;
-		readonly workCompleted: boolean;
-		readonly workError: unknown;
-		readonly signal: AbortSignal | undefined;
-	},
+	state: Readonly<RunAttempt>,
+	signal: AbortSignal | undefined,
 ): unknown {
 	// Cancellation wins over the attempt flags: a scope that rejects with
 	// the caller's abort reason between retry attempts never re-enters the
@@ -787,10 +792,9 @@ function classifyRunError(
 	// a RollbackError carrying a retryable cause, inviting a retry of an
 	// explicitly cancelled operation.
 	if (
-		state.signal?.aborted &&
-		state.signal.reason !== undefined &&
-		(error === state.signal.reason ||
-			causeChainContains(error, state.signal.reason))
+		signal?.aborted &&
+		signal.reason !== undefined &&
+		(error === signal.reason || causeChainContains(error, signal.reason))
 	) {
 		return error;
 	}

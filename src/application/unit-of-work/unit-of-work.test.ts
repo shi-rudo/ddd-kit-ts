@@ -21,6 +21,7 @@ import type { EventBus } from "../../messaging/event-bus/ports";
 import type { Outbox } from "../../messaging/outbox/ports";
 import type { AggregateClass } from "../../persistence/repository/identity-map";
 import type { PersistenceModel } from "../../persistence/repository/persistence-model";
+import { RetryingTransactionScope } from "../../persistence/repository/retrying-scope";
 import type { TransactionScope } from "../../persistence/repository/scope";
 import { unstampedAggregate } from "../../testing/unstamped-aggregate";
 import {
@@ -2678,6 +2679,113 @@ describe("UnitOfWork", () => {
 			expect((rejection as RollbackError).cause).toBe(original);
 			// ...and the scope's own failure rides along.
 			expect((rejection as RollbackError).rollbackCause).toBe(rollbackFailure);
+		});
+	});
+
+	describe("error labeling per scope attempt", () => {
+		function retryingOver(
+			attempts: ReadonlyArray<
+				(fn: (_ctx: undefined) => Promise<unknown>) => Promise<unknown>
+			>,
+		): TransactionScope<undefined> {
+			let attempt = 0;
+			const inner: TransactionScope<undefined> = {
+				transactional: <T>(fn: (_ctx: undefined) => Promise<T>) => {
+					const run = attempts[attempt];
+					attempt += 1;
+					if (!run) throw new Error("no attempt left");
+					return run(fn) as Promise<T>;
+				},
+			};
+			return new RetryingTransactionScope(inner, {
+				maxAttempts: attempts.length,
+				isRetryable: () => true,
+				sleep: async () => {},
+			});
+		}
+
+		it("a retry that cannot open its transaction passes the open failure through after a rolled-back attempt", async () => {
+			const conflict = new Error("attempt one conflicts");
+			const openFailure = new Error("attempt two cannot connect");
+			const scope = retryingOver([
+				(fn) => fn(undefined),
+				async () => {
+					throw openFailure;
+				},
+			]);
+			const { uow } = createUow({ scope });
+
+			const rejection = await uow
+				.run(async () => {
+					throw conflict;
+				})
+				.then(
+					() => "committed",
+					(error: unknown) => error,
+				);
+
+			expect(rejection).toBe(openFailure);
+		});
+
+		it("a retry that cannot open its transaction passes the open failure through after a failed commit", async () => {
+			const commitFailure = new Error("attempt one fails at COMMIT");
+			const openFailure = new Error("attempt two cannot connect");
+			const scope = retryingOver([
+				async (fn) => {
+					await fn(undefined);
+					throw commitFailure;
+				},
+				async () => {
+					throw openFailure;
+				},
+			]);
+			const { uow } = createUow({ scope });
+
+			const rejection = await uow
+				.run(async () => "completed")
+				.then(
+					() => "committed",
+					(error: unknown) => error,
+				);
+
+			expect(rejection).toBe(openFailure);
+		});
+
+		it("an abandoned attempt that throws late does not relabel the failure of the live attempt", async () => {
+			const lateFailure = new Error("abandoned attempt fails late");
+			const commitFailure = new Error("live attempt fails at COMMIT");
+			let releaseAbandoned!: () => void;
+			const abandonedReleased = new Promise<void>((resolve) => {
+				releaseAbandoned = resolve;
+			});
+			const scope: TransactionScope<undefined> = {
+				transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
+					const abandoned = fn(undefined).catch(() => undefined);
+					await fn(undefined);
+					releaseAbandoned();
+					await abandoned;
+					throw commitFailure;
+				},
+			};
+			const { uow } = createUow({ scope });
+			let calls = 0;
+
+			const rejection = await uow
+				.run(async () => {
+					calls += 1;
+					if (calls === 1) {
+						await abandonedReleased;
+						throw lateFailure;
+					}
+					return "completed";
+				})
+				.then(
+					() => "committed",
+					(error: unknown) => error,
+				);
+
+			expect(rejection).toBeInstanceOf(CommitError);
+			expect((rejection as CommitError).cause).toBe(commitFailure);
 		});
 	});
 

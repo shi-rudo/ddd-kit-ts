@@ -511,21 +511,37 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 		enrollment: CommitEnrollment<Evt>,
 	) => Promise<WithCommitWorkResult<Evt, R>>,
 ): Promise<R> {
-	return withCheckedCommit(deps, fn, undefined);
+	return withCheckedCommit(
+		deps,
+		async (ctx, enrollment) => {
+			const { result, commits } = await fn(ctx, enrollment);
+			return { result, commits };
+		},
+		undefined,
+	);
+}
+
+/** A work result that also carries the check of its own attempt. */
+export interface CheckedWorkResult<Evt extends AnyDomainEvent, R>
+	extends WithCommitWorkResult<Evt, R> {
+	/**
+	 * Runs inside the transaction after the outbox write, just before the
+	 * commit. A check that throws rolls the transaction back.
+	 */
+	readonly checkBeforeCommit?: () => void;
 }
 
 /**
- * {@link withCommit} with a check that runs inside the transaction after the
- * outbox write, just before the commit. A check that throws rolls the
- * transaction back.
+ * {@link withCommit} with a check per attempt before the commit. The scope
+ * receives `onAttemptStart` in its transactional options.
  */
 export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 	deps: WithCommitDeps<Evt, TCtx>,
 	fn: (
 		ctx: TCtx,
 		enrollment: CommitEnrollment<Evt>,
-	) => Promise<WithCommitWorkResult<Evt, R>>,
-	checkBeforeCommit: (() => void) | undefined,
+	) => Promise<CheckedWorkResult<Evt, R>>,
+	onAttemptStart: (() => void) | undefined,
 ): Promise<R> {
 	const postCommitTimeoutMs =
 		deps.postCommitTimeoutMs ?? DEFAULT_EXECUTION_TIMEOUT_MS;
@@ -549,7 +565,7 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 	const { result, commitRecords, events } = await deps.scope.transactional(
 		async (ctx) => {
 			const tokenScope = createCommitTokenScope<Evt>();
-			let fnResult: WithCommitWorkResult<Evt, R>;
+			let fnResult: CheckedWorkResult<Evt, R>;
 			try {
 				fnResult = await fn(ctx, tokenScope.enrollment);
 			} finally {
@@ -650,14 +666,14 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 					}
 				}
 			}
-			checkBeforeCommit?.();
+			fnResult.checkBeforeCommit?.();
 			return {
 				result: fnResult.result,
 				commitRecords,
 				events: candidates.map(({ event }) => event),
 			};
 		},
-		{ signal: deps.signal },
+		{ signal: deps.signal, onAttemptStart },
 	);
 
 	// Post-commit: capture the persisted versions, acknowledge every saved

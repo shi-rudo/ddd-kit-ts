@@ -11,6 +11,14 @@ export interface TransactionalOptions {
 	 * eagerly cancellable.
 	 */
 	readonly signal?: AbortSignal;
+	/**
+	 * Tells the caller that a new attempt starts. A scope that can open more
+	 * than one transaction for one call (a retrying scope) calls it before
+	 * each attempt opens its transaction. The caller can then tell a failure
+	 * to open the next attempt apart from a failure of the previous one. A
+	 * scope that opens one transaction per call can ignore it.
+	 */
+	readonly onAttemptStart?: () => void;
 }
 
 /**
