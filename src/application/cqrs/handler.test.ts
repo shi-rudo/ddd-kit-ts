@@ -197,6 +197,31 @@ describe("withCommit", () => {
 		expect(outbox.added[0]).toEqual([stamped(event)]);
 	});
 
+	it("an outbox that mutates its input fails the commit instead of changing what the bus publishes", async () => {
+		const event = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "order-1" },
+			{ aggregateId: "agg-1", aggregateType: "MockOrder" },
+		);
+		const agg = createMockAggregate([event]);
+		const bus = createMockBus();
+		const outbox: Outbox<TestEvent> = {
+			add: async (candidates) => {
+				(candidates as EventCommitCandidate<TestEvent>[]).length = 0;
+			},
+			getPending: async () => [],
+			markDispatched: async () => {},
+		};
+
+		await expect(
+			withCommit(
+				{ outbox, bus, scope: createMockScope() },
+				async (_ctx, enrollment) => enrolledResult(enrollment, "ok", [agg]),
+			),
+		).rejects.toBeInstanceOf(TypeError);
+		expect(bus.published).toEqual([]);
+	});
+
 	it("rejects an unrecorded aggregate decision before writing the outbox", async () => {
 		class DecisionAggregate extends StateStoredAggregate<
 			Readonly<Record<string, never>>,
