@@ -220,6 +220,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		let entry = existing;
 		const newlyTracked = !entry;
 		if (!entry) {
+			this.assertIdentityNotTaken(aggregate, definition);
 			this._identityMap.set(definition.aggregate, aggregate);
 			entry = {
 				aggregate,
@@ -251,6 +252,21 @@ export class Session<Evt extends AnyDomainEvent> {
 			}
 			throw error;
 		}
+	}
+
+	/** Two live instances of one identity would each flush and harvest. */
+	private assertIdentityNotTaken(
+		aggregate: Aggregate<Id<string>, Evt>,
+		definition: RuntimePersistenceDefinition<Evt>,
+	): void {
+		const tracked = this._identityMap.get(definition.aggregate, aggregate.id);
+		if (tracked === undefined || tracked === aggregate) return;
+		throw new AggregateTrackingError({
+			identity: aggregate.aggregateIdentity,
+			operation: "add",
+			reason: "identity_already_tracked",
+			registeredIntent: this.registrationOf(tracked as object)?.intent,
+		});
 	}
 
 	public update(

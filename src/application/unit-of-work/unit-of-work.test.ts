@@ -755,6 +755,41 @@ describe("UnitOfWork", () => {
 			);
 		});
 
+		it("rejects add of a second instance with the identity of a loaded aggregate", async () => {
+			const { uow } = createUow();
+
+			await expectTrackingFailure(
+				uow.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(createMockAggregate("o-1"));
+					repositories.orders.add(createMockAggregate("o-1"));
+					return undefined;
+				}),
+				"identity_already_tracked",
+			);
+		});
+
+		it("rejects add of a second new instance with the same identity", async () => {
+			const { uow } = createUow();
+
+			const rejection = await uow
+				.run(async ({ repositories }) => {
+					repositories.orders.add(createMockAggregate("o-1"));
+					repositories.orders.add(createMockAggregate("o-1"));
+					return undefined;
+				})
+				.then(
+					() => "committed",
+					(error: unknown) => error,
+				);
+
+			expect(rejection).toBeInstanceOf(AggregateTrackingError);
+			expect(rejection).toMatchObject({
+				operation: "add",
+				reason: "identity_already_tracked",
+				registeredIntent: "add",
+			});
+		});
+
 		it("rejects adding one aggregate instance through two repository definitions", async () => {
 			const aggregate = createMockAggregate("o-1");
 			let flushCalls = 0;

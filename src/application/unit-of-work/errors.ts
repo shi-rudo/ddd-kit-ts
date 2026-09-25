@@ -251,7 +251,8 @@ export type AggregateTrackingReason =
 	| "different_repository"
 	| "conflicting_intent"
 	| "mutated_after_registration"
-	| "registered_during_flush";
+	| "registered_during_flush"
+	| "identity_already_tracked";
 
 /**
  * A deterministic violation of the Unit of Work's aggregate lifecycle.
@@ -331,6 +332,12 @@ function trackingReasonMessage(options: AggregateTrackingErrorOptions): string {
 				`Aggregate ${aggregate} cannot be registered for ${operation}: the ` +
 				"unit of work already flushes its writes, so this write cannot join " +
 				"the transaction. Await every repository call inside the run() callback."
+			);
+		case "identity_already_tracked":
+			return (
+				`Aggregate ${aggregate} cannot be registered for ${operation}: this ` +
+				"unit of work already tracks another instance with the same identity. " +
+				"Change the tracked instance, or give the new aggregate a new id."
 			);
 	}
 }
