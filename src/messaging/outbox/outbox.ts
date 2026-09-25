@@ -51,6 +51,7 @@ export function outboxWriterAcceptingEventLoss<
 >(): OutboxWriter<Evt> {
 	return {
 		add: async () => {},
+		endEventSources: async () => {},
 	};
 }
 
@@ -131,7 +132,9 @@ type DispatchedEventReceipt = {
  * inverse of `deadLetters()`); `markDispatched` acks pending AND
  * dead-lettered records (manual redelivery then ack).
  * To link future eventful commits, the implementation also retains one
- * source cursor per qualified aggregate after dispatch. Consequently a
+ * source cursor per qualified aggregate after dispatch. `endEventSources`
+ * marks the cursor of a removed aggregate as ended, and a new event of that
+ * source then throws {@link EventHarvestError}. Consequently a
  * long-lived instance is bounded only when `maxRecords` and `maxSources` are
  * configured, plus `maxRetainedDispatchedEventIds`; use a durable adapter with
  * an explicit source-head lifecycle and an event-id unique key for unbounded
@@ -175,6 +178,8 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 	private readonly dead = new Map<string, DeadLetterRecord<Evt>>();
 	/** Latest eventful commit and its predecessor per qualified source. */
 	private readonly sourceCursors = new Map<string, EventSourceCursor>();
+	/** Keys of source cursors whose aggregate was removed. */
+	private readonly endedSourceKeys = new Set<string>();
 	/** Bounded insertion-ordered receipts for exact retries after acknowledgement. */
 	private readonly dispatchedEventIds = new Map<
 		string,
@@ -499,6 +504,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 		const simulatedCursors = new Map<string, EventSourceCursor>();
 		for (const { event, source, position } of events) {
 			const sourceKey = encodeAggregateIdentity(source);
+			this.assertSourceNotEnded(event, source, position, sourceKey);
 			const cursor =
 				simulatedCursors.get(sourceKey) ?? this.sourceCursors.get(sourceKey);
 			if (
@@ -612,6 +618,43 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 			// clears it too.
 			this.dead.delete(id);
 		}
+	}
+
+	async endEventSources(
+		sources: ReadonlyArray<AggregateIdentity>,
+	): Promise<void> {
+		for (const source of sources) {
+			const sourceKey = encodeAggregateIdentity(source);
+			if (this.sourceCursors.has(sourceKey)) {
+				this.endedSourceKeys.add(sourceKey);
+			}
+		}
+	}
+
+	/** An exact retry of a stored event of an ended source stays a retry. */
+	private assertSourceNotEnded(
+		event: AnyDomainEvent,
+		source: AggregateIdentity,
+		position: EventCommitCandidatePosition,
+		sourceKey: string,
+	): void {
+		if (!this.endedSourceKeys.has(sourceKey)) return;
+		if (
+			this.pending.has(event.eventId) ||
+			this.dead.has(event.eventId) ||
+			this.dispatchedEventIds.has(event.eventId) ||
+			this.recordedAtSourceHead(event, source, position)
+		) {
+			return;
+		}
+		throw new EventHarvestError(
+			`InMemoryOutbox rejected event "${event.eventId}" for ` +
+				`${describeAggregateIdentity(source)}: the aggregate was removed, so ` +
+				"its event source ended. The kit does not support an aggregate that " +
+				"is created again under a removed identity. Give the new aggregate " +
+				"a new id.",
+			event.type,
+		);
 	}
 
 	private recordedAtSourceHead(

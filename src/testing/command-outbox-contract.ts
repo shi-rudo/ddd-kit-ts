@@ -4,6 +4,7 @@ import type {
 	CommandOutboxWriter,
 	DurableCommandMessage,
 } from "../application/cqrs/command/command-outbox";
+import type { AggregateIdentity } from "../domain/aggregate/aggregate-identity";
 import { deepEqual } from "../internal/structural/deep-equal";
 import {
 	assert,
@@ -11,6 +12,7 @@ import {
 	bindContractEnvironment,
 	type ContractTest,
 	captureRejection,
+	describeError,
 	gatedContractTest,
 } from "./contract-assertions";
 
@@ -21,6 +23,14 @@ export interface CommandOutboxContractEnvironment<C extends PublishedCommand> {
 	) => Promise<void>;
 	readonly addRolledBack?: (
 		commits: ReadonlyArray<CommandOutboxCommitCandidate<C>>,
+	) => Promise<void>;
+	/** Runs `outbox.endEventSources(sources)` in a transaction that commits. */
+	readonly endEventSourcesCommitted: (
+		sources: ReadonlyArray<AggregateIdentity>,
+	) => Promise<void>;
+	/** Runs `outbox.endEventSources(sources)` in a transaction that rolls back. */
+	readonly endEventSourcesRolledBack?: (
+		sources: ReadonlyArray<AggregateIdentity>,
 	) => Promise<void>;
 	readonly readAll: () => Promise<
 		ReadonlyArray<CommandOutboxCommitCandidate<C>>
@@ -42,6 +52,8 @@ export interface CommandOutboxContractHarness<C extends PublishedCommand> {
 	 */
 	readonly createCommand: (seed: number) => C;
 	readonly providesRolledBackAdds?: boolean;
+	/** Declare `true` when environments provide `endEventSourcesRolledBack`. */
+	readonly providesRolledBackEnds?: boolean;
 }
 
 export type CommandOutboxContractTest = ContractTest;
@@ -50,16 +62,18 @@ export function createCommandOutboxContractTests<C extends PublishedCommand>(
 	harness: CommandOutboxContractHarness<C>,
 ): ReadonlyArray<CommandOutboxContractTest> {
 	const inEnv = bindContractEnvironment(harness.createEnvironment);
+	const processSource: AggregateIdentity = {
+		aggregateType: "CheckoutProcess",
+		aggregateId: "order-1",
+	};
 	const commit = (
 		seed: number,
 		commandSeeds: ReadonlyArray<number> = [seed],
+		source: AggregateIdentity = processSource,
 	): CommandOutboxCommitCandidate<C> => ({
 		origin: {
 			eventId: `process-event-${seed}`,
-			source: {
-				aggregateType: "CheckoutProcess",
-				aggregateId: "order-1",
-			},
+			source,
 			position: {
 				aggregateVersion: seed,
 				commitSequence: 0,
@@ -343,6 +357,70 @@ export function createCommandOutboxContractTests<C extends PublishedCommand>(
 				);
 			}),
 		},
+		{
+			name: "rejects a new commit of an ended source",
+			run: inEnv(async (env) => {
+				const otherProcess: AggregateIdentity = {
+					aggregateType: "CheckoutProcess",
+					aggregateId: "order-2",
+				};
+				await env.addCommitted([commit(1)]);
+				await env.endEventSourcesCommitted([processSource]);
+				const secondEnd = await captureRejection(
+					env.endEventSourcesCommitted([processSource]),
+				);
+				assert(
+					secondEnd === undefined,
+					`ending a source twice must not be an error. Got: ${describeError(secondEnd)}`,
+				);
+
+				const rejection = await captureRejection(env.addCommitted([commit(2)]));
+				assert(
+					rejection !== undefined,
+					"a new commit of an ended source must reject",
+				);
+				await env.addCommitted([commit(3, [3], otherProcess)]);
+				assert(
+					deepEqual(
+						(await env.readAll()).map(({ origin }) => origin.eventId),
+						["process-event-1", "process-event-3"],
+					),
+					"the rejected commit must leave no receipt, and ending one source must not end another",
+				);
+			}),
+		},
+		{
+			name: "deduplicates an exact retry of a commit of an ended source",
+			run: inEnv(async (env) => {
+				const original = commit(1);
+				await env.addCommitted([original]);
+				await env.endEventSourcesCommitted([processSource]);
+
+				const rejection = await captureRejection(env.addCommitted([original]));
+				assert(
+					rejection === undefined,
+					`an exact retry must stay idempotent after its source ended. Got: ${describeError(rejection)}`,
+				);
+				assertEqual(
+					(await env.readAll()).length,
+					1,
+					"the retry must not append another receipt",
+				);
+			}),
+		},
+		{
+			name: "ending a source without a cursor leaves it open for its first commit",
+			run: inEnv(async (env) => {
+				await env.endEventSourcesCommitted([processSource]);
+				await env.addCommitted([commit(1)]);
+
+				assertEqual(
+					(await env.readAll()).length,
+					1,
+					"a source without a cursor has nothing to protect, so its first commit is accepted",
+				);
+			}),
+		},
 	];
 	tests.push(
 		gatedContractTest(
@@ -363,6 +441,31 @@ export function createCommandOutboxContractTests<C extends PublishedCommand>(
 						(await env.readAll()).length,
 						0,
 						"a rolled-back transaction must persist no command receipt",
+					);
+				}),
+			},
+		),
+		gatedContractTest(
+			{
+				capability: "providesRolledBackEnds",
+				satisfiedBy: harness.providesRolledBackEnds === true,
+			},
+			{
+				name: "a rolled-back end leaves the source open",
+				run: inEnv(async (env) => {
+					if (!env.endEventSourcesRolledBack) {
+						throw new Error(
+							"Contract violated: harness declared providesRolledBackEnds but the environment lacks endEventSourcesRolledBack",
+						);
+					}
+					await env.addCommitted([commit(1)]);
+					await env.endEventSourcesRolledBack([processSource]);
+					await env.addCommitted([commit(2)]);
+
+					assertEqual(
+						(await env.readAll()).length,
+						2,
+						"an end in a rolled-back transaction must not end the source",
 					);
 				}),
 			},

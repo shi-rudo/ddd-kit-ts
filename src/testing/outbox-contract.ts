@@ -50,6 +50,24 @@ export interface OutboxContractEnvironment<Evt extends AnyDomainEvent> {
 		events: ReadonlyArray<EventCommitCandidate<Evt>>,
 	): Promise<void>;
 
+	/**
+	 * Runs `outbox.endEventSources(sources)` inside a transaction that
+	 * COMMITS, the way `withCommit` calls it for a removal. For a
+	 * non-transactional store this is simply `outbox.endEventSources(sources)`.
+	 */
+	endEventSourcesCommitted(
+		sources: ReadonlyArray<AggregateIdentity>,
+	): Promise<void>;
+
+	/**
+	 * Optional capability: runs `outbox.endEventSources(sources)` inside a
+	 * transaction that ROLLS BACK. Enables the test that a rolled-back
+	 * removal leaves its event source open.
+	 */
+	endEventSourcesRolledBack?(
+		sources: ReadonlyArray<AggregateIdentity>,
+	): Promise<void>;
+
 	/** Release connections, drop schemas, etc. Called in a finally. */
 	teardown?(): Promise<void>;
 }
@@ -95,6 +113,13 @@ export interface OutboxContractHarness<Evt extends AnyDomainEvent> {
 	 * in-memory fake, and a loud gap for a transactional adapter.
 	 */
 	providesRolledBackAdds?: boolean;
+
+	/**
+	 * Declare `true` when environments provide {@link
+	 * OutboxContractEnvironment.endEventSourcesRolledBack}. Without it, the
+	 * test that a rolled-back end leaves the source open is marked skipped.
+	 */
+	providesRolledBackEnds?: boolean;
 
 	/**
 	 * Declare `true` when the adapter's `getPending` CLAIMS the returned
@@ -262,6 +287,63 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 			}),
 		},
 		{
+			name: "rejects a new event of an ended event source",
+			run: inEnv(async (env) => {
+				const removed: AggregateIdentity = {
+					aggregateType: "Order",
+					aggregateId: "1",
+				};
+				const sibling: AggregateIdentity = {
+					aggregateType: "Payment",
+					aggregateId: "1",
+				};
+				const first = harness.createEvent(1);
+				const siblingFirst = harness.createEvent(2);
+				const siblingNext = harness.createEvent(4);
+				await env.addCommitted(commit([first], 1, removed));
+				await env.addCommitted(commit([siblingFirst], 1, sibling));
+				await env.endEventSourcesCommitted([removed]);
+				const secondEnd = await captureRejection(
+					env.endEventSourcesCommitted([removed]),
+				);
+				assert(
+					secondEnd === undefined,
+					`ending an event source twice must not be an error. Got: ${describeError(secondEnd)}`,
+				);
+
+				const rejection = await captureRejection(
+					env.addCommitted(commit([harness.createEvent(3)], 5, removed)),
+				);
+				assert(
+					rejection !== undefined,
+					"a new event of an ended event source must reject, also above its head",
+				);
+				await env.addCommitted(commit([siblingNext], 2, sibling));
+				const records = await takeAndAck(env, 3);
+				assert(
+					deepEqual(
+						records.map(({ event }) => event.eventId),
+						[first.eventId, siblingFirst.eventId, siblingNext.eventId],
+					),
+					"the rejected event must leave no record, and ending one source must not end another",
+				);
+			}),
+		},
+		{
+			name: "ending an event source without events leaves it open for its first event",
+			run: inEnv(async (env) => {
+				await env.endEventSourcesCommitted([defaultSource]);
+				await env.addCommitted(commit([harness.createEvent(1)], 1));
+
+				const [record] = await takeAndAck(env, 1);
+				assertEqual(
+					record?.position.previousEventfulAggregateVersion,
+					null,
+					"a source without a head has no events to protect, so its first event starts a genesis head",
+				);
+			}),
+		},
+		{
 			name: "getPending returns records in commit order, across separate committed adds",
 			run: inEnv(async (env) => {
 				await env.addCommitted(
@@ -422,6 +504,31 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 				}),
 			},
 		),
+		gatedContractTest(
+			{
+				capability: "dedupesOnEventId",
+				satisfiedBy: harness.dedupesOnEventId === true,
+			},
+			{
+				name: "an exact retry of a stored event of an ended source is deduped, not rejected",
+				run: inEnv(async (env) => {
+					const original = commit([harness.createEvent(1)]);
+					await env.addCommitted(original);
+					await env.endEventSourcesCommitted([defaultSource]);
+
+					const rejection = await captureRejection(env.addCommitted(original));
+					assert(
+						rejection === undefined,
+						`an exact retry of a stored event must stay idempotent after its source ended. Got: ${describeError(rejection)}`,
+					);
+					assertEqual(
+						(await env.outbox.getPending(10)).length,
+						1,
+						"the retry must not add a second record",
+					);
+				}),
+			},
+		),
 	];
 
 	// Rollback purity: capability-gated (in-memory fakes cannot keep it).
@@ -451,6 +558,35 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 						afterRollback?.position.previousEventfulAggregateVersion,
 						null,
 						"a rolled-back add must not advance the event-source head",
+					);
+				}),
+			},
+		),
+	);
+
+	tests.push(
+		gatedContractTest(
+			{
+				capability: "providesRolledBackEnds",
+				satisfiedBy: harness.providesRolledBackEnds === true,
+			},
+			{
+				name: "a rolled-back end leaves the event source open (transactional participation)",
+				run: inEnv(async (env) => {
+					if (!env.endEventSourcesRolledBack) {
+						throw new Error(
+							"Contract violated: harness declared providesRolledBackEnds but the environment lacks endEventSourcesRolledBack",
+						);
+					}
+					await env.addCommitted(commit([harness.createEvent(1)], 1));
+					await env.endEventSourcesRolledBack([defaultSource]);
+					await env.addCommitted(commit([harness.createEvent(2)], 2));
+
+					const [, next] = await takeAndAck(env, 2);
+					assertEqual(
+						next?.position.previousEventfulAggregateVersion,
+						1,
+						"an end in a rolled-back transaction must not end the event source",
 					);
 				}),
 			},

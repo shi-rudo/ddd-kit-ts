@@ -78,6 +78,7 @@ const scope: TransactionScope<undefined> = {
 function outbox(): Outbox<OrderEvent> {
 	return {
 		add: async () => {},
+		endEventSources: async () => {},
 		getPending: async () => [],
 		markDispatched: async () => {},
 	};

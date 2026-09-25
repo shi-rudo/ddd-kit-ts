@@ -64,6 +64,7 @@ describe("routeEventsToCommandOutbox", () => {
 			add: async (commits) => {
 				writes.push(commits);
 			},
+			endEventSources: async () => {},
 		};
 		const writer = routeEventsToCommandOutbox(
 			commandOutbox,
@@ -141,6 +142,7 @@ describe("routeEventsToCommandOutbox", () => {
 			add: async (commits) => {
 				received = commits;
 			},
+			endEventSources: async () => {},
 		};
 		const writer = routeEventsToCommandOutbox(commandOutbox, () => []);
 
@@ -173,6 +175,7 @@ describe("routeEventsToCommandOutbox", () => {
 			add: async (commits) => {
 				writes.push(commits);
 			},
+			endEventSources: async () => {},
 		};
 		const writer = routeEventsToCommandOutbox(commandOutbox, () => [
 			{
@@ -212,6 +215,7 @@ describe("routeEventsToCommandOutbox", () => {
 				add: async (commits) => {
 					recorded = commits[0];
 				},
+				endEventSources: async () => {},
 			},
 			() => [
 				{
@@ -238,6 +242,7 @@ describe("routeEventsToCommandOutbox", () => {
 				add: async () => {
 					addCalls += 1;
 				},
+				endEventSources: async () => {},
 			},
 			() => [
 				{
@@ -268,6 +273,7 @@ describe("routeEventsToCommandOutbox", () => {
 				add: async () => {
 					addCalls += 1;
 				},
+				endEventSources: async () => {},
 			},
 			() => sparse,
 		);
@@ -285,6 +291,7 @@ describe("routeEventsToCommandOutbox", () => {
 				add: async () => {
 					addCalls += 1;
 				},
+				endEventSources: async () => {},
 			},
 			() => [
 				{
@@ -313,6 +320,7 @@ describe("routeEventsToCommandOutbox", () => {
 				add: async () => {
 					addCalls += 1;
 				},
+				endEventSources: async () => {},
 			},
 			() => [
 				{
@@ -338,6 +346,7 @@ describe("routeEventsToCommandOutbox", () => {
 				add: async () => {
 					addCalls += 1;
 				},
+				endEventSources: async () => {},
 			},
 			() => [
 				{
@@ -364,6 +373,7 @@ describe("routeEventsToCommandOutbox", () => {
 				add: async () => {
 					addCalls += 1;
 				},
+				endEventSources: async () => {},
 			},
 			() => [
 				{
@@ -395,6 +405,7 @@ describe("routeEventsToCommandOutbox", () => {
 				add: async (commits) => {
 					received = commits;
 				},
+				endEventSources: async () => {},
 			},
 			() => [
 				{
@@ -421,6 +432,7 @@ describe("routeEventsToCommandOutbox", () => {
 				add: async (commits: unknown) => {
 					received = commits;
 				},
+				endEventSources: async () => {},
 			},
 			() => [
 				{
@@ -450,6 +462,7 @@ describe("routeEventsToCommandOutbox", () => {
 				add: async () => {
 					addCalls += 1;
 				},
+				endEventSources: async () => {},
 			},
 			() => [
 				{

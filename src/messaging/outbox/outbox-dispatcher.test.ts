@@ -97,6 +97,7 @@ function interceptOutbox(
 ): Outbox<TestEvent> {
 	return {
 		add: (events) => inner.add(events),
+		endEventSources: async () => {},
 		getPending: (limit) => inner.getPending(limit),
 		markDispatched: (ids) => inner.markDispatched(ids),
 		...overrides,
@@ -777,6 +778,7 @@ describe("OutboxDispatcher", () => {
 			markFailed: (reason: string) => Promise<void>;
 		} = {
 			add: (events) => inner.add(events),
+			endEventSources: async () => {},
 			getPending: (limit) => inner.getPending(limit),
 			markDispatched: (ids) => inner.markDispatched(ids),
 			markFailed: async (reason) => {
@@ -964,6 +966,7 @@ describe("OutboxDispatcher", () => {
 		it("never rejects on a poll failure", async () => {
 			const outbox: Outbox<TestEvent> = {
 				add: async () => {},
+				endEventSources: async () => {},
 				getPending: async () => {
 					throw new Error("storage down");
 				},

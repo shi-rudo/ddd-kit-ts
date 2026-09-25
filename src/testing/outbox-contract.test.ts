@@ -23,9 +23,10 @@ function createInMemoryHarness(): OutboxContractHarness<TestEvent> {
 			return {
 				outbox,
 				addCommitted: (events) => outbox.add(events),
-				// No addRolledBack: the in-memory outbox cannot keep rollback
-				// purity (documented limitation); the test stays visible as
-				// skipped.
+				endEventSourcesCommitted: (sources) => outbox.endEventSources(sources),
+				// No addRolledBack or endEventSourcesRolledBack: the in-memory
+				// outbox cannot keep rollback purity (documented limitation);
+				// the tests stay visible as skipped.
 			};
 		},
 		createEvent: (seed) =>
@@ -47,10 +48,11 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 		(test.skipped ? it.skip : it)(test.name, test.run);
 	}
 
-	it("only the rollback-purity test is skipped for the in-memory reference", () => {
+	it("only the rollback-purity tests are skipped for the in-memory reference", () => {
 		const skipped = tests.filter((test) => test.skipped);
 		expect(skipped.map((test) => test.skipped?.capability)).toEqual([
 			"providesRolledBackAdds",
+			"providesRolledBackEnds",
 		]);
 	});
 
@@ -60,7 +62,24 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 				"finalizes complete commit receipts and links the next eventful commit",
 				"rejects different event identities at one qualified source position",
 				"keeps event-source heads isolated by aggregate type and id",
+				"rejects a new event of an ended event source",
 			]),
+		);
+	});
+
+	it("the ended-source law kills an adapter that ignores endEventSources", async () => {
+		const mutant = createInMemoryHarness();
+		const createEnvironment = mutant.createEnvironment;
+		mutant.createEnvironment = async () => {
+			const environment = await createEnvironment();
+			return { ...environment, endEventSourcesCommitted: async () => {} };
+		};
+		const endedSourceTest = createOutboxContractTests(mutant).find(
+			(test) => test.name === "rejects a new event of an ended event source",
+		);
+		expect(endedSourceTest).toBeDefined();
+		await expect(endedSourceTest?.run()).rejects.toThrow(
+			/a new event of an ended event source must reject/,
 		);
 	});
 
@@ -81,6 +100,7 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 						},
 					})),
 				markDispatched: (ids) => realOutbox.markDispatched(ids),
+				endEventSources: (sources) => realOutbox.endEventSources(sources),
 			};
 			return { ...environment, outbox };
 		};
@@ -100,7 +120,7 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 		plain.failuresToDeadLetter = undefined;
 		const plainTests = createOutboxContractTests(plain);
 		const skipped = plainTests.filter((test) => test.skipped);
-		expect(skipped.length).toBe(5); // rollback + four tracking tests
+		expect(skipped.length).toBe(6); // two rollback + four tracking tests
 		await expect(skipped[1]?.run()).rejects.toThrow("skipped");
 	});
 
@@ -115,6 +135,7 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 			"non-claiming getPending",
 			"non-claiming getPending",
 			"providesRolledBackAdds",
+			"providesRolledBackEnds",
 			"non-claiming getPending",
 		]);
 	});
@@ -128,6 +149,7 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 		// could observe its attempt count; the other tracking tests run.
 		expect(skipped.map((test) => test.skipped?.capability)).toEqual([
 			"providesRolledBackAdds",
+			"providesRolledBackEnds",
 			"failuresToDeadLetter >= 2",
 		]);
 	});
@@ -139,7 +161,9 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 		const skipped = noDedupeTests.filter((test) => test.skipped);
 		expect(skipped.map((test) => test.skipped?.capability)).toEqual([
 			"dedupesOnEventId",
+			"dedupesOnEventId",
 			"providesRolledBackAdds",
+			"providesRolledBackEnds",
 		]);
 	});
 });

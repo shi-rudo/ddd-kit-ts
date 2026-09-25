@@ -11,6 +11,7 @@ import {
 import type { Id } from "../../domain/identity/id";
 import {
 	describeAggregateIdentity,
+	detachAggregateIdentity,
 	EventHarvestError,
 } from "../../errors/kit-errors";
 import { abortReason } from "../../internal/async/abort";
@@ -646,10 +647,20 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 					}) as EventCommitCandidate<Evt>;
 				});
 			});
+			const endedSources = commitRecords
+				.filter((record) => record.disposition === "deleted")
+				.map((record) =>
+					detachAggregateIdentity(record.aggregate.aggregateIdentity),
+				);
 			if (candidates.length > 0) {
 				// The bus publishes the events of these same candidates, so an
 				// outbox that mutates its input must fail, not change them.
 				await deps.outbox.add(Object.freeze(candidates));
+			}
+			if (endedSources.length > 0) {
+				await deps.outbox.endEventSources(Object.freeze(endedSources));
+			}
+			if (candidates.length > 0 || endedSources.length > 0) {
 				// The outbox write can yield. Work that the callback did not
 				// await could change an enrolled aggregate meanwhile, and the
 				// acknowledgement would then cover state or events that were

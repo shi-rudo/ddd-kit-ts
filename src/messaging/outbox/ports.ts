@@ -1,3 +1,4 @@
+import type { AggregateIdentity } from "../../domain/aggregate/aggregate-identity";
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import type { ExecutionContext } from "../../internal/async/execution";
 import type {
@@ -80,6 +81,21 @@ export interface OutboxWriter<Evt extends AnyDomainEvent> {
 	 * should reject it rather than replace or silently reinterpret it as a retry.
 	 */
 	add: (events: ReadonlyArray<EventCommitCandidate<Evt>>) => Promise<void>;
+
+	/**
+	 * Ends the event sources of removed aggregates. Called from inside
+	 * `withCommit`'s transactional callback, after `add()`, atomically with
+	 * the removal.
+	 *
+	 * For every source that has a head, the adapter marks the head as ended
+	 * in the SAME transaction. A source without a head has no events, so it
+	 * has no continuity to protect and needs no mark. After the mark,
+	 * `add()` must reject a new event of that source: its aggregate was
+	 * created again under a removed identity, which the kit does not
+	 * support. An exact retry of a stored event stays idempotent, and ending
+	 * a source twice is not an error.
+	 */
+	endEventSources: (sources: ReadonlyArray<AggregateIdentity>) => Promise<void>;
 }
 
 /**

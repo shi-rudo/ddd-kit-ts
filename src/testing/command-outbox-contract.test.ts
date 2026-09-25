@@ -4,6 +4,7 @@ import type {
 	CommandOutboxCommitCandidate,
 	CommandOutboxWriter,
 } from "../application/cqrs/command/command-outbox";
+import type { AggregateIdentity } from "../domain/aggregate/aggregate-identity";
 import {
 	type CommandOutboxContractEnvironment,
 	type CommandOutboxContractHarness,
@@ -31,40 +32,66 @@ function createInMemoryHarness(): CommandOutboxContractHarness<TestCommand> {
 			payload: { seed, label: `work-${seed}` },
 		}),
 		createEnvironment: async () => {
-			let committed = new Map<
-				string,
-				CommandOutboxCommitCandidate<TestCommand>
-			>();
-			let active:
-				| Map<string, CommandOutboxCommitCandidate<TestCommand>>
-				| undefined;
+			type Store = {
+				readonly receipts: Map<
+					string,
+					CommandOutboxCommitCandidate<TestCommand>
+				>;
+				readonly endedSources: Set<string>;
+			};
+			let committed: Store = { receipts: new Map(), endedSources: new Set() };
+			let active: Store | undefined;
+			const sourceKey = (source: AggregateIdentity): string =>
+				JSON.stringify([source.aggregateType, source.aggregateId]);
 			const outbox: CommandOutboxWriter<TestCommand> = {
 				add: async (commits) => {
 					if (!active) throw new Error("write attempted outside transaction");
 					for (const commit of commits) {
-						const prior = active.get(commit.origin.eventId);
+						const prior = active.receipts.get(commit.origin.eventId);
 						if (prior !== undefined && !same(prior, commit)) {
 							throw new Error(
 								`conflicting origin event id ${commit.origin.eventId}`,
 							);
 						}
+						if (
+							prior === undefined &&
+							active.endedSources.has(sourceKey(commit.origin.source))
+						) {
+							throw new Error(`the source of ${commit.origin.eventId} ended`);
+						}
 					}
 					for (const commit of commits) {
-						if (!active.has(commit.origin.eventId)) {
-							active.set(commit.origin.eventId, clone(commit));
+						if (!active.receipts.has(commit.origin.eventId)) {
+							active.receipts.set(commit.origin.eventId, clone(commit));
 						}
+					}
+				},
+				endEventSources: async (sources) => {
+					if (!active) throw new Error("write attempted outside transaction");
+					for (const source of sources) {
+						const key = sourceKey(source);
+						const hasCursor = [...active.receipts.values()].some(
+							(receipt) => sourceKey(receipt.origin.source) === key,
+						);
+						if (hasCursor) active.endedSources.add(key);
 					}
 				},
 			};
 			const transact = async (
-				commits: ReadonlyArray<CommandOutboxCommitCandidate<TestCommand>>,
+				write: () => Promise<void>,
 				commit: boolean,
 			): Promise<void> => {
-				active = new Map(
-					[...committed].map(([id, candidate]) => [id, clone(candidate)]),
-				);
+				active = {
+					receipts: new Map(
+						[...committed.receipts].map(([id, candidate]) => [
+							id,
+							clone(candidate),
+						]),
+					),
+					endedSources: new Set(committed.endedSources),
+				};
 				try {
-					await outbox.add(commits);
+					await write();
 					if (commit) committed = active;
 				} finally {
 					active = undefined;
@@ -72,13 +99,18 @@ function createInMemoryHarness(): CommandOutboxContractHarness<TestCommand> {
 			};
 			const environment: CommandOutboxContractEnvironment<TestCommand> = {
 				outbox,
-				addCommitted: (commits) => transact(commits, true),
-				addRolledBack: (commits) => transact(commits, false),
-				readAll: async () => [...committed.values()].map(clone),
+				addCommitted: (commits) => transact(() => outbox.add(commits), true),
+				addRolledBack: (commits) => transact(() => outbox.add(commits), false),
+				endEventSourcesCommitted: (sources) =>
+					transact(() => outbox.endEventSources(sources), true),
+				endEventSourcesRolledBack: (sources) =>
+					transact(() => outbox.endEventSources(sources), false),
+				readAll: async () => [...committed.receipts.values()].map(clone),
 			};
 			return environment;
 		},
 		providesRolledBackAdds: true,
+		providesRolledBackEnds: true,
 	};
 }
 
@@ -101,8 +133,32 @@ describe("command outbox contract suite", () => {
 				"retains command and commit input order",
 				"retains every position in a multi-event aggregate commit",
 				"retains an empty command receipt and advances the source cursor",
+				"rejects a new commit of an ended source",
+				"deduplicates an exact retry of a commit of an ended source",
+				"ending a source without a cursor leaves it open for its first commit",
 				"a rolled-back add leaves no receipt or command behind",
+				"a rolled-back end leaves the source open",
 			]),
+		);
+	});
+
+	it("exposes an adapter that ignores endEventSources", async () => {
+		const harness = createInMemoryHarness();
+		const broken: CommandOutboxContractHarness<TestCommand> = {
+			...harness,
+			createEnvironment: async () => ({
+				...(await harness.createEnvironment()),
+				endEventSourcesCommitted: async () => {},
+			}),
+		};
+		const test = createCommandOutboxContractTests(broken).find(
+			(candidate) =>
+				candidate.name === "rejects a new commit of an ended source",
+		);
+
+		expect(test).toBeDefined();
+		await expect(test?.run()).rejects.toThrow(
+			/a new commit of an ended source must reject/,
 		);
 	});
 
@@ -115,16 +171,20 @@ describe("command outbox contract suite", () => {
 					add: async (commits) => {
 						rows.push(...commits.map(clone));
 					},
+					endEventSources: async () => {},
 				};
 				return {
 					outbox,
 					addCommitted: (
 						commits: ReadonlyArray<CommandOutboxCommitCandidate<TestCommand>>,
 					) => outbox.add(commits),
+					endEventSourcesCommitted: (sources) =>
+						outbox.endEventSources(sources),
 					readAll: async () => rows.map(clone),
 				};
 			},
 			providesRolledBackAdds: false,
+			providesRolledBackEnds: false,
 		};
 		const retryTest = createCommandOutboxContractTests(broken).find(
 			(test) => test.name === "deduplicates an exact retry by origin event id",
@@ -159,14 +219,18 @@ describe("command outbox contract suite", () => {
 							if (!prior) rows.set(commit.origin.eventId, clone(commit));
 						}
 					},
+					endEventSources: async () => {},
 				};
 				return {
 					outbox,
 					addCommitted: (commits) => outbox.add(commits),
+					endEventSourcesCommitted: (sources) =>
+						outbox.endEventSources(sources),
 					readAll: async () => [...rows.values()].map(clone),
 				};
 			},
 			providesRolledBackAdds: false,
+			providesRolledBackEnds: false,
 		};
 		const contract = createCommandOutboxContractTests(broken);
 
@@ -209,14 +273,18 @@ describe("command outbox contract suite", () => {
 							),
 						);
 					},
+					endEventSources: async () => {},
 				};
 				return {
 					outbox,
 					addCommitted: (commits) => outbox.add(commits),
+					endEventSourcesCommitted: (sources) =>
+						outbox.endEventSources(sources),
 					readAll: async () => rows.map(clone),
 				};
 			},
 			providesRolledBackAdds: false,
+			providesRolledBackEnds: false,
 		};
 		const test = createCommandOutboxContractTests(broken).find(
 			(candidate) =>
