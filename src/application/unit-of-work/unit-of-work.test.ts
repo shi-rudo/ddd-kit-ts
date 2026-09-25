@@ -3474,6 +3474,48 @@ describe("UnitOfWork", () => {
 			},
 		);
 
+		it("names the registered update on a conflict that mapError builds", async () => {
+			const uniqueViolation = new Error("duplicate key value");
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: createMockOutbox(),
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						flush: async () => {
+							throw uniqueViolation;
+						},
+						mapError: (error, write) =>
+							new ConcurrencyConflictError({
+								reason: "stale_version",
+								identity: write.aggregateIdentity,
+								expectedVersion: 1,
+								actualVersion: 2,
+								cause: error,
+							}),
+						create: (_tx: undefined, tracking) => ({
+							trackLoaded: (loaded: MockAggregate) =>
+								tracking.trackLoaded(loaded),
+						}),
+					}),
+				},
+			});
+			const aggregate = createMockAggregate("o-1");
+
+			const rejection = await rejectionOf(
+				uow.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(aggregate);
+					aggregate.change();
+					repositories.orders.update(aggregate);
+					return undefined;
+				}),
+			);
+
+			expect(rejection).toBeInstanceOf(ConcurrencyConflictError);
+			expect(rejection).toMatchObject({ intent: "update" });
+		});
+
 		it("names an add on a conflict from a creation race", async () => {
 			const conflict = new ConcurrencyConflictError({
 				reason: "stale_version",

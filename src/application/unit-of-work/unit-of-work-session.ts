@@ -697,7 +697,10 @@ function mapRepositoryPersistenceError<Evt extends AnyDomainEvent>(
 	// InfrastructureError fails a plain instanceof here; rejecting it would
 	// turn every retryable conflict into a non-retryable wiring crash that
 	// blames a correct mapper.
-	if (isInfrastructureErrorLike(mapped)) return mapped;
+	if (isInfrastructureErrorLike(mapped)) {
+		attributeWriteIntent(mapped, write.intent);
+		return mapped;
+	}
 	throw new RepositoryErrorMappingFailedError({
 		identity: write.aggregateIdentity,
 		intent: write.intent,
