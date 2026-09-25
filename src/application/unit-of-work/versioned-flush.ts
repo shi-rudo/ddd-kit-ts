@@ -273,8 +273,12 @@ function versionedWriter<
 		if (versionedWrites === undefined || statement === undefined) {
 			throw statementDefect(write, "statement_absent");
 		}
-		if (write.expectedVersion === undefined) {
-			throw statementDefect(write, "no_expected_version");
+		if (!isStoredVersion(write.expectedVersion)) {
+			throw statementDefect(
+				write,
+				"no_expected_version",
+				describeReceived(write.expectedVersion),
+			);
 		}
 		const matchedRows = await statement(
 			transaction,
@@ -393,9 +397,15 @@ function storedVersionOf(
 /** Names a value that the flush received in place of a valid one. */
 function describeReceived(value: unknown): string | undefined {
 	if (value === undefined) return undefined;
-	return typeof value === "number"
-		? String(value)
-		: `${String(value)} (${typeof value})`;
+	if (typeof value === "number") return String(value);
+	let text: string;
+	try {
+		text = String(value);
+	} catch {
+		// An object without a prototype has no toString.
+		text = Object.prototype.toString.call(value);
+	}
+	return `${text} (${typeof value})`;
 }
 
 async function readStoredVersion(

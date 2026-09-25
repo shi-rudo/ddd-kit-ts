@@ -347,6 +347,30 @@ describe("versionedFlush", () => {
 		});
 	});
 
+	it.each([
+		["a negative number", -1],
+		["NaN", Number.NaN],
+		["a fraction", 1.5],
+	])(
+		"fails an update whose expectedVersion is %s before it runs a statement",
+		async (_label, expectedVersion) => {
+			const { statements, calls } = recordingStatements();
+
+			const rejection = await versionedFlush(statements)(
+				transaction,
+				writeFor("update", expectedVersion as Version),
+			).catch((error: unknown) => error);
+
+			expect(rejection).toBeInstanceOf(InvalidFlushStatementError);
+			expect(rejection).toMatchObject({
+				reason: "no_expected_version",
+				intent: "update",
+				received: String(expectedVersion),
+			});
+			expect(calls).toEqual([]);
+		},
+	);
+
 	it("fails with a statement defect when the version read returns no version", async () => {
 		const { statements } = recordingStatements({
 			update: () => 0,
@@ -585,6 +609,11 @@ describe("classifyConcurrencyConflict", () => {
 		["NaN", Number.NaN, "NaN"],
 		["a negative number", -1, "-1"],
 		["a fraction", 1.5, "1.5"],
+		[
+			"an object without a prototype",
+			Object.create(null),
+			"[object Object] (object)",
+		],
 	])(
 		"rejects a version read that returns %s as a defect of the statement",
 		async (_label, returned, received) => {
