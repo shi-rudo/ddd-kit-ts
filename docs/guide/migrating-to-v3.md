@@ -475,10 +475,14 @@ carries the nested `identity`.
 `actualVersion` is `number | null`. It is required for `stale_version` and
 `version_unchanged` and is `null` for the other two. The `-1` sentinel is
 gone. `retryable` follows the reason: `version_unchanged` is not retryable,
-because a retry repeats a defect of the adapter. Do not classify the
-conflict by hand. `versionedFlush` names the reason, and a hand-written flush
-throws the result of `classifyConcurrencyConflict`, which applies the same
-rule. The unit of work adds the `intent` of the write.
+because a retry repeats a defect of the adapter. A state-stored flush does
+not classify the conflict by hand. `versionedFlush` names the reason, and a
+hand-written flush throws the result of `classifyConcurrencyConflict`, which
+applies the same rule. An `EventStore.append` adapter raises the conflict
+itself: it passes `reason: "stale_version"` with the stream head as
+`actualVersion`, where it used `-1` for a missing stream before. A stream
+that was never created is at version 0. The unit of work adds the `intent`
+of the write.
 
 #### `toProblemDetails` returns a result object
 
