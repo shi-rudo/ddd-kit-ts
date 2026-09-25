@@ -3,6 +3,8 @@
  * repository contract suites (state-stored and event-sourced). Internal
  * to the testing entry: not re-exported from `@shirudo/ddd-kit/testing`.
  */
+
+import type { AggregateWriteIntent } from "../application/unit-of-work/persistence-contract";
 import { isRecordedDomainEvent } from "../domain/event/domain-event";
 import { runBoundedExecution } from "../internal/async/execution";
 
@@ -438,6 +440,32 @@ export function assertChainContainsKitError(
 		return;
 	}
 	throw new Error(`Contract violated: ${message}`);
+}
+
+/**
+ * Asserts that the first `CONCURRENCY_CONFLICT` in the cause chain names the
+ * write that failed. The unit of work sets the intent on every conflict that
+ * leaves a flush, so an adapter that wraps the conflict keeps it.
+ */
+export function assertChainConflictNamesIntent(
+	rejection: unknown,
+	intent: AggregateWriteIntent,
+	message: string,
+): void {
+	let observed: unknown = "no CONCURRENCY_CONFLICT";
+	walkCauseChain(rejection, (node) => {
+		if (!errorMatchesName(node, "CONCURRENCY_CONFLICT")) return false;
+		try {
+			observed = (node as { intent?: unknown }).intent;
+		} catch {
+			observed = "an intent that cannot be read";
+		}
+		return true;
+	});
+	if (observed === intent) return;
+	throw new Error(
+		`Contract violated: ${message}; got ${typeof observed === "string" ? observed : String(observed)}`,
+	);
 }
 
 /**

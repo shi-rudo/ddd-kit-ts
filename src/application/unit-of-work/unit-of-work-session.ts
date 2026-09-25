@@ -1,5 +1,4 @@
 import type { Aggregate, Version } from "../../domain/aggregate/aggregate";
-import type { AggregateIdentity } from "../../domain/aggregate/aggregate-identity";
 import { requirePendingEventLifecycleReadView } from "../../domain/aggregate/pending-event-lifecycle";
 import type {
 	AnyDomainEvent,
@@ -8,11 +7,14 @@ import type {
 import type { Id } from "../../domain/identity/id";
 import {
 	AggregateDeletedError,
+	attributeConflictIntent,
+	ConcurrencyConflictError,
 	type InfrastructureError,
 	isInfrastructureErrorLike,
 	isWiringErrorLike,
 	UnenrolledChangesError,
 } from "../../errors/kit-errors";
+import { findInCauseChain } from "../../internal/cause-chain";
 import { IdentityMap } from "../../persistence/repository/identity-map";
 import {
 	capturePersistenceBaseline,
@@ -26,6 +28,8 @@ import {
 import type { AggregateCommitToken, CommitEnrollment } from "../cqrs/handler";
 import {
 	AggregateTrackingError,
+	attributeFlushStatementIntent,
+	InvalidFlushStatementError,
 	RepositoryErrorMappingFailedError,
 	TransactionClosedError,
 } from "./errors";
@@ -556,11 +560,50 @@ export class Session<Evt extends AnyDomainEvent> {
 		}
 	}
 }
+/**
+ * A flush and an event store report what they observed; the unit of work
+ * knows which write it asked for. So the intent of a conflict and of a
+ * statement defect comes from here. It is set on the error object itself,
+ * found by its code anywhere in the cause chain, so a wrapped error and an
+ * error from another copy of the kit get it too.
+ */
+function attributeWriteIntent(
+	error: unknown,
+	intent: AggregateWriteIntent,
+): void {
+	const conflict = firstInCauseChainWithCode(error, "CONCURRENCY_CONFLICT");
+	if (conflict instanceof ConcurrencyConflictError) {
+		attributeConflictIntent(conflict, intent);
+	} else if (conflict !== undefined) {
+		Reflect.set(conflict, "intent", intent);
+	}
+	const defect = firstInCauseChainWithCode(error, "INVALID_FLUSH_STATEMENT");
+	if (defect instanceof InvalidFlushStatementError) {
+		attributeFlushStatementIntent(defect, intent);
+	} else if (defect !== undefined) {
+		Reflect.set(defect, "intent", intent);
+	}
+}
+
+function firstInCauseChainWithCode(
+	error: unknown,
+	code: string,
+): object | undefined {
+	return findInCauseChain(error, (link) => {
+		try {
+			return (link as { code?: unknown }).code === code ? link : undefined;
+		} catch {
+			return undefined;
+		}
+	});
+}
+
 function mapRepositoryPersistenceError<Evt extends AnyDomainEvent>(
 	definition: RuntimePersistenceDefinition<Evt>,
 	error: unknown,
 	write: AggregatePersistenceWrite<Aggregate<Id<string>, Evt>, unknown>,
 ): InfrastructureError {
+	attributeWriteIntent(error, write.intent);
 	// A wiring error states a defect of the definition, not a store failure.
 	// The mapper must return an InfrastructureError, so passing it in would
 	// relabel a programming defect as a store outage and make it retryable.

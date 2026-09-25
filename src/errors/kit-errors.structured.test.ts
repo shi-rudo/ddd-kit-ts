@@ -4,6 +4,7 @@ import {
 	InvalidFlushStatementError,
 	RollbackError,
 } from "../application/unit-of-work/errors";
+import type { AggregateWriteIntent } from "../application/unit-of-work/persistence-contract";
 import type { AggregateIdentity } from "../domain/aggregate/aggregate-identity";
 import { InvalidDomainTransitionError } from "../domain/state-machine/errors";
 import type {
@@ -908,4 +909,14 @@ const identityShapesMatchAggregateIdentity: [
 
 it("pins every inline identity shape to AggregateIdentity", () => {
 	expect(identityShapesMatchAggregateIdentity.every(Boolean)).toBe(true);
+});
+
+// The conflict declares its intent inline for the same reason.
+const conflictIntentMatchesWriteIntent: SameType<
+	NonNullable<ConcurrencyConflictErrorOptions["intent"]>,
+	AggregateWriteIntent
+> = true;
+
+it("pins the inline conflict intent to the write intents", () => {
+	expect(conflictIntentMatchesWriteIntent).toBe(true);
 });

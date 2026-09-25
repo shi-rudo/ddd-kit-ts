@@ -7,6 +7,7 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 import {
 	AggregateNotFoundError,
+	attributeConflictIntent,
 	ConcurrencyConflictError,
 	DomainError,
 	DuplicateAggregateError,
@@ -423,6 +424,86 @@ describe("ConcurrencyConflictError", () => {
 		expect(e.actualVersion).toBe(5);
 		expect(e.message).toContain("expected version 3");
 		expect(e.message).toContain("stored version 5");
+	});
+
+	it("names the write that failed in its intent and its message", () => {
+		const e = new ConcurrencyConflictError({
+			reason: "aggregate_absent",
+			identity: { aggregateType: "Order", aggregateId: "o-1" },
+			intent: "remove",
+			expectedVersion: 3,
+		});
+
+		expect(e.intent).toBe("remove");
+		expect(e.message).toContain("remove of Order(o-1)");
+		expect(e.toJSON()).toMatchObject({ intent: "remove" });
+	});
+
+	it("reports the intent as null when the layer that raised it does not know the write", () => {
+		const e = new ConcurrencyConflictError({
+			reason: "stale_version",
+			identity: { aggregateType: "Order", aggregateId: "o-1" },
+			expectedVersion: 0,
+			actualVersion: 2,
+		});
+
+		expect(e.intent).toBeNull();
+		expect(e.message).toContain("Concurrency conflict on Order(o-1):");
+		expect(e.toJSON()).toMatchObject({ intent: null });
+	});
+
+	it("treats an intent of null as a write it does not know", () => {
+		const e = new ConcurrencyConflictError({
+			reason: "stale_version",
+			identity: { aggregateType: "Order", aggregateId: "o-1" },
+			intent: null,
+			expectedVersion: 1,
+			actualVersion: 2,
+		});
+
+		expect(e.intent).toBeNull();
+		expect(e.message).toContain("Concurrency conflict on Order(o-1):");
+		expect(e.message).not.toContain("null of");
+	});
+
+	it("names an add as the write that failed", () => {
+		const e = new ConcurrencyConflictError({
+			reason: "stale_version",
+			identity: { aggregateType: "Order", aggregateId: "o-1" },
+			intent: "add",
+			expectedVersion: 0,
+			actualVersion: 3,
+		});
+
+		expect(e.message).toContain("add of Order(o-1)");
+	});
+
+	it("takes a write intent in place and keeps its reason, versions, cause, and throw site", () => {
+		const readFailure = new Error("connection reset");
+		const conflict = new ConcurrencyConflictError({
+			reason: "version_unknown",
+			identity: { aggregateType: "Order", aggregateId: "o-1" },
+			expectedVersion: 3,
+			cause: readFailure,
+		});
+		const throwSite = String(conflict.stack).split("\n").slice(1).join("\n");
+
+		attributeConflictIntent(conflict, "update");
+
+		expect(conflict).toMatchObject({
+			intent: "update",
+			reason: "version_unknown",
+			identity: { aggregateType: "Order", aggregateId: "o-1" },
+			expectedVersion: 3,
+			actualVersion: null,
+			retryable: true,
+		});
+		expect(conflict.cause).toBe(readFailure);
+		expect(conflict.message).toContain("update of Order(o-1)");
+		expect(String(conflict.stack).split("\n")[0]).toContain(
+			"update of Order(o-1)",
+		);
+		expect(String(conflict.stack)).toContain(throwSite);
 	});
 
 	it("marks itself retryable so isRetryable picks it up: the OCC reload-and-retry pattern", () => {

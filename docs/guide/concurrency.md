@@ -171,6 +171,14 @@ defect: alert on any occurrence. A conflict with `retryable: true` is the
 expected background of a busy store: alert on a change of the rate, not on the
 count.
 
+A conflict that leaves a unit of work names the write that failed in
+`intent`: `add`, `update`, or `remove`. The unit of work sets it, because a
+flush or an event store reports only what it observed. The intent tells a
+responder how serious an `aggregate_absent` is. On an update, another writer
+removed the aggregate under a running use case. On a remove, two removals
+raced, and the aggregate is gone as intended. A conflict outside a unit of
+work, for example from a direct `withCommit` flush, has `intent: null`.
+
 An adapter whose version read is a snapshot read can retry `version_unchanged`
 after all. Pass an `isRetryable` to the retry policy that accepts it. Prefer
 the locking read: a retry of a predicate defect fires on every write and

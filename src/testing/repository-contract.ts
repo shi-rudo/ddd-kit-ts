@@ -8,6 +8,7 @@ import { deepEqual } from "../internal/structural/deep-equal";
 import type { CommittedDomainEvent } from "../messaging/committed-event";
 import {
 	assert,
+	assertChainConflictNamesIntent,
 	assertChainContainsKitError,
 	assertEqual,
 	awaitOverlappingCall,
@@ -309,6 +310,11 @@ export function createRepositoryContractTests<
 					rejection,
 					["CONCURRENCY_CONFLICT"],
 					`stale update must reject with ConcurrencyConflictError; got ${describeError(rejection)}`,
+				);
+				assertChainConflictNamesIntent(
+					rejection,
+					"update",
+					"the stale update conflict must name the update in its intent",
 				);
 
 				const final = await reload(environment, seeded.id);
@@ -642,6 +648,11 @@ export function createRepositoryContractTests<
 							rejection,
 							["CONCURRENCY_CONFLICT"],
 							`stale remove must reject with ConcurrencyConflictError; got ${describeError(rejection)}`,
+						);
+						assertChainConflictNamesIntent(
+							rejection,
+							"remove",
+							"the stale remove conflict must name the remove in its intent",
 						);
 						assert(
 							(await reload(environment, seeded.id)) !== undefined,
