@@ -552,6 +552,19 @@ export class Session<Evt extends AnyDomainEvent> {
 		}
 	}
 
+	/**
+	 * Returns a check of every registered write that still works after the
+	 * session closes, for the moment just before the transaction commits.
+	 */
+	public registrationsCheck(): () => void {
+		const registered = [...this._registeredWrites];
+		return () => {
+			for (const entry of registered) {
+				this.assertUnchangedAfterRegistration(entry);
+			}
+		};
+	}
+
 	public get commitTokens(): ReadonlyArray<AggregateCommitToken<Evt>> {
 		return [...this._commitTokens];
 	}

@@ -511,6 +511,22 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 		enrollment: CommitEnrollment<Evt>,
 	) => Promise<WithCommitWorkResult<Evt, R>>,
 ): Promise<R> {
+	return withCheckedCommit(deps, fn, undefined);
+}
+
+/**
+ * {@link withCommit} with a check that runs inside the transaction after the
+ * outbox write, just before the commit. A check that throws rolls the
+ * transaction back.
+ */
+export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
+	deps: WithCommitDeps<Evt, TCtx>,
+	fn: (
+		ctx: TCtx,
+		enrollment: CommitEnrollment<Evt>,
+	) => Promise<WithCommitWorkResult<Evt, R>>,
+	checkBeforeCommit: (() => void) | undefined,
+): Promise<R> {
 	const postCommitTimeoutMs =
 		deps.postCommitTimeoutMs ?? DEFAULT_EXECUTION_TIMEOUT_MS;
 	assertNonNegativeFinite(
@@ -620,7 +636,21 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 			});
 			if (candidates.length > 0) {
 				await deps.outbox.add(candidates);
+				// The outbox write can yield. Work that the callback did not
+				// await could change an enrolled aggregate meanwhile, and the
+				// acknowledgement would then cover state or events that were
+				// never written.
+				for (const record of commitRecords) {
+					if (enrollmentDiverged(record)) {
+						throw new EventHarvestError(
+							`withCommit: aggregate ${describeAggregateIdentity(record.aggregate.aggregateIdentity)} ` +
+								"changed while its outbox write ran. Await every change " +
+								"inside the work callback.",
+						);
+					}
+				}
 			}
+			checkBeforeCommit?.();
 			return {
 				result: fnResult.result,
 				commitRecords,

@@ -3,8 +3,8 @@ import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
 import {
 	AggregateDeletedError,
-	EventHarvestError,
 	type InfrastructureError,
+	isWiringErrorLike,
 } from "../../errors/kit-errors";
 import { abortReason } from "../../internal/async/abort";
 import type { ExecutionContext } from "../../internal/async/execution";
@@ -18,7 +18,7 @@ import type { OutboxWriter } from "../../messaging/outbox/ports";
 import type { AggregateClass } from "../../persistence/repository/identity-map";
 import type { PersistenceModel } from "../../persistence/repository/persistence-model";
 import type { TransactionScope } from "../../persistence/repository/scope";
-import { withCommit } from "../cqrs/handler";
+import { withCheckedCommit } from "../cqrs/handler";
 import {
 	CommitError,
 	InvalidRepositoryDefinitionError,
@@ -629,9 +629,10 @@ export class UnitOfWork<
 		let workCompleted = false;
 		let workThrew = false;
 		let workError: unknown;
+		let checkRegistrations: (() => void) | undefined;
 
 		try {
-			return await withCommit<Evt, R, TCtx>(
+			return await withCheckedCommit<Evt, R, TCtx>(
 				{
 					outbox: this.deps.outbox,
 					bus: this.deps.bus,
@@ -655,6 +656,7 @@ export class UnitOfWork<
 					workCompleted = false;
 					workThrew = false;
 					workError = undefined;
+					checkRegistrations = undefined;
 
 					const repositories = this.buildRepositories(tx, s);
 					const context = makeContext(repositories, s, options?.signal);
@@ -675,6 +677,7 @@ export class UnitOfWork<
 						// The tokens below are what gets harvested; after close, any
 						// use of the session throws TransactionClosedError.
 						const commits = s.commitTokens;
+						checkRegistrations = s.registrationsCheck();
 						s.close();
 						return { result, commits };
 					} catch (error) {
@@ -683,6 +686,7 @@ export class UnitOfWork<
 						throw error;
 					}
 				},
+				() => checkRegistrations?.(),
 			);
 		} catch (error) {
 			throw classifyRunError(error, {
@@ -756,14 +760,14 @@ function makeContext<TRepos, Evt extends AnyDomainEvent>(
  *   callback's error indicates the rollback itself failed, which becomes a
  *   {@link RollbackError}.
  * - `workCompleted`: the callback finished; the failure is post-completion.
- *   A harvest-guard violation (an event missing aggregateId / aggregateType,
- *   or an eventful persisted aggregate that did not advance its version) is a deterministic
- *   programming bug, surfaced as its {@link EventHarvestError} (which does
- *   NOT extend `InfrastructureError`, so a retry-on-Infrastructure handler
- *   skips it). It is thrown inside `scope.transactional()`, so a wrapping
- *   scope can nest it: walk the chain rather than a bare `instanceof`. Only
- *   genuinely unforeseeable post-completion failures (outbox write, the
- *   commit itself) become {@link CommitError}.
+ *   A wiring error (a harvest-guard violation, or an aggregate that changed
+ *   after its registration) is a deterministic programming bug and passes
+ *   through; it does NOT extend `InfrastructureError`, so a
+ *   retry-on-Infrastructure handler skips it. It is thrown inside
+ *   `scope.transactional()`, so a wrapping scope can nest it: walk the
+ *   chain rather than a bare `instanceof`. Only genuinely unforeseeable
+ *   post-completion failures (outbox write, the commit itself) become
+ *   {@link CommitError}.
  * - Neither flag set: `withCommit` rejected before the callback ran (the
  *   scope failed to even open a transaction); pass the error through.
  */
@@ -800,29 +804,15 @@ function classifyRunError(
 		return new RollbackError(state.workError, error);
 	}
 	if (state.workCompleted) {
-		const harvestError = findHarvestErrorInChain(error);
-		if (harvestError) {
-			return harvestError;
+		const wiringError = findInCauseChain(error, (link) =>
+			isWiringErrorLike(link) ? link : undefined,
+		);
+		if (wiringError) {
+			return wiringError;
 		}
 		return new CommitError(error);
 	}
 	return error;
-}
-
-/**
- * Walks `error`'s `cause` chain and returns the first `EventHarvestError`,
- * or `undefined`. `withCommit` throws the harvest-guard error INSIDE
- * `scope.transactional`, so a wrapping scope can nest it; matching
- * only the top-level error would let the wrapper mask the non-retryable
- * type. `withCommit` and `run()` share this module, so the local
- * `instanceof` is reliable for the un-wrapped link.
- */
-function findHarvestErrorInChain(
-	error: unknown,
-): EventHarvestError | undefined {
-	return findInCauseChain(error, (link) =>
-		link instanceof EventHarvestError ? link : undefined,
-	);
 }
 
 /**

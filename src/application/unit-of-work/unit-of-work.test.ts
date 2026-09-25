@@ -2875,6 +2875,106 @@ describe("UnitOfWork", () => {
 		);
 	});
 
+	describe("changes during the outbox write", () => {
+		class NotedOrder extends StateStoredAggregate<
+			{ readonly note: string },
+			TestId,
+			TestEvent
+		> {
+			protected readonly aggregateType = "MockOrder";
+
+			constructor(id: string) {
+				super(id as TestId, { note: "" });
+				this.setVersion(1 as Version);
+			}
+
+			note(note: string, event?: TestEvent): void {
+				this.setState({ note }, event);
+			}
+
+			noteWithoutVersionBump(note: string): void {
+				this.setStateWithoutVersionBump({ note });
+			}
+
+			get currentNote(): string {
+				return this.state.note;
+			}
+		}
+
+		function uowWhoseOutboxWriteYields(onOutboxWrite: () => void) {
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: {
+					add: async () => {
+						onOutboxWrite();
+						await new Promise((resolve) => setTimeout(resolve, 0));
+					},
+				},
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: NotedOrder,
+						persistence: {
+							capture: (order: NotedOrder) => order.currentNote,
+							changes: (baseline: string, order: NotedOrder) =>
+								baseline === order.currentNote ? undefined : order.currentNote,
+							isEmpty: (change: string | undefined) => change === undefined,
+						},
+						flush: async () => {},
+						create: (_tx: undefined, tracking) => ({
+							trackLoaded: (loaded: NotedOrder) => tracking.trackLoaded(loaded),
+						}),
+					}),
+				},
+			});
+			return uow;
+		}
+
+		it("fails the run when leaked work records an event while the outbox write runs", async () => {
+			const order = new NotedOrder("o-1");
+			const uow = uowWhoseOutboxWriteYields(() => {
+				queueMicrotask(() => order.note("late", testEvent("o-1")));
+			});
+
+			const rejection = await uow
+				.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(order);
+					order.note("first", testEvent("o-1"));
+					repositories.orders.update(order);
+					return undefined;
+				})
+				.then(
+					() => "committed",
+					(error: unknown) => error,
+				);
+
+			expect(rejection).toBeInstanceOf(EventHarvestError);
+			expect(persistedVersionOf(order)).toBeUndefined();
+		});
+
+		it("fails the run when leaked work changes registered state while the outbox write runs", async () => {
+			const order = new NotedOrder("o-1");
+			const uow = uowWhoseOutboxWriteYields(() => {
+				queueMicrotask(() => order.noteWithoutVersionBump("late"));
+			});
+
+			const rejection = await uow
+				.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(order);
+					order.note("first", testEvent("o-1"));
+					repositories.orders.update(order);
+					return undefined;
+				})
+				.then(
+					() => "committed",
+					(error: unknown) => error,
+				);
+
+			expect(rejection).toBeInstanceOf(AggregateTrackingError);
+			expect(rejection).toMatchObject({ reason: "mutated_after_registration" });
+			expect(persistedVersionOf(order)).toBeUndefined();
+		});
+	});
+
 	describe("conflict attribution", () => {
 		const identity = { aggregateType: "MockAggregate", aggregateId: "o-1" };
 
