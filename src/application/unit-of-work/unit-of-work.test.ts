@@ -29,6 +29,7 @@ import {
 	CommitError,
 	InvalidFlushStatementError,
 	InvalidRepositoryAdapterError,
+	InvalidRepositoryDefinitionError,
 	NestedUnitOfWorkError,
 	RollbackError,
 	TransactionClosedError,
@@ -3787,7 +3788,37 @@ describe("UnitOfWork", () => {
 			});
 
 			expect(Object.getOwnPropertySymbols(definition)).toContain(
-				Symbol.for("@shirudo/ddd-kit/repository-definition/v2"),
+				Symbol.for("@shirudo/ddd-kit/repository-definition/v3"),
+			);
+		});
+
+		it("rejects a definition from a copy with the earlier flush contract", async () => {
+			const earlierContract = Object.freeze(
+				Object.defineProperty(
+					{
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						flush: async () => {},
+						mapError: mapTestRepositoryError,
+						create: () => ({}),
+					},
+					Symbol.for("@shirudo/ddd-kit/repository-definition/v2"),
+					{
+						value: true,
+						enumerable: false,
+						writable: false,
+						configurable: false,
+					},
+				),
+			);
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: createMockOutbox(),
+				repositories: { orders: earlierContract } as never,
+			});
+
+			await expect(uow.run(async () => undefined)).rejects.toBeInstanceOf(
+				InvalidRepositoryDefinitionError,
 			);
 		});
 	});

@@ -81,7 +81,7 @@ export interface RunOptions {
 // it when the definition contract changes so an incompatible copy fails the
 // generic not-a-definition check instead of half-working.
 const repositoryDefinitionBrand: unique symbol = Symbol.for(
-	"@shirudo/ddd-kit/repository-definition/v2",
+	"@shirudo/ddd-kit/repository-definition/v3",
 );
 
 /** Adapter wiring accepted by {@link defineRepository}. */
