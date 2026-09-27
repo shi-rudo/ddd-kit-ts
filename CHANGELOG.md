@@ -57,7 +57,8 @@ immutable. Run one kit version per process during a cutover.
 - The flush receives a sealed `AggregatePersistenceWrite` with the intent,
   `aggregateIdentity`, `expectedVersion`, `version`, the change set, and the
   exact event batch. A change to the aggregate after its registration
-  rejects the transaction, also while the outbox write runs. Registration
+  rejects the transaction, also while the outbox write runs, and so does a
+  change of a loaded aggregate without a write. Registration
   closes when the flush starts: a later `add`, `update`, or `remove` fails
   the run. `withCommit` hands the outbox a frozen array of candidates.
 - Snapshots move out of the aggregate into an adapter-owned
@@ -234,10 +235,13 @@ immutable. Run one kit version per process during a cutover.
   that raised it. A retry that cannot open its transaction reaches the
   caller unchanged. The facade of a failed attempt closes before the retry
   waits. A repository factory that throws counts as a failed attempt, so
-  `RollbackError` keeps its error when the rollback fails too.
+  `RollbackError` keeps its error when the rollback fails too. A custom
+  retrying scope passes the options on unchanged, or `run()` cannot see its
+  attempts.
 - A violated port constraint or wiring constraint is one compiler error that
   names it. A port whose `add`, `update`, or `remove` returns a value, for
-  example a promise, is such a violation. The runtime checks the definition
+  example a promise, is such a violation, and so is a member whose promise
+  resolves to the port itself. The runtime checks the definition
   and the adapter and throws `InvalidRepositoryDefinitionError`,
   `InvalidRepositoryAdapterError`, `AggregateTrackingError`, or
   `RepositoryErrorMappingFailedError`. `defineRepository` throws a

@@ -197,7 +197,11 @@ Call the registration method last. After a successful `add`, `update`, or
 change, or adapter-projection change throws `AggregateTrackingError` and rolls
 the transaction back. The guard runs before the flush, after the flush, and
 after the outbox write, because an asynchronous adapter can yield to other
-work while the transaction is still open.
+work while the transaction is still open. The last run also covers a loaded
+aggregate without a write: if it changed, the commit fails with
+`UnenrolledChangesError`. A change of a registered aggregate always fails with
+`AggregateTrackingError` and the reason `mutated_after_registration`, also
+while the outbox write runs.
 
 Registration closes when the flush starts. Work that the callback did not
 await can call `add`, `update`, or `remove` later. That call throws
@@ -259,9 +263,11 @@ with a tracked identity throws `AggregateTrackingError` with the reason
 
 The facade guards the other members of the adapter. A member that returns the
 adapter itself, for example a fluent `lockForUpdate(): this`, returns the
-facade, so a chained `add` still goes through the Unit of Work. After `run()`
-settles, a member read throws `TransactionClosedError`. A language probe such
-as `then` or `constructor` does not.
+facade, so a chained `add` still goes through the Unit of Work. A promise from
+an adapter member reaches the caller unchanged. A port member whose promise
+resolves to the port itself, for example `reloaded(): Promise<this>`, does not
+compile. After `run()` settles, a member read throws `TransactionClosedError`.
+A language probe such as `then` or `constructor` does not.
 
 Application code cannot access the raw transaction or the tracking capability.
 The `UnitOfWorkContext` contains only `repositories` and the optional
@@ -386,7 +392,10 @@ raised it. A retry that cannot open its transaction reaches the caller
 unchanged, not as `CommitError` or `RollbackError` of the attempt before it.
 The facade of a failed attempt closes before the retry waits. A custom
 retrying scope calls `onAttemptStart` from the transactional options before
-each attempt; see [TransactionScope](/guide/outbox#transactionscope).
+each attempt; see [TransactionScope](/guide/outbox#transactionscope). If a
+scope retries without that call, `run()` cannot see the new attempt. A retry
+that cannot open its transaction then reaches the caller as the `CommitError`
+or `RollbackError` of the attempt before it.
 
 ## Contract tests
 

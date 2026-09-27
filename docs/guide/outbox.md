@@ -118,7 +118,8 @@ A scope that can open more than one transaction for one call, for example a
 retrying scope, calls `onAttemptStart` before each attempt opens its
 transaction. `UnitOfWork.run` uses it to label a failure by the attempt that
 raised it. `RetryingTransactionScope` calls it. A scope that opens one
-transaction per call ignores it.
+transaction per call ignores it. A scope that wraps another scope passes the
+options object on unchanged: a copy such as `{ signal }` drops the hook.
 
 `TCtx` is whatever your persistence layer exposes inside a transaction:
 Drizzle `tx`, Prisma `tx`, a Mongo session, or `undefined` for a fake test
@@ -185,8 +186,10 @@ interface OutboxWriter<Evt extends AnyDomainEvent> {
 ```
 
 `withCommit` calls `add()` inside the same transaction as the aggregate
-write. The candidate array is frozen: the in-process bus publishes the events
-of the same candidates, so an adapter that mutates its input fails the commit.
+write. The candidate array is frozen, because the in-process bus publishes the
+events of the same candidates. An adapter cannot change it: a `sort`, `push`,
+or `splice` throws, and so does an assignment in strict-mode code. To reorder
+the candidates, copy the array first.
 The candidate contains the aggregate source, current aggregate version,
 commit sequence, and commit size. The writer owns the durable event-source
 head: it links the candidate to the preceding eventful commit and persists the

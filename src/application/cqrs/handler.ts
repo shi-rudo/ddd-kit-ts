@@ -647,8 +647,9 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 				});
 			});
 			if (candidates.length > 0) {
-				// The bus publishes the events of these same candidates, so an
-				// outbox that mutates its input must fail, not change them.
+				// The bus publishes the events of these same candidates, so the
+				// outbox must not change them. A mutation of the frozen array
+				// throws in strict-mode code and has no effect otherwise.
 				await deps.outbox.add(Object.freeze(candidates));
 			}
 			// The caller's own check runs first, so that it names a change in
