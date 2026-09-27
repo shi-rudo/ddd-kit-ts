@@ -325,8 +325,19 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 					rejection !== undefined,
 					"a new event of an ended event source must reject, also above its head",
 				);
-				await env.addCommitted(commit([siblingNext], 2, sibling));
-				await env.addCommitted(commit([sameTypeNext], 2, sameType));
+				for (const [event, source] of [
+					[siblingNext, sibling],
+					[sameTypeNext, sameType],
+				] as const) {
+					const siblingRejection = await captureRejection(
+						env.addCommitted(commit([event], 2, source)),
+					);
+					assert(
+						siblingRejection === undefined,
+						"ending one source must not end another with the same id or the same type. " +
+							`Got: ${describeError(siblingRejection)}`,
+					);
+				}
 				const records = await takeAndAck(env, 5);
 				assert(
 					deepEqual(

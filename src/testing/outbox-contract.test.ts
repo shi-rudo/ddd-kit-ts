@@ -110,7 +110,9 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 			(test) => test.name === "rejects a new event of an ended event source",
 		);
 		expect(endedSourceTest).toBeDefined();
-		await expect(endedSourceTest?.run()).rejects.toThrow();
+		await expect(endedSourceTest?.run()).rejects.toThrow(
+			/ending one source must not end another/,
+		);
 	});
 
 	it("the source-chain law kills an adapter that drops every predecessor", async () => {

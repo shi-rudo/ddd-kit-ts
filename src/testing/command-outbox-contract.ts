@@ -384,19 +384,30 @@ export function createCommandOutboxContractTests<C extends PublishedCommand>(
 					rejection !== undefined,
 					"a new commit of an ended source must reject",
 				);
-				await env.addCommitted([commit(3, [3], otherProcess)]);
-				await env.addCommitted([commit(5, [5], otherType)]);
+				for (const [seed, source] of [
+					[3, otherProcess],
+					[5, otherType],
+				] as const) {
+					const siblingRejection = await captureRejection(
+						env.addCommitted([commit(seed, [seed], source)]),
+					);
+					assert(
+						siblingRejection === undefined,
+						"ending one source must not end another with the same id or the same type. " +
+							`Got: ${describeError(siblingRejection)}`,
+					);
+				}
 				assert(
 					deepEqual(
-						(await env.readAll()).map(({ origin }) => origin.eventId),
+						(await env.readAll()).map(({ origin }) => origin.eventId).sort(),
 						[
 							"process-event-1",
-							"process-event-4",
 							"process-event-3",
+							"process-event-4",
 							"process-event-5",
 						],
 					),
-					"the rejected commit must leave no receipt, and ending one source must not end another with the same id or the same type",
+					"the rejected commit must leave no receipt",
 				);
 			}),
 		},

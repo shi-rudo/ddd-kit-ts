@@ -171,7 +171,35 @@ describe("command outbox contract suite", () => {
 		);
 
 		expect(test).toBeDefined();
-		await expect(test?.run()).rejects.toThrow();
+		await expect(test?.run()).rejects.toThrow(
+			/ending one source must not end another/,
+		);
+	});
+
+	it("accepts an adapter whose readAll orders receipts by source", async () => {
+		const harness = createInMemoryHarness();
+		const sorted: CommandOutboxContractHarness<TestCommand> = {
+			...harness,
+			createEnvironment: async () => {
+				const environment = await harness.createEnvironment();
+				return {
+					...environment,
+					readAll: async () =>
+						[...(await environment.readAll())].sort((left, right) =>
+							`${left.origin.source.aggregateType}/${left.origin.source.aggregateId}/${left.origin.position.aggregateVersion}`.localeCompare(
+								`${right.origin.source.aggregateType}/${right.origin.source.aggregateId}/${right.origin.position.aggregateVersion}`,
+							),
+						),
+				};
+			},
+		};
+		const test = createCommandOutboxContractTests(sorted).find(
+			(candidate) =>
+				candidate.name === "rejects a new commit of an ended source",
+		);
+
+		expect(test).toBeDefined();
+		await expect(test?.run()).resolves.toBeUndefined();
 	});
 
 	it("exposes an adapter that ignores endEventSources", async () => {
