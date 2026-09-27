@@ -297,11 +297,18 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 					aggregateType: "Payment",
 					aggregateId: "1",
 				};
+				const sameType: AggregateIdentity = {
+					aggregateType: "Order",
+					aggregateId: "2",
+				};
 				const first = harness.createEvent(1);
 				const siblingFirst = harness.createEvent(2);
 				const siblingNext = harness.createEvent(4);
+				const sameTypeFirst = harness.createEvent(5);
+				const sameTypeNext = harness.createEvent(6);
 				await env.addCommitted(commit([first], 1, removed));
 				await env.addCommitted(commit([siblingFirst], 1, sibling));
+				await env.addCommitted(commit([sameTypeFirst], 1, sameType));
 				await env.endEventSourcesCommitted([removed]);
 				const secondEnd = await captureRejection(
 					env.endEventSourcesCommitted([removed]),
@@ -319,13 +326,20 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 					"a new event of an ended event source must reject, also above its head",
 				);
 				await env.addCommitted(commit([siblingNext], 2, sibling));
-				const records = await takeAndAck(env, 3);
+				await env.addCommitted(commit([sameTypeNext], 2, sameType));
+				const records = await takeAndAck(env, 5);
 				assert(
 					deepEqual(
 						records.map(({ event }) => event.eventId),
-						[first.eventId, siblingFirst.eventId, siblingNext.eventId],
+						[
+							first.eventId,
+							siblingFirst.eventId,
+							sameTypeFirst.eventId,
+							siblingNext.eventId,
+							sameTypeNext.eventId,
+						],
 					),
-					"the rejected event must leave no record, and ending one source must not end another",
+					"the rejected event must leave no record, and ending one source must not end another with the same id or the same type",
 				);
 			}),
 		},

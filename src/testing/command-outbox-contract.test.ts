@@ -142,6 +142,38 @@ describe("command outbox contract suite", () => {
 		);
 	});
 
+	it("exposes an adapter that keys the end mark by aggregate id only", async () => {
+		const harness = createInMemoryHarness();
+		const broken: CommandOutboxContractHarness<TestCommand> = {
+			...harness,
+			createEnvironment: async () => {
+				const environment = await harness.createEnvironment();
+				return {
+					...environment,
+					endEventSourcesCommitted: async (sources) => {
+						const known = (await environment.readAll()).map(
+							({ origin }) => origin.source,
+						);
+						await environment.endEventSourcesCommitted(
+							known.filter((candidate) =>
+								sources.some(
+									(source) => source.aggregateId === candidate.aggregateId,
+								),
+							),
+						);
+					},
+				};
+			},
+		};
+		const test = createCommandOutboxContractTests(broken).find(
+			(candidate) =>
+				candidate.name === "rejects a new commit of an ended source",
+		);
+
+		expect(test).toBeDefined();
+		await expect(test?.run()).rejects.toThrow();
+	});
+
 	it("exposes an adapter that ignores endEventSources", async () => {
 		const harness = createInMemoryHarness();
 		const broken: CommandOutboxContractHarness<TestCommand> = {

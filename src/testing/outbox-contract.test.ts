@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+import type { AggregateIdentity } from "../domain/aggregate/aggregate-identity";
 import {
 	createDomainEvent,
 	type DomainEvent,
@@ -81,6 +82,35 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 		await expect(endedSourceTest?.run()).rejects.toThrow(
 			/a new event of an ended event source must reject/,
 		);
+	});
+
+	it("the ended-source law kills an adapter that keys the end mark by aggregate type only", async () => {
+		const mutant = createInMemoryHarness();
+		const createEnvironment = mutant.createEnvironment;
+		mutant.createEnvironment = async () => {
+			const environment = await createEnvironment();
+			const knownSources: AggregateIdentity[] = [];
+			return {
+				...environment,
+				addCommitted: async (events) => {
+					for (const { source } of events) knownSources.push(source);
+					await environment.addCommitted(events);
+				},
+				endEventSourcesCommitted: (sources) =>
+					environment.endEventSourcesCommitted(
+						knownSources.filter((known) =>
+							sources.some(
+								(source) => source.aggregateType === known.aggregateType,
+							),
+						),
+					),
+			};
+		};
+		const endedSourceTest = createOutboxContractTests(mutant).find(
+			(test) => test.name === "rejects a new event of an ended event source",
+		);
+		expect(endedSourceTest).toBeDefined();
+		await expect(endedSourceTest?.run()).rejects.toThrow();
 	});
 
 	it("the source-chain law kills an adapter that drops every predecessor", async () => {

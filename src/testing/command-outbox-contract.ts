@@ -364,7 +364,12 @@ export function createCommandOutboxContractTests<C extends PublishedCommand>(
 					aggregateType: "CheckoutProcess",
 					aggregateId: "order-2",
 				};
+				const otherType: AggregateIdentity = {
+					aggregateType: "ShippingProcess",
+					aggregateId: "order-1",
+				};
 				await env.addCommitted([commit(1)]);
+				await env.addCommitted([commit(4, [4], otherType)]);
 				await env.endEventSourcesCommitted([processSource]);
 				const secondEnd = await captureRejection(
 					env.endEventSourcesCommitted([processSource]),
@@ -380,12 +385,18 @@ export function createCommandOutboxContractTests<C extends PublishedCommand>(
 					"a new commit of an ended source must reject",
 				);
 				await env.addCommitted([commit(3, [3], otherProcess)]);
+				await env.addCommitted([commit(5, [5], otherType)]);
 				assert(
 					deepEqual(
 						(await env.readAll()).map(({ origin }) => origin.eventId),
-						["process-event-1", "process-event-3"],
+						[
+							"process-event-1",
+							"process-event-4",
+							"process-event-3",
+							"process-event-5",
+						],
 					),
-					"the rejected commit must leave no receipt, and ending one source must not end another",
+					"the rejected commit must leave no receipt, and ending one source must not end another with the same id or the same type",
 				);
 			}),
 		},
