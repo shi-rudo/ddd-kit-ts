@@ -41,10 +41,11 @@ export class NestedUnitOfWorkError extends KitWiringError<"NESTED_UNIT_OF_WORK">
 }
 
 /**
- * Thrown when the unit-of-work context is used after `run()` has
- * settled: reading `context.repositories`, calling an adapter-held
- * `tracking.trackLoaded`, or using a repository facade after the transaction
- * has committed or rolled back.
+ * Thrown when the unit-of-work context is used after its attempt ended:
+ * reading `context.repositories`, calling an adapter-held
+ * `tracking.trackLoaded`, or using a repository facade once the work
+ * callback settled, while the transaction commits, or after it committed or
+ * rolled back.
  *
  * Use-after-close is a programming bug (typically a leaked context
  * reference or a fire-and-forget promise outliving the callback), so
@@ -61,9 +62,10 @@ export class TransactionClosedError extends KitWiringError<"TRANSACTION_CLOSED">
 	constructor(public readonly operation: string) {
 		super(
 			"TRANSACTION_CLOSED",
-			`Unit of work is closed: ${operation} was called after the ` +
-				"transaction committed or rolled back. Do not use the context or " +
-				"repository facade or tracking capability outside the run() callback.",
+			`Unit of work is closed: ${operation} was called after its attempt ` +
+				"ended. Do not use the context, the repository facade, or the " +
+				"tracking capability outside the run() callback, and await all " +
+				"work inside it.",
 		);
 	}
 }

@@ -3483,6 +3483,64 @@ describe("UnitOfWork", () => {
 		);
 
 		it.each(["add", "update", "remove"] as const)(
+			"fails the run when a late %s arrives while the outbox write runs, even if the caller swallows the error",
+			async (operation) => {
+				const late = createMockAggregate("late-1", [testEvent("late-1")]);
+				let lateCall: unknown = "not attempted";
+				let registerLate: () => void = () => {};
+				const uow = new UnitOfWork({
+					scope: createMockScope(),
+					outbox: {
+						add: async () => {
+							registerLate();
+							await new Promise((resolve) => setTimeout(resolve, 0));
+						},
+					},
+					repositories: {
+						orders: defineTestRepository({
+							aggregate: MockAggregate,
+							persistence: versionPersistenceModel<MockAggregate>(),
+							physicalRemoval: true,
+							flush: async () => {},
+							create: (_tx: undefined, tracking) => ({
+								trackLoaded: (loaded: MockAggregate) =>
+									tracking.trackLoaded(loaded),
+							}),
+						}),
+					},
+				});
+
+				const rejection = await uow
+					.run(async ({ repositories }) => {
+						const orders = repositories.orders;
+						if (operation !== "add") orders.trackLoaded(late);
+						orders.add(createMockAggregate("first-1", [testEvent("first-1")]));
+						registerLate = () =>
+							queueMicrotask(() => {
+								try {
+									orders[operation](late);
+									lateCall = "accepted";
+								} catch (error) {
+									lateCall = error;
+								}
+							});
+						return undefined;
+					})
+					.then(
+						() => "committed",
+						(error: unknown) => error,
+					);
+
+				expect(lateCall).toBeInstanceOf(AggregateTrackingError);
+				expect(lateCall).toMatchObject({
+					reason: "registered_during_flush",
+					operation,
+				});
+				expect(rejection).toBe(lateCall);
+			},
+		);
+
+		it.each(["add", "update", "remove"] as const)(
 			"accepts a repeated %s of the same unchanged instance while the flush runs",
 			async (operation) => {
 				const { uow, outbox, flushed, flushEntered, releaseFlush } =

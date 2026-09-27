@@ -97,7 +97,12 @@ export class Session<Evt extends AnyDomainEvent> {
 		TrackedAggregate<Evt>
 	>();
 	private readonly _trackedAggregates = new Set<TrackedAggregate<Evt>>();
-	private _closed = false;
+	/**
+	 * `committing`: the callback settled and the flush ran; the transaction
+	 * still has to commit. Use is closed, but a registration in this phase
+	 * also fails the run, because its write can no longer join.
+	 */
+	private _phase: "open" | "committing" | "closed" = "open";
 	/**
 	 * Set when the flush starts. A write registered after that point would be
 	 * committed and harvested without its flush, so it is rejected, and the
@@ -194,9 +199,9 @@ export class Session<Evt extends AnyDomainEvent> {
 		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void {
-		this.assertOpen("repository.add");
 		requirePendingEventLifecycleReadView(aggregate, "repository.add");
 		this.assertWritesOpen(aggregate, "add");
+		this.assertOpen("repository.add");
 		this.assertNotRemoved(aggregate, definition);
 		const existing = this._trackingByAggregate.get(aggregate);
 		if (existing && existing.definition !== definition) {
@@ -273,9 +278,9 @@ export class Session<Evt extends AnyDomainEvent> {
 		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void {
-		this.assertOpen("repository.update");
 		requirePendingEventLifecycleReadView(aggregate, "repository.update");
 		this.assertWritesOpen(aggregate, "update");
+		this.assertOpen("repository.update");
 		const entry = this.loadedEntryFor(aggregate, "update", definition);
 		this.registerWrite(entry, "update", definition);
 	}
@@ -284,9 +289,9 @@ export class Session<Evt extends AnyDomainEvent> {
 		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void {
-		this.assertOpen("repository.remove");
 		requirePendingEventLifecycleReadView(aggregate, "repository.remove");
 		this.assertWritesOpen(aggregate, "remove");
+		this.assertOpen("repository.remove");
 		// Idempotent by reference, like add and update: a repeated remove of
 		// the SAME instance re-declares the same final lifecycle outcome
 		// (collection semantics; the enrollment layer already returns the
@@ -598,11 +603,11 @@ export class Session<Evt extends AnyDomainEvent> {
 	 * {@link close} releases the state afterwards.
 	 */
 	public closeForCommit(): void {
-		this._closed = true;
+		this._phase = "committing";
 	}
 
 	public close(): void {
-		this._closed = true;
+		this._phase = "closed";
 		// Defensive: a leaked direct IdentityMap reference must not serve
 		// stale instances into a later operation (that would silently
 		// bypass OCC). The session getter already throws after close;
@@ -614,7 +619,7 @@ export class Session<Evt extends AnyDomainEvent> {
 	}
 
 	public assertOpen(operation: string): void {
-		if (this._closed) {
+		if (this._phase !== "open") {
 			throw new TransactionClosedError(operation);
 		}
 	}
@@ -623,7 +628,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		aggregate: Aggregate<Id<string>, Evt>,
 		operation: "add" | "update" | "remove",
 	): void {
-		if (!this._writesSealed) return;
+		if (!this._writesSealed || this._phase === "closed") return;
 		// A repeat of a registered write is a no-op by reference: the write
 		// is already part of the flush, so it passes on to the normal path,
 		// which still rejects a change after the registration.

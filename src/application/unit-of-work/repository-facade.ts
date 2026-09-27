@@ -244,8 +244,9 @@ function installRepositoryLifecycleOperations<Evt extends AnyDomainEvent>(
 			configurable: false,
 			enumerable: false,
 			writable: false,
+			// The session checks the phase itself: a registration while the
+			// transaction commits must fail the run, not only this call.
 			value: (aggregate: unknown) => {
-				state.session.assertOpen(repositoryOperationName(operation));
 				state.session[operation](
 					aggregate as Aggregate<Id<string>, Evt>,
 					state.definition,
@@ -273,8 +274,9 @@ function createRepositoryFacadeHandler<Evt extends AnyDomainEvent>(
 	return {
 		get: (target, property, receiver) => {
 			// Member reads keep the loud TransactionClosedError: a probe
-			// cannot leak state, a member read can.
-			if (isLanguagePlumbing(state, property)) {
+			// cannot leak state, a member read can. An installed lifecycle
+			// operation checks the session when it is called.
+			if (isLanguagePlumbing(state, property) || state.writes.has(property)) {
 				return Reflect.get(target, property, receiver);
 			}
 			state.session.assertOpen(repositoryOperationName(property));
