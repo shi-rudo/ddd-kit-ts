@@ -3526,7 +3526,7 @@ describe("UnitOfWork", () => {
 			return uow;
 		}
 
-		it("fails the run when leaked work records an event while the outbox write runs", async () => {
+		it("fails the run with mutated_after_registration when leaked work records an event while the outbox write runs", async () => {
 			const order = new NotedOrder("o-1");
 			const uow = uowWhoseOutboxWriteYields(() => {
 				queueMicrotask(() => order.note("late", testEvent("o-1")));
@@ -3544,7 +3544,8 @@ describe("UnitOfWork", () => {
 					(error: unknown) => error,
 				);
 
-			expect(rejection).toBeInstanceOf(EventHarvestError);
+			expect(rejection).toBeInstanceOf(AggregateTrackingError);
+			expect(rejection).toMatchObject({ reason: "mutated_after_registration" });
 			expect(persistedVersionOf(order)).toBeUndefined();
 		});
 

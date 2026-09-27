@@ -650,6 +650,11 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 				// The bus publishes the events of these same candidates, so an
 				// outbox that mutates its input must fail, not change them.
 				await deps.outbox.add(Object.freeze(candidates));
+			}
+			// The caller's own check runs first, so that it names a change in
+			// its own terms, with one code for every kind of change.
+			fnResult.checkBeforeCommit?.();
+			if (candidates.length > 0) {
 				// The outbox write can yield. Work that the callback did not
 				// await could change an enrolled aggregate meanwhile, and the
 				// acknowledgement would then cover state or events that were
@@ -664,7 +669,6 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 					}
 				}
 			}
-			fnResult.checkBeforeCommit?.();
 			return {
 				result: fnResult.result,
 				commitRecords,
