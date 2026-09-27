@@ -763,10 +763,11 @@ kit discards the exact pending batch because there is no saved row to observe.
 The identity map is tombstoned immediately, so the same identity cannot be
 loaded or re-registered later in that run.
 
-The removal also ends the event source of the aggregate in the outbox. A later
-run cannot create the identity again once its aggregate committed events: the
-outbox rejects the events of the new aggregate. The kit does not support a
-re-created identity. Give the new aggregate a new id.
+The removal also ends the event source of the aggregate in the outbox. The kit
+does not support a re-created identity: give the new aggregate a new id. Once
+the removed aggregate committed events, the outbox rejects the first events of
+a new aggregate under the same identity. A re-creation that commits only state
+passes until the aggregate commits its first event.
 
 Bulk retention cleanup is a different port. Do not hydrate thousands of
 aggregates only to delete rows with no business decision. Define an

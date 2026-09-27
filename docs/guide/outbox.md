@@ -202,7 +202,9 @@ in the same transaction, after `add()`. The writer marks the head of each
 source as ended, and a later `add()` rejects a new event of that source. The
 kit does not support an aggregate that is created again under a removed
 identity: give the new aggregate a new id. An exact retry of a stored event
-stays idempotent. A source without events has no head, so it needs no mark.
+stays idempotent. A source without events has no head: it stays open, and its
+first event starts a new head. The kit detects a re-created identity only when
+both the removed and the new aggregate commit events.
 
 If the kit's dispatcher will poll the outbox, implement the full `Outbox`
 port:
@@ -263,6 +265,7 @@ create table event_source_head (
   aggregate_type text not null,
   aggregate_id text not null,
   last_eventful_aggregate_version integer not null,
+  ended boolean not null default false,
   primary key (aggregate_type, aggregate_id)
 );
 ```
@@ -318,7 +321,9 @@ genesis writes from separate missing-row reads.
 Reject a new event whose `aggregateVersion` is below the source head: the
 head only moves forward. Keep an `ended` flag on the source-head record.
 `endEventSources` sets it in the same transaction as the removal, and `add()`
-rejects a new event of an ended source, also above its head.
+rejects a new event of an ended source, also above its head. Never prune an
+ended head: without it, the source opens again and a re-created identity
+passes.
 
 For a projection, the four fields form a gap-proof cursor: the consumer can
 reject missing sequences and commits. For general deduplication across all
@@ -336,7 +341,13 @@ dispatched receipts -- event ID, qualified source, and candidate commit
 position (10,000 by default) -- so an exact post-ack retry remains an idempotent
 no-op without touching the source head. Unbounded production
 workloads need a durable adapter with an explicit source-head retention policy
-and a transactional unique key on `eventId`.
+that keeps ended heads, and a transactional unique key on `eventId`.
+
+`InMemoryOutbox` cannot see a rollback. A source that `endEventSources` ended
+inside a transaction that rolls back stays ended, so every later event of the
+still existing aggregate is rejected, also on the retry of a
+`RetryingTransactionScope`. A test that rolls back or retries a removal needs
+an outbox that joins the test's transaction.
 
 ```ts
 import { InMemoryOutbox, type DomainEvent } from "@shirudo/ddd-kit";

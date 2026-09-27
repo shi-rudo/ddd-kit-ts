@@ -180,6 +180,9 @@ immutable. Run one kit version per process during a cutover.
   identity, and the commit `position`. `DispatchTrackingOutbox.markFailed`
   returns the dead-letter record on the call that crosses the attempt
   ceiling. The poll methods accept an optional `ExecutionContext`.
+- `OutboxWriter` has a required `endEventSources(sources)`, and so does the
+  new `CommandOutboxWriter`. A custom outbox marks the head of each removed
+  aggregate's source as ended and rejects a new event of an ended source.
 
 #### Command and query buses
 
@@ -298,12 +301,13 @@ immutable. Run one kit version per process during a cutover.
   reliability. `createOutboxContractTests` proves an outbox adapter.
 - `withCommit` composes every event into an `EventCommitCandidate`, and the
   outbox persists a `CommittedDomainEvent` with a gap-proof `CommitPosition`.
-  `OutboxWriter` and `CommandOutboxWriter` have `endEventSources`.
-  `withCommit` ends the event source of every removed aggregate, and the
-  outbox then rejects a new event of that source, so an aggregate created
-  again under a removed identity fails loud. `InMemoryOutbox` implements
-  it, and it still dedupes a retry at the source head after the receipt of
-  the event expired, independent of its place in the batch.
+  `withCommit` ends the event source of every removed aggregate through
+  `endEventSources`, and the outbox then rejects a new event of that
+  source. An aggregate created again under a removed identity fails loud
+  when the removed aggregate committed events and the new one commits
+  events. `InMemoryOutbox` implements it; it cannot see a rollback, so a
+  rolled-back end stays. It still dedupes a retry at the source head after
+  the receipt of the event expired, independent of its place in the batch.
 - `IntegrationMessage` is the JSON-safe broker contract, with
   `createIntegrationMessage`, `encodeIntegrationMessage`,
   `decodeIntegrationMessage`, and `integrationMessageToCommittedEvent`.

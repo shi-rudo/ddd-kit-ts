@@ -103,8 +103,8 @@ export interface CommandOutboxWriter<C extends PublishedCommand> {
 	 * Ends the source cursors of removed aggregates, in the same transaction
 	 * as the removal. After the mark, `add()` must reject a new commit whose
 	 * origin comes from an ended source; an exact retry by `origin.eventId`
-	 * stays idempotent. A source without a cursor needs no mark, and ending
-	 * a source twice is not an error. See `OutboxWriter.endEventSources`.
+	 * stays idempotent. A source without a cursor stays open, and ending a
+	 * source twice is not an error. See `OutboxWriter.endEventSources`.
 	 */
 	endEventSources(sources: ReadonlyArray<AggregateIdentity>): Promise<void>;
 }

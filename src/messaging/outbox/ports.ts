@@ -88,12 +88,14 @@ export interface OutboxWriter<Evt extends AnyDomainEvent> {
 	 * the removal.
 	 *
 	 * For every source that has a head, the adapter marks the head as ended
-	 * in the SAME transaction. A source without a head has no events, so it
-	 * has no continuity to protect and needs no mark. After the mark,
-	 * `add()` must reject a new event of that source: its aggregate was
-	 * created again under a removed identity, which the kit does not
-	 * support. An exact retry of a stored event stays idempotent, and ending
-	 * a source twice is not an error.
+	 * in the SAME transaction. The mark must outlive any retention of heads:
+	 * a pruned ended head opens the source again. A source without a head
+	 * has no events, so it has no continuity to protect: it stays open, and
+	 * its first event starts a new head. After the mark, `add()` must reject
+	 * a new event of that source: its aggregate was created again under a
+	 * removed identity, which the kit does not support. An exact retry of a
+	 * stored event stays idempotent, and ending a source twice is not an
+	 * error.
 	 */
 	endEventSources: (sources: ReadonlyArray<AggregateIdentity>) => Promise<void>;
 }

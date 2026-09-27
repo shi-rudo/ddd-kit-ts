@@ -977,8 +977,11 @@ not bare events. An `OutboxRecord` is a `CommittedDomainEvent` with a
 `position`. `DispatchTrackingOutbox.markFailed` returns the dead-letter record
 on the call that crosses the attempt ceiling, and `undefined` otherwise. The
 poll methods accept an optional `ExecutionContext`. `InMemoryOutbox` users
-need no change. A custom outbox passes `createOutboxContractTests`, which
-proves the commit positions and the source cursor.
+need no change. A custom outbox implements the new required
+`endEventSources(sources)`: it marks the head of each removed aggregate's
+source as ended, in the same transaction, and rejects a new event of an ended
+source. It passes `createOutboxContractTests`, which proves the commit
+positions, the source cursor, and ended sources.
 
 `DomainEvent` has no `aggregateVersion` any more, and `createDomainEvent`
 takes no such option. The commit envelope carries the position: an outbox
