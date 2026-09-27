@@ -14,7 +14,10 @@ import {
 	UnenrolledChangesError,
 } from "../../errors/kit-errors";
 import { findInCauseChain } from "../../internal/cause-chain";
-import { IdentityMap } from "../../persistence/repository/identity-map";
+import {
+	type AggregateClass,
+	IdentityMap,
+} from "../../persistence/repository/identity-map";
 import {
 	capturePersistenceBaseline,
 	derivePersistenceChanges,
@@ -86,11 +89,16 @@ export class Session<Evt extends AnyDomainEvent> {
 	// What adapters receive: the typed read-only view, enforced at runtime.
 	// Handing out the map itself would expose set/delete/clear to JavaScript
 	// callers, and a stray clear() erases deletion tombstones and the
-	// pending-event baselines behind UnenrolledChangesError.
+	// pending-event baselines behind UnenrolledChangesError. A view that an
+	// adapter keeps answers empty once the session is no longer open, so it
+	// cannot serve an instance after its attempt ended.
 	private readonly _identityMapView = Object.freeze({
-		get: this._identityMap.get.bind(this._identityMap),
-		has: this._identityMap.has.bind(this._identityMap),
-		isDeleted: this._identityMap.isDeleted.bind(this._identityMap),
+		get: (type: AggregateClass<unknown>, id: Id<string>) =>
+			this._phase === "open" ? this._identityMap.get(type, id) : undefined,
+		has: (type: AggregateClass<unknown>, id: Id<string>) =>
+			this._phase === "open" && this._identityMap.has(type, id),
+		isDeleted: (type: AggregateClass<unknown>, id: Id<string>) =>
+			this._phase === "open" && this._identityMap.isDeleted(type, id),
 	}) as UnitOfWorkIdentityMap;
 	private readonly _trackingByAggregate = new WeakMap<
 		Aggregate<Id<string>, Evt>,

@@ -2529,6 +2529,47 @@ describe("UnitOfWork", () => {
 			expect(leakedMap.has(OrderAggregate, "o-1" as TestId)).toBe(false);
 		});
 
+		it("a captured identity map answers empty while the transaction commits", async () => {
+			const event = testEvent("o-1");
+			const rows = new Map([["o-1", [event]]]);
+			let leakedMap!: ReturnType<
+				() => RepositoryTracking<OrderAggregate>["identityMap"]
+			>;
+			const seenDuringCommit: unknown[] = [];
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: {
+					add: async () => {
+						seenDuringCommit.push(
+							leakedMap.get(OrderAggregate, "o-1" as TestId),
+							leakedMap.has(OrderAggregate, "o-1" as TestId),
+						);
+					},
+				},
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: OrderAggregate,
+						persistence: versionPersistenceModel<OrderAggregate>(),
+						flush: async () => {},
+						create: (_tx: undefined, tracking) =>
+							new CachingOrderRepository(rows, tracking),
+					}),
+				},
+			});
+
+			await uow.run(async ({ repositories }) => {
+				const order = (await repositories.orders.findById(
+					"o-1" as TestId,
+				)) as OrderAggregate;
+				leakedMap = repositories.orders.trackedIdentities;
+				order.change(event);
+				repositories.orders.update(order);
+				return undefined;
+			});
+
+			expect(seenDuringCommit).toEqual([undefined, false]);
+		});
+
 		it("after delete, findById reads uniformly as null, even when the physical delete is deferred", async () => {
 			const event = testEvent("o-1");
 			// The row store deliberately keeps the row: simulates a repo
