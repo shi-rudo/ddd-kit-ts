@@ -309,6 +309,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		// reject.
 		const entry = this._trackingByAggregate.get(aggregate);
 		if (this.isRemovedInstance(aggregate) && entry?.definition === definition) {
+			this.assertUnchangedAfterRegistration(entry, "remove");
 			return;
 		}
 		const loaded = this.loadedEntryFor(aggregate, "remove", definition);

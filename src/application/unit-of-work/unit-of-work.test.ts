@@ -1147,20 +1147,26 @@ describe("UnitOfWork", () => {
 			);
 		});
 
-		it.each(["add", "update"] as const)(
+		it.each(["add", "update", "remove"] as const)(
 			"names the operation %s when it repeats after a change",
 			async (operation) => {
 				const { uow } = createUow();
 				const aggregate = createMockAggregate("o-1");
+				let repeatedCall: unknown = "not attempted";
 
 				const rejection = await uow
 					.run(async ({ repositories }) => {
-						if (operation === "update") {
+						if (operation !== "add") {
 							repositories.orders.trackLoaded(aggregate);
 						}
 						repositories.orders[operation](aggregate);
 						aggregate.change();
-						repositories.orders[operation](aggregate);
+						try {
+							repositories.orders[operation](aggregate);
+						} catch (error) {
+							repeatedCall = error;
+							throw error;
+						}
 						return undefined;
 					})
 					.then(
@@ -1168,7 +1174,8 @@ describe("UnitOfWork", () => {
 						(error: unknown) => error,
 					);
 
-				expect(rejection).toBeInstanceOf(AggregateTrackingError);
+				expect(repeatedCall).toBeInstanceOf(AggregateTrackingError);
+				expect(rejection).toBe(repeatedCall);
 				expect(rejection).toMatchObject({
 					operation,
 					reason: "mutated_after_registration",
