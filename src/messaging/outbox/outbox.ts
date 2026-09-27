@@ -500,7 +500,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 		for (const { event, source, position } of events) {
 			if (headRetries.has(event.eventId)) continue;
 			const sourceKey = encodeAggregateIdentity(source);
-			this.assertSourceNotEnded(event, source, sourceKey);
+			this.assertSourceNotEnded(event, source, position, sourceKey);
 			const cursor =
 				simulatedCursors.get(sourceKey) ?? this.sourceCursors.get(sourceKey);
 			if (
@@ -621,12 +621,16 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 	}
 
 	/**
-	 * An exact retry of a stored event of an ended source stays a retry. The
-	 * caller skips retries at the source head before this check.
+	 * Rejects a new event of an ended source above its head. An exact retry of
+	 * a stored event of an ended source stays a retry; the caller skips
+	 * retries at the source head before this check. A candidate below the
+	 * head, or at a position that another event owns, is left to the
+	 * stale-head and position checks, which name both possible causes.
 	 */
 	private assertSourceNotEnded(
 		event: AnyDomainEvent,
 		source: AggregateIdentity,
+		position: EventCommitCandidatePosition,
 		sourceKey: string,
 	): void {
 		if (!this.endedSourceKeys.has(sourceKey)) return;
@@ -634,6 +638,15 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 			this.pending.has(event.eventId) ||
 			this.dead.has(event.eventId) ||
 			this.dispatchedEventIds.has(event.eventId)
+		) {
+			return;
+		}
+		const cursor = this.sourceCursors.get(sourceKey);
+		if (
+			cursor !== undefined &&
+			(position.aggregateVersion < cursor.aggregateVersion ||
+				(position.aggregateVersion === cursor.aggregateVersion &&
+					cursor.eventIdsBySequence.has(position.commitSequence)))
 		) {
 			return;
 		}

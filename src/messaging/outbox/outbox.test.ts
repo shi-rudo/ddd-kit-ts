@@ -663,6 +663,38 @@ describe("InMemoryOutbox", () => {
 		);
 	});
 
+	it("names both causes when a retry with an expired receipt reaches an ended source below its head", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>({
+			maxRetainedDispatchedEventIds: 1,
+		});
+		const event = (eventId: string) =>
+			createDomainEvent(
+				"OrderCreated",
+				{ orderId: "o-1" },
+				{ eventId, aggregateId: "o-1", aggregateType: "Order" },
+			);
+		const first = event("evt-v1");
+		const second = event("evt-v2");
+		await outbox.add([candidate(first, 1)]);
+		await outbox.markDispatched([first.eventId]);
+		await outbox.add([candidate(second, 2)]);
+		await outbox.markDispatched([second.eventId]);
+		await outbox.endEventSources([
+			{ aggregateType: "Order", aggregateId: "o-1" },
+		]);
+
+		const rejection = await outbox.add([candidate(first, 1)]).then(
+			() => "accepted",
+			(error: unknown) => error,
+		);
+
+		expect(rejection).toBeInstanceOf(EventHarvestError);
+		expect((rejection as EventHarvestError).message).toMatch(/receipt/);
+		expect((rejection as EventHarvestError).message).toMatch(
+			/removed and created again/,
+		);
+	});
+
 	it("names a re-created identity as a cause when a new event lands below the source head", async () => {
 		const outbox = new InMemoryOutbox<OrderCreated>();
 		const event = (eventId: string) =>
