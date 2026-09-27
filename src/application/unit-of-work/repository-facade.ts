@@ -32,9 +32,9 @@ interface RepositoryFacadeSession<Evt extends AnyDomainEvent> {
  * the lifecycle writes, and an adapter that defines its own add, update, or
  * remove is rejected. Other methods are bound to the adapter so classes with private
  * fields keep their normal receiver. A member that returns the adapter itself
- * (a fluent `this`) returns the facade instead. A promise passes unchanged; the
- * port constraints of `defineRepository` reject a member whose promise
- * resolves to the port itself.
+ * (a fluent `this`) returns the facade instead. A promise passes unchanged: a
+ * raw adapter that it resolves to can only read, because an adapter defines
+ * no add, update, or remove.
  */
 export function bindRepositoryWrites<TRepository, Evt extends AnyDomainEvent>(
 	adapter: TRepository,

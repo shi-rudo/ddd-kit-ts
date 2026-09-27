@@ -1300,8 +1300,8 @@ definition from an earlier copy fails with `InvalidRepositoryDefinitionError`.
 Behavior that a use case or an adapter can notice:
 
 - Registration closes when the flush starts. A repository call that the
-  callback did not await and that registers later, until the transaction
-  commits, throws `AggregateTrackingError` with the reason
+  callback did not await and that registers later, until the last check
+  before the commit, throws `AggregateTrackingError` with the reason
   `registered_during_flush`, and the run fails, also when the caller swallows
   the error. Await every repository call.
 - A read adapter returns the result of `tracking.trackLoaded`, not its
@@ -1316,7 +1316,8 @@ Behavior that a use case or an adapter can notice:
 - The outbox receives a frozen candidate array. An adapter that sorts it in
   place fails the commit; copy the array first.
 - An adapter must not define `add`, `update`, or `remove`. A typed adapter
-  with one of them fails to compile on `create`; any other fails on the first
+  with one of them fails to compile on `create`; one that the compiler
+  cannot see, for example a JavaScript object, fails on the first
   run with `InvalidRepositoryAdapterError` (reason
   `defines_lifecycle_operation`). Delete those methods from the adapter. The
   error takes one options object now: `{ repository, reason, receivedType }`

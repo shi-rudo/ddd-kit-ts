@@ -60,8 +60,8 @@ immutable. Run one kit version per process during a cutover.
   exact event batch. A change to the aggregate after its registration
   rejects the transaction, also while the outbox write runs, and so does a
   change of a loaded aggregate without a write. Registration
-  closes when the flush starts: a later `add`, `update`, or `remove` fails
-  the run, also while the transaction commits and also when the caller
+  closes when the flush starts: a later `add`, `update`, or `remove` until
+  the last check before the commit fails the run, also when the caller
   swallows the error. `withCommit` hands the outbox a frozen array of candidates.
 - Snapshots move out of the aggregate into an adapter-owned
   `SnapshotModel`. `createSnapshot`, `restoreFromSnapshot`,

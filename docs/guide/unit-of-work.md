@@ -204,13 +204,14 @@ aggregate without a write: if it changed, the commit fails with
 while the outbox write runs.
 
 Registration closes when the flush starts. Work that the callback did not
-await can call `add`, `update`, or `remove` later, while the flush or the
-commit runs. That call throws `AggregateTrackingError` with the reason
-`registered_during_flush`, and the run fails before it commits, also when the
-caller swallows the error. A repeat of a write that is already registered for
-the same, unchanged instance stays a no-op. After the attempt ended, a call
-throws `TransactionClosedError`. Await every repository call inside the
-`run()` callback.
+await can call `add`, `update`, or `remove` later. Until the last check before
+the commit, after the outbox write, that call throws `AggregateTrackingError`
+with the reason `registered_during_flush`, and the run fails before it
+commits, also when the caller swallows the error. A repeat of a write that is
+already registered for the same, unchanged instance stays a no-op. After the
+last check, a call throws `TransactionClosedError`: the transaction can no
+longer take the write, and a caller that swallows the error loses it. Await
+every repository call inside the `run()` callback.
 
 ## Read adapters and the identity map
 
@@ -254,8 +255,9 @@ class DrizzleOrderReadAdapter {
 
 The map enforces one object per aggregate class and id for the duration of the
 operation. This is a correctness rule, not just a cache: event batches and
-write receipts are bound to object identity. The map is cleared when `run()`
-settles, and a removed identity remains tombstoned until then.
+write receipts are bound to object identity. A removed identity stays
+tombstoned until the attempt ends. After that, a view of the map that an
+adapter kept answers empty.
 
 Two loads of one id can overlap, for example
 `Promise.all([findById(id), findById(id)])`. Both pass the identity-map check
@@ -376,7 +378,7 @@ The most useful failures are intentionally specific:
 | `UnenrolledChangesError` | a loaded aggregate changed but the use case never called `update` |
 | `ConcurrencyConflictError` | the adapter's expected-version predicate lost a race |
 | `DuplicateAggregateError` | an `add` collided with an existing identity |
-| `InvalidRepositoryAdapterError` | a repository factory returned no adapter object |
+| `InvalidRepositoryAdapterError` | a repository factory returned no adapter object, or an adapter that defines `add`, `update`, or `remove` |
 | `CommitError` | work completed, but the outbox write or transaction commit failed |
 | `RollbackError` | work failed and the scope reported a different rollback failure |
 | `NestedUnitOfWorkError` | one instance was entered while already running |
