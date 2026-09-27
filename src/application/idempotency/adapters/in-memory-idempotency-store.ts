@@ -5,7 +5,10 @@ import {
 	IdempotencyKeyReuseError,
 	InMemoryCapacityExceededError,
 } from "../../../errors/kit-errors";
-import { assertPositiveSafeInteger } from "../../../internal/validate";
+import {
+	assertPositiveSafeInteger,
+	MAX_TIMER_DELAY_MS,
+} from "../../../internal/validate";
 import type {
 	IdempotencyClaim,
 	IdempotencyClaimHandle,
@@ -99,19 +102,19 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 		this.maxEntries = options.maxEntries;
 		if (
 			!positiveSafeInteger(this.leaseDurationMs) ||
-			this.leaseDurationMs > 2_147_483_647
+			this.leaseDurationMs > MAX_TIMER_DELAY_MS
 		) {
 			throw new RangeError(
-				"leaseDurationMs must be a positive safe integer no greater than 2147483647",
+				`leaseDurationMs must be a positive safe integer no greater than ${MAX_TIMER_DELAY_MS}`,
 			);
 		}
 		if (
 			!positiveSafeInteger(this.renewAfterMs) ||
 			this.renewAfterMs >= this.leaseDurationMs ||
-			this.renewAfterMs > 2_147_483_647
+			this.renewAfterMs > MAX_TIMER_DELAY_MS
 		) {
 			throw new RangeError(
-				"renewAfterMs must be a positive safe integer below leaseDurationMs and no greater than 2147483647",
+				`renewAfterMs must be a positive safe integer below leaseDurationMs and no greater than ${MAX_TIMER_DELAY_MS}`,
 			);
 		}
 	}
