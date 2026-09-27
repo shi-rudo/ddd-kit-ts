@@ -118,6 +118,10 @@ interface ForStoringOrdersFluently {
 	update(order: Order): this;
 }
 
+interface ForStoringOrdersWithIndex extends ForStoringOrders {
+	readonly [facet: string]: unknown;
+}
+
 interface ForRemovingOrdersAsynchronously extends ForStoringOrders {
 	remove(order: Order): Promise<void>;
 }
@@ -238,6 +242,10 @@ const probes = {
 	"remove-with-boolean-removal": `defineRepository<ForRemovingOrders>()({
 	physicalRemoval: removalFlag,${adapterWiring}});`,
 	"async-add": `defineRepository<ForStoringOrdersAsynchronously>()({${adapterWiring}});`,
+	"port-with-index-signature": `defineRepository<ForStoringOrdersWithIndex>()({${adapterWiring.replace(
+		"new SqlOrderAdapter(tracking)",
+		"({ findById: async (_id: OrderId) => (void tracking, null) })",
+	)}});`,
 	"adapter-with-add": `defineRepository<ForStoringOrders>()({${adapterWiring.replace(
 		"new SqlOrderAdapter(tracking)",
 		"new WritingOrderAdapter(tracking)",
@@ -374,6 +382,10 @@ describe("defineRepository compile-time diagnostics", () => {
 		expect(diagnostics[0]?.message).toContain(
 			"the adapter must not define add; the unit of work installs it",
 		);
+	});
+
+	it("accepts a port with a string index signature", () => {
+		expect(diagnosticsOf("port-with-index-signature")).toEqual([]);
 	});
 
 	it("accepts a port without update when appendOnly is true", () => {

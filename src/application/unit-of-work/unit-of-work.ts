@@ -270,41 +270,59 @@ type AdapterWritesConstraint<TAdapter> = unknown extends TAdapter
 				: RepositoryPortViolation<`the adapter must not define ${TMember & string}; the unit of work installs it`>
 			: never;
 
+/**
+ * The keys that a port declares by name. A string index signature makes every
+ * name a key, which would count an undeclared `update` or `remove` as present.
+ * @inline
+ */
+type DeclaredKeys<T> = keyof {
+	[TKey in keyof T as string extends TKey
+		? never
+		: number extends TKey
+			? never
+			: symbol extends TKey
+				? never
+				: TKey]: T[TKey];
+};
+
 /** @inline */
 type AddConstraint<
 	TRepositoryPort,
 	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
-> = "add" extends keyof TRepositoryPort
-	? MemberAcceptsAggregate<TRepositoryPort, "add", TAggregate>
-	: RepositoryPortViolation<"the port must declare add(aggregate): void">;
+> =
+	"add" extends DeclaredKeys<TRepositoryPort>
+		? MemberAcceptsAggregate<TRepositoryPort, "add", TAggregate>
+		: RepositoryPortViolation<"the port must declare add(aggregate): void">;
 
 /** @inline */
 type UpdateConstraint<
 	TRepositoryPort,
 	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 	TAppendOnly extends boolean,
-> = "update" extends keyof TRepositoryPort
-	? boolean extends TAppendOnly
-		? RepositoryPortViolation<"the port declares update, so the definition must not set appendOnly">
+> =
+	"update" extends DeclaredKeys<TRepositoryPort>
+		? boolean extends TAppendOnly
+			? RepositoryPortViolation<"the port declares update, so the definition must not set appendOnly">
+			: [TAppendOnly] extends [true]
+				? RepositoryPortViolation<"appendOnly is true, so the port must not declare update">
+				: MemberAcceptsAggregate<TRepositoryPort, "update", TAggregate>
 		: [TAppendOnly] extends [true]
-			? RepositoryPortViolation<"appendOnly is true, so the port must not declare update">
-			: MemberAcceptsAggregate<TRepositoryPort, "update", TAggregate>
-	: [TAppendOnly] extends [true]
-		? unknown
-		: RepositoryPortViolation<"the port declares no update, so the definition must set appendOnly: true">;
+			? unknown
+			: RepositoryPortViolation<"the port declares no update, so the definition must set appendOnly: true">;
 
 /** @inline */
 type RemovalConstraint<
 	TRepositoryPort,
 	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 	TRemoval extends boolean,
-> = "remove" extends keyof TRepositoryPort
-	? [TRemoval] extends [true]
-		? MemberAcceptsAggregate<TRepositoryPort, "remove", TAggregate>
-		: RepositoryPortViolation<"the port declares remove, so the definition must set physicalRemoval: true">
-	: [TRemoval] extends [true]
-		? RepositoryPortViolation<"physicalRemoval is true, so the port must declare remove(aggregate): void">
-		: unknown;
+> =
+	"remove" extends DeclaredKeys<TRepositoryPort>
+		? [TRemoval] extends [true]
+			? MemberAcceptsAggregate<TRepositoryPort, "remove", TAggregate>
+			: RepositoryPortViolation<"the port declares remove, so the definition must set physicalRemoval: true">
+		: [TRemoval] extends [true]
+			? RepositoryPortViolation<"physicalRemoval is true, so the port must declare remove(aggregate): void">
+			: unknown;
 
 /**
  * Checks the port against every constraint of {@link defineRepository}, one
