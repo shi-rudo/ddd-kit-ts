@@ -1300,9 +1300,10 @@ definition from an earlier copy fails with `InvalidRepositoryDefinitionError`.
 Behavior that a use case or an adapter can notice:
 
 - Registration closes when the flush starts. A repository call that the
-  callback did not await and that registers later throws
-  `AggregateTrackingError` with the reason `registered_during_flush`, and
-  the run fails. Await every repository call.
+  callback did not await and that registers later, until the transaction
+  commits, throws `AggregateTrackingError` with the reason
+  `registered_during_flush`, and the run fails, also when the caller swallows
+  the error. Await every repository call.
 - A read adapter returns the result of `tracking.trackLoaded`, not its
   argument. When two loads of one id overlap, the first tracked instance
   wins. An `add` of a second instance with a tracked identity throws

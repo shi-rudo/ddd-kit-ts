@@ -204,9 +204,12 @@ aggregate without a write: if it changed, the commit fails with
 while the outbox write runs.
 
 Registration closes when the flush starts. Work that the callback did not
-await can call `add`, `update`, or `remove` later. That call throws
-`AggregateTrackingError` with the reason `registered_during_flush`, and the
-run fails before it commits. Await every repository call inside the
+await can call `add`, `update`, or `remove` later, while the flush or the
+commit runs. That call throws `AggregateTrackingError` with the reason
+`registered_during_flush`, and the run fails before it commits, also when the
+caller swallows the error. A repeat of a write that is already registered for
+the same, unchanged instance stays a no-op. After the attempt ended, a call
+throws `TransactionClosedError`. Await every repository call inside the
 `run()` callback.
 
 ## Read adapters and the identity map

@@ -309,8 +309,10 @@ genesis writes from separate missing-row reads.
 
 Reject a new event whose `aggregateVersion` is below the source head. An
 aggregate that was removed and then created again under the same identity
-produces such events, because its versions restart. The kit does not support a
-re-created identity: give the new aggregate a new id.
+usually produces such events, because its versions restart. The kit does not
+support a re-created identity: give the new aggregate a new id. The head alone
+cannot detect a new aggregate whose versions pass the earlier head; its events
+continue the earlier source.
 
 For a projection, the four fields form a gap-proof cursor: the consumer can
 reject missing sequences and commits. For general deduplication across all
