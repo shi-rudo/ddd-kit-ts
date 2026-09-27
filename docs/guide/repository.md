@@ -382,8 +382,12 @@ declare `remove` with `physicalRemoval: true`.
 
 The adapter itself defines no `add`, `update`, or `remove`: the Unit of Work
 installs them on the facade. A typed adapter with one of them fails to compile
-on `create`, and any other adapter fails on the first run with
-`InvalidRepositoryAdapterError` and the reason `defines_lifecycle_operation`.
+on `create`, also as one member of a union or as a private member. Any other
+adapter fails on the first run with `InvalidRepositoryAdapterError` and the
+reason `defines_lifecycle_operation`, for example a JavaScript object or a
+union that TypeScript reduces to its base class. The run reads the adapter's
+property descriptors, as the facade does: a Proxy adapter reports its members
+through them.
 The rule makes a raw adapter harmless wherever it leaves the facade, for
 example through a callback or a clone: it can only read. A fluent port member
 such as `lockForUpdate(): this` returns the facade at run time, but the adapter

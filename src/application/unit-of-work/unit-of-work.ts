@@ -268,20 +268,18 @@ type ReturnsWhatTheRegistrationReturns<TDeclared, TInstalled> = 0 extends 1 &
 		: false;
 
 /**
- * Rejects an adapter type that declares its own `add`, `update`, or `remove`.
+ * What an adapter type may say about `add`, `update`, and `remove`: nothing.
  * The Unit of Work installs them on the facade, and a raw adapter that can
- * write would bypass it wherever it leaves the facade.
+ * write would bypass it wherever it leaves the facade. As a bound on the
+ * adapter type, the rule also holds for a generic adapter and for each
+ * member of a union.
  * @inline
  */
-type AdapterWritesConstraint<TAdapter> = unknown extends TAdapter
-	? unknown
-	: 0 extends 1 & TAdapter
-		? unknown
-		: Extract<keyof TAdapter, "add" | "update" | "remove"> extends infer TMember
-			? [TMember] extends [never]
-				? unknown
-				: RepositoryPortViolation<`the adapter must not define ${TMember & string}; the unit of work installs it`>
-			: never;
+type LifecycleFreeAdapter = {
+	readonly add?: RepositoryPortViolation<"the adapter must not define add; the unit of work installs it">;
+	readonly update?: RepositoryPortViolation<"the adapter must not define update; the unit of work installs it">;
+	readonly remove?: RepositoryPortViolation<"the adapter must not define remove; the unit of work installs it">;
+};
 
 /**
  * The keys that a port declares by name. A string index signature makes every
@@ -370,7 +368,8 @@ type RepositoryDefinitionBuilder<TRepositoryPort extends object> = <
 	TCreate extends (
 		transaction: never,
 		tracking: RepositoryTracking<TAggregate>,
-	) => Omit<TRepositoryPort, "add" | "update" | "remove">,
+	) => Omit<TRepositoryPort, "add" | "update" | "remove"> &
+		LifecycleFreeAdapter,
 	TBaseline,
 	TChangeSet,
 	TRemoval extends boolean = false,
@@ -385,7 +384,7 @@ type RepositoryDefinitionBuilder<TRepositoryPort extends object> = <
 		TRemoval,
 		TAppendOnly
 	> & {
-		readonly create: TCreate & AdapterWritesConstraint<ReturnType<TCreate>>;
+		readonly create: TCreate;
 	} & RepositoryPortConstraint<
 			TRepositoryPort,
 			TAggregate,
@@ -718,6 +717,9 @@ export class UnitOfWork<
 		this._active = true;
 
 		let session: Session<Evt> | undefined;
+		// Every session of the run, so that the run can end them all: a
+		// scope can overlap attempts, and each one can leak its facades.
+		const sessions: Session<Evt>[] = [];
 		// The attempt that the scope runs now. Each callback writes only to
 		// its own record, so an abandoned attempt that settles late cannot
 		// relabel the failure of the live one.
@@ -745,6 +747,7 @@ export class UnitOfWork<
 					session?.close();
 					const s = new Session<Evt>(enrollment);
 					session = s;
+					sessions.push(s);
 					const current = startAttempt();
 					attempt = current;
 
@@ -767,14 +770,14 @@ export class UnitOfWork<
 						// The tokens below are what gets harvested; after close, any
 						// use of the session throws TransactionClosedError.
 						const commits = s.commitTokens;
-						s.closeForCommit();
+						s.close();
 						// The outbox write can yield, and leaked work can change a
 						// tracked aggregate meanwhile. The same check runs again
 						// just before the commit.
 						return {
 							result,
 							commits,
-							checkBeforeCommit: () => s.assertReadyToCommit(),
+							checkBeforeCommit: () => s.assertReadyToCommitLastTime(),
 						};
 					} catch (error) {
 						current.workThrew = true;
@@ -782,7 +785,7 @@ export class UnitOfWork<
 						// The scope rolls this attempt back and can wait before a
 						// retry. A leaked facade must not read through the dead
 						// transaction handle meanwhile.
-						s.close();
+						s.end();
 						throw error;
 					}
 				},
@@ -796,7 +799,7 @@ export class UnitOfWork<
 		} catch (error) {
 			throw classifyRunError(error, attempt, options?.signal);
 		} finally {
-			session?.close();
+			for (const ended of sessions) ended.end();
 			this._active = false;
 		}
 	}

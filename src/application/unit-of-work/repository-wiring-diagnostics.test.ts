@@ -71,6 +71,17 @@ class WritingOrderAdapter extends SqlOrderAdapter {
 	add(_order: Order): void {}
 }
 
+class PrivatelyWritingOrderAdapter extends SqlOrderAdapter {
+	private add(_order: Order): void {}
+}
+
+class OtherOrderReader {
+	constructor(readonly _tracking: RepositoryTracking<Order>) {}
+	async findById(_id: OrderId): Promise<Order | null> {
+		return null;
+	}
+}
+
 interface ForStoringOrders {
 	findById(id: OrderId): Promise<Order | null>;
 	add(order: Order): void;
@@ -253,6 +264,26 @@ const probes = {
 		"new SqlOrderAdapter(tracking)",
 		"({ findById: async (_id: OrderId) => (void tracking, null) })",
 	)}});`,
+	"generic-adapter": `function defineOrdersWith<
+	TAdapter extends Omit<ForStoringOrders, "add" | "update">,
+>(create: (transaction: undefined, tracking: RepositoryTracking<Order>) => TAdapter) {
+	return defineRepository<ForStoringOrders>()({
+		aggregate: Order,
+		persistence,
+		create,
+		flush: async () => {},
+		mapError: (error) => new OrderStoreUnavailableError(error),
+	});
+}
+defineOrdersWith((_transaction, tracking) => new SqlOrderAdapter(tracking));`,
+	"union-adapter-with-add": `defineRepository<ForStoringOrders>()({${adapterWiring.replace(
+		"new SqlOrderAdapter(tracking)",
+		"(Math.random() > 0.5 ? new WritingOrderAdapter(tracking) : new OtherOrderReader(tracking))",
+	)}});`,
+	"private-add": `defineRepository<ForStoringOrders>()({${adapterWiring.replace(
+		"new SqlOrderAdapter(tracking)",
+		"new PrivatelyWritingOrderAdapter(tracking)",
+	)}});`,
 	"adapter-with-add": `defineRepository<ForStoringOrders>()({${adapterWiring.replace(
 		"new SqlOrderAdapter(tracking)",
 		"new WritingOrderAdapter(tracking)",
@@ -380,6 +411,20 @@ describe("defineRepository compile-time diagnostics", () => {
 	it("accepts a port typed any", () => {
 		expect(diagnosticsOf("any-port")).toEqual([]);
 	});
+
+	it("accepts a generic adapter type", () => {
+		expect(diagnosticsOf("generic-adapter")).toEqual([]);
+	});
+
+	it.each(["union-adapter-with-add", "private-add"] as const)(
+		"reports one error on create for %s",
+		(name) => {
+			const diagnostics = diagnosticsOf(name);
+
+			expect(diagnostics).toHaveLength(1);
+			expect(diagnostics[0]?.target).toContain("create");
+		},
+	);
 
 	it("reports one error on create that names an adapter defining add", () => {
 		const diagnostics = diagnosticsOf("adapter-with-add");

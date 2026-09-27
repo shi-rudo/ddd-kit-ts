@@ -105,18 +105,17 @@ export class Session<Evt extends AnyDomainEvent> {
 		TrackedAggregate<Evt>
 	>();
 	private readonly _trackedAggregates = new Set<TrackedAggregate<Evt>>();
+	/** Whether the context, facades, and tracking may still be used. */
+	private _phase: "open" | "closed" = "open";
 	/**
-	 * `committing`: the callback settled and the flush ran; the transaction
-	 * still has to commit. Use is closed, but a registration in this phase
-	 * also fails the run, because its write can no longer join.
+	 * True from the start of the flush until the last check before the
+	 * commit ran or the run ended. A write registered in that window would
+	 * be committed and harvested without its flush, so it is rejected, and
+	 * the first rejection also fails the attempt, even when the caller
+	 * swallows it. After the window, a registration reports a closed unit of
+	 * work: nothing can fail the attempt any more.
 	 */
-	private _phase: "open" | "committing" | "closed" = "open";
-	/**
-	 * Set when the flush starts. A write registered after that point would be
-	 * committed and harvested without its flush, so it is rejected, and the
-	 * first rejection also fails the run.
-	 */
-	private _writesSealed = false;
+	private _lateRegistrationsFailAttempt = false;
 	private _registrationDuringFlush: AggregateTrackingError | undefined;
 
 	constructor(private readonly commitEnrollment: CommitEnrollment<Evt>) {}
@@ -207,9 +206,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void {
-		requirePendingEventLifecycleReadView(aggregate, "repository.add");
-		this.assertWritesOpen(aggregate, "add");
-		this.assertOpen("repository.add");
+		if (this.isRepeatAdmitted(aggregate, definition, "add")) return;
 		this.assertNotRemoved(aggregate, definition);
 		const existing = this._trackingByAggregate.get(aggregate);
 		if (existing && existing.definition !== definition) {
@@ -286,9 +283,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void {
-		requirePendingEventLifecycleReadView(aggregate, "repository.update");
-		this.assertWritesOpen(aggregate, "update");
-		this.assertOpen("repository.update");
+		if (this.isRepeatAdmitted(aggregate, definition, "update")) return;
 		const entry = this.loadedEntryFor(aggregate, "update", definition);
 		this.registerWrite(entry, "update", definition);
 	}
@@ -297,9 +292,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void {
-		requirePendingEventLifecycleReadView(aggregate, "repository.remove");
-		this.assertWritesOpen(aggregate, "remove");
-		this.assertOpen("repository.remove");
+		if (this.isRepeatAdmitted(aggregate, definition, "remove")) return;
 		// Idempotent by reference, like add and update: a repeated remove of
 		// the SAME instance re-declares the same final lifecycle outcome
 		// (collection semantics; the enrollment layer already returns the
@@ -576,7 +569,7 @@ export class Session<Evt extends AnyDomainEvent> {
 	/** Flushes every registered receipt in deterministic registration order. */
 	public async flush(transaction: unknown): Promise<void> {
 		this.assertOpen("unitOfWork.flush");
-		this._writesSealed = true;
+		this._lateRegistrationsFailAttempt = true;
 		for (const entry of this._registeredWrites) {
 			const registration = entry.registration;
 			if (registration === undefined) {
@@ -607,21 +600,26 @@ export class Session<Evt extends AnyDomainEvent> {
 	}
 
 	/**
-	 * Closes the session for use while the transaction commits.
-	 * {@link assertReadyToCommit} still runs on the tracked state.
-	 */
-	public closeForCommit(): void {
-		this._phase = "committing";
-	}
-
-	/**
-	 * Ends the session. The tracked state stays: a scope that abandons an
-	 * attempt can still reach its pre-commit check, which must see the
-	 * attempt's own state. Leaked views answer empty once the phase is not
-	 * open, so the state cannot serve a later operation.
+	 * Closes the session for use. The tracked state stays, and late
+	 * registrations still fail the attempt until its last check before the
+	 * commit: a scope can abandon an attempt and still commit it, and that
+	 * attempt's check must see its own state. Leaked views answer empty once
+	 * the session is closed, so the state cannot serve a later operation.
 	 */
 	public close(): void {
 		this._phase = "closed";
+	}
+
+	/** Runs {@link assertReadyToCommit} for the last time before the commit. */
+	public assertReadyToCommitLastTime(): void {
+		this.assertReadyToCommit();
+		this._lateRegistrationsFailAttempt = false;
+	}
+
+	/** Closes the session for good, when its attempt or the run ended. */
+	public end(): void {
+		this._phase = "closed";
+		this._lateRegistrationsFailAttempt = false;
 	}
 
 	public assertOpen(operation: string): void {
@@ -630,15 +628,38 @@ export class Session<Evt extends AnyDomainEvent> {
 		}
 	}
 
-	private assertWritesOpen(
+	/** Like {@link assertOpen}, but open while a late registration still counts. */
+	public assertOpenForRegistration(operation: string): void {
+		if (!this._lateRegistrationsFailAttempt) this.assertOpen(operation);
+	}
+
+	/**
+	 * Admits an add, update, or remove. Before the flush, the call proceeds.
+	 * In the late-registration window, a repeat of the same registered write
+	 * stays a no-op (returns true), and any other registration is rejected
+	 * and fails the attempt. After the window, the call reports a closed unit
+	 * of work before it looks at its argument.
+	 */
+	private isRepeatAdmitted(
 		aggregate: Aggregate<Id<string>, Evt>,
-		operation: "add" | "update" | "remove",
-	): void {
-		if (!this._writesSealed || this._phase === "closed") return;
-		// A repeat of a registered write is a no-op by reference: the write
-		// is already part of the flush, so it passes on to the normal path,
-		// which still rejects a change after the registration.
-		if (this.registrationOf(aggregate)?.intent === operation) return;
+		definition: RuntimePersistenceDefinition<Evt>,
+		operation: AggregateWriteIntent,
+	): boolean {
+		const name = repositoryOperation(operation);
+		if (!this._lateRegistrationsFailAttempt) {
+			this.assertOpen(name);
+			requirePendingEventLifecycleReadView(aggregate, name);
+			return false;
+		}
+		requirePendingEventLifecycleReadView(aggregate, name);
+		const entry = this._trackingByAggregate.get(aggregate);
+		if (
+			entry?.definition === definition &&
+			entry.registration?.intent === operation
+		) {
+			this.assertUnchangedAfterRegistration(entry, operation);
+			return true;
+		}
 		const rejection = new AggregateTrackingError({
 			identity: aggregate.aggregateIdentity,
 			operation,
@@ -724,4 +745,10 @@ function mapRepositoryPersistenceError<Evt extends AnyDomainEvent>(
 			"Repository mapError must return an InfrastructureError instance",
 		),
 	});
+}
+
+function repositoryOperation(
+	operation: AggregateWriteIntent,
+): `repository.${AggregateWriteIntent}` {
+	return `repository.${operation}`;
 }

@@ -41,11 +41,13 @@ export class NestedUnitOfWorkError extends KitWiringError<"NESTED_UNIT_OF_WORK">
 }
 
 /**
- * Thrown when the unit-of-work context is used after its attempt ended:
- * reading `context.repositories`, calling an adapter-held
- * `tracking.trackLoaded`, or using a repository facade once the work
- * callback settled, while the transaction commits, or after it committed or
- * rolled back.
+ * Thrown when the unit-of-work context is used after the unit of work closed
+ * it: reading `context.repositories`, calling an adapter-held
+ * `tracking.trackLoaded`, or using a repository facade after the flush of its
+ * attempt, while the transaction commits, or after it committed or rolled
+ * back. An `add`, `update`, or `remove` between the start of the flush and the
+ * last check before the commit fails the attempt with `AggregateTrackingError`
+ * instead.
  *
  * Use-after-close is a programming bug (typically a leaked context
  * reference or a fire-and-forget promise outliving the callback), so

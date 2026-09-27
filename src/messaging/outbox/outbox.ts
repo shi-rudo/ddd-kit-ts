@@ -304,14 +304,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 					position.commitSequence,
 				);
 				if (positionOwner !== undefined && positionOwner !== event.eventId) {
-					throw new EventHarvestError(
-						`InMemoryOutbox rejected event "${event.eventId}" for ` +
-							`${describeAggregateIdentity(source)}: source position ` +
-							`(${position.aggregateVersion}, ${position.commitSequence}) is ` +
-							`already owned by event "${positionOwner}". One qualified source ` +
-							"position must identify exactly one immutable event.",
-						event.type,
-					);
+					throw positionOwnedError(event, source, position, positionOwner);
 				}
 			}
 			let previousEventfulAggregateVersion: number | null;
@@ -399,6 +392,15 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				position: ownedPosition,
 				attempts: 0,
 			});
+		}
+		// Restore the receipts of the head retries only now: a receipt stored
+		// inside the loop could evict one that a later event of this batch
+		// needed. Without the receipt, the same event would read as stale
+		// once the head moves on.
+		for (const { event, source, position } of events) {
+			if (headRetries.has(event.eventId)) {
+				this.rememberDispatched(event.eventId, source, position);
+			}
 		}
 	}
 
@@ -554,14 +556,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				position.commitSequence,
 			);
 			if (positionOwner !== undefined && positionOwner !== event.eventId) {
-				throw new EventHarvestError(
-					`InMemoryOutbox rejected event "${event.eventId}" for ` +
-						`${describeAggregateIdentity(source)}: source position ` +
-						`(${position.aggregateVersion}, ${position.commitSequence}) is ` +
-						`already owned by event "${positionOwner}". One qualified source ` +
-						"position must identify exactly one immutable event.",
-					event.type,
-				);
+				throw positionOwnedError(event, source, position, positionOwner);
 			}
 			if (positionOwner === undefined) {
 				simulatedCursors.set(
@@ -657,7 +652,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 	 * although no receipt, pending record, or dead letter remains: events
 	 * that were dispatched and whose receipt was evicted. They are decided
 	 * against the heads before the batch, so their place in the batch does
-	 * not matter, and deduping them changes no state.
+	 * not matter. Their receipts are restored after the batch.
 	 */
 	private retriesAtSourceHead(
 		events: ReadonlyArray<EventCommitCandidate<Evt>>,
@@ -799,6 +794,25 @@ function assertReceiptShape(
 			`commitSize=${recorded.commitSize}) to (${received.aggregateVersion}, ` +
 			`${received.commitSequence}; commitSize=${received.commitSize}). ` +
 			"An exact redelivery must keep its source position immutable.",
+		event.type,
+	);
+}
+
+function positionOwnedError(
+	event: { readonly eventId: string; readonly type: string },
+	source: AggregateIdentity,
+	position: EventCommitCandidatePosition,
+	positionOwner: string,
+): EventHarvestError {
+	return new EventHarvestError(
+		`InMemoryOutbox rejected event "${event.eventId}" for ` +
+			`${describeAggregateIdentity(source)}: source position ` +
+			`(${position.aggregateVersion}, ${position.commitSequence}) is ` +
+			`already owned by event "${positionOwner}". One qualified source ` +
+			"position must identify exactly one immutable event. An aggregate " +
+			"that was removed and created again under the same identity causes " +
+			"this too; the kit does not support that, so give the new aggregate " +
+			"a new id.",
 		event.type,
 	);
 }
