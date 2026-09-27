@@ -74,7 +74,8 @@ export interface InMemoryOutboxOptions {
 	 * candidate commit position) retained for idempotent `add` retries and
 	 * collision detection. Older receipts are evicted in dispatch order; a later
 	 * candidate behind its source head then rejects instead of rewinding the
-	 * cursor.
+	 * cursor. A retry of an event at its source head still dedupes, because the
+	 * source cursor names that event.
 	 * Default `10_000`.
 	 */
 	maxRetainedDispatchedEventIds?: number;
@@ -217,11 +218,13 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 		// Prove identity/receipt and source-position consistency for the whole input
 		// before mutating pending records or source heads. Otherwise a conflict later
 		// in one add() call could reject only after its earlier prefix had leaked.
+		const headRetries = this.retriesAtSourceHead(events);
 		this.assertBatchEventReceiptIntegrity(events);
-		this.assertBatchPositionIntegrity(events);
-		this.assertCapacity(events);
+		this.assertBatchPositionIntegrity(events, headRetries);
+		this.assertCapacity(events, headRetries);
 		for (const message of events) {
 			const { event, source, position } = message;
+			if (headRetries.has(event.eventId)) continue;
 			const dispatchedReceipt = this.dispatchedEventIds.get(event.eventId);
 			if (dispatchedReceipt !== undefined) {
 				assertSameEventSource(event, source, dispatchedReceipt.source);
@@ -296,14 +299,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 					position.commitSequence,
 				);
 				if (positionOwner !== undefined && positionOwner !== event.eventId) {
-					throw new EventHarvestError(
-						`InMemoryOutbox rejected event "${event.eventId}" for ` +
-							`${describeAggregateIdentity(source)}: source position ` +
-							`(${position.aggregateVersion}, ${position.commitSequence}) is ` +
-							`already owned by event "${positionOwner}". One qualified source ` +
-							"position must identify exactly one immutable event.",
-						event.type,
-					);
+					throw positionOwnedError(event, source, position, positionOwner);
 				}
 			}
 			let previousEventfulAggregateVersion: number | null;
@@ -392,10 +388,20 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				attempts: 0,
 			});
 		}
+		// Restore the receipts of the head retries only now: a receipt stored
+		// inside the loop could evict one that a later event of this batch
+		// needed. Without the receipt, the same event would read as stale
+		// once the head moves on.
+		for (const { event, source, position } of events) {
+			if (headRetries.has(event.eventId)) {
+				this.rememberDispatched(event.eventId, source, position);
+			}
+		}
 	}
 
 	private assertCapacity(
 		events: ReadonlyArray<EventCommitCandidate<Evt>>,
+		headRetries: ReadonlySet<string>,
 	): void {
 		const newRecordIds = new Set<string>();
 		const newSourceKeys = new Set<string>();
@@ -403,7 +409,8 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 			if (
 				this.pending.has(event.eventId) ||
 				this.dead.has(event.eventId) ||
-				this.dispatchedEventIds.has(event.eventId)
+				this.dispatchedEventIds.has(event.eventId) ||
+				headRetries.has(event.eventId)
 			) {
 				continue;
 			}
@@ -482,9 +489,11 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 
 	private assertBatchPositionIntegrity(
 		events: ReadonlyArray<EventCommitCandidate<Evt>>,
+		headRetries: ReadonlySet<string>,
 	): void {
 		const simulatedCursors = new Map<string, EventSourceCursor>();
 		for (const { event, source, position } of events) {
+			if (headRetries.has(event.eventId)) continue;
 			const sourceKey = encodeAggregateIdentity(source);
 			const cursor =
 				simulatedCursors.get(sourceKey) ?? this.sourceCursors.get(sourceKey);
@@ -541,14 +550,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				position.commitSequence,
 			);
 			if (positionOwner !== undefined && positionOwner !== event.eventId) {
-				throw new EventHarvestError(
-					`InMemoryOutbox rejected event "${event.eventId}" for ` +
-						`${describeAggregateIdentity(source)}: source position ` +
-						`(${position.aggregateVersion}, ${position.commitSequence}) is ` +
-						`already owned by event "${positionOwner}". One qualified source ` +
-						"position must identify exactly one immutable event.",
-					event.type,
-				);
+				throw positionOwnedError(event, source, position, positionOwner);
 			}
 			if (positionOwner === undefined) {
 				simulatedCursors.set(
@@ -599,6 +601,43 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 			// clears it too.
 			this.dead.delete(id);
 		}
+	}
+
+	/**
+	 * Event ids of the batch that the source head names at their position
+	 * although no receipt, pending record, or dead letter remains: events
+	 * that were dispatched and whose receipt was evicted. They are decided
+	 * against the heads before the batch, so their place in the batch does
+	 * not matter. Their receipts are restored after the batch.
+	 */
+	private retriesAtSourceHead(
+		events: ReadonlyArray<EventCommitCandidate<Evt>>,
+	): ReadonlySet<string> {
+		const retries = new Set<string>();
+		for (const { event, source, position } of events) {
+			if (
+				!this.pending.has(event.eventId) &&
+				!this.dead.has(event.eventId) &&
+				!this.dispatchedEventIds.has(event.eventId) &&
+				this.recordedAtSourceHead(event, source, position)
+			) {
+				retries.add(event.eventId);
+			}
+		}
+		return retries;
+	}
+
+	private recordedAtSourceHead(
+		event: AnyDomainEvent,
+		source: AggregateIdentity,
+		position: EventCommitCandidatePosition,
+	): boolean {
+		const cursor = this.sourceCursors.get(encodeAggregateIdentity(source));
+		return (
+			cursor?.aggregateVersion === position.aggregateVersion &&
+			cursor.commitSize === position.commitSize &&
+			cursor.eventIdsBySequence.get(position.commitSequence) === event.eventId
+		);
 	}
 
 	private rememberDispatched(
@@ -715,6 +754,25 @@ function assertReceiptShape(
 	);
 }
 
+function positionOwnedError(
+	event: { readonly eventId: string; readonly type: string },
+	source: AggregateIdentity,
+	position: EventCommitCandidatePosition,
+	positionOwner: string,
+): EventHarvestError {
+	return new EventHarvestError(
+		`InMemoryOutbox rejected event "${event.eventId}" for ` +
+			`${describeAggregateIdentity(source)}: source position ` +
+			`(${position.aggregateVersion}, ${position.commitSequence}) is ` +
+			`already owned by event "${positionOwner}". One qualified source ` +
+			"position must identify exactly one immutable event. An aggregate " +
+			"that was removed and created again under the same identity causes " +
+			"this too; the kit does not support that, so give the new aggregate " +
+			"a new id.",
+		event.type,
+	);
+}
+
 function staleHeadError(
 	event: { readonly eventId: string; readonly type: string },
 	source: AggregateIdentity,
@@ -725,9 +783,13 @@ function staleHeadError(
 		`InMemoryOutbox rejected stale event "${event.eventId}" for ` +
 			`${describeAggregateIdentity(source)} at aggregate version ` +
 			`${position.aggregateVersion}: the event-source head is already ` +
-			`${staleHeadVersion}. The dispatched-id receipt may have ` +
-			"expired; use a durable outbox with a transactional eventId unique key " +
-			"for unbounded idempotency.",
+			`${staleHeadVersion}. There are two possible causes. First, the ` +
+			"aggregate was removed and created again under the same identity. " +
+			"The kit does not support this, because the versions of the new " +
+			"aggregate restart below the head. Give the new aggregate a new id. " +
+			"Second, this is a retry of an event whose dispatched-id receipt " +
+			"expired. Use a durable outbox with a transactional eventId unique " +
+			"key for unbounded idempotency.",
 		event.type,
 	);
 }

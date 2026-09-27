@@ -3,7 +3,6 @@ import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
 import {
 	AggregateDeletedError,
-	EventHarvestError,
 	type InfrastructureError,
 } from "../../errors/kit-errors";
 import { abortReason } from "../../internal/async/abort";
@@ -18,13 +17,14 @@ import type { OutboxWriter } from "../../messaging/outbox/ports";
 import type { AggregateClass } from "../../persistence/repository/identity-map";
 import type { PersistenceModel } from "../../persistence/repository/persistence-model";
 import type { TransactionScope } from "../../persistence/repository/scope";
-import { withCommit } from "../cqrs/handler";
+import { withCheckedCommit } from "../cqrs/handler";
 import {
 	CommitError,
 	InvalidRepositoryDefinitionError,
 	NestedUnitOfWorkError,
 	RollbackError,
 	TransactionClosedError,
+	wiringErrorInCauseChain,
 } from "./errors";
 import type {
 	AggregatePersistenceWrite,
@@ -81,7 +81,7 @@ export interface RunOptions {
 // it when the definition contract changes so an incompatible copy fails the
 // generic not-a-definition check instead of half-working.
 const repositoryDefinitionBrand: unique symbol = Symbol.for(
-	"@shirudo/ddd-kit/repository-definition/v2",
+	"@shirudo/ddd-kit/repository-definition/v3",
 );
 
 /** Adapter wiring accepted by {@link defineRepository}. */
@@ -220,11 +220,19 @@ type PortShapeConstraint<TRepositoryPort> = [
 		: unknown
 	: RepositoryPortViolation<"the port must be an object type, not a function">;
 
+/** @inline */
+type InstalledRegistration<
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
+> = AggregateWriteRegistration<TAggregate> &
+	PhysicalRemovalRegistration<TAggregate>;
+
 /**
- * Checks a lifecycle member that the port declares: it is required, and it
- * accepts the definition's aggregate. An optional member is the trap of a
- * port that extends a type with `update?` or `remove?`, so it gets its own
- * message.
+ * Checks a lifecycle member that the port declares: it is required, it
+ * accepts the definition's aggregate, and it returns what the installed
+ * registration returns. An optional member is the trap of a port that
+ * extends a type with `update?` or `remove?`, so it gets its own message.
+ * The return check exists because TypeScript lets a member that returns a
+ * promise or `this` stand in for one that returns void.
  * @inline
  */
 type MemberAcceptsAggregate<
@@ -233,51 +241,99 @@ type MemberAcceptsAggregate<
 	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 > = undefined extends TRepositoryPort[TMember & keyof TRepositoryPort]
 	? RepositoryPortViolation<`the port's ${TMember} must not be optional`>
-	: [TRepositoryPort] extends [
-				Pick<
-					AggregateWriteRegistration<TAggregate> &
-						PhysicalRemovalRegistration<TAggregate>,
-					TMember
+	: [TRepositoryPort] extends [Pick<InstalledRegistration<TAggregate>, TMember>]
+		? ReturnsWhatTheRegistrationReturns<
+				ReturnType<
+					Extract<
+						TRepositoryPort[TMember & keyof TRepositoryPort],
+						CallableValue
+					>
 				>,
-			]
-		? unknown
+				ReturnType<InstalledRegistration<TAggregate>[TMember]>
+			> extends true
+			? unknown
+			: RepositoryPortViolation<`the port's ${TMember} must return void`>
 		: RepositoryPortViolation<`the port's ${TMember} must accept the definition's aggregate`>;
+
+/**
+ * An `any` result would let a caller use a value that the installed
+ * registration never returns, so it does not count as a match.
+ * @inline
+ */
+type ReturnsWhatTheRegistrationReturns<TDeclared, TInstalled> = 0 extends 1 &
+	TDeclared
+	? false
+	: [TDeclared] extends [TInstalled]
+		? true
+		: false;
+
+/**
+ * What an adapter type may say about `add`, `update`, and `remove`: nothing.
+ * The Unit of Work installs them on the facade, and a raw adapter that can
+ * write would bypass it wherever it leaves the facade. As a bound on the
+ * adapter type, the rule also holds for a generic adapter and for each
+ * member of a union.
+ * @inline
+ */
+type LifecycleFreeAdapter = {
+	readonly add?: RepositoryPortViolation<"the adapter must not define add; the unit of work installs it">;
+	readonly update?: RepositoryPortViolation<"the adapter must not define update; the unit of work installs it">;
+	readonly remove?: RepositoryPortViolation<"the adapter must not define remove; the unit of work installs it">;
+};
+
+/**
+ * The keys that a port declares by name. A string index signature makes every
+ * name a key, which would count an undeclared `update` or `remove` as present.
+ * @inline
+ */
+type DeclaredKeys<T> = keyof {
+	[TKey in keyof T as string extends TKey
+		? never
+		: number extends TKey
+			? never
+			: symbol extends TKey
+				? never
+				: TKey]: T[TKey];
+};
 
 /** @inline */
 type AddConstraint<
 	TRepositoryPort,
 	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
-> = "add" extends keyof TRepositoryPort
-	? MemberAcceptsAggregate<TRepositoryPort, "add", TAggregate>
-	: RepositoryPortViolation<"the port must declare add(aggregate): void">;
+> =
+	"add" extends DeclaredKeys<TRepositoryPort>
+		? MemberAcceptsAggregate<TRepositoryPort, "add", TAggregate>
+		: RepositoryPortViolation<"the port must declare add(aggregate): void">;
 
 /** @inline */
 type UpdateConstraint<
 	TRepositoryPort,
 	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 	TAppendOnly extends boolean,
-> = "update" extends keyof TRepositoryPort
-	? boolean extends TAppendOnly
-		? RepositoryPortViolation<"the port declares update, so the definition must not set appendOnly">
+> =
+	"update" extends DeclaredKeys<TRepositoryPort>
+		? boolean extends TAppendOnly
+			? RepositoryPortViolation<"the port declares update, so the definition must not set appendOnly">
+			: [TAppendOnly] extends [true]
+				? RepositoryPortViolation<"appendOnly is true, so the port must not declare update">
+				: MemberAcceptsAggregate<TRepositoryPort, "update", TAggregate>
 		: [TAppendOnly] extends [true]
-			? RepositoryPortViolation<"appendOnly is true, so the port must not declare update">
-			: MemberAcceptsAggregate<TRepositoryPort, "update", TAggregate>
-	: [TAppendOnly] extends [true]
-		? unknown
-		: RepositoryPortViolation<"the port declares no update, so the definition must set appendOnly: true">;
+			? unknown
+			: RepositoryPortViolation<"the port declares no update, so the definition must set appendOnly: true">;
 
 /** @inline */
 type RemovalConstraint<
 	TRepositoryPort,
 	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 	TRemoval extends boolean,
-> = "remove" extends keyof TRepositoryPort
-	? [TRemoval] extends [true]
-		? MemberAcceptsAggregate<TRepositoryPort, "remove", TAggregate>
-		: RepositoryPortViolation<"the port declares remove, so the definition must set physicalRemoval: true">
-	: [TRemoval] extends [true]
-		? RepositoryPortViolation<"physicalRemoval is true, so the port must declare remove(aggregate): void">
-		: unknown;
+> =
+	"remove" extends DeclaredKeys<TRepositoryPort>
+		? [TRemoval] extends [true]
+			? MemberAcceptsAggregate<TRepositoryPort, "remove", TAggregate>
+			: RepositoryPortViolation<"the port declares remove, so the definition must set physicalRemoval: true">
+		: [TRemoval] extends [true]
+			? RepositoryPortViolation<"physicalRemoval is true, so the port must declare remove(aggregate): void">
+			: unknown;
 
 /**
  * Checks the port against every constraint of {@link defineRepository}, one
@@ -312,7 +368,8 @@ type RepositoryDefinitionBuilder<TRepositoryPort extends object> = <
 	TCreate extends (
 		transaction: never,
 		tracking: RepositoryTracking<TAggregate>,
-	) => Omit<TRepositoryPort, "add" | "update" | "remove">,
+	) => Omit<TRepositoryPort, "add" | "update" | "remove"> &
+		LifecycleFreeAdapter,
 	TBaseline,
 	TChangeSet,
 	TRemoval extends boolean = false,
@@ -374,6 +431,39 @@ function assertRepositoryDefinitionMembers(
 				"with own enumerable properties.",
 		);
 	}
+	assertPersistenceModelMembers(
+		definition.persistence as Record<PropertyKey, unknown>,
+	);
+	for (const key of ["appendOnly", "physicalRemoval"] as const) {
+		const flag = definition[key];
+		if (flag !== undefined && typeof flag !== "boolean") {
+			throw new TypeError(
+				`defineRepository: "${key}" must be true or false, got ${String(flag)}.`,
+			);
+		}
+	}
+}
+
+function assertPersistenceModelMembers(
+	persistence: Record<PropertyKey, unknown>,
+): void {
+	for (const key of ["capture", "changes", "isEmpty"] as const) {
+		if (typeof persistence[key] !== "function") {
+			throw new TypeError(
+				`defineRepository: "persistence.${key}" is not a function. A ` +
+					"PersistenceModel needs capture, changes, and isEmpty.",
+			);
+		}
+	}
+	if (
+		persistence.captureEquals !== undefined &&
+		typeof persistence.captureEquals !== "function"
+	) {
+		throw new TypeError(
+			'defineRepository: "persistence.captureEquals" is not a function. ' +
+				"Omit it, or pass a function that compares two captures.",
+		);
+	}
 }
 
 /**
@@ -383,7 +473,8 @@ function assertRepositoryDefinitionMembers(
  * aggregate, persistence, event, and lifecycle types from the adapter wiring.
  * The port must declare `add` for the aggregate. It declares `update` unless
  * the definition sets `appendOnly: true`. If it declares `remove`, the
- * definition must set `physicalRemoval: true`. A violated constraint fails
+ * definition must set `physicalRemoval: true`. The adapter that `create`
+ * returns does not define `add`, `update`, or `remove`. A violated constraint fails
  * the call with a compiler error that names the constraint. The adapter
  * created by the definition implements only the remaining methods because
  * lifecycle writes are installed by the Unit of Work.
@@ -626,12 +717,16 @@ export class UnitOfWork<
 		this._active = true;
 
 		let session: Session<Evt> | undefined;
-		let workCompleted = false;
-		let workThrew = false;
-		let workError: unknown;
+		// Every session of the run, so that the run can end them all: a
+		// scope can overlap attempts, and each one can leak its facades.
+		const sessions: Session<Evt>[] = [];
+		// The attempt that the scope runs now. Each callback writes only to
+		// its own record, so an abandoned attempt that settles late cannot
+		// relabel the failure of the live one.
+		let attempt = startAttempt();
 
 		try {
-			return await withCommit<Evt, R, TCtx>(
+			return await withCheckedCommit<Evt, R, TCtx>(
 				{
 					outbox: this.deps.outbox,
 					bus: this.deps.bus,
@@ -652,13 +747,13 @@ export class UnitOfWork<
 					session?.close();
 					const s = new Session<Evt>(enrollment);
 					session = s;
-					workCompleted = false;
-					workThrew = false;
-					workError = undefined;
+					sessions.push(s);
+					const current = startAttempt();
+					attempt = current;
 
-					const repositories = this.buildRepositories(tx, s);
-					const context = makeContext(repositories, s, options?.signal);
 					try {
+						const repositories = this.buildRepositories(tx, s);
+						const context = makeContext(repositories, s, options?.signal);
 						const result = await work(context);
 						// Validate tracking before sealing: a loaded aggregate that
 						// changed without update intent would otherwise be lost.
@@ -666,35 +761,45 @@ export class UnitOfWork<
 						// the transaction, so the unit of work rolls back.
 						s.assertReadyToCommit();
 						await s.flush(tx);
-						// A flush may yield to the event loop. Re-check before the
-						// transaction is allowed to commit so leaked concurrent work
-						// cannot mutate an already registered aggregate mid-flush.
+						// The flush closes registration and may yield to the event
+						// loop. Re-check before the transaction may commit: leaked
+						// work that changed a registered aggregate, or that tried to
+						// register a write, fails the run here.
 						s.assertReadyToCommit();
-						workCompleted = true;
-						// Seal immediately: the aggregates snapshot below is what
-						// gets harvested. A late registration from work still in
-						// flight must throw
-						// TransactionClosedError instead of being silently
-						// accepted-but-never-harvested.
+						current.workCompleted = true;
+						// The tokens below are what gets harvested; after close, any
+						// use of the session throws TransactionClosedError.
 						const commits = s.commitTokens;
 						s.close();
-						return { result, commits };
+						// The outbox write can yield, and leaked work can change a
+						// tracked aggregate meanwhile. The same check runs again
+						// just before the commit.
+						return {
+							result,
+							commits,
+							checkBeforeCommit: () => s.assertReadyToCommitLastTime(),
+						};
 					} catch (error) {
-						workThrew = true;
-						workError = error;
+						current.workThrew = true;
+						current.workError = error;
+						// The scope rolls this attempt back and can wait before a
+						// retry. A leaked facade must not read through the dead
+						// transaction handle meanwhile.
+						s.end();
 						throw error;
 					}
 				},
+				// A scope that retries announces each attempt before it opens
+				// the transaction. A failure to open that attempt then finds a
+				// fresh record, not the flags of the attempt before it.
+				() => {
+					attempt = startAttempt();
+				},
 			);
 		} catch (error) {
-			throw classifyRunError(error, {
-				workThrew,
-				workCompleted,
-				workError,
-				signal: options?.signal,
-			});
+			throw classifyRunError(error, attempt, options?.signal);
 		} finally {
-			session?.close();
+			for (const ended of sessions) ended.end();
 			this._active = false;
 		}
 	}
@@ -744,13 +849,25 @@ function makeContext<TRepos, Evt extends AnyDomainEvent>(
 	};
 }
 
+/** What one scope attempt of `run()` reached: the flags that label its failure. */
+interface RunAttempt {
+	workCompleted: boolean;
+	workThrew: boolean;
+	workError: unknown;
+}
+
+function startAttempt(): RunAttempt {
+	return { workCompleted: false, workThrew: false, workError: undefined };
+}
+
 /**
  * Classifies a `withCommit` rejection into the error `run()` should throw,
- * using the flags captured inside the work wrapper. Pure and total: it
+ * using the record of the attempt that the scope ran last. Pure and total: it
  * returns the error to throw rather than throwing itself, so `run()` reads
  * as orchestration and this decision is unit-testable in isolation.
  *
- * - `workThrew`: the work callback (or `assertReadyToCommit`) threw.
+ * - `workThrew`: the attempt threw before it completed: the repository
+ *   factories, the work callback, or `assertReadyToCommit`.
  *   The scope normally rethrows that error unchanged (rolled back, pass
  *   through so a `ConcurrencyConflictError` & co. stay catchable as-is); a
  *   scope that WRAPS the original is detected via the cause chain and also
@@ -758,25 +875,21 @@ function makeContext<TRepos, Evt extends AnyDomainEvent>(
  *   callback's error indicates the rollback itself failed, which becomes a
  *   {@link RollbackError}.
  * - `workCompleted`: the callback finished; the failure is post-completion.
- *   A harvest-guard violation (an event missing aggregateId / aggregateType,
- *   or an eventful persisted aggregate that did not advance its version) is a deterministic
- *   programming bug, surfaced as its {@link EventHarvestError} (which does
- *   NOT extend `InfrastructureError`, so a retry-on-Infrastructure handler
- *   skips it). It is thrown inside `scope.transactional()`, so a wrapping
- *   scope can nest it: walk the chain rather than a bare `instanceof`. Only
- *   genuinely unforeseeable post-completion failures (outbox write, the
- *   commit itself) become {@link CommitError}.
+ *   A wiring error (a harvest-guard violation, or an aggregate that changed
+ *   after its registration) is a deterministic programming bug and passes
+ *   through; it does NOT extend `InfrastructureError`, so a
+ *   retry-on-Infrastructure handler skips it. It is thrown inside
+ *   `scope.transactional()`, so a wrapping scope can nest it: walk the
+ *   chain rather than a bare `instanceof`. Only genuinely unforeseeable
+ *   post-completion failures (outbox write, the commit itself) become
+ *   {@link CommitError}.
  * - Neither flag set: `withCommit` rejected before the callback ran (the
  *   scope failed to even open a transaction); pass the error through.
  */
 function classifyRunError(
 	error: unknown,
-	state: {
-		readonly workThrew: boolean;
-		readonly workCompleted: boolean;
-		readonly workError: unknown;
-		readonly signal: AbortSignal | undefined;
-	},
+	state: Readonly<RunAttempt>,
+	signal: AbortSignal | undefined,
 ): unknown {
 	// Cancellation wins over the attempt flags: a scope that rejects with
 	// the caller's abort reason between retry attempts never re-enters the
@@ -785,10 +898,9 @@ function classifyRunError(
 	// a RollbackError carrying a retryable cause, inviting a retry of an
 	// explicitly cancelled operation.
 	if (
-		state.signal?.aborted &&
-		state.signal.reason !== undefined &&
-		(error === state.signal.reason ||
-			causeChainContains(error, state.signal.reason))
+		signal?.aborted &&
+		signal.reason !== undefined &&
+		(error === signal.reason || causeChainContains(error, signal.reason))
 	) {
 		return error;
 	}
@@ -802,29 +914,13 @@ function classifyRunError(
 		return new RollbackError(state.workError, error);
 	}
 	if (state.workCompleted) {
-		const harvestError = findHarvestErrorInChain(error);
-		if (harvestError) {
-			return harvestError;
+		const wiringError = wiringErrorInCauseChain(error);
+		if (wiringError) {
+			return wiringError;
 		}
 		return new CommitError(error);
 	}
 	return error;
-}
-
-/**
- * Walks `error`'s `cause` chain and returns the first `EventHarvestError`,
- * or `undefined`. `withCommit` throws the harvest-guard error INSIDE
- * `scope.transactional`, so a wrapping scope can nest it; matching
- * only the top-level error would let the wrapper mask the non-retryable
- * type. `withCommit` and `run()` share this module, so the local
- * `instanceof` is reliable for the un-wrapped link.
- */
-function findHarvestErrorInChain(
-	error: unknown,
-): EventHarvestError | undefined {
-	return findInCauseChain(error, (link) =>
-		link instanceof EventHarvestError ? link : undefined,
-	);
 }
 
 /**

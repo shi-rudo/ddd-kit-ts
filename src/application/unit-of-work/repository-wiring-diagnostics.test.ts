@@ -67,6 +67,21 @@ class SqlOrderAdapter {
 	}
 }
 
+class WritingOrderAdapter extends SqlOrderAdapter {
+	add(_order: Order): void {}
+}
+
+class PrivatelyWritingOrderAdapter extends SqlOrderAdapter {
+	private add(_order: Order): void {}
+}
+
+class OtherOrderReader {
+	constructor(readonly _tracking: RepositoryTracking<Order>) {}
+	async findById(_id: OrderId): Promise<Order | null> {
+		return null;
+	}
+}
+
 interface ForStoringOrders {
 	findById(id: OrderId): Promise<Order | null>;
 	add(order: Order): void;
@@ -100,6 +115,32 @@ interface ForRemovingOrdersWithOptionalRemove extends ForStoringOrders {
 
 interface ForRemovingOrdersById extends ForStoringOrders {
 	remove(id: OrderId): void;
+}
+
+interface ForStoringOrdersAsynchronously {
+	findById(id: OrderId): Promise<Order | null>;
+	add(order: Order): Promise<void>;
+	update(order: Order): void;
+}
+
+interface ForStoringOrdersFluently {
+	findById(id: OrderId): Promise<Order | null>;
+	add(order: Order): void;
+	update(order: Order): this;
+}
+
+interface ForStoringOrdersWithIndex extends ForStoringOrders {
+	readonly [facet: string]: unknown;
+}
+
+interface ForStoringOrdersUntyped {
+	findById(id: OrderId): Promise<Order | null>;
+	add(order: Order): any;
+	update(order: Order): void;
+}
+
+interface ForRemovingOrdersAsynchronously extends ForStoringOrders {
+	remove(order: Order): Promise<void>;
 }
 
 type PaymentEvent = DomainEvent<"PaymentCaptured", { readonly paymentId: string }>;
@@ -217,6 +258,39 @@ const probes = {
 	"remove-without-removal": `defineRepository<ForRemovingOrders>()({${adapterWiring}});`,
 	"remove-with-boolean-removal": `defineRepository<ForRemovingOrders>()({
 	physicalRemoval: removalFlag,${adapterWiring}});`,
+	"async-add": `defineRepository<ForStoringOrdersAsynchronously>()({${adapterWiring}});`,
+	"untyped-add": `defineRepository<ForStoringOrdersUntyped>()({${adapterWiring}});`,
+	"port-with-index-signature": `defineRepository<ForStoringOrdersWithIndex>()({${adapterWiring.replace(
+		"new SqlOrderAdapter(tracking)",
+		"({ findById: async (_id: OrderId) => (void tracking, null) })",
+	)}});`,
+	"generic-adapter": `function defineOrdersWith<
+	TAdapter extends Omit<ForStoringOrders, "add" | "update">,
+>(create: (transaction: undefined, tracking: RepositoryTracking<Order>) => TAdapter) {
+	return defineRepository<ForStoringOrders>()({
+		aggregate: Order,
+		persistence,
+		create,
+		flush: async () => {},
+		mapError: (error) => new OrderStoreUnavailableError(error),
+	});
+}
+defineOrdersWith((_transaction, tracking) => new SqlOrderAdapter(tracking));`,
+	"union-adapter-with-add": `defineRepository<ForStoringOrders>()({${adapterWiring.replace(
+		"new SqlOrderAdapter(tracking)",
+		"(Math.random() > 0.5 ? new WritingOrderAdapter(tracking) : new OtherOrderReader(tracking))",
+	)}});`,
+	"private-add": `defineRepository<ForStoringOrders>()({${adapterWiring.replace(
+		"new SqlOrderAdapter(tracking)",
+		"new PrivatelyWritingOrderAdapter(tracking)",
+	)}});`,
+	"adapter-with-add": `defineRepository<ForStoringOrders>()({${adapterWiring.replace(
+		"new SqlOrderAdapter(tracking)",
+		"new WritingOrderAdapter(tracking)",
+	)}});`,
+	"fluent-update": `defineRepository<ForStoringOrdersFluently>()({${adapterWiring}});`,
+	"async-remove": `defineRepository<ForRemovingOrdersAsynchronously>()({
+	physicalRemoval: true,${adapterWiring}});`,
 	"remove-by-id": `defineRepository<ForRemovingOrdersById>()({
 	physicalRemoval: true,${adapterWiring}});`,
 	"union-port": `defineRepository<ForStoringOrders | ForRemovingOrders>()({${adapterWiring}});`,
@@ -338,6 +412,34 @@ describe("defineRepository compile-time diagnostics", () => {
 		expect(diagnosticsOf("any-port")).toEqual([]);
 	});
 
+	it("accepts a generic adapter type", () => {
+		expect(diagnosticsOf("generic-adapter")).toEqual([]);
+	});
+
+	it.each(["union-adapter-with-add", "private-add"] as const)(
+		"reports one error on create for %s",
+		(name) => {
+			const diagnostics = diagnosticsOf(name);
+
+			expect(diagnostics).toHaveLength(1);
+			expect(diagnostics[0]?.target).toContain("create");
+		},
+	);
+
+	it("reports one error on create that names an adapter defining add", () => {
+		const diagnostics = diagnosticsOf("adapter-with-add");
+
+		expect(diagnostics).toHaveLength(1);
+		expect(diagnostics[0]?.target).toContain("create");
+		expect(diagnostics[0]?.message).toContain(
+			"the adapter must not define add; the unit of work installs it",
+		);
+	});
+
+	it("accepts a port with a string index signature", () => {
+		expect(diagnosticsOf("port-with-index-signature")).toEqual([]);
+	});
+
 	it("accepts a port without update when appendOnly is true", () => {
 		expect(diagnosticsOf("append-only-port")).toEqual([]);
 	});
@@ -386,6 +488,10 @@ describe("defineRepository compile-time diagnostics", () => {
 			"remove-by-id",
 			"the port's remove must accept the definition's aggregate",
 		],
+		["async-add", "the port's add must return void"],
+		["untyped-add", "the port's add must return void"],
+		["fluent-update", "the port's update must return void"],
+		["async-remove", "the port's remove must return void"],
 		["union-port", "the port must be one object type, not a union"],
 		["callable-port", "the port must be an object type, not a function"],
 	] as const)(

@@ -7,8 +7,8 @@ import {
 import { sleepRejectingOnAbort } from "../../internal/async/sleep";
 import { reportToObserver } from "../../internal/observer";
 import {
-	assertNonNegativeFinite,
 	assertPositiveInteger,
+	assertTimerDelay,
 } from "../../internal/validate";
 import type { TransactionalOptions, TransactionScope } from "./scope";
 
@@ -91,6 +91,10 @@ function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
  * After `maxAttempts` the last error is rethrown unchanged, so a caller
  * can still match `ConcurrencyConflictError` and map it to HTTP 409.
  *
+ * **Attempts.** Before each attempt, the scope calls `onAttemptStart` from
+ * the `transactional` options, so the caller can attribute a failure to the
+ * attempt that raised it.
+ *
  * **Cancellation.** The `AbortSignal` from `transactional` options is
  * checked before each attempt and aborts the backoff wait, so an
  * `AbortSignal.timeout(ms)` bounds total elapsed time (there is
@@ -119,16 +123,12 @@ export class RetryingTransactionScope<TCtx> implements TransactionScope<TCtx> {
 			"maxAttempts",
 			this.maxAttempts,
 		);
-		assertNonNegativeFinite(
+		assertTimerDelay(
 			"RetryingTransactionScope",
 			"baseDelayMs",
 			this.baseDelayMs,
 		);
-		assertNonNegativeFinite(
-			"RetryingTransactionScope",
-			"maxDelayMs",
-			this.maxDelayMs,
-		);
+		assertTimerDelay("RetryingTransactionScope", "maxDelayMs", this.maxDelayMs);
 		this.isRetryable = policy.isRetryable ?? someChainRetryable;
 		this.sleep = policy.sleep ?? defaultSleep;
 		// Wrapped like the poll loop's jitter: an injected source that throws
@@ -156,6 +156,7 @@ export class RetryingTransactionScope<TCtx> implements TransactionScope<TCtx> {
 			if (signal?.aborted) {
 				throw abortReason(signal, ABORT_MESSAGE);
 			}
+			options?.onAttemptStart?.();
 			try {
 				return await this.inner.transactional(fn, options);
 			} catch (error) {

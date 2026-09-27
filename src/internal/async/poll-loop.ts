@@ -1,4 +1,4 @@
-import { assertNonNegativeFinite, assertPositiveInteger } from "../validate";
+import { assertPositiveInteger, assertTimerDelay } from "../validate";
 import { computeBackoffDelay, neutralJitterSource } from "./backoff";
 import { joinWithoutBlockingOnAbort } from "./in-flight";
 import { sleepResolvingOnAbort } from "./sleep";
@@ -48,9 +48,9 @@ export abstract class PollLoop {
 		this.pollIntervalMs = options.pollIntervalMs ?? 250;
 		this.baseDelayMs = options.baseDelayMs ?? 50;
 		this.maxDelayMs = options.maxDelayMs ?? 5000;
-		assertNonNegativeFinite(context, "pollIntervalMs", this.pollIntervalMs);
-		assertNonNegativeFinite(context, "baseDelayMs", this.baseDelayMs);
-		assertNonNegativeFinite(context, "maxDelayMs", this.maxDelayMs);
+		assertTimerDelay(context, "pollIntervalMs", this.pollIntervalMs);
+		assertTimerDelay(context, "baseDelayMs", this.baseDelayMs);
+		assertTimerDelay(context, "maxDelayMs", this.maxDelayMs);
 		this.jitter = neutralJitterSource(options.random ?? Math.random);
 	}
 

@@ -6,12 +6,13 @@ import type { RuntimePersistenceDefinition } from "./persistence-contract";
 
 /**
  * The part of the running unit of work that a facade needs: the open
- * check, and the three lifecycle writes it installs on the facade. The
+ * checks, and the three lifecycle writes it installs on the facade. The
  * facade never reaches further into the session, and stating that here
  * keeps the dependency pointing one way.
  */
 interface RepositoryFacadeSession<Evt extends AnyDomainEvent> {
 	assertOpen(operation: string): void;
+	assertOpenForRegistration(operation: string): void;
 	add(
 		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
@@ -27,10 +28,13 @@ interface RepositoryFacadeSession<Evt extends AnyDomainEvent> {
 }
 
 /**
- * Builds the application-facing repository facade. Standard lifecycle writes
- * are always supplied by the Unit of Work; similarly named adapter methods are
- * never invoked. Other methods are bound to the adapter so classes with private
- * fields keep their normal receiver.
+ * Builds the application-facing repository facade. The Unit of Work supplies
+ * the lifecycle writes, and an adapter that defines its own add, update, or
+ * remove is rejected. Other methods are bound to the adapter so classes with private
+ * fields keep their normal receiver. A member that returns the adapter itself
+ * (a fluent `this`) returns the facade instead. A promise passes unchanged: a
+ * raw adapter that it resolves to can only read, because an adapter defines
+ * no add, update, or remove.
  */
 export function bindRepositoryWrites<TRepository, Evt extends AnyDomainEvent>(
 	adapter: TRepository,
@@ -39,10 +43,23 @@ export function bindRepositoryWrites<TRepository, Evt extends AnyDomainEvent>(
 	repository: string,
 ): TRepository {
 	if (adapter === null || typeof adapter !== "object") {
-		throw new InvalidRepositoryAdapterError(
+		throw new InvalidRepositoryAdapterError({
 			repository,
-			adapter === null ? "null" : typeof adapter,
-		);
+			reason: "not_an_object",
+			receivedType: adapter === null ? "null" : typeof adapter,
+		});
+	}
+	// A raw adapter can leave the facade on paths no proxy can intercept: a
+	// clone, a callback argument, an iterator. Without its own lifecycle
+	// members, such an adapter can only read.
+	for (const operation of REPOSITORY_LIFECYCLE_OPERATIONS) {
+		if (hasMemberBelowObjectPrototype(adapter, operation)) {
+			throw new InvalidRepositoryAdapterError({
+				repository,
+				reason: "defines_lifecycle_operation",
+				operation,
+			});
+		}
 	}
 
 	const state = createRepositoryFacadeState(
@@ -52,10 +69,8 @@ export function bindRepositoryWrites<TRepository, Evt extends AnyDomainEvent>(
 	);
 	installRepositoryLifecycleOperations(state);
 	forwardAdapterOwnProperties(state);
-	return new Proxy(
-		state.target,
-		createRepositoryFacadeHandler(state),
-	) as TRepository;
+	state.facade = new Proxy(state.target, createRepositoryFacadeHandler(state));
+	return state.facade as TRepository;
 }
 
 const REPOSITORY_LIFECYCLE_OPERATIONS = ["add", "update", "remove"] as const;
@@ -72,6 +87,7 @@ interface GuardedMethodCacheEntry {
 interface RepositoryFacadeState<Evt extends AnyDomainEvent> {
 	readonly source: object;
 	readonly target: object;
+	facade: object | undefined;
 	readonly session: RepositoryFacadeSession<Evt>;
 	readonly definition: RuntimePersistenceDefinition<Evt>;
 	readonly methodCache: Map<PropertyKey, GuardedMethodCacheEntry>;
@@ -87,6 +103,7 @@ function createRepositoryFacadeState<Evt extends AnyDomainEvent>(
 	return {
 		source,
 		target: Object.create(Reflect.getPrototypeOf(source)) as object,
+		facade: undefined,
 		session,
 		definition,
 		methodCache: new Map(),
@@ -110,10 +127,28 @@ function isRepositoryLifecycleOperation(property: PropertyKey): boolean {
 }
 
 /**
- * Own-or-inherited presence that stops BEFORE `Object.prototype`: members
- * every object inherits (`toString`, `valueOf`, `constructor`) are language
- * plumbing, not repository surface, and must not trip the facade's
- * session-open assertion.
+ * Whether a property read or `in` probe is language plumbing, not a
+ * repository member: promise resolution probes `then`, JSON.stringify probes
+ * `toJSON`, string interpolation reads `toString`, and inspection utilities
+ * read well-known symbols. Only a property present BELOW Object.prototype is
+ * repository surface, except `constructor`, which every class prototype
+ * carries. Plumbing answers without the session-open assertion, so logging a
+ * leaked facade after close cannot mask the original failure.
+ */
+function isLanguagePlumbing<Evt extends AnyDomainEvent>(
+	state: RepositoryFacadeState<Evt>,
+	property: PropertyKey,
+): boolean {
+	return (
+		property === "constructor" ||
+		(!hasMemberBelowObjectPrototype(state.target, property) &&
+			!hasMemberBelowObjectPrototype(state.source, property))
+	);
+}
+
+/**
+ * Own-or-inherited presence that stops BEFORE `Object.prototype`, where the
+ * members that every object inherits live.
  */
 function hasMemberBelowObjectPrototype(
 	object: object,
@@ -133,7 +168,7 @@ function readRepositorySource<Evt extends AnyDomainEvent>(
 ): unknown {
 	state.session.assertOpen(repositoryOperationName(property));
 	const value = Reflect.get(state.source, property, state.source);
-	if (typeof value !== "function") return value;
+	if (typeof value !== "function") return facadeInPlaceOfSource(state, value);
 	// Cache validity is keyed on the CURRENT source function, not the
 	// property name alone: adapter methods run with `this` bound to the raw
 	// source, so a lazy-init self-assignment replaces the method without any
@@ -142,12 +177,30 @@ function readRepositorySource<Evt extends AnyDomainEvent>(
 	const cached = state.methodCache.get(property);
 	if (cached && cached.sourceMethod === value) return cached.guarded;
 	const sourceMethod = value as (...args: unknown[]) => unknown;
-	const guarded = (...args: unknown[]): unknown => {
-		state.session.assertOpen(repositoryOperationName(property));
-		return Reflect.apply(sourceMethod, state.source, args);
-	};
+	// A proxy, not a wrapper function: a callable property can carry its own
+	// members (a query object) or be a class, and both must keep working.
+	const guarded = new Proxy(sourceMethod, {
+		apply: (method, _receiver, args) => {
+			state.session.assertOpen(repositoryOperationName(property));
+			return facadeInPlaceOfSource(
+				state,
+				Reflect.apply(method, state.source, args),
+			);
+		},
+		construct: (method, args, newTarget) => {
+			state.session.assertOpen(repositoryOperationName(property));
+			return Reflect.construct(method, args, newTarget);
+		},
+	});
 	state.methodCache.set(property, { sourceMethod, guarded });
 	return guarded;
+}
+
+function facadeInPlaceOfSource<Evt extends AnyDomainEvent>(
+	state: RepositoryFacadeState<Evt>,
+	value: unknown,
+): unknown {
+	return value === state.source ? state.facade : value;
 }
 
 function defineForwardedRepositoryProperty<Evt extends AnyDomainEvent>(
@@ -178,8 +231,8 @@ function installedLifecycleOperations<Evt extends AnyDomainEvent>(
 	definition: RuntimePersistenceDefinition<Evt>,
 ): RepositoryLifecycleOperation[] {
 	const operations: RepositoryLifecycleOperation[] = ["add"];
-	if (!definition.appendOnly) operations.push("update");
-	if (definition.physicalRemoval) operations.push("remove");
+	if (definition.appendOnly !== true) operations.push("update");
+	if (definition.physicalRemoval === true) operations.push("remove");
 	return operations;
 }
 
@@ -192,8 +245,9 @@ function installRepositoryLifecycleOperations<Evt extends AnyDomainEvent>(
 			configurable: false,
 			enumerable: false,
 			writable: false,
+			// The session checks the phase itself: a registration while the
+			// transaction commits must fail the run, not only this call.
 			value: (aggregate: unknown) => {
-				state.session.assertOpen(repositoryOperationName(operation));
 				state.session[operation](
 					aggregate as Aggregate<Id<string>, Evt>,
 					state.definition,
@@ -220,35 +274,40 @@ function createRepositoryFacadeHandler<Evt extends AnyDomainEvent>(
 ): ProxyHandler<object> {
 	return {
 		get: (target, property, receiver) => {
-			// Language-level probes are not repository operations: promise
-			// resolution reads `then` on any value returned from run(),
-			// JSON.stringify probes `toJSON`, string interpolation reads
-			// `toString`, and inspection utilities read well-known symbols.
-			// One principled rule instead of one exemption per discovered
-			// probe: only a property present BELOW Object.prototype is
-			// repository surface and gets the session-open assertion.
-			// Everything else is language plumbing and answers normally, so
-			// logging a leaked facade after close cannot mask the original
-			// failure. Member reads keep the loud TransactionClosedError
-			// (a probe cannot leak state; a member read can).
-			if (
-				!hasMemberBelowObjectPrototype(target, property) &&
-				!hasMemberBelowObjectPrototype(state.source, property)
-			) {
+			// Member reads keep the loud TransactionClosedError: a probe
+			// cannot leak state, a member read can. An installed lifecycle
+			// operation stays readable while a late registration still fails
+			// the attempt, so that the call can record it.
+			if (isLanguagePlumbing(state, property)) {
+				return Reflect.get(target, property, receiver);
+			}
+			if (state.writes.has(property)) {
+				state.session.assertOpenForRegistration(
+					repositoryOperationName(property),
+				);
 				return Reflect.get(target, property, receiver);
 			}
 			state.session.assertOpen(repositoryOperationName(property));
 			const own = Reflect.getOwnPropertyDescriptor(target, property);
 			if (own) return Reflect.get(target, property, receiver);
 			// An installed lifecycle operation is an own property of the
-			// target, so one that reaches this line is not installed. The
-			// adapter's own method of that name stays masked.
+			// target, so one that reaches this line is not installed. An
+			// adapter that gains a method of that name later stays masked.
 			if (isRepositoryLifecycleOperation(property)) return undefined;
 			return readRepositorySource(state, property);
 		},
 		set: (target, property, value, receiver) =>
 			setRepositoryFacadeProperty(state, target, property, value, receiver),
 		has: (target, property) => {
+			if (isLanguagePlumbing(state, property)) {
+				return Reflect.has(target, property);
+			}
+			if (state.writes.has(property)) {
+				state.session.assertOpenForRegistration(
+					repositoryOperationName(property),
+				);
+				return true;
+			}
 			state.session.assertOpen(repositoryOperationName(property));
 			return (
 				state.writes.has(property) ||

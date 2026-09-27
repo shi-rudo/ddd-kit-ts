@@ -58,11 +58,10 @@ export type UnitOfWorkIdentityMap = Pick<
  *   `identityMap.isDeleted` as not-found (`undefined`), and returns
  *   `tracking.trackLoaded(aggregate)` after hydration. This captures the
  *   expected version before application code can mutate the instance.
- * - Adapter objects do not need lifecycle methods; the facade installs the
+ * - Adapter objects have no lifecycle methods; the facade installs the
  *   Unit-of-Work-owned `add`, `update` unless the definition is append-only,
- *   and `remove` with `physicalRemoval`. If a concrete adapter has a method
- *   named `add`, `update`, or `remove` anyway, the facade masks it, installed
- *   or not.
+ *   and `remove` with `physicalRemoval`. An adapter that defines `add`,
+ *   `update`, or `remove` fails with `InvalidRepositoryAdapterError`.
  * - Other repository methods are reads. A custom method that performs a write
  *   would bypass the Unit of Work and violates the adapter contract.
  */
@@ -73,6 +72,10 @@ export interface RepositoryTracking<
 	 * Registers an aggregate restored by a repository before returning it to
 	 * application code. The Unit of Work identity-maps the instance and captures
 	 * its current version as the optimistic-concurrency expectation.
+	 *
+	 * Return the result, not the argument. If the Unit of Work already tracks
+	 * an instance with the same identity, the result is that instance: when
+	 * two loads of one id overlap, the first tracked instance wins.
 	 */
 	trackLoaded(aggregate: TAggregate): TAggregate;
 

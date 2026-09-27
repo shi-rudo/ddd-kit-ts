@@ -25,6 +25,9 @@ const KINDS = new Set<DeliveryFailureKind>([
  * the shell's safe accounting default.
  */
 export function classifyDeliveryFailure(error: unknown): DeliveryFailureKind {
+	// Not findInCauseChain: there, a throwing cause getter ends the walk as
+	// no-match, so an earlier `retryable: false` would read as permanent. A
+	// hostile link here makes the whole failure unknown instead.
 	let current = error;
 	let sawNonRetryable = false;
 	const seen = new Set<object>();

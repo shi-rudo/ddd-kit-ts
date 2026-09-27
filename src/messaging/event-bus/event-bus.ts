@@ -9,7 +9,10 @@ import {
 	captureObserverFunctions,
 	reportToObserver,
 } from "../../internal/observer";
-import { assertPositiveInteger } from "../../internal/validate";
+import {
+	assertPositiveInteger,
+	assertTimerDelay,
+} from "../../internal/validate";
 import { EventBusClosedError, PublishDepthExceededError } from "./errors";
 import type {
 	EventBus,
@@ -430,6 +433,10 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		options?: OnceOptions,
 	): Promise<Extract<Evt, { type: K }>> {
 		return new Promise<Extract<Evt, { type: K }>>((resolve, reject) => {
+			const timeoutMs = options?.timeoutMs;
+			if (timeoutMs !== undefined) {
+				assertTimerDelay("EventBus.once", "timeoutMs", timeoutMs);
+			}
 			if (this.closed) {
 				reject(new EventBusClosedError("once"));
 				return;
@@ -491,15 +498,15 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 				signal.addEventListener("abort", abortListener);
 			}
 
-			if (typeof options?.timeoutMs === "number") {
+			if (timeoutMs !== undefined) {
 				timer = setTimeout(() => {
 					cleanup();
 					reject(
 						new Error(
-							`EventBus.once timed out after ${options.timeoutMs}ms waiting for "${eventType}"`,
+							`EventBus.once timed out after ${timeoutMs}ms waiting for "${eventType}"`,
 						),
 					);
-				}, options.timeoutMs);
+				}, timeoutMs);
 			}
 		});
 	}

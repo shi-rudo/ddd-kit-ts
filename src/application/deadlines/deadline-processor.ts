@@ -13,7 +13,7 @@ import {
 	captureObserverFunctions,
 	reportToObserver,
 } from "../../internal/observer";
-import { assertNonNegativeFinite } from "../../internal/validate";
+import { assertTimerDelay } from "../../internal/validate";
 import type {
 	DeadLetterDeadline,
 	DeadlineStore,
@@ -198,12 +198,12 @@ export class DeadlineProcessor<TPayload = unknown> extends PollLoop {
 			options.deliveryTimeoutMs ?? DEFAULT_EXECUTION_TIMEOUT_MS;
 		this.storageTimeoutMs =
 			options.storageTimeoutMs ?? DEFAULT_EXECUTION_TIMEOUT_MS;
-		assertNonNegativeFinite(
+		assertTimerDelay(
 			"DeadlineProcessor",
 			"deliveryTimeoutMs",
 			this.deliveryTimeoutMs,
 		);
-		assertNonNegativeFinite(
+		assertTimerDelay(
 			"DeadlineProcessor",
 			"storageTimeoutMs",
 			this.storageTimeoutMs,

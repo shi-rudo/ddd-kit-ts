@@ -195,14 +195,27 @@ The adapter and aggregate do not infer it from `version`.
 Call the registration method last. After a successful `add`, `update`, or
 `remove`, the aggregate is sealed for that run. A later version change, event
 change, or adapter-projection change throws `AggregateTrackingError` and rolls
-the transaction back. The guard runs once before flush and again afterward,
-because an asynchronous adapter can yield to other work while the transaction
-is still open.
+the transaction back. The guard runs before the flush, after the flush, and
+after the outbox write, because an asynchronous adapter can yield to other
+work while the transaction is still open. The last run also covers a loaded
+aggregate without a write: if it changed, the commit fails with
+`UnenrolledChangesError`. A change of a registered aggregate always fails with
+`AggregateTrackingError` and the reason `mutated_after_registration`, also
+while the outbox write runs.
+
+Registration closes when the flush starts. Work that the callback did not
+await can call `add`, `update`, or `remove` later. Until the last check before
+the commit, after the outbox write, that call throws `AggregateTrackingError`
+with the reason `registered_during_flush`, and the run fails before it
+commits, also when the caller swallows the error. A repeat of a write that is
+already registered for the same, unchanged instance stays a no-op. After the
+last check, a call throws `TransactionClosedError`: the transaction can no
+longer take the write, and a caller that swallows the error loses it. Await
+every repository call inside the `run()` callback.
 
 ## Read adapters and the identity map
 
-Every successful load calls `tracking.trackLoaded` before returning the
-aggregate:
+Every successful load returns the result of `tracking.trackLoaded`:
 
 ```ts
 class DrizzleOrderReadAdapter {
@@ -242,8 +255,25 @@ class DrizzleOrderReadAdapter {
 
 The map enforces one object per aggregate class and id for the duration of the
 operation. This is a correctness rule, not just a cache: event batches and
-write receipts are bound to object identity. The map is cleared when `run()`
-settles, and a removed identity remains tombstoned until then.
+write receipts are bound to object identity. A removed identity stays
+tombstoned until the attempt ends. After that, a view of the map that an
+adapter kept answers empty.
+
+Two loads of one id can overlap, for example
+`Promise.all([findById(id), findById(id)])`. Both pass the identity-map check
+and hydrate. `trackLoaded` returns the first tracked instance to both, so
+return its result, not the hydrated argument. An `add` of a second instance
+with a tracked identity throws `AggregateTrackingError` with the reason
+`identity_already_tracked`.
+
+The facade guards the other members of the adapter. A member that returns the
+adapter itself, for example a fluent `lockForUpdate(): this`, returns the
+facade, so a chained `add` still goes through the Unit of Work. A promise from
+an adapter member reaches the caller unchanged. The adapter defines no `add`,
+`update`, or `remove` of its own, so a raw adapter that leaves the facade, for
+example in a resolved promise, can only read. After `run()` settles, a member
+read throws `TransactionClosedError`.
+A language probe such as `then` or `constructor` does not.
 
 Application code cannot access the raw transaction or the tracking capability.
 The `UnitOfWorkContext` contains only `repositories` and the optional
@@ -257,7 +287,7 @@ the use case and removes the old enrollment escape hatch.
 ```ts
 interface AggregatePersistenceWrite<TAggregate, TChangeSet> {
   readonly intent: "add" | "update" | "remove";
-  readonly aggregateId: TAggregate["id"];
+  readonly aggregateIdentity: AggregateIdentity<TAggregate["id"]>;
   readonly expectedVersion: Version | undefined;
   readonly version: Version;
   readonly changes: {
@@ -348,7 +378,7 @@ The most useful failures are intentionally specific:
 | `UnenrolledChangesError` | a loaded aggregate changed but the use case never called `update` |
 | `ConcurrencyConflictError` | the adapter's expected-version predicate lost a race |
 | `DuplicateAggregateError` | an `add` collided with an existing identity |
-| `InvalidRepositoryAdapterError` | a repository factory returned no adapter object |
+| `InvalidRepositoryAdapterError` | a repository factory returned no adapter object, or an adapter that defines `add`, `update`, or `remove` |
 | `CommitError` | work completed, but the outbox write or transaction commit failed |
 | `RollbackError` | work failed and the scope reported a different rollback failure |
 | `NestedUnitOfWorkError` | one instance was entered while already running |
@@ -361,6 +391,17 @@ operation with a new `UnitOfWork`, reload, and apply the command again.
 Also discard aggregate instances after rollback. Recreate even a new instance.
 A failed adapter can leave resources in an uncertain state. A background task
 can also keep a reference.
+
+A scope that retries, such as `RetryingTransactionScope`, runs the callback
+again in a new transaction. `run()` labels a failure by the attempt that
+raised it. A retry that cannot open its transaction reaches the caller
+unchanged, not as `CommitError` or `RollbackError` of the attempt before it.
+The facade of a failed attempt closes before the retry waits. A custom
+retrying scope calls `onAttemptStart` from the transactional options before
+each attempt; see [TransactionScope](/guide/outbox#transactionscope). If a
+scope retries without that call, `run()` cannot see the new attempt. A retry
+that cannot open its transaction then reaches the caller as the `CommitError`
+or `RollbackError` of the attempt before it.
 
 ## Contract tests
 

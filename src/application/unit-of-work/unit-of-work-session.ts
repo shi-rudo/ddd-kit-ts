@@ -11,11 +11,13 @@ import {
 	ConcurrencyConflictError,
 	type InfrastructureError,
 	isInfrastructureErrorLike,
-	isWiringErrorLike,
 	UnenrolledChangesError,
 } from "../../errors/kit-errors";
 import { findInCauseChain } from "../../internal/cause-chain";
-import { IdentityMap } from "../../persistence/repository/identity-map";
+import {
+	type AggregateClass,
+	IdentityMap,
+} from "../../persistence/repository/identity-map";
 import {
 	capturePersistenceBaseline,
 	derivePersistenceChanges,
@@ -32,6 +34,7 @@ import {
 	InvalidFlushStatementError,
 	RepositoryErrorMappingFailedError,
 	TransactionClosedError,
+	wiringErrorInCauseChain,
 } from "./errors";
 import type {
 	AggregatePersistenceWrite,
@@ -86,18 +89,34 @@ export class Session<Evt extends AnyDomainEvent> {
 	// What adapters receive: the typed read-only view, enforced at runtime.
 	// Handing out the map itself would expose set/delete/clear to JavaScript
 	// callers, and a stray clear() erases deletion tombstones and the
-	// pending-event baselines behind UnenrolledChangesError.
+	// pending-event baselines behind UnenrolledChangesError. A view that an
+	// adapter keeps answers empty once the session is no longer open, so it
+	// cannot serve an instance after its attempt ended.
 	private readonly _identityMapView = Object.freeze({
-		get: this._identityMap.get.bind(this._identityMap),
-		has: this._identityMap.has.bind(this._identityMap),
-		isDeleted: this._identityMap.isDeleted.bind(this._identityMap),
+		get: (type: AggregateClass<unknown>, id: Id<string>) =>
+			this._phase === "open" ? this._identityMap.get(type, id) : undefined,
+		has: (type: AggregateClass<unknown>, id: Id<string>) =>
+			this._phase === "open" && this._identityMap.has(type, id),
+		isDeleted: (type: AggregateClass<unknown>, id: Id<string>) =>
+			this._phase === "open" && this._identityMap.isDeleted(type, id),
 	}) as UnitOfWorkIdentityMap;
 	private readonly _trackingByAggregate = new WeakMap<
 		Aggregate<Id<string>, Evt>,
 		TrackedAggregate<Evt>
 	>();
 	private readonly _trackedAggregates = new Set<TrackedAggregate<Evt>>();
-	private _closed = false;
+	/** Whether the context, facades, and tracking may still be used. */
+	private _phase: "open" | "closed" = "open";
+	/**
+	 * True from the start of the flush until the last check before the
+	 * commit ran or the run ended. A write registered in that window would
+	 * be committed and harvested without its flush, so it is rejected, and
+	 * the first rejection also fails the attempt, even when the caller
+	 * swallows it. After the window, a registration reports a closed unit of
+	 * work: nothing can fail the attempt any more.
+	 */
+	private _lateRegistrationsFailAttempt = false;
+	private _registrationDuringFlush: AggregateTrackingError | undefined;
 
 	constructor(private readonly commitEnrollment: CommitEnrollment<Evt>) {}
 
@@ -139,9 +158,19 @@ export class Session<Evt extends AnyDomainEvent> {
 	): TAggregate {
 		this.assertOpen("tracking.trackLoaded");
 		requirePendingEventLifecycleReadView(aggregate, "tracking.trackLoaded");
-		// Ownership is checked BEFORE identity-map registration: a rejected
-		// instance must not stay registered under the second definition's
-		// class key with no tracking entry behind it.
+		// Two overlapping loads of one id both pass the identity-map check
+		// and hydrate. The first tracked instance wins, and the second
+		// hydration is discarded.
+		const tracked = this._identityMap.get(definition.aggregate, aggregate.id) as
+			| TAggregate
+			| undefined;
+		if (tracked !== undefined && tracked !== aggregate) {
+			return this.trackLoaded(tracked, definition);
+		}
+		// Ownership and the baseline capture both come BEFORE identity-map
+		// registration: an instance that a check or a capture rejects must
+		// not stay in the map with no tracking entry behind it, because
+		// findById would serve it.
 		const existing = this._trackingByAggregate.get(aggregate);
 		if (existing && existing.definition !== definition) {
 			throw new AggregateTrackingError({
@@ -151,15 +180,22 @@ export class Session<Evt extends AnyDomainEvent> {
 				registeredIntent: existing.registration?.intent,
 			});
 		}
-		this._identityMap.set(definition.aggregate, aggregate);
-		if (existing) return aggregate;
+		if (existing) {
+			this._identityMap.set(definition.aggregate, aggregate);
+			return aggregate;
+		}
 
+		const baseline = capturePersistenceBaseline(
+			definition.persistence,
+			aggregate,
+		);
+		this._identityMap.set(definition.aggregate, aggregate);
 		const entry: TrackedAggregate<Evt> = {
 			aggregate,
 			lifecycle: "loaded",
 			expectedVersion: aggregate.version,
 			definition,
-			baseline: capturePersistenceBaseline(definition.persistence, aggregate),
+			baseline,
 		};
 		this._trackingByAggregate.set(aggregate, entry);
 		this._trackedAggregates.add(entry);
@@ -170,8 +206,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void {
-		this.assertOpen("repository.add");
-		requirePendingEventLifecycleReadView(aggregate, "repository.add");
+		if (this.isRepeatAdmitted(aggregate, definition, "add")) return;
 		this.assertNotRemoved(aggregate, definition);
 		const existing = this._trackingByAggregate.get(aggregate);
 		if (existing && existing.definition !== definition) {
@@ -195,6 +230,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		let entry = existing;
 		const newlyTracked = !entry;
 		if (!entry) {
+			this.assertIdentityNotTaken(aggregate, definition);
 			this._identityMap.set(definition.aggregate, aggregate);
 			entry = {
 				aggregate,
@@ -228,12 +264,26 @@ export class Session<Evt extends AnyDomainEvent> {
 		}
 	}
 
+	/** Two live instances of one identity would each flush and harvest. */
+	private assertIdentityNotTaken(
+		aggregate: Aggregate<Id<string>, Evt>,
+		definition: RuntimePersistenceDefinition<Evt>,
+	): void {
+		const tracked = this._identityMap.get(definition.aggregate, aggregate.id);
+		if (tracked === undefined || tracked === aggregate) return;
+		throw new AggregateTrackingError({
+			identity: aggregate.aggregateIdentity,
+			operation: "add",
+			reason: "identity_already_tracked",
+			registeredIntent: this.registrationOf(tracked as object)?.intent,
+		});
+	}
+
 	public update(
 		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void {
-		this.assertOpen("repository.update");
-		requirePendingEventLifecycleReadView(aggregate, "repository.update");
+		if (this.isRepeatAdmitted(aggregate, definition, "update")) return;
 		const entry = this.loadedEntryFor(aggregate, "update", definition);
 		this.registerWrite(entry, "update", definition);
 	}
@@ -242,8 +292,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void {
-		this.assertOpen("repository.remove");
-		requirePendingEventLifecycleReadView(aggregate, "repository.remove");
+		if (this.isRepeatAdmitted(aggregate, definition, "remove")) return;
 		// Idempotent by reference, like add and update: a repeated remove of
 		// the SAME instance re-declares the same final lifecycle outcome
 		// (collection semantics; the enrollment layer already returns the
@@ -253,6 +302,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		// reject.
 		const entry = this._trackingByAggregate.get(aggregate);
 		if (this.isRemovedInstance(aggregate) && entry?.definition === definition) {
+			this.assertUnchangedAfterRegistration(entry, "remove");
 			return;
 		}
 		const loaded = this.loadedEntryFor(aggregate, "remove", definition);
@@ -352,7 +402,7 @@ export class Session<Evt extends AnyDomainEvent> {
 					registeredIntent: entry.registration.intent,
 				});
 			}
-			this.assertUnchangedAfterRegistration(entry);
+			this.assertUnchangedAfterRegistration(entry, intent);
 			return false;
 		}
 
@@ -375,7 +425,10 @@ export class Session<Evt extends AnyDomainEvent> {
 		delete entry.registration;
 	}
 
-	private assertUnchangedAfterRegistration(entry: TrackedAggregate<Evt>): void {
+	private assertUnchangedAfterRegistration(
+		entry: TrackedAggregate<Evt>,
+		operation: AggregateWriteIntent | "commit",
+	): void {
 		const registration = entry.registration;
 		if (registration === undefined) return;
 		const currentEvents = entry.aggregate.pendingEvents;
@@ -399,7 +452,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		) {
 			throw new AggregateTrackingError({
 				identity: entry.aggregate.aggregateIdentity,
-				operation: "commit",
+				operation,
 				reason: "mutated_after_registration",
 				registeredIntent: registration.intent,
 			});
@@ -467,9 +520,12 @@ export class Session<Evt extends AnyDomainEvent> {
 	 * transaction.
 	 */
 	public assertReadyToCommit(): void {
+		if (this._registrationDuringFlush !== undefined) {
+			throw this._registrationDuringFlush;
+		}
 		for (const entry of this._trackedAggregates) {
 			if (entry.registration !== undefined) {
-				this.assertUnchangedAfterRegistration(entry);
+				this.assertUnchangedAfterRegistration(entry, "commit");
 				continue;
 			}
 			// Capture-to-capture drift against the load-time baseline: a
@@ -513,6 +569,7 @@ export class Session<Evt extends AnyDomainEvent> {
 	/** Flushes every registered receipt in deterministic registration order. */
 	public async flush(transaction: unknown): Promise<void> {
 		this.assertOpen("unitOfWork.flush");
+		this._lateRegistrationsFailAttempt = true;
 		for (const entry of this._registeredWrites) {
 			const registration = entry.registration;
 			if (registration === undefined) {
@@ -542,22 +599,74 @@ export class Session<Evt extends AnyDomainEvent> {
 		return [...this._commitTokens];
 	}
 
+	/**
+	 * Closes the session for use. The tracked state stays, and late
+	 * registrations still fail the attempt until its last check before the
+	 * commit: a scope can abandon an attempt and still commit it, and that
+	 * attempt's check must see its own state. Leaked views answer empty once
+	 * the session is closed, so the state cannot serve a later operation.
+	 */
 	public close(): void {
-		this._closed = true;
-		// Defensive: a leaked direct IdentityMap reference must not serve
-		// stale instances into a later operation (that would silently
-		// bypass OCC). The session getter already throws after close;
-		// clearing covers refs captured before.
-		this._identityMap.clear();
-		this._trackedAggregates.clear();
-		this._registeredWrites.length = 0;
-		this._commitTokens.clear();
+		this._phase = "closed";
+	}
+
+	/** Runs {@link assertReadyToCommit} for the last time before the commit. */
+	public assertReadyToCommitLastTime(): void {
+		this.assertReadyToCommit();
+		this._lateRegistrationsFailAttempt = false;
+	}
+
+	/** Closes the session for good, when its attempt or the run ended. */
+	public end(): void {
+		this._phase = "closed";
+		this._lateRegistrationsFailAttempt = false;
 	}
 
 	public assertOpen(operation: string): void {
-		if (this._closed) {
+		if (this._phase !== "open") {
 			throw new TransactionClosedError(operation);
 		}
+	}
+
+	/** Like {@link assertOpen}, but open while a late registration still counts. */
+	public assertOpenForRegistration(operation: string): void {
+		if (!this._lateRegistrationsFailAttempt) this.assertOpen(operation);
+	}
+
+	/**
+	 * Admits an add, update, or remove. Before the flush, the call proceeds.
+	 * In the late-registration window, a repeat of the same registered write
+	 * stays a no-op (returns true), and any other registration is rejected
+	 * and fails the attempt. After the window, the call reports a closed unit
+	 * of work before it looks at its argument.
+	 */
+	private isRepeatAdmitted(
+		aggregate: Aggregate<Id<string>, Evt>,
+		definition: RuntimePersistenceDefinition<Evt>,
+		operation: AggregateWriteIntent,
+	): boolean {
+		const name = repositoryOperation(operation);
+		if (!this._lateRegistrationsFailAttempt) {
+			this.assertOpen(name);
+			requirePendingEventLifecycleReadView(aggregate, name);
+			return false;
+		}
+		requirePendingEventLifecycleReadView(aggregate, name);
+		const entry = this._trackingByAggregate.get(aggregate);
+		if (
+			entry?.definition === definition &&
+			entry.registration?.intent === operation
+		) {
+			this.assertUnchangedAfterRegistration(entry, operation);
+			return true;
+		}
+		const rejection = new AggregateTrackingError({
+			identity: aggregate.aggregateIdentity,
+			operation,
+			reason: "registered_during_flush",
+		});
+		this._registrationDuringFlush ??= rejection;
+		throw rejection;
 	}
 }
 /**
@@ -607,7 +716,8 @@ function mapRepositoryPersistenceError<Evt extends AnyDomainEvent>(
 	// A wiring error states a defect of the definition, not a store failure.
 	// The mapper must return an InfrastructureError, so passing it in would
 	// relabel a programming defect as a store outage and make it retryable.
-	if (isWiringErrorLike(error)) throw error;
+	const wiringError = wiringErrorInCauseChain(error);
+	if (wiringError !== undefined) throw wiringError;
 	let mapped: unknown;
 	try {
 		mapped = definition.mapError(error, write);
@@ -623,7 +733,10 @@ function mapRepositoryPersistenceError<Evt extends AnyDomainEvent>(
 	// InfrastructureError fails a plain instanceof here; rejecting it would
 	// turn every retryable conflict into a non-retryable wiring crash that
 	// blames a correct mapper.
-	if (isInfrastructureErrorLike(mapped)) return mapped;
+	if (isInfrastructureErrorLike(mapped)) {
+		attributeWriteIntent(mapped, write.intent);
+		return mapped;
+	}
 	throw new RepositoryErrorMappingFailedError({
 		identity: write.aggregateIdentity,
 		intent: write.intent,
@@ -632,4 +745,10 @@ function mapRepositoryPersistenceError<Evt extends AnyDomainEvent>(
 			"Repository mapError must return an InfrastructureError instance",
 		),
 	});
+}
+
+function repositoryOperation(
+	operation: AggregateWriteIntent,
+): `repository.${AggregateWriteIntent}` {
+	return `repository.${operation}`;
 }

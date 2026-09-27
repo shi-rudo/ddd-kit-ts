@@ -197,6 +197,31 @@ describe("withCommit", () => {
 		expect(outbox.added[0]).toEqual([stamped(event)]);
 	});
 
+	it("an outbox that mutates its input fails the commit instead of changing what the bus publishes", async () => {
+		const event = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "order-1" },
+			{ aggregateId: "agg-1", aggregateType: "MockOrder" },
+		);
+		const agg = createMockAggregate([event]);
+		const bus = createMockBus();
+		const outbox: Outbox<TestEvent> = {
+			add: async (candidates) => {
+				(candidates as EventCommitCandidate<TestEvent>[]).length = 0;
+			},
+			getPending: async () => [],
+			markDispatched: async () => {},
+		};
+
+		await expect(
+			withCommit(
+				{ outbox, bus, scope: createMockScope() },
+				async (_ctx, enrollment) => enrolledResult(enrollment, "ok", [agg]),
+			),
+		).rejects.toBeInstanceOf(TypeError);
+		expect(bus.published).toEqual([]);
+	});
+
 	it("rejects an unrecorded aggregate decision before writing the outbox", async () => {
 		class DecisionAggregate extends StateStoredAggregate<
 			Readonly<Record<string, never>>,
@@ -1499,6 +1524,41 @@ describe("withCommit", () => {
 				),
 			).rejects.toThrow(/postCommitTimeoutMs/);
 			expect(opened).toBe(false);
+		});
+
+		it("rejects a post-commit budget above the largest timer delay before opening the transaction", async () => {
+			let opened = false;
+			const scope: TransactionScope<undefined> = {
+				transactional: async () => {
+					opened = true;
+					throw new Error("must not open");
+				},
+			};
+
+			await expect(
+				withCommit(
+					{
+						outbox: createMockOutbox(),
+						scope,
+						postCommitTimeoutMs: 2 ** 31,
+					},
+					async () => ({ result: undefined, commits: [] }),
+				),
+			).rejects.toThrow(/postCommitTimeoutMs/);
+			expect(opened).toBe(false);
+		});
+
+		it("accepts the largest timer delay as a post-commit budget", async () => {
+			const result = await withCommit(
+				{
+					outbox: createMockOutbox(),
+					scope: createMockScope(),
+					postCommitTimeoutMs: 2 ** 31 - 1,
+				},
+				async () => ({ result: "committed", commits: [] }),
+			);
+
+			expect(result).toBe("committed");
 		});
 
 		it("reports an application observer failure via onPersistError with the failing aggregate", async () => {

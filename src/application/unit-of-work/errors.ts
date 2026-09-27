@@ -3,9 +3,11 @@ import {
 	describeAggregateIdentity,
 	detachAggregateIdentity,
 	InfrastructureError,
+	isWiringErrorLike,
 	KitWiringError,
 	rewriteErrorMessage,
 } from "../../errors/kit-errors";
+import { findInCauseChain } from "../../internal/cause-chain";
 import type { AggregateWriteIntent } from "./persistence-contract";
 
 /**
@@ -39,10 +41,13 @@ export class NestedUnitOfWorkError extends KitWiringError<"NESTED_UNIT_OF_WORK">
 }
 
 /**
- * Thrown when the unit-of-work context is used after `run()` has
- * settled: reading `context.repositories`, calling an adapter-held
- * `tracking.trackLoaded`, or using a repository facade after the transaction
- * has committed or rolled back.
+ * Thrown when the unit-of-work context is used after the unit of work closed
+ * it: reading `context.repositories`, calling an adapter-held
+ * `tracking.trackLoaded`, or using a repository facade after the flush of its
+ * attempt, while the transaction commits, or after it committed or rolled
+ * back. An `add`, `update`, or `remove` between the start of the flush and the
+ * last check before the commit fails the attempt with `AggregateTrackingError`
+ * instead.
  *
  * Use-after-close is a programming bug (typically a leaked context
  * reference or a fire-and-forget promise outliving the callback), so
@@ -59,24 +64,60 @@ export class TransactionClosedError extends KitWiringError<"TRANSACTION_CLOSED">
 	constructor(public readonly operation: string) {
 		super(
 			"TRANSACTION_CLOSED",
-			`Unit of work is closed: ${operation} was called after the ` +
-				"transaction committed or rolled back. Do not use the context or " +
-				"repository facade or tracking capability outside the run() callback.",
+			`Unit of work is closed: ${operation} was called after its attempt ` +
+				"ended. Do not use the context, the repository facade, or the " +
+				"tracking capability outside the run() callback, and await all " +
+				"work inside it.",
 		);
 	}
 }
 
+/** Why a repository factory result cannot become a facade. */
+export type InvalidRepositoryAdapterReason =
+	| "not_an_object"
+	| "defines_lifecycle_operation";
+
+/** Constructor options for {@link InvalidRepositoryAdapterError}. */
+export type InvalidRepositoryAdapterErrorOptions =
+	| {
+			readonly repository: string;
+			readonly reason: "not_an_object";
+			/** The `typeof` of the value that the factory returned, or `null`. */
+			readonly receivedType: string;
+	  }
+	| {
+			readonly repository: string;
+			readonly reason: "defines_lifecycle_operation";
+			/** The lifecycle member that the adapter defines. */
+			readonly operation: AggregateWriteIntent;
+	  };
+
 /** A repository factory returned a value that cannot be wrapped as a facade. */
 export class InvalidRepositoryAdapterError extends KitWiringError<"INVALID_REPOSITORY_ADAPTER"> {
-	constructor(
-		public readonly repository: string,
-		public readonly receivedType: string,
-	) {
+	readonly repository: string;
+	readonly reason: InvalidRepositoryAdapterReason;
+	readonly receivedType: string | undefined;
+	readonly operation: AggregateWriteIntent | undefined;
+
+	constructor(options: InvalidRepositoryAdapterErrorOptions) {
 		super(
 			"INVALID_REPOSITORY_ADAPTER",
-			`Repository factory "${repository}" returned ${receivedType}; ` +
-				"it must return an adapter object.",
+			options.reason === "not_an_object"
+				? `Repository factory "${options.repository}" returned ` +
+						`${options.receivedType}; it must return an adapter object.`
+				: `Repository factory "${options.repository}" returned an adapter ` +
+						`that defines ${options.operation}. The unit of work installs ` +
+						"add, update, and remove on the facade, so an adapter must not " +
+						`define them. Remove ${options.operation} from the adapter.`,
 		);
+		this.repository = options.repository;
+		this.reason = options.reason;
+		this.receivedType =
+			options.reason === "not_an_object" ? options.receivedType : undefined;
+		this.operation =
+			options.reason === "defines_lifecycle_operation"
+				? options.operation
+				: undefined;
 	}
 }
 
@@ -250,7 +291,9 @@ export type AggregateTrackingReason =
 	| "loaded_as_new"
 	| "different_repository"
 	| "conflicting_intent"
-	| "mutated_after_registration";
+	| "mutated_after_registration"
+	| "registered_during_flush"
+	| "identity_already_tracked";
 
 /**
  * A deterministic violation of the Unit of Work's aggregate lifecycle.
@@ -325,6 +368,18 @@ function trackingReasonMessage(options: AggregateTrackingErrorOptions): string {
 				"was registered. Make domain decisions first and call add, update, or " +
 				"remove last so persisted state and recorded events cannot diverge."
 			);
+		case "registered_during_flush":
+			return (
+				`Aggregate ${aggregate} cannot be registered for ${operation}: the ` +
+				"unit of work already flushes its writes, so this write cannot join " +
+				"the transaction. Await every repository call inside the run() callback."
+			);
+		case "identity_already_tracked":
+			return (
+				`Aggregate ${aggregate} cannot be registered for ${operation}: this ` +
+				"unit of work already tracks another instance with the same identity. " +
+				"Change the tracked instance, or give the new aggregate a new id."
+			);
 	}
 }
 
@@ -389,4 +444,16 @@ export class RollbackError extends InfrastructureError<"ROLLBACK_FAILED"> {
 			cause,
 		});
 	}
+}
+
+/**
+ * The first kit wiring error in the cause chain of `error`, also from another
+ * copy of the kit. A wiring error states a defect of the wiring, so the unit
+ * of work passes it to the caller and never lets a mapper or a retry
+ * relabel it, even when an adapter or a scope wrapped it.
+ */
+export function wiringErrorInCauseChain(error: unknown): object | undefined {
+	return findInCauseChain(error, (link) =>
+		isWiringErrorLike(link) ? link : undefined,
+	);
 }

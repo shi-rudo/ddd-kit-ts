@@ -902,4 +902,18 @@ describe("DeadlineProcessor", () => {
 			fastProcessor({ store, handler, storageTimeoutMs: -1 }),
 		).toThrow(/storageTimeoutMs/);
 	});
+
+	it("rejects a delay above the largest timer delay at construction", () => {
+		const store = new InMemoryDeadlineStore<Payload>();
+		const handler = (): void => {};
+		expect(() =>
+			fastProcessor({ store, handler, pollIntervalMs: 2 ** 31 }),
+		).toThrow(/pollIntervalMs/);
+		expect(() =>
+			fastProcessor({ store, handler, deliveryTimeoutMs: 2 ** 31 }),
+		).toThrow(/deliveryTimeoutMs/);
+		expect(() =>
+			fastProcessor({ store, handler, storageTimeoutMs: 2 ** 31 }),
+		).toThrow(/storageTimeoutMs/);
+	});
 });

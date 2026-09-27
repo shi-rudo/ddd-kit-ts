@@ -20,7 +20,7 @@ import {
 	runBoundedExecution,
 } from "../../internal/async/execution";
 import { reportToObserver } from "../../internal/observer";
-import { assertNonNegativeFinite } from "../../internal/validate";
+import { assertTimerDelay } from "../../internal/validate";
 import type { EventCommitCandidate } from "../../messaging/committed-event";
 import type { EventBus } from "../../messaging/event-bus/ports";
 import type { OutboxWriter } from "../../messaging/outbox/ports";
@@ -511,13 +511,41 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 		enrollment: CommitEnrollment<Evt>,
 	) => Promise<WithCommitWorkResult<Evt, R>>,
 ): Promise<R> {
+	return withCheckedCommit(
+		deps,
+		async (ctx, enrollment) => {
+			const { result, commits } = await fn(ctx, enrollment);
+			return { result, commits };
+		},
+		undefined,
+	);
+}
+
+/** A work result that also carries the check of its own attempt. */
+export interface CheckedWorkResult<Evt extends AnyDomainEvent, R>
+	extends WithCommitWorkResult<Evt, R> {
+	/**
+	 * Runs inside the transaction after the outbox write, just before the
+	 * commit. A check that throws rolls the transaction back.
+	 */
+	readonly checkBeforeCommit?: () => void;
+}
+
+/**
+ * {@link withCommit} with a check per attempt before the commit. The scope
+ * receives `onAttemptStart` in its transactional options.
+ */
+export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
+	deps: WithCommitDeps<Evt, TCtx>,
+	fn: (
+		ctx: TCtx,
+		enrollment: CommitEnrollment<Evt>,
+	) => Promise<CheckedWorkResult<Evt, R>>,
+	onAttemptStart: (() => void) | undefined,
+): Promise<R> {
 	const postCommitTimeoutMs =
 		deps.postCommitTimeoutMs ?? DEFAULT_EXECUTION_TIMEOUT_MS;
-	assertNonNegativeFinite(
-		"withCommit",
-		"postCommitTimeoutMs",
-		postCommitTimeoutMs,
-	);
+	assertTimerDelay("withCommit", "postCommitTimeoutMs", postCommitTimeoutMs);
 
 	// Pre-flight: an already-aborted caller never opens a transaction.
 	// Throwing the signal's reason matches the web AbortSignal convention;
@@ -533,7 +561,7 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 	const { result, commitRecords, events } = await deps.scope.transactional(
 		async (ctx) => {
 			const tokenScope = createCommitTokenScope<Evt>();
-			let fnResult: WithCommitWorkResult<Evt, R>;
+			let fnResult: CheckedWorkResult<Evt, R>;
 			try {
 				fnResult = await fn(ctx, tokenScope.enrollment);
 			} finally {
@@ -619,7 +647,28 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 				});
 			});
 			if (candidates.length > 0) {
-				await deps.outbox.add(candidates);
+				// The bus publishes the events of these same candidates, so the
+				// outbox must not change them. A mutation of the frozen array
+				// throws in strict-mode code and has no effect otherwise.
+				await deps.outbox.add(Object.freeze(candidates));
+			}
+			// The caller's own check runs first, so that it names a change in
+			// its own terms, with one code for every kind of change.
+			fnResult.checkBeforeCommit?.();
+			if (candidates.length > 0) {
+				// The outbox write can yield. Work that the callback did not
+				// await could change an enrolled aggregate meanwhile, and the
+				// acknowledgement would then cover state or events that were
+				// never written.
+				for (const record of commitRecords) {
+					if (enrollmentDiverged(record)) {
+						throw new EventHarvestError(
+							`withCommit: aggregate ${describeAggregateIdentity(record.aggregate.aggregateIdentity)} ` +
+								"changed while its outbox write ran. Await every change " +
+								"inside the work callback.",
+						);
+					}
+				}
 			}
 			return {
 				result: fnResult.result,
@@ -627,7 +676,7 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 				events: candidates.map(({ event }) => event),
 			};
 		},
-		{ signal: deps.signal },
+		{ signal: deps.signal, onAttemptStart },
 	);
 
 	// Post-commit: capture the persisted versions, acknowledge every saved
