@@ -1312,8 +1312,13 @@ Behavior that a use case or an adapter can notice:
   promise or `this`, no longer compiles. `defineRepository` throws a
   `TypeError` for a persistence model without `capture`, `changes`, or
   `isEmpty`, and for a lifecycle flag that is not a boolean.
-- The outbox receives a frozen candidate array. An adapter that sorts or
-  changes the array in place fails the commit.
+- The outbox receives a frozen candidate array. An adapter that sorts it in
+  place fails the commit; copy the array first.
+- A port member whose promise resolves to the port itself, for example
+  `reloaded(): Promise<this>`, no longer compiles. The facade hands promises
+  through unchanged.
+- A flush must not wrap a kit wiring error. If it does, the unit of work
+  throws the wiring error and drops the wrapper.
 - A time option above 2147483647 ms throws a `RangeError`, and an invalid
   time option throws a `RangeError` in place of an `Error`.
 - A custom scope that retries calls `onAttemptStart` from the transactional

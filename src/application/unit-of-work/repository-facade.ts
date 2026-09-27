@@ -31,8 +31,9 @@ interface RepositoryFacadeSession<Evt extends AnyDomainEvent> {
  * are always supplied by the Unit of Work; similarly named adapter methods are
  * never invoked. Other methods are bound to the adapter so classes with private
  * fields keep their normal receiver. A member that returns the adapter itself
- * (a fluent `this`, also through a promise) returns the facade instead, so the
- * application never holds the raw adapter.
+ * (a fluent `this`) returns the facade instead. A promise passes unchanged; the
+ * port constraints of `defineRepository` reject a member whose promise
+ * resolves to the port itself.
  */
 export function bindRepositoryWrites<TRepository, Evt extends AnyDomainEvent>(
 	adapter: TRepository,
@@ -167,12 +168,10 @@ function readRepositorySource<Evt extends AnyDomainEvent>(
 	const guarded = new Proxy(sourceMethod, {
 		apply: (method, _receiver, args) => {
 			state.session.assertOpen(repositoryOperationName(property));
-			const result = Reflect.apply(method, state.source, args);
-			// Only a native promise: `then` on another thenable can start its
-			// work, for example a query builder that runs its query.
-			return result instanceof Promise
-				? result.then((settled) => facadeInPlaceOfSource(state, settled))
-				: facadeInPlaceOfSource(state, result);
+			return facadeInPlaceOfSource(
+				state,
+				Reflect.apply(method, state.source, args),
+			);
 		},
 		construct: (method, args, newTarget) => {
 			state.session.assertOpen(repositoryOperationName(property));

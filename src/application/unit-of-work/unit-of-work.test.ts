@@ -1560,10 +1560,6 @@ describe("UnitOfWork", () => {
 					return this;
 				}
 
-				async reloaded(): Promise<this> {
-					return this;
-				}
-
 				get current(): this {
 					return this;
 				}
@@ -1608,17 +1604,28 @@ describe("UnitOfWork", () => {
 				expect(flushed).toEqual(["add order-1"]);
 			});
 
-			it("an async method resolves to the facade, so a chained add goes through the unit of work", async () => {
-				const { uow, adapter, flushed } = uowOverLockingAdapter();
-
-				await uow.run(async ({ repositories }) => {
-					const reloaded = await repositories.orders.reloaded();
-					expect(reloaded).toBe(repositories.orders);
-					reloaded.add(createMockAggregate("order-1"));
+			it("hands a promise of an adapter method to the caller unchanged", async () => {
+				const inflight = Object.assign(Promise.resolve("row"), {
+					cancel: () => "cancelled",
+				});
+				const uow = new UnitOfWork({
+					scope: createMockScope(),
+					outbox: createMockOutbox(),
+					repositories: {
+						orders: defineTestRepository({
+							aggregate: MockAggregate,
+							persistence: versionPersistenceModel<MockAggregate>(),
+							flush: async () => {},
+							create: (_tx: undefined) => ({ load: () => inflight }),
+						}),
+					},
 				});
 
-				expect(adapter.ownWrites).toEqual([]);
-				expect(flushed).toEqual(["add order-1"]);
+				await uow.run(async ({ repositories }) => {
+					const loaded = repositories.orders.load();
+					expect(loaded).toBe(inflight);
+					expect(loaded.cancel()).toBe("cancelled");
+				});
 			});
 
 			it("a getter returns the facade, so a chained add goes through the unit of work", async () => {
@@ -3478,6 +3485,35 @@ describe("UnitOfWork", () => {
 				expect(persistedVersionOf(late)).toBeUndefined();
 			},
 		);
+
+		it.each(["add", "update", "remove"] as const)(
+			"accepts a repeated %s of the same unchanged instance while the flush runs",
+			async (operation) => {
+				const { uow, outbox, flushed, flushEntered, releaseFlush } =
+					uowWithGatedFlush();
+				const order = createMockAggregate("order-1", [testEvent("order-1")]);
+				let repeatedCall: unknown = "not attempted";
+
+				await uow.run(async ({ repositories }) => {
+					const orders = repositories.orders;
+					if (operation !== "add") orders.trackLoaded(order);
+					orders[operation](order);
+					void flushEntered.then(() => {
+						try {
+							orders[operation](order);
+							repeatedCall = "accepted";
+						} catch (error) {
+							repeatedCall = error;
+						}
+						releaseFlush();
+					});
+				});
+
+				expect(repeatedCall).toBe("accepted");
+				expect(flushed).toEqual(["order-1"]);
+				expect(outbox.added).toHaveLength(1);
+			},
+		);
 	});
 
 	describe("changes during the outbox write", () => {
@@ -3535,7 +3571,7 @@ describe("UnitOfWork", () => {
 			return uow;
 		}
 
-		it("fails the run when leaked work records an event while the outbox write runs", async () => {
+		it("fails the run with mutated_after_registration when leaked work records an event while the outbox write runs", async () => {
 			const order = new NotedOrder("o-1");
 			const uow = uowWhoseOutboxWriteYields(() => {
 				queueMicrotask(() => order.note("late", testEvent("o-1")));
@@ -3553,7 +3589,8 @@ describe("UnitOfWork", () => {
 					(error: unknown) => error,
 				);
 
-			expect(rejection).toBeInstanceOf(EventHarvestError);
+			expect(rejection).toBeInstanceOf(AggregateTrackingError);
+			expect(rejection).toMatchObject({ reason: "mutated_after_registration" });
 			expect(persistedVersionOf(order)).toBeUndefined();
 		});
 
@@ -3579,6 +3616,45 @@ describe("UnitOfWork", () => {
 			expect(rejection).toMatchObject({ reason: "mutated_after_registration" });
 			expect(persistedVersionOf(order)).toBeUndefined();
 		});
+
+		it.each([
+			[
+				"records an event",
+				(other: NotedOrder) => other.note("late", testEvent("o-2")),
+			],
+			[
+				"changes its state",
+				(other: NotedOrder) => other.noteWithoutVersionBump("late"),
+			],
+		] as const)(
+			"fails the run when leaked work %s on a loaded aggregate without a write while the outbox write runs",
+			async (_change, change) => {
+				const order = new NotedOrder("o-1");
+				const other = new NotedOrder("o-2");
+				const uow = uowWhoseOutboxWriteYields(() => {
+					queueMicrotask(() => change(other));
+				});
+
+				const rejection = await uow
+					.run(async ({ repositories }) => {
+						repositories.orders.trackLoaded(order);
+						repositories.orders.trackLoaded(other);
+						order.note("first", testEvent("o-1"));
+						repositories.orders.update(order);
+						return undefined;
+					})
+					.then(
+						() => "committed",
+						(error: unknown) => error,
+					);
+
+				expect(rejection).toBeInstanceOf(UnenrolledChangesError);
+				expect(rejection).toMatchObject({
+					identity: { aggregateType: "MockOrder", aggregateId: "o-2" },
+				});
+				expect(persistedVersionOf(order)).toBeUndefined();
+			},
+		);
 	});
 
 	describe("conflict attribution", () => {

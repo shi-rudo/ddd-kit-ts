@@ -11,7 +11,6 @@ import {
 	ConcurrencyConflictError,
 	type InfrastructureError,
 	isInfrastructureErrorLike,
-	isWiringErrorLike,
 	UnenrolledChangesError,
 } from "../../errors/kit-errors";
 import { findInCauseChain } from "../../internal/cause-chain";
@@ -32,6 +31,7 @@ import {
 	InvalidFlushStatementError,
 	RepositoryErrorMappingFailedError,
 	TransactionClosedError,
+	wiringErrorInCauseChain,
 } from "./errors";
 import type {
 	AggregatePersistenceWrite,
@@ -588,21 +588,17 @@ export class Session<Evt extends AnyDomainEvent> {
 		}
 	}
 
-	/**
-	 * Returns a check of every registered write that still works after the
-	 * session closes, for the moment just before the transaction commits.
-	 */
-	public registrationsCheck(): () => void {
-		const registered = [...this._registeredWrites];
-		return () => {
-			for (const entry of registered) {
-				this.assertUnchangedAfterRegistration(entry, "commit");
-			}
-		};
-	}
-
 	public get commitTokens(): ReadonlyArray<AggregateCommitToken<Evt>> {
 		return [...this._commitTokens];
+	}
+
+	/**
+	 * Closes the session for use but keeps its tracked state, so that
+	 * {@link assertReadyToCommit} can still run just before the commit.
+	 * {@link close} releases the state afterwards.
+	 */
+	public closeForCommit(): void {
+		this._closed = true;
 	}
 
 	public close(): void {
@@ -628,6 +624,10 @@ export class Session<Evt extends AnyDomainEvent> {
 		operation: "add" | "update" | "remove",
 	): void {
 		if (!this._writesSealed) return;
+		// A repeat of a registered write is a no-op by reference: the write
+		// is already part of the flush, so it passes on to the normal path,
+		// which still rejects a change after the registration.
+		if (this.registrationOf(aggregate)?.intent === operation) return;
 		const rejection = new AggregateTrackingError({
 			identity: aggregate.aggregateIdentity,
 			operation,
@@ -684,10 +684,7 @@ function mapRepositoryPersistenceError<Evt extends AnyDomainEvent>(
 	// A wiring error states a defect of the definition, not a store failure.
 	// The mapper must return an InfrastructureError, so passing it in would
 	// relabel a programming defect as a store outage and make it retryable.
-	// An adapter can wrap the defect, so the whole cause chain counts.
-	const wiringError = findInCauseChain(error, (link) =>
-		isWiringErrorLike(link) ? link : undefined,
-	);
+	const wiringError = wiringErrorInCauseChain(error);
 	if (wiringError !== undefined) throw wiringError;
 	let mapped: unknown;
 	try {

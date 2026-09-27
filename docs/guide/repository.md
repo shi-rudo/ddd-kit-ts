@@ -396,7 +396,9 @@ Property '"defineRepository: the port declares remove, so the definition must se
 A port without `add` fails with the same form of error. So does a port whose
 `add`, `update`, or `remove` does not accept the aggregate of the definition,
 or returns a value such as a promise or `this`: the installed registration
-returns nothing.
+returns nothing. Any other member whose promise resolves to the port itself,
+for example `reloaded(): Promise<this>`, fails too, because the facade does
+not rewrite promises.
 An optional `update?` or `remove?` fails as well: the port must declare the
 member as required. A port that extends `ContractRepository` from the testing
 entry inherits an optional `update`, so redeclare `update` on that port. A
@@ -417,8 +419,10 @@ or returns a raw value, the Unit of Work raises
 That keeps ORM error types out of use cases without hiding the original cause.
 
 The mapper never sees a wiring error. A flush that raises one, for example
-`InvalidFlushStatementError`, reaches the caller unchanged, also when the flush
-wraps it in another error. Such an error
+`InvalidFlushStatementError`, reaches the caller unchanged. Do not wrap a kit
+wiring error in the flush: let it propagate. If a flush wraps it anyway, the
+Unit of Work throws the wiring error and drops the wrapper with its context.
+Such an error
 states a defect of the definition, and a mapper can only return an
 `InfrastructureError`, which would make a caller retry a write that can never
 succeed. Use `isWiringErrorLike` to recognise the family across kit copies.

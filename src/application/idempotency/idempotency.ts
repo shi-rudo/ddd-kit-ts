@@ -4,6 +4,7 @@ import {
 	IdempotencyReconciliationRequiredError,
 } from "../../errors/kit-errors";
 import { reportToObserver } from "../../internal/observer";
+import { MAX_TIMER_DELAY_MS } from "../../internal/validate";
 import type { TransactionScope } from "../../persistence/repository/scope";
 import {
 	type CommitEnrollment,
@@ -270,7 +271,9 @@ interface LeaseHeartbeat {
 }
 
 function validRenewAfterMs(value: number): boolean {
-	return Number.isSafeInteger(value) && value > 0 && value <= 2_147_483_647;
+	return (
+		Number.isSafeInteger(value) && value > 0 && value <= MAX_TIMER_DELAY_MS
+	);
 }
 
 function startLeaseHeartbeat<TCtx>(
@@ -286,7 +289,7 @@ function startLeaseHeartbeat<TCtx>(
 	const schedule = (delayMs: number): void => {
 		if (!validRenewAfterMs(delayMs)) {
 			heartbeatFailure = new TypeError(
-				"IdempotencyStore returned an invalid lease renewAfterMs; expected a positive safe integer no greater than 2147483647",
+				`IdempotencyStore returned an invalid lease renewAfterMs; expected a positive safe integer no greater than ${MAX_TIMER_DELAY_MS}`,
 			);
 			return;
 		}

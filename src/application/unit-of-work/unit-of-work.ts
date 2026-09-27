@@ -4,7 +4,6 @@ import type { Id } from "../../domain/identity/id";
 import {
 	AggregateDeletedError,
 	type InfrastructureError,
-	isWiringErrorLike,
 } from "../../errors/kit-errors";
 import { abortReason } from "../../internal/async/abort";
 import type { ExecutionContext } from "../../internal/async/execution";
@@ -25,6 +24,7 @@ import {
 	NestedUnitOfWorkError,
 	RollbackError,
 	TransactionClosedError,
+	wiringErrorInCauseChain,
 } from "./errors";
 import type {
 	AggregatePersistenceWrite,
@@ -255,6 +255,39 @@ type MemberAcceptsAggregate<
 		: RepositoryPortViolation<`the port's ${TMember} must accept the definition's aggregate`>;
 
 /** @inline */
+type ResolvesToPort<TMember, TRepositoryPort> = TMember extends CallableValue
+	? ReturnType<TMember> extends PromiseLike<infer TResolved>
+		? 0 extends 1 & TResolved
+			? false
+			: [TResolved] extends [never]
+				? false
+				: [TResolved] extends [TRepositoryPort]
+					? true
+					: false
+		: false
+	: false;
+
+/**
+ * Rejects a port member whose promise resolves to the port itself, for
+ * example `reloaded(): Promise<this>`. The facade replaces a synchronous
+ * result that is the adapter, but it does not rewrite promises, so such a
+ * member would hand the raw adapter to the application.
+ * @inline
+ */
+type NoMemberResolvesToPort<TRepositoryPort> = {
+	[TKey in keyof TRepositoryPort]: ResolvesToPort<
+		TRepositoryPort[TKey],
+		TRepositoryPort
+	> extends true
+		? TKey
+		: never;
+}[keyof TRepositoryPort] extends infer TMember
+	? [TMember] extends [never]
+		? unknown
+		: RepositoryPortViolation<`the port's ${TMember & string} must not resolve to the port itself`>
+	: never;
+
+/** @inline */
 type AddConstraint<
 	TRepositoryPort,
 	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
@@ -312,7 +345,10 @@ type RepositoryPortConstraint<
 				AddConstraint<TRepositoryPort, TAggregate>,
 				Then<
 					UpdateConstraint<TRepositoryPort, TAggregate, TAppendOnly>,
-					RemovalConstraint<TRepositoryPort, TAggregate, TRemoval>
+					Then<
+						RemovalConstraint<TRepositoryPort, TAggregate, TRemoval>,
+						NoMemberResolvesToPort<TRepositoryPort>
+					>
 				>
 			>
 		>;
@@ -427,7 +463,8 @@ function assertPersistenceModelMembers(
  * aggregate, persistence, event, and lifecycle types from the adapter wiring.
  * The port must declare `add` for the aggregate. It declares `update` unless
  * the definition sets `appendOnly: true`. If it declares `remove`, the
- * definition must set `physicalRemoval: true`. A violated constraint fails
+ * definition must set `physicalRemoval: true`. No member returns a promise
+ * that resolves to the port itself. A violated constraint fails
  * the call with a compiler error that names the constraint. The adapter
  * created by the definition implements only the remaining methods because
  * lifecycle writes are installed by the Unit of Work.
@@ -719,9 +756,15 @@ export class UnitOfWork<
 						// The tokens below are what gets harvested; after close, any
 						// use of the session throws TransactionClosedError.
 						const commits = s.commitTokens;
-						const checkBeforeCommit = s.registrationsCheck();
-						s.close();
-						return { result, commits, checkBeforeCommit };
+						s.closeForCommit();
+						// The outbox write can yield, and leaked work can change a
+						// tracked aggregate meanwhile. The same check runs again
+						// just before the commit.
+						return {
+							result,
+							commits,
+							checkBeforeCommit: () => s.assertReadyToCommit(),
+						};
 					} catch (error) {
 						current.workThrew = true;
 						current.workError = error;
@@ -857,9 +900,7 @@ function classifyRunError(
 		return new RollbackError(state.workError, error);
 	}
 	if (state.workCompleted) {
-		const wiringError = findInCauseChain(error, (link) =>
-			isWiringErrorLike(link) ? link : undefined,
-		);
+		const wiringError = wiringErrorInCauseChain(error);
 		if (wiringError) {
 			return wiringError;
 		}

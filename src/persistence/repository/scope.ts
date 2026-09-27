@@ -16,7 +16,8 @@ export interface TransactionalOptions {
 	 * than one transaction for one call (a retrying scope) calls it before
 	 * each attempt opens its transaction. The caller can then tell a failure
 	 * to open the next attempt apart from a failure of the previous one. A
-	 * scope that opens one transaction per call can ignore it.
+	 * scope that opens one transaction per call can ignore it. A scope that
+	 * wraps another scope passes the options on unchanged.
 	 */
 	readonly onAttemptStart?: () => void;
 }
