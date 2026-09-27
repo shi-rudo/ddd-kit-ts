@@ -1558,10 +1558,6 @@ describe("UnitOfWork", () => {
 					return this;
 				}
 
-				async reloaded(): Promise<this> {
-					return this;
-				}
-
 				get current(): this {
 					return this;
 				}
@@ -1606,17 +1602,28 @@ describe("UnitOfWork", () => {
 				expect(flushed).toEqual(["add order-1"]);
 			});
 
-			it("an async method resolves to the facade, so a chained add goes through the unit of work", async () => {
-				const { uow, adapter, flushed } = uowOverLockingAdapter();
-
-				await uow.run(async ({ repositories }) => {
-					const reloaded = await repositories.orders.reloaded();
-					expect(reloaded).toBe(repositories.orders);
-					reloaded.add(createMockAggregate("order-1"));
+			it("hands a promise of an adapter method to the caller unchanged", async () => {
+				const inflight = Object.assign(Promise.resolve("row"), {
+					cancel: () => "cancelled",
+				});
+				const uow = new UnitOfWork({
+					scope: createMockScope(),
+					outbox: createMockOutbox(),
+					repositories: {
+						orders: defineTestRepository({
+							aggregate: MockAggregate,
+							persistence: versionPersistenceModel<MockAggregate>(),
+							flush: async () => {},
+							create: (_tx: undefined) => ({ load: () => inflight }),
+						}),
+					},
 				});
 
-				expect(adapter.ownWrites).toEqual([]);
-				expect(flushed).toEqual(["add order-1"]);
+				await uow.run(async ({ repositories }) => {
+					const loaded = repositories.orders.load();
+					expect(loaded).toBe(inflight);
+					expect(loaded.cancel()).toBe("cancelled");
+				});
 			});
 
 			it("a getter returns the facade, so a chained add goes through the unit of work", async () => {
