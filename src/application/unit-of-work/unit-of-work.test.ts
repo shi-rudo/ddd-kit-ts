@@ -3441,6 +3441,35 @@ describe("UnitOfWork", () => {
 				expect(persistedVersionOf(late)).toBeUndefined();
 			},
 		);
+
+		it.each(["add", "update", "remove"] as const)(
+			"accepts a repeated %s of the same unchanged instance while the flush runs",
+			async (operation) => {
+				const { uow, outbox, flushed, flushEntered, releaseFlush } =
+					uowWithGatedFlush();
+				const order = createMockAggregate("order-1", [testEvent("order-1")]);
+				let repeatedCall: unknown = "not attempted";
+
+				await uow.run(async ({ repositories }) => {
+					const orders = repositories.orders;
+					if (operation !== "add") orders.trackLoaded(order);
+					orders[operation](order);
+					void flushEntered.then(() => {
+						try {
+							orders[operation](order);
+							repeatedCall = "accepted";
+						} catch (error) {
+							repeatedCall = error;
+						}
+						releaseFlush();
+					});
+				});
+
+				expect(repeatedCall).toBe("accepted");
+				expect(flushed).toEqual(["order-1"]);
+				expect(outbox.added).toHaveLength(1);
+			},
+		);
 	});
 
 	describe("changes during the outbox write", () => {

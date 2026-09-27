@@ -628,6 +628,10 @@ export class Session<Evt extends AnyDomainEvent> {
 		operation: "add" | "update" | "remove",
 	): void {
 		if (!this._writesSealed) return;
+		// A repeat of a registered write is a no-op by reference: the write
+		// is already part of the flush, so it passes on to the normal path,
+		// which still rejects a change after the registration.
+		if (this.registrationOf(aggregate)?.intent === operation) return;
 		const rejection = new AggregateTrackingError({
 			identity: aggregate.aggregateIdentity,
 			operation,
