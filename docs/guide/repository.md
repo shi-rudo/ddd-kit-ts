@@ -765,9 +765,11 @@ loaded or re-registered later in that run.
 
 The removal also ends the event source of the aggregate in the outbox. The kit
 does not support a re-created identity: give the new aggregate a new id. Once
-the removed aggregate committed events, the outbox rejects the first events of
-a new aggregate under the same identity. A re-creation that commits only state
-passes until the aggregate commits its first event.
+the removed aggregate committed events, an outbox that keeps source heads
+rejects the first events of a new aggregate under the same identity. A
+re-creation that commits only state passes until the aggregate commits its
+first event. `outboxWriterAcceptingEventLoss` keeps no heads and detects
+nothing.
 
 Bulk retention cleanup is a different port. Do not hydrate thousands of
 aggregates only to delete rows with no business decision. Define an

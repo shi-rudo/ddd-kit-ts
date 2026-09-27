@@ -343,11 +343,11 @@ no-op without touching the source head. Unbounded production
 workloads need a durable adapter with an explicit source-head retention policy
 that keeps ended heads, and a transactional unique key on `eventId`.
 
-`InMemoryOutbox` cannot see a rollback. A source that `endEventSources` ended
-inside a transaction that rolls back stays ended, so every later event of the
-still existing aggregate is rejected, also on the retry of a
-`RetryingTransactionScope`. A test that rolls back or retries a removal needs
-an outbox that joins the test's transaction.
+`InMemoryOutbox` cannot see a rollback. If `endEventSources` ends a source
+inside a transaction that rolls back, the source stays ended. The outbox then
+rejects every later event of the aggregate, which still exists. This also
+happens on the retry of a `RetryingTransactionScope`. A test that rolls back
+or retries a removal needs an outbox that joins the test's transaction.
 
 ```ts
 import { InMemoryOutbox, type DomainEvent } from "@shirudo/ddd-kit";

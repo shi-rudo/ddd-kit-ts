@@ -150,9 +150,9 @@ type DispatchedEventReceipt = {
  * setup use {@link outboxWriterAcceptingEventLoss} instead. Sharper still:
  * events `add()`ed inside a transaction that later rolls back are NOT
  * removed (the Map knows nothing about your scope's rollback), and a source
- * that `endEventSources` ended inside such a transaction stays ended: every
- * later event of that aggregate is rejected, also on the retry of a
- * `RetryingTransactionScope`. Tests that roll back or retry a removal, or
+ * that `endEventSources` ended inside such a transaction stays ended: the
+ * outbox rejects every later event of that aggregate, also on the retry of
+ * a `RetryingTransactionScope`. Tests that roll back or retry a removal, or
  * that assert rollback purity, need an outbox that participates in the
  * test store's transactional semantics; see the reference adapter at
  * https://github.com/shi-rudo/ddd-kit-ts/blob/main/src/testing/repository-contract.test.ts
