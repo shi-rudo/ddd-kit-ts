@@ -4,7 +4,6 @@ import type { Id } from "../../domain/identity/id";
 import {
 	AggregateDeletedError,
 	type InfrastructureError,
-	isWiringErrorLike,
 } from "../../errors/kit-errors";
 import { abortReason } from "../../internal/async/abort";
 import type { ExecutionContext } from "../../internal/async/execution";
@@ -25,6 +24,7 @@ import {
 	NestedUnitOfWorkError,
 	RollbackError,
 	TransactionClosedError,
+	wiringErrorInCauseChain,
 } from "./errors";
 import type {
 	AggregatePersistenceWrite,
@@ -900,9 +900,7 @@ function classifyRunError(
 		return new RollbackError(state.workError, error);
 	}
 	if (state.workCompleted) {
-		const wiringError = findInCauseChain(error, (link) =>
-			isWiringErrorLike(link) ? link : undefined,
-		);
+		const wiringError = wiringErrorInCauseChain(error);
 		if (wiringError) {
 			return wiringError;
 		}

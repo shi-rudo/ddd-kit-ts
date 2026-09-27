@@ -3,9 +3,11 @@ import {
 	describeAggregateIdentity,
 	detachAggregateIdentity,
 	InfrastructureError,
+	isWiringErrorLike,
 	KitWiringError,
 	rewriteErrorMessage,
 } from "../../errors/kit-errors";
+import { findInCauseChain } from "../../internal/cause-chain";
 import type { AggregateWriteIntent } from "./persistence-contract";
 
 /**
@@ -403,4 +405,16 @@ export class RollbackError extends InfrastructureError<"ROLLBACK_FAILED"> {
 			cause,
 		});
 	}
+}
+
+/**
+ * The first kit wiring error in the cause chain of `error`, also from another
+ * copy of the kit. A wiring error states a defect of the wiring, so the unit
+ * of work passes it to the caller and never lets a mapper or a retry
+ * relabel it, even when an adapter or a scope wrapped it.
+ */
+export function wiringErrorInCauseChain(error: unknown): object | undefined {
+	return findInCauseChain(error, (link) =>
+		isWiringErrorLike(link) ? link : undefined,
+	);
 }

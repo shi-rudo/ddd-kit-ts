@@ -11,7 +11,6 @@ import {
 	ConcurrencyConflictError,
 	type InfrastructureError,
 	isInfrastructureErrorLike,
-	isWiringErrorLike,
 	UnenrolledChangesError,
 } from "../../errors/kit-errors";
 import { findInCauseChain } from "../../internal/cause-chain";
@@ -32,6 +31,7 @@ import {
 	InvalidFlushStatementError,
 	RepositoryErrorMappingFailedError,
 	TransactionClosedError,
+	wiringErrorInCauseChain,
 } from "./errors";
 import type {
 	AggregatePersistenceWrite,
@@ -684,10 +684,7 @@ function mapRepositoryPersistenceError<Evt extends AnyDomainEvent>(
 	// A wiring error states a defect of the definition, not a store failure.
 	// The mapper must return an InfrastructureError, so passing it in would
 	// relabel a programming defect as a store outage and make it retryable.
-	// An adapter can wrap the defect, so the whole cause chain counts.
-	const wiringError = findInCauseChain(error, (link) =>
-		isWiringErrorLike(link) ? link : undefined,
-	);
+	const wiringError = wiringErrorInCauseChain(error);
 	if (wiringError !== undefined) throw wiringError;
 	let mapped: unknown;
 	try {
