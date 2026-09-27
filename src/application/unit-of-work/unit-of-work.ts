@@ -718,6 +718,9 @@ export class UnitOfWork<
 		this._active = true;
 
 		let session: Session<Evt> | undefined;
+		// Every session of the run, so that the run can end them all: a
+		// scope can overlap attempts, and each one can leak its facades.
+		const sessions: Session<Evt>[] = [];
 		// The attempt that the scope runs now. Each callback writes only to
 		// its own record, so an abandoned attempt that settles late cannot
 		// relabel the failure of the live one.
@@ -745,6 +748,7 @@ export class UnitOfWork<
 					session?.close();
 					const s = new Session<Evt>(enrollment);
 					session = s;
+					sessions.push(s);
 					const current = startAttempt();
 					attempt = current;
 
@@ -767,14 +771,14 @@ export class UnitOfWork<
 						// The tokens below are what gets harvested; after close, any
 						// use of the session throws TransactionClosedError.
 						const commits = s.commitTokens;
-						s.closeForCommit();
+						s.close();
 						// The outbox write can yield, and leaked work can change a
 						// tracked aggregate meanwhile. The same check runs again
 						// just before the commit.
 						return {
 							result,
 							commits,
-							checkBeforeCommit: () => s.assertReadyToCommit(),
+							checkBeforeCommit: () => s.assertReadyToCommitLastTime(),
 						};
 					} catch (error) {
 						current.workThrew = true;
@@ -782,7 +786,7 @@ export class UnitOfWork<
 						// The scope rolls this attempt back and can wait before a
 						// retry. A leaked facade must not read through the dead
 						// transaction handle meanwhile.
-						s.close();
+						s.end();
 						throw error;
 					}
 				},
@@ -796,7 +800,7 @@ export class UnitOfWork<
 		} catch (error) {
 			throw classifyRunError(error, attempt, options?.signal);
 		} finally {
-			session?.close();
+			for (const ended of sessions) ended.end();
 			this._active = false;
 		}
 	}

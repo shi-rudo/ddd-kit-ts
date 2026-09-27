@@ -6,12 +6,13 @@ import type { RuntimePersistenceDefinition } from "./persistence-contract";
 
 /**
  * The part of the running unit of work that a facade needs: the open
- * check, and the three lifecycle writes it installs on the facade. The
+ * checks, and the three lifecycle writes it installs on the facade. The
  * facade never reaches further into the session, and stating that here
  * keeps the dependency pointing one way.
  */
 interface RepositoryFacadeSession<Evt extends AnyDomainEvent> {
 	assertOpen(operation: string): void;
+	assertOpenForRegistration(operation: string): void;
 	add(
 		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
@@ -275,8 +276,15 @@ function createRepositoryFacadeHandler<Evt extends AnyDomainEvent>(
 		get: (target, property, receiver) => {
 			// Member reads keep the loud TransactionClosedError: a probe
 			// cannot leak state, a member read can. An installed lifecycle
-			// operation checks the session when it is called.
-			if (isLanguagePlumbing(state, property) || state.writes.has(property)) {
+			// operation stays readable while a late registration still fails
+			// the attempt, so that the call can record it.
+			if (isLanguagePlumbing(state, property)) {
+				return Reflect.get(target, property, receiver);
+			}
+			if (state.writes.has(property)) {
+				state.session.assertOpenForRegistration(
+					repositoryOperationName(property),
+				);
 				return Reflect.get(target, property, receiver);
 			}
 			state.session.assertOpen(repositoryOperationName(property));
@@ -293,6 +301,12 @@ function createRepositoryFacadeHandler<Evt extends AnyDomainEvent>(
 		has: (target, property) => {
 			if (isLanguagePlumbing(state, property)) {
 				return Reflect.has(target, property);
+			}
+			if (state.writes.has(property)) {
+				state.session.assertOpenForRegistration(
+					repositoryOperationName(property),
+				);
+				return true;
 			}
 			state.session.assertOpen(repositoryOperationName(property));
 			return (

@@ -2127,6 +2127,17 @@ describe("UnitOfWork", () => {
 	});
 
 	describe("close: context invalidation", () => {
+		it("reports a closed unit of work before it checks the argument of a leaked add", async () => {
+			const { uow } = createUow();
+			const leaked = await uow.run(async ({ repositories }) => {
+				return repositories.orders;
+			});
+
+			expect(() => leaked.add({} as MockAggregate)).toThrow(
+				TransactionClosedError,
+			);
+		});
+
 		it("context.repositories access after run() settles throws TransactionClosedError", async () => {
 			const { uow } = createUow();
 			let leaked!: Parameters<Parameters<typeof uow.run>[0]>[0];
@@ -3094,6 +3105,123 @@ describe("UnitOfWork", () => {
 			expect(rejection).toBeInstanceOf(UnenrolledChangesError);
 		});
 
+		it("fails an abandoned attempt that the scope still commits when a late write reaches it", async () => {
+			let reachOutbox!: () => void;
+			const outboxReached = new Promise<void>((resolve) => {
+				reachOutbox = resolve;
+			});
+			let releaseOutbox!: () => void;
+			const outboxReleased = new Promise<void>((resolve) => {
+				releaseOutbox = resolve;
+			});
+			let outboxCalls = 0;
+			const outbox: Outbox<TestEvent> = {
+				add: async () => {
+					outboxCalls += 1;
+					if (outboxCalls === 1) {
+						reachOutbox();
+						await outboxReleased;
+					}
+				},
+				getPending: async () => [],
+				markDispatched: async () => {},
+			};
+			let attempt = 0;
+			let leakedOrders!: { add(order: MockAggregate): void };
+			let lateCall: unknown = "not attempted";
+			// Breaks the scope contract on purpose: it starts a second attempt
+			// and then still commits the first one.
+			const scope: TransactionScope<undefined> = {
+				transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
+					const first = fn(undefined);
+					await outboxReached;
+					await fn(undefined).catch(() => undefined);
+					try {
+						leakedOrders.add(createMockAggregate("late-1"));
+						lateCall = "accepted";
+					} catch (error) {
+						lateCall = error;
+					}
+					releaseOutbox();
+					return first;
+				},
+			};
+			const { uow } = createUow({ scope, outbox });
+
+			const rejection = await uow
+				.run(async ({ repositories }) => {
+					attempt += 1;
+					if (attempt === 1) {
+						leakedOrders = repositories.orders;
+						repositories.orders.add(
+							createMockAggregate("o-1", [testEvent("o-1")]),
+						);
+					}
+					return undefined;
+				})
+				.then(
+					() => "committed",
+					(error: unknown) => error,
+				);
+
+			expect(lateCall).toBeInstanceOf(AggregateTrackingError);
+			expect(rejection).toBe(lateCall);
+		});
+
+		it("ends every session of the run, also one that an overlapping attempt closed during its flush", async () => {
+			let enterFlush!: () => void;
+			const flushEntered = new Promise<void>((resolve) => {
+				enterFlush = resolve;
+			});
+			let releaseFlush!: () => void;
+			const flushReleased = new Promise<void>((resolve) => {
+				releaseFlush = resolve;
+			});
+			let flushCalls = 0;
+			let attempt = 0;
+			let firstAttemptOrders!: { add(order: MockAggregate): void };
+			const scope: TransactionScope<undefined> = {
+				transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
+					const first = fn(undefined);
+					await flushEntered;
+					await fn(undefined).catch(() => undefined);
+					releaseFlush();
+					return first;
+				},
+			};
+			const uow = new UnitOfWork({
+				scope,
+				outbox: createMockOutbox(),
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						flush: async () => {
+							flushCalls += 1;
+							if (flushCalls === 1) {
+								enterFlush();
+								await flushReleased;
+							}
+						},
+						create: () => ({}),
+					}),
+				},
+			});
+
+			await uow.run(async ({ repositories }) => {
+				attempt += 1;
+				if (attempt === 1) {
+					firstAttemptOrders = repositories.orders;
+					repositories.orders.add(createMockAggregate("o-1"));
+				}
+				return undefined;
+			});
+
+			expect(() =>
+				firstAttemptOrders.add(createMockAggregate("late-1")),
+			).toThrow(TransactionClosedError);
+		});
+
 		it("an abandoned attempt that throws late does not relabel the failure of the live attempt", async () => {
 			const lateFailure = new Error("abandoned attempt fails late");
 			const commitFailure = new Error("live attempt fails at COMMIT");
@@ -3642,6 +3770,60 @@ describe("UnitOfWork", () => {
 				expect(rejection).toBe(lateCall);
 			},
 		);
+
+		it("reports a closed unit of work to a write after the last check before the commit", async () => {
+			let leakedOrders!: { add(order: MockAggregate): void };
+			let lateCall: unknown = "not attempted";
+			const bus = createMockBus();
+			const publish = bus.publish;
+			bus.publish = async (events, options) => {
+				try {
+					leakedOrders.add(createMockAggregate("late-2"));
+					lateCall = "accepted";
+				} catch (error) {
+					lateCall = error;
+				}
+				await publish(events, options);
+			};
+			const { uow } = createUow({ bus });
+
+			const result = await uow.run(async ({ repositories }) => {
+				leakedOrders = repositories.orders;
+				repositories.orders.add(
+					createMockAggregate("first-1", [testEvent("first-1")]),
+				);
+				return "committed";
+			});
+
+			expect(result).toBe("committed");
+			expect(lateCall).toBeInstanceOf(TransactionClosedError);
+		});
+
+		it("keeps a repeated add of the same unchanged instance a no-op while the transaction commits", async () => {
+			const order = createMockAggregate("order-1", [testEvent("order-1")]);
+			let leakedOrders!: { add(order: MockAggregate): void };
+			let repeatedCall: unknown = "not attempted";
+			const outbox = createMockOutbox();
+			const add = outbox.add;
+			outbox.add = async (candidates) => {
+				try {
+					leakedOrders.add(order);
+					repeatedCall = "accepted";
+				} catch (error) {
+					repeatedCall = error;
+				}
+				await add(candidates);
+			};
+			const { uow } = createUow({ outbox });
+
+			await uow.run(async ({ repositories }) => {
+				leakedOrders = repositories.orders;
+				repositories.orders.add(order);
+			});
+
+			expect(repeatedCall).toBe("accepted");
+			expect(outbox.added).toHaveLength(1);
+		});
 
 		it.each(["add", "update", "remove"] as const)(
 			"accepts a repeated %s of the same unchanged instance while the flush runs",
