@@ -1314,9 +1314,13 @@ Behavior that a use case or an adapter can notice:
   `isEmpty`, and for a lifecycle flag that is not a boolean.
 - The outbox receives a frozen candidate array. An adapter that sorts it in
   place fails the commit; copy the array first.
-- A port member whose promise resolves to the port itself, for example
-  `reloaded(): Promise<this>`, no longer compiles. The facade hands promises
-  through unchanged.
+- An adapter must not define `add`, `update`, or `remove`. A typed adapter
+  with one of them fails to compile on `create`; any other fails on the first
+  run with `InvalidRepositoryAdapterError` (reason
+  `defines_lifecycle_operation`). Delete those methods from the adapter. The
+  error takes one options object now: `{ repository, reason, receivedType }`
+  or `{ repository, reason, operation }`. The facade hands promises through
+  unchanged.
 - A flush must not wrap a kit wiring error. If it does, the unit of work
   throws the wiring error and drops the wrapper.
 - A time option above 2147483647 ms throws a `RangeError`, and an invalid

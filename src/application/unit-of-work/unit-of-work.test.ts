@@ -410,9 +410,6 @@ describe("UnitOfWork", () => {
 						create: (_tx: undefined, tracking) => ({
 							load: (aggregate: ProjectedAggregate) =>
 								tracking.trackLoaded(aggregate),
-							update: (_aggregate: ProjectedAggregate) => {
-								throw new Error("facade must own update");
-							},
 						}),
 					}),
 				},
@@ -553,12 +550,69 @@ describe("UnitOfWork", () => {
 			).resolves.toBe("registered");
 		});
 
-		it("owns standard write methods even when an adapter defines implementations", async () => {
+		it.each(["add", "update", "remove"] as const)(
+			"rejects an adapter that defines its own %s",
+			async (operation) => {
+				const uow = new UnitOfWork({
+					scope: createMockScope(),
+					outbox: createMockOutbox(),
+					repositories: {
+						orders: defineTestRepository({
+							aggregate: MockAggregate,
+							persistence: versionPersistenceModel<MockAggregate>(),
+							physicalRemoval: true,
+							flush: async () => {},
+							// Typed as a bare object to reach the runtime check that
+							// guards JavaScript adapters.
+							create: (): object => ({ [operation]: () => undefined }),
+						}),
+					},
+				});
+
+				const rejection = await uow
+					.run(async () => undefined)
+					.then(
+						() => "ran",
+						(error: unknown) => error,
+					);
+
+				expect(rejection).toBeInstanceOf(InvalidRepositoryAdapterError);
+				expect(rejection).toMatchObject({
+					code: "INVALID_REPOSITORY_ADAPTER",
+					repository: "orders",
+					reason: "defines_lifecycle_operation",
+					operation,
+				});
+			},
+		);
+
+		it("rejects an adapter that inherits update from its class", async () => {
+			class UpdatingAdapter {
+				update(): void {}
+			}
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: createMockOutbox(),
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						flush: async () => {},
+						create: (): object => new UpdatingAdapter(),
+					}),
+				},
+			});
+
+			await expect(uow.run(async () => undefined)).rejects.toMatchObject({
+				reason: "defines_lifecycle_operation",
+				operation: "update",
+			});
+		});
+
+		it("installs no remove without physical removal", async () => {
 			const event = testEvent("o-1");
 			const aggregate = createMockAggregate("o-1", [event]);
 			const outbox = createMockOutbox();
-			let adapterAddCalls = 0;
-			let adapterRemoveCalls = 0;
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
 				outbox,
@@ -567,14 +621,7 @@ describe("UnitOfWork", () => {
 						aggregate: MockAggregate,
 						persistence: versionPersistenceModel<MockAggregate>(),
 						flush: async () => {},
-						create: () => ({
-							add: async (_aggregate: MockAggregate) => {
-								adapterAddCalls += 1;
-							},
-							remove: (_aggregate: MockAggregate) => {
-								adapterRemoveCalls += 1;
-							},
-						}),
+						create: () => ({}),
 					}),
 				},
 			});
@@ -587,18 +634,15 @@ describe("UnitOfWork", () => {
 				expect(repositories.orders.remove).toBeUndefined();
 			});
 
-			expect(adapterAddCalls).toBe(0);
-			expect(adapterRemoveCalls).toBe(0);
 			expect(outbox.added).toEqual([[stamped(event)]]);
 			expect(persistedVersionOf(aggregate)).toBe(aggregate.version);
 		});
 
-		it("installs no update for an append-only definition and masks the adapter's own", async () => {
+		it("installs no update for an append-only definition", async () => {
 			const event = testEvent("o-1");
 			const aggregate = createMockAggregate("o-1", [event]);
 			const outbox = createMockOutbox();
 			const flushedIntents: string[] = [];
-			let adapterUpdateCalls = 0;
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
 				outbox,
@@ -609,11 +653,7 @@ describe("UnitOfWork", () => {
 						aggregate: MockAggregate,
 						persistence: versionPersistenceModel<MockAggregate>(),
 						appendOnly: true,
-						create: () => ({
-							update: (_aggregate: MockAggregate) => {
-								adapterUpdateCalls += 1;
-							},
-						}),
+						create: () => ({}),
 						flush: async (_transaction: undefined, write) => {
 							flushedIntents.push(write.intent);
 						},
@@ -630,7 +670,6 @@ describe("UnitOfWork", () => {
 				expect(repositories.receipts.update).toBeUndefined();
 			});
 
-			expect(adapterUpdateCalls).toBe(0);
 			expect(flushedIntents).toEqual(["add"]);
 			expect(outbox.added).toEqual([[stamped(event)]]);
 		});
@@ -1184,9 +1223,7 @@ describe("UnitOfWork", () => {
 						aggregate: PlainAggregate,
 						persistence: versionPersistenceModel<PlainAggregate>(),
 						flush: async () => {},
-						create: () => ({
-							add: (_plain: PlainAggregate) => {},
-						}),
+						create: () => ({}),
 					}),
 				},
 			});
@@ -1552,18 +1589,12 @@ describe("UnitOfWork", () => {
 
 		describe("a member that returns the adapter", () => {
 			class LockingOrderRepository {
-				readonly ownWrites: string[] = [];
-
 				lockForUpdate(): this {
 					return this;
 				}
 
 				get current(): this {
 					return this;
-				}
-
-				add(order: MockAggregate): void {
-					this.ownWrites.push(order.id);
 				}
 			}
 
@@ -1586,19 +1617,20 @@ describe("UnitOfWork", () => {
 						}),
 					},
 				});
-				return { uow, adapter, flushed };
+				return { uow, flushed };
 			}
 
 			it("a fluent method returns the facade, so a chained add goes through the unit of work", async () => {
-				const { uow, adapter, flushed } = uowOverLockingAdapter();
+				const { uow, flushed } = uowOverLockingAdapter();
 
 				await uow.run(async ({ repositories }) => {
-					const locked = repositories.orders.lockForUpdate();
+					// The adapter implements no add, so its `this` type has none.
+					const locked =
+						repositories.orders.lockForUpdate() as unknown as typeof repositories.orders;
 					expect(locked).toBe(repositories.orders);
 					locked.add(createMockAggregate("order-1"));
 				});
 
-				expect(adapter.ownWrites).toEqual([]);
 				expect(flushed).toEqual(["add order-1"]);
 			});
 
@@ -1627,23 +1659,24 @@ describe("UnitOfWork", () => {
 			});
 
 			it("a getter returns the facade, so a chained add goes through the unit of work", async () => {
-				const { uow, adapter, flushed } = uowOverLockingAdapter();
+				const { uow, flushed } = uowOverLockingAdapter();
 
 				await uow.run(async ({ repositories }) => {
-					const current = repositories.orders.current;
+					const current = repositories.orders
+						.current as unknown as typeof repositories.orders;
 					expect(current).toBe(repositories.orders);
 					current.add(createMockAggregate("order-1"));
 				});
 
-				expect(adapter.ownWrites).toEqual([]);
 				expect(flushed).toEqual(["add order-1"]);
 			});
 
 			it("a facade handed out by a fluent method is closed after the run", async () => {
 				const { uow } = uowOverLockingAdapter();
 
-				const escaped = await uow.run(async ({ repositories }) =>
-					repositories.orders.lockForUpdate(),
+				const escaped = await uow.run(
+					async ({ repositories }) =>
+						repositories.orders.lockForUpdate() as unknown as typeof repositories.orders,
 				);
 
 				expect(() => escaped.add(createMockAggregate("order-1"))).toThrow(

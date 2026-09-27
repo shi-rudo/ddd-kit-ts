@@ -68,17 +68,52 @@ export class TransactionClosedError extends KitWiringError<"TRANSACTION_CLOSED">
 	}
 }
 
+/** Why a repository factory result cannot become a facade. */
+export type InvalidRepositoryAdapterReason =
+	| "not_an_object"
+	| "defines_lifecycle_operation";
+
+/** Constructor options for {@link InvalidRepositoryAdapterError}. */
+export type InvalidRepositoryAdapterErrorOptions =
+	| {
+			readonly repository: string;
+			readonly reason: "not_an_object";
+			/** The `typeof` of the value that the factory returned, or `null`. */
+			readonly receivedType: string;
+	  }
+	| {
+			readonly repository: string;
+			readonly reason: "defines_lifecycle_operation";
+			/** The lifecycle member that the adapter defines. */
+			readonly operation: AggregateWriteIntent;
+	  };
+
 /** A repository factory returned a value that cannot be wrapped as a facade. */
 export class InvalidRepositoryAdapterError extends KitWiringError<"INVALID_REPOSITORY_ADAPTER"> {
-	constructor(
-		public readonly repository: string,
-		public readonly receivedType: string,
-	) {
+	readonly repository: string;
+	readonly reason: InvalidRepositoryAdapterReason;
+	readonly receivedType: string | undefined;
+	readonly operation: AggregateWriteIntent | undefined;
+
+	constructor(options: InvalidRepositoryAdapterErrorOptions) {
 		super(
 			"INVALID_REPOSITORY_ADAPTER",
-			`Repository factory "${repository}" returned ${receivedType}; ` +
-				"it must return an adapter object.",
+			options.reason === "not_an_object"
+				? `Repository factory "${options.repository}" returned ` +
+						`${options.receivedType}; it must return an adapter object.`
+				: `Repository factory "${options.repository}" returned an adapter ` +
+						`that defines ${options.operation}. The unit of work installs ` +
+						"add, update, and remove on the facade, so an adapter must not " +
+						`define them. Remove ${options.operation} from the adapter.`,
 		);
+		this.repository = options.repository;
+		this.reason = options.reason;
+		this.receivedType =
+			options.reason === "not_an_object" ? options.receivedType : undefined;
+		this.operation =
+			options.reason === "defines_lifecycle_operation"
+				? options.operation
+				: undefined;
 	}
 }
 

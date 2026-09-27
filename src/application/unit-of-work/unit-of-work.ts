@@ -254,38 +254,21 @@ type MemberAcceptsAggregate<
 			: RepositoryPortViolation<`the port's ${TMember} must return void`>
 		: RepositoryPortViolation<`the port's ${TMember} must accept the definition's aggregate`>;
 
-/** @inline */
-type ResolvesToPort<TMember, TRepositoryPort> = TMember extends CallableValue
-	? ReturnType<TMember> extends PromiseLike<infer TResolved>
-		? 0 extends 1 & TResolved
-			? false
-			: [TResolved] extends [never]
-				? false
-				: [TResolved] extends [TRepositoryPort]
-					? true
-					: false
-		: false
-	: false;
-
 /**
- * Rejects a port member whose promise resolves to the port itself, for
- * example `reloaded(): Promise<this>`. The facade replaces a synchronous
- * result that is the adapter, but it does not rewrite promises, so such a
- * member would hand the raw adapter to the application.
+ * Rejects an adapter type that declares its own `add`, `update`, or `remove`.
+ * The Unit of Work installs them on the facade, and a raw adapter that can
+ * write would bypass it wherever it leaves the facade.
  * @inline
  */
-type NoMemberResolvesToPort<TRepositoryPort> = {
-	[TKey in keyof TRepositoryPort]: ResolvesToPort<
-		TRepositoryPort[TKey],
-		TRepositoryPort
-	> extends true
-		? TKey
-		: never;
-}[keyof TRepositoryPort] extends infer TMember
-	? [TMember] extends [never]
+type AdapterWritesConstraint<TAdapter> = unknown extends TAdapter
+	? unknown
+	: 0 extends 1 & TAdapter
 		? unknown
-		: RepositoryPortViolation<`the port's ${TMember & string} must not resolve to the port itself`>
-	: never;
+		: Extract<keyof TAdapter, "add" | "update" | "remove"> extends infer TMember
+			? [TMember] extends [never]
+				? unknown
+				: RepositoryPortViolation<`the adapter must not define ${TMember & string}; the unit of work installs it`>
+			: never;
 
 /** @inline */
 type AddConstraint<
@@ -345,10 +328,7 @@ type RepositoryPortConstraint<
 				AddConstraint<TRepositoryPort, TAggregate>,
 				Then<
 					UpdateConstraint<TRepositoryPort, TAggregate, TAppendOnly>,
-					Then<
-						RemovalConstraint<TRepositoryPort, TAggregate, TRemoval>,
-						NoMemberResolvesToPort<TRepositoryPort>
-					>
+					RemovalConstraint<TRepositoryPort, TAggregate, TRemoval>
 				>
 			>
 		>;
@@ -374,7 +354,7 @@ type RepositoryDefinitionBuilder<TRepositoryPort extends object> = <
 		TRemoval,
 		TAppendOnly
 	> & {
-		readonly create: TCreate;
+		readonly create: TCreate & AdapterWritesConstraint<ReturnType<TCreate>>;
 	} & RepositoryPortConstraint<
 			TRepositoryPort,
 			TAggregate,
@@ -463,8 +443,8 @@ function assertPersistenceModelMembers(
  * aggregate, persistence, event, and lifecycle types from the adapter wiring.
  * The port must declare `add` for the aggregate. It declares `update` unless
  * the definition sets `appendOnly: true`. If it declares `remove`, the
- * definition must set `physicalRemoval: true`. No member returns a promise
- * that resolves to the port itself. A violated constraint fails
+ * definition must set `physicalRemoval: true`. The adapter that `create`
+ * returns does not define `add`, `update`, or `remove`. A violated constraint fails
  * the call with a compiler error that names the constraint. The adapter
  * created by the definition implements only the remaining methods because
  * lifecycle writes are installed by the Unit of Work.
