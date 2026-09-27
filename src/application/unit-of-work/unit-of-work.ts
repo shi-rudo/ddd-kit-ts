@@ -719,9 +719,15 @@ export class UnitOfWork<
 						// The tokens below are what gets harvested; after close, any
 						// use of the session throws TransactionClosedError.
 						const commits = s.commitTokens;
-						const checkBeforeCommit = s.registrationsCheck();
-						s.close();
-						return { result, commits, checkBeforeCommit };
+						s.closeForCommit();
+						// The outbox write can yield, and leaked work can change a
+						// tracked aggregate meanwhile. The same check runs again
+						// just before the commit.
+						return {
+							result,
+							commits,
+							checkBeforeCommit: () => s.assertReadyToCommit(),
+						};
 					} catch (error) {
 						current.workThrew = true;
 						current.workError = error;

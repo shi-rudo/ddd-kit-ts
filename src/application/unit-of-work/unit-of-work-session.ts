@@ -588,21 +588,17 @@ export class Session<Evt extends AnyDomainEvent> {
 		}
 	}
 
-	/**
-	 * Returns a check of every registered write that still works after the
-	 * session closes, for the moment just before the transaction commits.
-	 */
-	public registrationsCheck(): () => void {
-		const registered = [...this._registeredWrites];
-		return () => {
-			for (const entry of registered) {
-				this.assertUnchangedAfterRegistration(entry, "commit");
-			}
-		};
-	}
-
 	public get commitTokens(): ReadonlyArray<AggregateCommitToken<Evt>> {
 		return [...this._commitTokens];
+	}
+
+	/**
+	 * Closes the session for use but keeps its tracked state, so that
+	 * {@link assertReadyToCommit} can still run just before the commit.
+	 * {@link close} releases the state afterwards.
+	 */
+	public closeForCommit(): void {
+		this._closed = true;
 	}
 
 	public close(): void {

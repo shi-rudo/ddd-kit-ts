@@ -3570,6 +3570,45 @@ describe("UnitOfWork", () => {
 			expect(rejection).toMatchObject({ reason: "mutated_after_registration" });
 			expect(persistedVersionOf(order)).toBeUndefined();
 		});
+
+		it.each([
+			[
+				"records an event",
+				(other: NotedOrder) => other.note("late", testEvent("o-2")),
+			],
+			[
+				"changes its state",
+				(other: NotedOrder) => other.noteWithoutVersionBump("late"),
+			],
+		] as const)(
+			"fails the run when leaked work %s on a loaded aggregate without a write while the outbox write runs",
+			async (_change, change) => {
+				const order = new NotedOrder("o-1");
+				const other = new NotedOrder("o-2");
+				const uow = uowWhoseOutboxWriteYields(() => {
+					queueMicrotask(() => change(other));
+				});
+
+				const rejection = await uow
+					.run(async ({ repositories }) => {
+						repositories.orders.trackLoaded(order);
+						repositories.orders.trackLoaded(other);
+						order.note("first", testEvent("o-1"));
+						repositories.orders.update(order);
+						return undefined;
+					})
+					.then(
+						() => "committed",
+						(error: unknown) => error,
+					);
+
+				expect(rejection).toBeInstanceOf(UnenrolledChangesError);
+				expect(rejection).toMatchObject({
+					identity: { aggregateType: "MockOrder", aggregateId: "o-2" },
+				});
+				expect(persistedVersionOf(order)).toBeUndefined();
+			},
+		);
 	});
 
 	describe("conflict attribution", () => {
