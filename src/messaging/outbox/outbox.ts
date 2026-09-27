@@ -299,14 +299,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 					position.commitSequence,
 				);
 				if (positionOwner !== undefined && positionOwner !== event.eventId) {
-					throw new EventHarvestError(
-						`InMemoryOutbox rejected event "${event.eventId}" for ` +
-							`${describeAggregateIdentity(source)}: source position ` +
-							`(${position.aggregateVersion}, ${position.commitSequence}) is ` +
-							`already owned by event "${positionOwner}". One qualified source ` +
-							"position must identify exactly one immutable event.",
-						event.type,
-					);
+					throw positionOwnedError(event, source, position, positionOwner);
 				}
 			}
 			let previousEventfulAggregateVersion: number | null;
@@ -557,14 +550,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				position.commitSequence,
 			);
 			if (positionOwner !== undefined && positionOwner !== event.eventId) {
-				throw new EventHarvestError(
-					`InMemoryOutbox rejected event "${event.eventId}" for ` +
-						`${describeAggregateIdentity(source)}: source position ` +
-						`(${position.aggregateVersion}, ${position.commitSequence}) is ` +
-						`already owned by event "${positionOwner}". One qualified source ` +
-						"position must identify exactly one immutable event.",
-					event.type,
-				);
+				throw positionOwnedError(event, source, position, positionOwner);
 			}
 			if (positionOwner === undefined) {
 				simulatedCursors.set(
@@ -764,6 +750,25 @@ function assertReceiptShape(
 			`commitSize=${recorded.commitSize}) to (${received.aggregateVersion}, ` +
 			`${received.commitSequence}; commitSize=${received.commitSize}). ` +
 			"An exact redelivery must keep its source position immutable.",
+		event.type,
+	);
+}
+
+function positionOwnedError(
+	event: { readonly eventId: string; readonly type: string },
+	source: AggregateIdentity,
+	position: EventCommitCandidatePosition,
+	positionOwner: string,
+): EventHarvestError {
+	return new EventHarvestError(
+		`InMemoryOutbox rejected event "${event.eventId}" for ` +
+			`${describeAggregateIdentity(source)}: source position ` +
+			`(${position.aggregateVersion}, ${position.commitSequence}) is ` +
+			`already owned by event "${positionOwner}". One qualified source ` +
+			"position must identify exactly one immutable event. An aggregate " +
+			"that was removed and created again under the same identity causes " +
+			"this too; the kit does not support that, so give the new aggregate " +
+			"a new id.",
 		event.type,
 	);
 }
