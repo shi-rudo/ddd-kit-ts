@@ -242,17 +242,30 @@ type MemberAcceptsAggregate<
 > = undefined extends TRepositoryPort[TMember & keyof TRepositoryPort]
 	? RepositoryPortViolation<`the port's ${TMember} must not be optional`>
 	: [TRepositoryPort] extends [Pick<InstalledRegistration<TAggregate>, TMember>]
-		? [
+		? ReturnsWhatTheRegistrationReturns<
 				ReturnType<
 					Extract<
 						TRepositoryPort[TMember & keyof TRepositoryPort],
 						CallableValue
 					>
 				>,
-			] extends [ReturnType<InstalledRegistration<TAggregate>[TMember]>]
+				ReturnType<InstalledRegistration<TAggregate>[TMember]>
+			> extends true
 			? unknown
 			: RepositoryPortViolation<`the port's ${TMember} must return void`>
 		: RepositoryPortViolation<`the port's ${TMember} must accept the definition's aggregate`>;
+
+/**
+ * An `any` result would let a caller use a value that the installed
+ * registration never returns, so it does not count as a match.
+ * @inline
+ */
+type ReturnsWhatTheRegistrationReturns<TDeclared, TInstalled> = 0 extends 1 &
+	TDeclared
+	? false
+	: [TDeclared] extends [TInstalled]
+		? true
+		: false;
 
 /**
  * Rejects an adapter type that declares its own `add`, `update`, or `remove`.

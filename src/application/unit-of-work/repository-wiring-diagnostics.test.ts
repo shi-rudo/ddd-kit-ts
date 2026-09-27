@@ -122,6 +122,12 @@ interface ForStoringOrdersWithIndex extends ForStoringOrders {
 	readonly [facet: string]: unknown;
 }
 
+interface ForStoringOrdersUntyped {
+	findById(id: OrderId): Promise<Order | null>;
+	add(order: Order): any;
+	update(order: Order): void;
+}
+
 interface ForRemovingOrdersAsynchronously extends ForStoringOrders {
 	remove(order: Order): Promise<void>;
 }
@@ -242,6 +248,7 @@ const probes = {
 	"remove-with-boolean-removal": `defineRepository<ForRemovingOrders>()({
 	physicalRemoval: removalFlag,${adapterWiring}});`,
 	"async-add": `defineRepository<ForStoringOrdersAsynchronously>()({${adapterWiring}});`,
+	"untyped-add": `defineRepository<ForStoringOrdersUntyped>()({${adapterWiring}});`,
 	"port-with-index-signature": `defineRepository<ForStoringOrdersWithIndex>()({${adapterWiring.replace(
 		"new SqlOrderAdapter(tracking)",
 		"({ findById: async (_id: OrderId) => (void tracking, null) })",
@@ -437,6 +444,7 @@ describe("defineRepository compile-time diagnostics", () => {
 			"the port's remove must accept the definition's aggregate",
 		],
 		["async-add", "the port's add must return void"],
+		["untyped-add", "the port's add must return void"],
 		["fluent-update", "the port's update must return void"],
 		["async-remove", "the port's remove must return void"],
 		["union-port", "the port must be one object type, not a union"],
