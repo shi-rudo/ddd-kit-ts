@@ -3130,6 +3130,7 @@ describe("UnitOfWork", () => {
 						await outboxReleased;
 					}
 				},
+				endEventSources: async () => {},
 				getPending: async () => [],
 				markDispatched: async () => {},
 			};
