@@ -613,6 +613,33 @@ describe("InMemoryOutbox", () => {
 		},
 	);
 
+	it("accepts the same batch twice after the receipt of its head event expired", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>({
+			maxRetainedDispatchedEventIds: 1,
+		});
+		const event = (eventId: string, orderId: string) =>
+			createDomainEvent(
+				"OrderCreated",
+				{ orderId },
+				{ eventId, aggregateId: orderId, aggregateType: "Order" },
+			);
+		const x = event("evt-x", "o-a");
+		const other = event("evt-o", "o-b");
+		const y = event("evt-y", "o-a");
+		await outbox.add([candidate(x, 5)]);
+		await outbox.markDispatched([x.eventId]);
+		await outbox.add([candidate(other, 1)]);
+		await outbox.markDispatched([other.eventId]);
+		const batch = [candidate(x, 5), candidate(y, 6)];
+
+		await outbox.add(batch);
+		await outbox.add(batch);
+
+		expect(
+			(await outbox.getPending()).map((record) => record.event.eventId),
+		).toEqual(["evt-y"]);
+	});
+
 	it("names a re-created identity as a cause when a new event lands below the source head", async () => {
 		const outbox = new InMemoryOutbox<OrderCreated>();
 		const event = (eventId: string) =>

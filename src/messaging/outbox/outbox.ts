@@ -395,6 +395,15 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				attempts: 0,
 			});
 		}
+		// Restore the receipts of the head retries only now: a receipt stored
+		// inside the loop could evict one that a later event of this batch
+		// needed. Without the receipt, the same event would read as stale
+		// once the head moves on.
+		for (const { event, source, position } of events) {
+			if (headRetries.has(event.eventId)) {
+				this.rememberDispatched(event.eventId, source, position);
+			}
+		}
 	}
 
 	private assertCapacity(
@@ -613,7 +622,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 	 * although no receipt, pending record, or dead letter remains: events
 	 * that were dispatched and whose receipt was evicted. They are decided
 	 * against the heads before the batch, so their place in the batch does
-	 * not matter, and deduping them changes no state.
+	 * not matter. Their receipts are restored after the batch.
 	 */
 	private retriesAtSourceHead(
 		events: ReadonlyArray<EventCommitCandidate<Evt>>,
