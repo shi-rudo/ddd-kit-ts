@@ -41,10 +41,11 @@ export class NestedUnitOfWorkError extends KitWiringError<"NESTED_UNIT_OF_WORK">
 }
 
 /**
- * Thrown when the unit-of-work context is used after `run()` has
- * settled: reading `context.repositories`, calling an adapter-held
- * `tracking.trackLoaded`, or using a repository facade after the transaction
- * has committed or rolled back.
+ * Thrown when the unit-of-work context is used after its attempt ended:
+ * reading `context.repositories`, calling an adapter-held
+ * `tracking.trackLoaded`, or using a repository facade once the work
+ * callback settled, while the transaction commits, or after it committed or
+ * rolled back.
  *
  * Use-after-close is a programming bug (typically a leaked context
  * reference or a fire-and-forget promise outliving the callback), so
@@ -61,24 +62,60 @@ export class TransactionClosedError extends KitWiringError<"TRANSACTION_CLOSED">
 	constructor(public readonly operation: string) {
 		super(
 			"TRANSACTION_CLOSED",
-			`Unit of work is closed: ${operation} was called after the ` +
-				"transaction committed or rolled back. Do not use the context or " +
-				"repository facade or tracking capability outside the run() callback.",
+			`Unit of work is closed: ${operation} was called after its attempt ` +
+				"ended. Do not use the context, the repository facade, or the " +
+				"tracking capability outside the run() callback, and await all " +
+				"work inside it.",
 		);
 	}
 }
 
+/** Why a repository factory result cannot become a facade. */
+export type InvalidRepositoryAdapterReason =
+	| "not_an_object"
+	| "defines_lifecycle_operation";
+
+/** Constructor options for {@link InvalidRepositoryAdapterError}. */
+export type InvalidRepositoryAdapterErrorOptions =
+	| {
+			readonly repository: string;
+			readonly reason: "not_an_object";
+			/** The `typeof` of the value that the factory returned, or `null`. */
+			readonly receivedType: string;
+	  }
+	| {
+			readonly repository: string;
+			readonly reason: "defines_lifecycle_operation";
+			/** The lifecycle member that the adapter defines. */
+			readonly operation: AggregateWriteIntent;
+	  };
+
 /** A repository factory returned a value that cannot be wrapped as a facade. */
 export class InvalidRepositoryAdapterError extends KitWiringError<"INVALID_REPOSITORY_ADAPTER"> {
-	constructor(
-		public readonly repository: string,
-		public readonly receivedType: string,
-	) {
+	readonly repository: string;
+	readonly reason: InvalidRepositoryAdapterReason;
+	readonly receivedType: string | undefined;
+	readonly operation: AggregateWriteIntent | undefined;
+
+	constructor(options: InvalidRepositoryAdapterErrorOptions) {
 		super(
 			"INVALID_REPOSITORY_ADAPTER",
-			`Repository factory "${repository}" returned ${receivedType}; ` +
-				"it must return an adapter object.",
+			options.reason === "not_an_object"
+				? `Repository factory "${options.repository}" returned ` +
+						`${options.receivedType}; it must return an adapter object.`
+				: `Repository factory "${options.repository}" returned an adapter ` +
+						`that defines ${options.operation}. The unit of work installs ` +
+						"add, update, and remove on the facade, so an adapter must not " +
+						`define them. Remove ${options.operation} from the adapter.`,
 		);
+		this.repository = options.repository;
+		this.reason = options.reason;
+		this.receivedType =
+			options.reason === "not_an_object" ? options.receivedType : undefined;
+		this.operation =
+			options.reason === "defines_lifecycle_operation"
+				? options.operation
+				: undefined;
 	}
 }
 

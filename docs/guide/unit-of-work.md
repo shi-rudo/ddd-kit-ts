@@ -204,9 +204,12 @@ aggregate without a write: if it changed, the commit fails with
 while the outbox write runs.
 
 Registration closes when the flush starts. Work that the callback did not
-await can call `add`, `update`, or `remove` later. That call throws
-`AggregateTrackingError` with the reason `registered_during_flush`, and the
-run fails before it commits. Await every repository call inside the
+await can call `add`, `update`, or `remove` later, while the flush or the
+commit runs. That call throws `AggregateTrackingError` with the reason
+`registered_during_flush`, and the run fails before it commits, also when the
+caller swallows the error. A repeat of a write that is already registered for
+the same, unchanged instance stays a no-op. After the attempt ended, a call
+throws `TransactionClosedError`. Await every repository call inside the
 `run()` callback.
 
 ## Read adapters and the identity map
@@ -264,9 +267,10 @@ with a tracked identity throws `AggregateTrackingError` with the reason
 The facade guards the other members of the adapter. A member that returns the
 adapter itself, for example a fluent `lockForUpdate(): this`, returns the
 facade, so a chained `add` still goes through the Unit of Work. A promise from
-an adapter member reaches the caller unchanged. A port member whose promise
-resolves to the port itself, for example `reloaded(): Promise<this>`, does not
-compile. After `run()` settles, a member read throws `TransactionClosedError`.
+an adapter member reaches the caller unchanged. The adapter defines no `add`,
+`update`, or `remove` of its own, so a raw adapter that leaves the facade, for
+example in a resolved promise, can only read. After `run()` settles, a member
+read throws `TransactionClosedError`.
 A language probe such as `then` or `constructor` does not.
 
 Application code cannot access the raw transaction or the tracking capability.

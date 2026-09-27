@@ -223,11 +223,13 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 		// Prove identity/receipt and source-position consistency for the whole input
 		// before mutating pending records or source heads. Otherwise a conflict later
 		// in one add() call could reject only after its earlier prefix had leaked.
+		const headRetries = this.retriesAtSourceHead(events);
 		this.assertBatchEventReceiptIntegrity(events);
-		this.assertBatchPositionIntegrity(events);
-		this.assertCapacity(events);
+		this.assertBatchPositionIntegrity(events, headRetries);
+		this.assertCapacity(events, headRetries);
 		for (const message of events) {
 			const { event, source, position } = message;
+			if (headRetries.has(event.eventId)) continue;
 			const dispatchedReceipt = this.dispatchedEventIds.get(event.eventId);
 			if (dispatchedReceipt !== undefined) {
 				assertSameEventSource(event, source, dispatchedReceipt.source);
@@ -243,17 +245,6 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 			}
 			const existing = this.pending.get(event.eventId);
 			const deadLetter = this.dead.get(event.eventId);
-			if (
-				existing === undefined &&
-				deadLetter === undefined &&
-				this.recordedAtSourceHead(event, source, position)
-			) {
-				// The receipt was evicted, but the source head still names this
-				// event at this position. It is neither pending nor dead, so it
-				// was dispatched: dedupe it like a retained receipt.
-				this.rememberDispatched(event.eventId, source, position);
-				continue;
-			}
 			if (existing !== undefined) {
 				assertSameEventSource(event, source, existing.source);
 				// A pending record may move to another aggregateVersion only because
@@ -413,15 +404,16 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 
 	private assertCapacity(
 		events: ReadonlyArray<EventCommitCandidate<Evt>>,
+		headRetries: ReadonlySet<string>,
 	): void {
 		const newRecordIds = new Set<string>();
 		const newSourceKeys = new Set<string>();
-		for (const { event, source, position } of events) {
+		for (const { event, source } of events) {
 			if (
 				this.pending.has(event.eventId) ||
 				this.dead.has(event.eventId) ||
 				this.dispatchedEventIds.has(event.eventId) ||
-				this.recordedAtSourceHead(event, source, position)
+				headRetries.has(event.eventId)
 			) {
 				continue;
 			}
@@ -500,11 +492,13 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 
 	private assertBatchPositionIntegrity(
 		events: ReadonlyArray<EventCommitCandidate<Evt>>,
+		headRetries: ReadonlySet<string>,
 	): void {
 		const simulatedCursors = new Map<string, EventSourceCursor>();
 		for (const { event, source, position } of events) {
+			if (headRetries.has(event.eventId)) continue;
 			const sourceKey = encodeAggregateIdentity(source);
-			this.assertSourceNotEnded(event, source, position, sourceKey);
+			this.assertSourceNotEnded(event, source, sourceKey);
 			const cursor =
 				simulatedCursors.get(sourceKey) ?? this.sourceCursors.get(sourceKey);
 			if (
@@ -631,19 +625,20 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 		}
 	}
 
-	/** An exact retry of a stored event of an ended source stays a retry. */
+	/**
+	 * An exact retry of a stored event of an ended source stays a retry. The
+	 * caller skips retries at the source head before this check.
+	 */
 	private assertSourceNotEnded(
 		event: AnyDomainEvent,
 		source: AggregateIdentity,
-		position: EventCommitCandidatePosition,
 		sourceKey: string,
 	): void {
 		if (!this.endedSourceKeys.has(sourceKey)) return;
 		if (
 			this.pending.has(event.eventId) ||
 			this.dead.has(event.eventId) ||
-			this.dispatchedEventIds.has(event.eventId) ||
-			this.recordedAtSourceHead(event, source, position)
+			this.dispatchedEventIds.has(event.eventId)
 		) {
 			return;
 		}
@@ -655,6 +650,30 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				"a new id.",
 			event.type,
 		);
+	}
+
+	/**
+	 * Event ids of the batch that the source head names at their position
+	 * although no receipt, pending record, or dead letter remains: events
+	 * that were dispatched and whose receipt was evicted. They are decided
+	 * against the heads before the batch, so their place in the batch does
+	 * not matter, and deduping them changes no state.
+	 */
+	private retriesAtSourceHead(
+		events: ReadonlyArray<EventCommitCandidate<Evt>>,
+	): ReadonlySet<string> {
+		const retries = new Set<string>();
+		for (const { event, source, position } of events) {
+			if (
+				!this.pending.has(event.eventId) &&
+				!this.dead.has(event.eventId) &&
+				!this.dispatchedEventIds.has(event.eventId) &&
+				this.recordedAtSourceHead(event, source, position)
+			) {
+				retries.add(event.eventId);
+			}
+		}
+		return retries;
 	}
 
 	private recordedAtSourceHead(

@@ -41,8 +41,9 @@ immutable. Run one kit version per process during a cutover.
 - `UnitOfWork` takes repository definitions from
   `defineRepository<Port>()({ aggregate, persistence, create, flush, mapError })`.
   The port type argument is explicit, and the Unit of Work installs `add`,
-  `update`, and `remove` on the facade. A member of the adapter that returns
-  the adapter itself returns the facade. A read adapter returns the result of
+  `update`, and `remove` on the facade, and an adapter that defines them
+  itself fails with `InvalidRepositoryAdapterError`. A member of the adapter
+  that returns the adapter itself returns the facade. A read adapter returns the result of
   `tracking.trackLoaded`: when two loads of one id overlap, the first tracked
   instance wins. `UnitOfWorkSession`,
   `RepositoryFactories`, and the `rawTransaction` and `session` fields of the
@@ -60,7 +61,8 @@ immutable. Run one kit version per process during a cutover.
   rejects the transaction, also while the outbox write runs, and so does a
   change of a loaded aggregate without a write. Registration
   closes when the flush starts: a later `add`, `update`, or `remove` fails
-  the run. `withCommit` hands the outbox a frozen array of candidates.
+  the run, also while the transaction commits and also when the caller
+  swallows the error. `withCommit` hands the outbox a frozen array of candidates.
 - Snapshots move out of the aggregate into an adapter-owned
   `SnapshotModel`. `createSnapshot`, `restoreFromSnapshot`,
   `restoreFromSnapshotWithEvents`, the snapshot schema members, and the
@@ -240,8 +242,8 @@ immutable. Run one kit version per process during a cutover.
   attempts.
 - A violated port constraint or wiring constraint is one compiler error that
   names it. A port whose `add`, `update`, or `remove` returns a value, for
-  example a promise, is such a violation, and so is a member whose promise
-  resolves to the port itself. The runtime checks the definition
+  example a promise, is such a violation, and so is an adapter type that
+  defines one of them. The runtime checks the definition
   and the adapter and throws `InvalidRepositoryDefinitionError`,
   `InvalidRepositoryAdapterError`, `AggregateTrackingError`, or
   `RepositoryErrorMappingFailedError`. `defineRepository` throws a
@@ -301,7 +303,7 @@ immutable. Run one kit version per process during a cutover.
   outbox then rejects a new event of that source, so an aggregate created
   again under a removed identity fails loud. `InMemoryOutbox` implements
   it, and it still dedupes a retry at the source head after the receipt of
-  the event expired.
+  the event expired, independent of its place in the batch.
 - `IntegrationMessage` is the JSON-safe broker contract, with
   `createIntegrationMessage`, `encodeIntegrationMessage`,
   `decodeIntegrationMessage`, and `integrationMessageToCommittedEvent`.

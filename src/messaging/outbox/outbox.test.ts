@@ -551,6 +551,68 @@ describe("InMemoryOutbox", () => {
 		expect(await outbox.getPending()).toEqual([]);
 	});
 
+	it("accepts a batch of exact retries whose receipts partly expired, without leaking a new event on failure", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>({
+			maxRetainedDispatchedEventIds: 1,
+		});
+		const event = (eventId: string, orderId: string) =>
+			createDomainEvent(
+				"OrderCreated",
+				{ orderId },
+				{ eventId, aggregateId: orderId, aggregateType: "Order" },
+			);
+		const a = event("evt-a", "o-a");
+		const c = event("evt-c", "o-b");
+		const d = event("evt-d", "o-b");
+		const n = event("evt-n", "o-n");
+		await outbox.add([candidate(a, 1)]);
+		await outbox.markDispatched([a.eventId]);
+		await outbox.add([candidate(c, 2)]);
+		await outbox.markDispatched([c.eventId]);
+		await outbox.add([candidate(d, 3)]);
+
+		await outbox.add([candidate(n, 1), candidate(a, 1), candidate(c, 2)]);
+
+		expect(
+			(await outbox.getPending()).map((record) => record.event.eventId),
+		).toEqual(["evt-d", "evt-n"]);
+	});
+
+	it.each([
+		["the retry first", ["retry", "next"]],
+		["the retry last", ["next", "retry"]],
+	] as const)(
+		"dedupes a retry at the source head with %s in the batch",
+		async (_order, order) => {
+			const outbox = new InMemoryOutbox<OrderCreated>({
+				maxRetainedDispatchedEventIds: 1,
+			});
+			const event = (eventId: string, orderId: string) =>
+				createDomainEvent(
+					"OrderCreated",
+					{ orderId },
+					{ eventId, aggregateId: orderId, aggregateType: "Order" },
+				);
+			const retry = event("evt-a1", "o-a");
+			const evicting = event("evt-b1", "o-b");
+			const next = event("evt-a2", "o-a");
+			await outbox.add([candidate(retry, 1)]);
+			await outbox.markDispatched([retry.eventId]);
+			await outbox.add([candidate(evicting, 1)]);
+			await outbox.markDispatched([evicting.eventId]);
+			const byName = {
+				retry: candidate(retry, 1),
+				next: candidate(next, 2),
+			};
+
+			await outbox.add(order.map((name) => byName[name]));
+
+			const pending = await outbox.getPending();
+			expect(pending.map((record) => record.event.eventId)).toEqual(["evt-a2"]);
+			expect(pending[0]?.position.previousEventfulAggregateVersion).toBe(1);
+		},
+	);
+
 	it("names a re-created identity as a cause when a new event lands below the source head", async () => {
 		const outbox = new InMemoryOutbox<OrderCreated>();
 		const event = (eventId: string) =>

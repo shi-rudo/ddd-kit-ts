@@ -242,86 +242,100 @@ type MemberAcceptsAggregate<
 > = undefined extends TRepositoryPort[TMember & keyof TRepositoryPort]
 	? RepositoryPortViolation<`the port's ${TMember} must not be optional`>
 	: [TRepositoryPort] extends [Pick<InstalledRegistration<TAggregate>, TMember>]
-		? [
+		? ReturnsWhatTheRegistrationReturns<
 				ReturnType<
 					Extract<
 						TRepositoryPort[TMember & keyof TRepositoryPort],
 						CallableValue
 					>
 				>,
-			] extends [ReturnType<InstalledRegistration<TAggregate>[TMember]>]
+				ReturnType<InstalledRegistration<TAggregate>[TMember]>
+			> extends true
 			? unknown
 			: RepositoryPortViolation<`the port's ${TMember} must return void`>
 		: RepositoryPortViolation<`the port's ${TMember} must accept the definition's aggregate`>;
 
-/** @inline */
-type ResolvesToPort<TMember, TRepositoryPort> = TMember extends CallableValue
-	? ReturnType<TMember> extends PromiseLike<infer TResolved>
-		? 0 extends 1 & TResolved
-			? false
-			: [TResolved] extends [never]
-				? false
-				: [TResolved] extends [TRepositoryPort]
-					? true
-					: false
-		: false
-	: false;
-
 /**
- * Rejects a port member whose promise resolves to the port itself, for
- * example `reloaded(): Promise<this>`. The facade replaces a synchronous
- * result that is the adapter, but it does not rewrite promises, so such a
- * member would hand the raw adapter to the application.
+ * An `any` result would let a caller use a value that the installed
+ * registration never returns, so it does not count as a match.
  * @inline
  */
-type NoMemberResolvesToPort<TRepositoryPort> = {
-	[TKey in keyof TRepositoryPort]: ResolvesToPort<
-		TRepositoryPort[TKey],
-		TRepositoryPort
-	> extends true
-		? TKey
-		: never;
-}[keyof TRepositoryPort] extends infer TMember
-	? [TMember] extends [never]
+type ReturnsWhatTheRegistrationReturns<TDeclared, TInstalled> = 0 extends 1 &
+	TDeclared
+	? false
+	: [TDeclared] extends [TInstalled]
+		? true
+		: false;
+
+/**
+ * Rejects an adapter type that declares its own `add`, `update`, or `remove`.
+ * The Unit of Work installs them on the facade, and a raw adapter that can
+ * write would bypass it wherever it leaves the facade.
+ * @inline
+ */
+type AdapterWritesConstraint<TAdapter> = unknown extends TAdapter
+	? unknown
+	: 0 extends 1 & TAdapter
 		? unknown
-		: RepositoryPortViolation<`the port's ${TMember & string} must not resolve to the port itself`>
-	: never;
+		: Extract<keyof TAdapter, "add" | "update" | "remove"> extends infer TMember
+			? [TMember] extends [never]
+				? unknown
+				: RepositoryPortViolation<`the adapter must not define ${TMember & string}; the unit of work installs it`>
+			: never;
+
+/**
+ * The keys that a port declares by name. A string index signature makes every
+ * name a key, which would count an undeclared `update` or `remove` as present.
+ * @inline
+ */
+type DeclaredKeys<T> = keyof {
+	[TKey in keyof T as string extends TKey
+		? never
+		: number extends TKey
+			? never
+			: symbol extends TKey
+				? never
+				: TKey]: T[TKey];
+};
 
 /** @inline */
 type AddConstraint<
 	TRepositoryPort,
 	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
-> = "add" extends keyof TRepositoryPort
-	? MemberAcceptsAggregate<TRepositoryPort, "add", TAggregate>
-	: RepositoryPortViolation<"the port must declare add(aggregate): void">;
+> =
+	"add" extends DeclaredKeys<TRepositoryPort>
+		? MemberAcceptsAggregate<TRepositoryPort, "add", TAggregate>
+		: RepositoryPortViolation<"the port must declare add(aggregate): void">;
 
 /** @inline */
 type UpdateConstraint<
 	TRepositoryPort,
 	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 	TAppendOnly extends boolean,
-> = "update" extends keyof TRepositoryPort
-	? boolean extends TAppendOnly
-		? RepositoryPortViolation<"the port declares update, so the definition must not set appendOnly">
+> =
+	"update" extends DeclaredKeys<TRepositoryPort>
+		? boolean extends TAppendOnly
+			? RepositoryPortViolation<"the port declares update, so the definition must not set appendOnly">
+			: [TAppendOnly] extends [true]
+				? RepositoryPortViolation<"appendOnly is true, so the port must not declare update">
+				: MemberAcceptsAggregate<TRepositoryPort, "update", TAggregate>
 		: [TAppendOnly] extends [true]
-			? RepositoryPortViolation<"appendOnly is true, so the port must not declare update">
-			: MemberAcceptsAggregate<TRepositoryPort, "update", TAggregate>
-	: [TAppendOnly] extends [true]
-		? unknown
-		: RepositoryPortViolation<"the port declares no update, so the definition must set appendOnly: true">;
+			? unknown
+			: RepositoryPortViolation<"the port declares no update, so the definition must set appendOnly: true">;
 
 /** @inline */
 type RemovalConstraint<
 	TRepositoryPort,
 	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 	TRemoval extends boolean,
-> = "remove" extends keyof TRepositoryPort
-	? [TRemoval] extends [true]
-		? MemberAcceptsAggregate<TRepositoryPort, "remove", TAggregate>
-		: RepositoryPortViolation<"the port declares remove, so the definition must set physicalRemoval: true">
-	: [TRemoval] extends [true]
-		? RepositoryPortViolation<"physicalRemoval is true, so the port must declare remove(aggregate): void">
-		: unknown;
+> =
+	"remove" extends DeclaredKeys<TRepositoryPort>
+		? [TRemoval] extends [true]
+			? MemberAcceptsAggregate<TRepositoryPort, "remove", TAggregate>
+			: RepositoryPortViolation<"the port declares remove, so the definition must set physicalRemoval: true">
+		: [TRemoval] extends [true]
+			? RepositoryPortViolation<"physicalRemoval is true, so the port must declare remove(aggregate): void">
+			: unknown;
 
 /**
  * Checks the port against every constraint of {@link defineRepository}, one
@@ -345,10 +359,7 @@ type RepositoryPortConstraint<
 				AddConstraint<TRepositoryPort, TAggregate>,
 				Then<
 					UpdateConstraint<TRepositoryPort, TAggregate, TAppendOnly>,
-					Then<
-						RemovalConstraint<TRepositoryPort, TAggregate, TRemoval>,
-						NoMemberResolvesToPort<TRepositoryPort>
-					>
+					RemovalConstraint<TRepositoryPort, TAggregate, TRemoval>
 				>
 			>
 		>;
@@ -374,7 +385,7 @@ type RepositoryDefinitionBuilder<TRepositoryPort extends object> = <
 		TRemoval,
 		TAppendOnly
 	> & {
-		readonly create: TCreate;
+		readonly create: TCreate & AdapterWritesConstraint<ReturnType<TCreate>>;
 	} & RepositoryPortConstraint<
 			TRepositoryPort,
 			TAggregate,
@@ -463,8 +474,8 @@ function assertPersistenceModelMembers(
  * aggregate, persistence, event, and lifecycle types from the adapter wiring.
  * The port must declare `add` for the aggregate. It declares `update` unless
  * the definition sets `appendOnly: true`. If it declares `remove`, the
- * definition must set `physicalRemoval: true`. No member returns a promise
- * that resolves to the port itself. A violated constraint fails
+ * definition must set `physicalRemoval: true`. The adapter that `create`
+ * returns does not define `add`, `update`, or `remove`. A violated constraint fails
  * the call with a compiler error that names the constraint. The adapter
  * created by the definition implements only the remaining methods because
  * lifecycle writes are installed by the Unit of Work.

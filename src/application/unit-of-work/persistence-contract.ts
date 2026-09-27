@@ -58,11 +58,10 @@ export type UnitOfWorkIdentityMap = Pick<
  *   `identityMap.isDeleted` as not-found (`undefined`), and returns
  *   `tracking.trackLoaded(aggregate)` after hydration. This captures the
  *   expected version before application code can mutate the instance.
- * - Adapter objects do not need lifecycle methods; the facade installs the
+ * - Adapter objects have no lifecycle methods; the facade installs the
  *   Unit-of-Work-owned `add`, `update` unless the definition is append-only,
- *   and `remove` with `physicalRemoval`. If a concrete adapter has a method
- *   named `add`, `update`, or `remove` anyway, the facade masks it, installed
- *   or not.
+ *   and `remove` with `physicalRemoval`. An adapter that defines `add`,
+ *   `update`, or `remove` fails with `InvalidRepositoryAdapterError`.
  * - Other repository methods are reads. A custom method that performs a write
  *   would bypass the Unit of Work and violates the adapter contract.
  */

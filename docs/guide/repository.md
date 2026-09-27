@@ -376,10 +376,18 @@ An append-only definition never updates, so its statements omit `update`. The
 flush above shows that shape. A definition that also sets
 `physicalRemoval: true` still supplies `remove` and `currentVersion`.
 
-The facade of an append-only repository has no `update` property. An `update`
-that the adapter defines stays hidden, as every adapter-defined lifecycle
-method does. `appendOnly` and `physicalRemoval` are independent: an
-append-only port can declare `remove` with `physicalRemoval: true`.
+The facade of an append-only repository has no `update` property.
+`appendOnly` and `physicalRemoval` are independent: an append-only port can
+declare `remove` with `physicalRemoval: true`.
+
+The adapter itself defines no `add`, `update`, or `remove`: the Unit of Work
+installs them on the facade. A typed adapter with one of them fails to compile
+on `create`, and any other adapter fails on the first run with
+`InvalidRepositoryAdapterError` and the reason `defines_lifecycle_operation`.
+The rule makes a raw adapter harmless wherever it leaves the facade, for
+example through a callback or a clone: it can only read. A fluent port member
+such as `lockForUpdate(): this` returns the facade at run time, but the adapter
+type has no `add`, so the adapter returns `this as unknown as ForStoringOrders`.
 
 The port and the options must agree. If the port declares `remove`, set
 `physicalRemoval: true`. If the port has no `remove`, omit the option.
@@ -396,9 +404,7 @@ Property '"defineRepository: the port declares remove, so the definition must se
 A port without `add` fails with the same form of error. So does a port whose
 `add`, `update`, or `remove` does not accept the aggregate of the definition,
 or returns a value such as a promise or `this`: the installed registration
-returns nothing. Any other member whose promise resolves to the port itself,
-for example `reloaded(): Promise<this>`, fails too, because the facade does
-not rewrite promises.
+returns nothing.
 An optional `update?` or `remove?` fails as well: the port must declare the
 member as required. A port that extends `ContractRepository` from the testing
 entry inherits an optional `update`, so redeclare `update` on that port. A

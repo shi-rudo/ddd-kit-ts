@@ -27,9 +27,9 @@ interface RepositoryFacadeSession<Evt extends AnyDomainEvent> {
 }
 
 /**
- * Builds the application-facing repository facade. Standard lifecycle writes
- * are always supplied by the Unit of Work; similarly named adapter methods are
- * never invoked. Other methods are bound to the adapter so classes with private
+ * Builds the application-facing repository facade. The Unit of Work supplies
+ * the lifecycle writes, and an adapter that defines its own add, update, or
+ * remove is rejected. Other methods are bound to the adapter so classes with private
  * fields keep their normal receiver. A member that returns the adapter itself
  * (a fluent `this`) returns the facade instead. A promise passes unchanged; the
  * port constraints of `defineRepository` reject a member whose promise
@@ -42,10 +42,23 @@ export function bindRepositoryWrites<TRepository, Evt extends AnyDomainEvent>(
 	repository: string,
 ): TRepository {
 	if (adapter === null || typeof adapter !== "object") {
-		throw new InvalidRepositoryAdapterError(
+		throw new InvalidRepositoryAdapterError({
 			repository,
-			adapter === null ? "null" : typeof adapter,
-		);
+			reason: "not_an_object",
+			receivedType: adapter === null ? "null" : typeof adapter,
+		});
+	}
+	// A raw adapter can leave the facade on paths no proxy can intercept: a
+	// clone, a callback argument, an iterator. Without its own lifecycle
+	// members, such an adapter can only read.
+	for (const operation of REPOSITORY_LIFECYCLE_OPERATIONS) {
+		if (hasMemberBelowObjectPrototype(adapter, operation)) {
+			throw new InvalidRepositoryAdapterError({
+				repository,
+				reason: "defines_lifecycle_operation",
+				operation,
+			});
+		}
 	}
 
 	const state = createRepositoryFacadeState(
@@ -231,8 +244,9 @@ function installRepositoryLifecycleOperations<Evt extends AnyDomainEvent>(
 			configurable: false,
 			enumerable: false,
 			writable: false,
+			// The session checks the phase itself: a registration while the
+			// transaction commits must fail the run, not only this call.
 			value: (aggregate: unknown) => {
-				state.session.assertOpen(repositoryOperationName(operation));
 				state.session[operation](
 					aggregate as Aggregate<Id<string>, Evt>,
 					state.definition,
@@ -260,16 +274,17 @@ function createRepositoryFacadeHandler<Evt extends AnyDomainEvent>(
 	return {
 		get: (target, property, receiver) => {
 			// Member reads keep the loud TransactionClosedError: a probe
-			// cannot leak state, a member read can.
-			if (isLanguagePlumbing(state, property)) {
+			// cannot leak state, a member read can. An installed lifecycle
+			// operation checks the session when it is called.
+			if (isLanguagePlumbing(state, property) || state.writes.has(property)) {
 				return Reflect.get(target, property, receiver);
 			}
 			state.session.assertOpen(repositoryOperationName(property));
 			const own = Reflect.getOwnPropertyDescriptor(target, property);
 			if (own) return Reflect.get(target, property, receiver);
 			// An installed lifecycle operation is an own property of the
-			// target, so one that reaches this line is not installed. The
-			// adapter's own method of that name stays masked.
+			// target, so one that reaches this line is not installed. An
+			// adapter that gains a method of that name later stays masked.
 			if (isRepositoryLifecycleOperation(property)) return undefined;
 			return readRepositorySource(state, property);
 		},

@@ -14,7 +14,10 @@ import {
 	UnenrolledChangesError,
 } from "../../errors/kit-errors";
 import { findInCauseChain } from "../../internal/cause-chain";
-import { IdentityMap } from "../../persistence/repository/identity-map";
+import {
+	type AggregateClass,
+	IdentityMap,
+} from "../../persistence/repository/identity-map";
 import {
 	capturePersistenceBaseline,
 	derivePersistenceChanges,
@@ -86,18 +89,28 @@ export class Session<Evt extends AnyDomainEvent> {
 	// What adapters receive: the typed read-only view, enforced at runtime.
 	// Handing out the map itself would expose set/delete/clear to JavaScript
 	// callers, and a stray clear() erases deletion tombstones and the
-	// pending-event baselines behind UnenrolledChangesError.
+	// pending-event baselines behind UnenrolledChangesError. A view that an
+	// adapter keeps answers empty once the session is no longer open, so it
+	// cannot serve an instance after its attempt ended.
 	private readonly _identityMapView = Object.freeze({
-		get: this._identityMap.get.bind(this._identityMap),
-		has: this._identityMap.has.bind(this._identityMap),
-		isDeleted: this._identityMap.isDeleted.bind(this._identityMap),
+		get: (type: AggregateClass<unknown>, id: Id<string>) =>
+			this._phase === "open" ? this._identityMap.get(type, id) : undefined,
+		has: (type: AggregateClass<unknown>, id: Id<string>) =>
+			this._phase === "open" && this._identityMap.has(type, id),
+		isDeleted: (type: AggregateClass<unknown>, id: Id<string>) =>
+			this._phase === "open" && this._identityMap.isDeleted(type, id),
 	}) as UnitOfWorkIdentityMap;
 	private readonly _trackingByAggregate = new WeakMap<
 		Aggregate<Id<string>, Evt>,
 		TrackedAggregate<Evt>
 	>();
 	private readonly _trackedAggregates = new Set<TrackedAggregate<Evt>>();
-	private _closed = false;
+	/**
+	 * `committing`: the callback settled and the flush ran; the transaction
+	 * still has to commit. Use is closed, but a registration in this phase
+	 * also fails the run, because its write can no longer join.
+	 */
+	private _phase: "open" | "committing" | "closed" = "open";
 	/**
 	 * Set when the flush starts. A write registered after that point would be
 	 * committed and harvested without its flush, so it is rejected, and the
@@ -194,9 +207,9 @@ export class Session<Evt extends AnyDomainEvent> {
 		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void {
-		this.assertOpen("repository.add");
 		requirePendingEventLifecycleReadView(aggregate, "repository.add");
 		this.assertWritesOpen(aggregate, "add");
+		this.assertOpen("repository.add");
 		this.assertNotRemoved(aggregate, definition);
 		const existing = this._trackingByAggregate.get(aggregate);
 		if (existing && existing.definition !== definition) {
@@ -273,9 +286,9 @@ export class Session<Evt extends AnyDomainEvent> {
 		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void {
-		this.assertOpen("repository.update");
 		requirePendingEventLifecycleReadView(aggregate, "repository.update");
 		this.assertWritesOpen(aggregate, "update");
+		this.assertOpen("repository.update");
 		const entry = this.loadedEntryFor(aggregate, "update", definition);
 		this.registerWrite(entry, "update", definition);
 	}
@@ -284,9 +297,9 @@ export class Session<Evt extends AnyDomainEvent> {
 		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void {
-		this.assertOpen("repository.remove");
 		requirePendingEventLifecycleReadView(aggregate, "repository.remove");
 		this.assertWritesOpen(aggregate, "remove");
+		this.assertOpen("repository.remove");
 		// Idempotent by reference, like add and update: a repeated remove of
 		// the SAME instance re-declares the same final lifecycle outcome
 		// (collection semantics; the enrollment layer already returns the
@@ -296,6 +309,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		// reject.
 		const entry = this._trackingByAggregate.get(aggregate);
 		if (this.isRemovedInstance(aggregate) && entry?.definition === definition) {
+			this.assertUnchangedAfterRegistration(entry, "remove");
 			return;
 		}
 		const loaded = this.loadedEntryFor(aggregate, "remove", definition);
@@ -593,28 +607,25 @@ export class Session<Evt extends AnyDomainEvent> {
 	}
 
 	/**
-	 * Closes the session for use but keeps its tracked state, so that
-	 * {@link assertReadyToCommit} can still run just before the commit.
-	 * {@link close} releases the state afterwards.
+	 * Closes the session for use while the transaction commits.
+	 * {@link assertReadyToCommit} still runs on the tracked state.
 	 */
 	public closeForCommit(): void {
-		this._closed = true;
+		this._phase = "committing";
 	}
 
+	/**
+	 * Ends the session. The tracked state stays: a scope that abandons an
+	 * attempt can still reach its pre-commit check, which must see the
+	 * attempt's own state. Leaked views answer empty once the phase is not
+	 * open, so the state cannot serve a later operation.
+	 */
 	public close(): void {
-		this._closed = true;
-		// Defensive: a leaked direct IdentityMap reference must not serve
-		// stale instances into a later operation (that would silently
-		// bypass OCC). The session getter already throws after close;
-		// clearing covers refs captured before.
-		this._identityMap.clear();
-		this._trackedAggregates.clear();
-		this._registeredWrites.length = 0;
-		this._commitTokens.clear();
+		this._phase = "closed";
 	}
 
 	public assertOpen(operation: string): void {
-		if (this._closed) {
+		if (this._phase !== "open") {
 			throw new TransactionClosedError(operation);
 		}
 	}
@@ -623,7 +634,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		aggregate: Aggregate<Id<string>, Evt>,
 		operation: "add" | "update" | "remove",
 	): void {
-		if (!this._writesSealed) return;
+		if (!this._writesSealed || this._phase === "closed") return;
 		// A repeat of a registered write is a no-op by reference: the write
 		// is already part of the flush, so it passes on to the normal path,
 		// which still rejects a change after the registration.

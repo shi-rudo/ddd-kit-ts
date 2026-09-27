@@ -114,6 +114,8 @@ export {
 	InvalidFlushStatementError,
 	type InvalidFlushStatementErrorOptions,
 	InvalidRepositoryAdapterError,
+	type InvalidRepositoryAdapterErrorOptions,
+	type InvalidRepositoryAdapterReason,
 	InvalidRepositoryDefinitionError,
 	NestedUnitOfWorkError,
 	RepositoryErrorMappingFailedError,

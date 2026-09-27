@@ -67,24 +67,8 @@ class SqlOrderAdapter {
 	}
 }
 
-class ExtendedOrderAdapter extends SqlOrderAdapter {
+class WritingOrderAdapter extends SqlOrderAdapter {
 	add(_order: Order): void {}
-	update(_order: Order): void {}
-	async reloaded(): Promise<this> {
-		return this;
-	}
-	lockForUpdate(): this {
-		return this;
-	}
-	async count(): Promise<number> {
-		return 0;
-	}
-	neverSettles(): Promise<never> {
-		return new Promise(() => {});
-	}
-	async untyped(): Promise<any> {
-		return undefined;
-	}
 }
 
 interface ForStoringOrders {
@@ -134,19 +118,18 @@ interface ForStoringOrdersFluently {
 	update(order: Order): this;
 }
 
+interface ForStoringOrdersWithIndex extends ForStoringOrders {
+	readonly [facet: string]: unknown;
+}
+
+interface ForStoringOrdersUntyped {
+	findById(id: OrderId): Promise<Order | null>;
+	add(order: Order): any;
+	update(order: Order): void;
+}
+
 interface ForRemovingOrdersAsynchronously extends ForStoringOrders {
 	remove(order: Order): Promise<void>;
-}
-
-interface ForStoringOrdersAfterReload extends ForStoringOrders {
-	reloaded(): Promise<this>;
-}
-
-interface ForStoringOrdersWithFluentLock extends ForStoringOrders {
-	lockForUpdate(): this;
-	count(): Promise<number>;
-	neverSettles(): Promise<never>;
-	untyped(): Promise<any>;
 }
 
 type PaymentEvent = DomainEvent<"PaymentCaptured", { readonly paymentId: string }>;
@@ -237,11 +220,6 @@ const adapterWiring = `
 	mapError: (error) => new OrderStoreUnavailableError(error),
 `;
 
-const extendedAdapterWiring = adapterWiring.replace(
-	"new SqlOrderAdapter(tracking)",
-	"new ExtendedOrderAdapter(tracking)",
-);
-
 const probes = {
 	"complete-port": `defineRepository<ForStoringOrders>()({${adapterWiring}});`,
 	"complete-port-with-removal": `defineRepository<ForRemovingOrders>()({
@@ -270,8 +248,15 @@ const probes = {
 	"remove-with-boolean-removal": `defineRepository<ForRemovingOrders>()({
 	physicalRemoval: removalFlag,${adapterWiring}});`,
 	"async-add": `defineRepository<ForStoringOrdersAsynchronously>()({${adapterWiring}});`,
-	"member-resolving-to-port": `defineRepository<ForStoringOrdersAfterReload>()({${extendedAdapterWiring}});`,
-	"fluent-and-async-members": `defineRepository<ForStoringOrdersWithFluentLock>()({${extendedAdapterWiring}});`,
+	"untyped-add": `defineRepository<ForStoringOrdersUntyped>()({${adapterWiring}});`,
+	"port-with-index-signature": `defineRepository<ForStoringOrdersWithIndex>()({${adapterWiring.replace(
+		"new SqlOrderAdapter(tracking)",
+		"({ findById: async (_id: OrderId) => (void tracking, null) })",
+	)}});`,
+	"adapter-with-add": `defineRepository<ForStoringOrders>()({${adapterWiring.replace(
+		"new SqlOrderAdapter(tracking)",
+		"new WritingOrderAdapter(tracking)",
+	)}});`,
 	"fluent-update": `defineRepository<ForStoringOrdersFluently>()({${adapterWiring}});`,
 	"async-remove": `defineRepository<ForRemovingOrdersAsynchronously>()({
 	physicalRemoval: true,${adapterWiring}});`,
@@ -396,8 +381,18 @@ describe("defineRepository compile-time diagnostics", () => {
 		expect(diagnosticsOf("any-port")).toEqual([]);
 	});
 
-	it("accepts a synchronous fluent member and promises that do not resolve to the port", () => {
-		expect(diagnosticsOf("fluent-and-async-members")).toEqual([]);
+	it("reports one error on create that names an adapter defining add", () => {
+		const diagnostics = diagnosticsOf("adapter-with-add");
+
+		expect(diagnostics).toHaveLength(1);
+		expect(diagnostics[0]?.target).toContain("create");
+		expect(diagnostics[0]?.message).toContain(
+			"the adapter must not define add; the unit of work installs it",
+		);
+	});
+
+	it("accepts a port with a string index signature", () => {
+		expect(diagnosticsOf("port-with-index-signature")).toEqual([]);
 	});
 
 	it("accepts a port without update when appendOnly is true", () => {
@@ -449,10 +444,7 @@ describe("defineRepository compile-time diagnostics", () => {
 			"the port's remove must accept the definition's aggregate",
 		],
 		["async-add", "the port's add must return void"],
-		[
-			"member-resolving-to-port",
-			"the port's reloaded must not resolve to the port itself",
-		],
+		["untyped-add", "the port's add must return void"],
 		["fluent-update", "the port's update must return void"],
 		["async-remove", "the port's remove must return void"],
 		["union-port", "the port must be one object type, not a union"],
