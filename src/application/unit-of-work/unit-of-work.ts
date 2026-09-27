@@ -268,20 +268,18 @@ type ReturnsWhatTheRegistrationReturns<TDeclared, TInstalled> = 0 extends 1 &
 		: false;
 
 /**
- * Rejects an adapter type that declares its own `add`, `update`, or `remove`.
+ * What an adapter type may say about `add`, `update`, and `remove`: nothing.
  * The Unit of Work installs them on the facade, and a raw adapter that can
- * write would bypass it wherever it leaves the facade.
+ * write would bypass it wherever it leaves the facade. As a bound on the
+ * adapter type, the rule also holds for a generic adapter and for each
+ * member of a union.
  * @inline
  */
-type AdapterWritesConstraint<TAdapter> = unknown extends TAdapter
-	? unknown
-	: 0 extends 1 & TAdapter
-		? unknown
-		: Extract<keyof TAdapter, "add" | "update" | "remove"> extends infer TMember
-			? [TMember] extends [never]
-				? unknown
-				: RepositoryPortViolation<`the adapter must not define ${TMember & string}; the unit of work installs it`>
-			: never;
+type LifecycleFreeAdapter = {
+	readonly add?: RepositoryPortViolation<"the adapter must not define add; the unit of work installs it">;
+	readonly update?: RepositoryPortViolation<"the adapter must not define update; the unit of work installs it">;
+	readonly remove?: RepositoryPortViolation<"the adapter must not define remove; the unit of work installs it">;
+};
 
 /**
  * The keys that a port declares by name. A string index signature makes every
@@ -370,7 +368,8 @@ type RepositoryDefinitionBuilder<TRepositoryPort extends object> = <
 	TCreate extends (
 		transaction: never,
 		tracking: RepositoryTracking<TAggregate>,
-	) => Omit<TRepositoryPort, "add" | "update" | "remove">,
+	) => Omit<TRepositoryPort, "add" | "update" | "remove"> &
+		LifecycleFreeAdapter,
 	TBaseline,
 	TChangeSet,
 	TRemoval extends boolean = false,
@@ -385,7 +384,7 @@ type RepositoryDefinitionBuilder<TRepositoryPort extends object> = <
 		TRemoval,
 		TAppendOnly
 	> & {
-		readonly create: TCreate & AdapterWritesConstraint<ReturnType<TCreate>>;
+		readonly create: TCreate;
 	} & RepositoryPortConstraint<
 			TRepositoryPort,
 			TAggregate,
