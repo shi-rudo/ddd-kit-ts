@@ -3032,6 +3032,61 @@ describe("UnitOfWork", () => {
 			expect(readDuringBackoff).toBeInstanceOf(TransactionClosedError);
 		});
 
+		it("checks an abandoned attempt against its own session when the scope still commits it", async () => {
+			let reachOutbox!: () => void;
+			const outboxReached = new Promise<void>((resolve) => {
+				reachOutbox = resolve;
+			});
+			let releaseOutbox!: () => void;
+			const outboxReleased = new Promise<void>((resolve) => {
+				releaseOutbox = resolve;
+			});
+			let outboxCalls = 0;
+			const outbox: Outbox<TestEvent> = {
+				add: async () => {
+					outboxCalls += 1;
+					if (outboxCalls === 1) {
+						reachOutbox();
+						await outboxReleased;
+					}
+				},
+				getPending: async () => [],
+				markDispatched: async () => {},
+			};
+			// Breaks the scope contract on purpose: it starts a second attempt
+			// and then still commits the first one.
+			const scope: TransactionScope<undefined> = {
+				transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
+					const first = fn(undefined);
+					await outboxReached;
+					void fn(undefined).catch(() => undefined);
+					releaseOutbox();
+					return first;
+				},
+			};
+			const { uow } = createUow({ scope, outbox });
+			const order = createMockAggregate("o-1", [testEvent("o-1")]);
+			const other = createMockAggregate("o-2");
+			let attempt = 0;
+
+			const rejection = await uow
+				.run(async ({ repositories }) => {
+					attempt += 1;
+					if (attempt === 1) {
+						repositories.orders.trackLoaded(other);
+						repositories.orders.add(order);
+						void outboxReached.then(() => other.change(testEvent("o-2")));
+					}
+					return undefined;
+				})
+				.then(
+					() => "committed",
+					(error: unknown) => error,
+				);
+
+			expect(rejection).toBeInstanceOf(UnenrolledChangesError);
+		});
+
 		it("an abandoned attempt that throws late does not relabel the failure of the live attempt", async () => {
 			const lateFailure = new Error("abandoned attempt fails late");
 			const commitFailure = new Error("live attempt fails at COMMIT");

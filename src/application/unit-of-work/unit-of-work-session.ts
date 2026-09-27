@@ -606,24 +606,21 @@ export class Session<Evt extends AnyDomainEvent> {
 	}
 
 	/**
-	 * Closes the session for use but keeps its tracked state, so that
-	 * {@link assertReadyToCommit} can still run just before the commit.
-	 * {@link close} releases the state afterwards.
+	 * Closes the session for use while the transaction commits.
+	 * {@link assertReadyToCommit} still runs on the tracked state.
 	 */
 	public closeForCommit(): void {
 		this._phase = "committing";
 	}
 
+	/**
+	 * Ends the session. The tracked state stays: a scope that abandons an
+	 * attempt can still reach its pre-commit check, which must see the
+	 * attempt's own state. Leaked views answer empty once the phase is not
+	 * open, so the state cannot serve a later operation.
+	 */
 	public close(): void {
 		this._phase = "closed";
-		// Defensive: a leaked direct IdentityMap reference must not serve
-		// stale instances into a later operation (that would silently
-		// bypass OCC). The session getter already throws after close;
-		// clearing covers refs captured before.
-		this._identityMap.clear();
-		this._trackedAggregates.clear();
-		this._registeredWrites.length = 0;
-		this._commitTokens.clear();
 	}
 
 	public assertOpen(operation: string): void {
