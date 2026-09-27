@@ -295,12 +295,11 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 			}
 			if (sourceCursor?.aggregateVersion === position.aggregateVersion) {
 				if (sourceCursor.commitSize !== position.commitSize) {
-					throw new EventHarvestError(
-						`InMemoryOutbox rejected event "${event.eventId}" for ` +
-							`${describeAggregateIdentity(source)}: aggregate version ` +
-							`${position.aggregateVersion} was already recorded with commitSize ` +
-							`${sourceCursor.commitSize}, not ${position.commitSize}.`,
-						event.type,
+					throw commitSizeMismatchError(
+						event,
+						source,
+						position,
+						sourceCursor.commitSize,
 					);
 				}
 				const positionOwner = sourceCursor.eventIdsBySequence.get(
@@ -547,12 +546,11 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				continue;
 			}
 			if (cursor.commitSize !== position.commitSize) {
-				throw new EventHarvestError(
-					`InMemoryOutbox rejected event "${event.eventId}" for ` +
-						`${describeAggregateIdentity(source)}: aggregate version ` +
-						`${position.aggregateVersion} was already recorded with commitSize ` +
-						`${cursor.commitSize}, not ${position.commitSize}.`,
-					event.type,
+				throw commitSizeMismatchError(
+					event,
+					source,
+					position,
+					cursor.commitSize,
 				);
 			}
 			const positionOwner = cursor.eventIdsBySequence.get(
@@ -626,9 +624,10 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 	/**
 	 * Rejects a new event of an ended source above its head. An exact retry of
 	 * a stored event of an ended source stays a retry; the caller skips
-	 * retries at the source head before this check. A candidate below the
-	 * head, or at a position that another event owns, is left to the
-	 * stale-head and position checks, which name both possible causes.
+	 * retries at the source head before this check. The stale-head, commit
+	 * size, and position checks reject a candidate below the head or at a
+	 * position that another event owns, and their messages name the
+	 * re-created identity as a cause.
 	 */
 	private assertSourceNotEnded(
 		event: AnyDomainEvent,
@@ -810,6 +809,23 @@ function assertReceiptShape(
 			`commitSize=${recorded.commitSize}) to (${received.aggregateVersion}, ` +
 			`${received.commitSequence}; commitSize=${received.commitSize}). ` +
 			"An exact redelivery must keep its source position immutable.",
+		event.type,
+	);
+}
+
+function commitSizeMismatchError(
+	event: { readonly eventId: string; readonly type: string },
+	source: AggregateIdentity,
+	position: EventCommitCandidatePosition,
+	recordedCommitSize: number,
+): EventHarvestError {
+	return new EventHarvestError(
+		`InMemoryOutbox rejected event "${event.eventId}" for ` +
+			`${describeAggregateIdentity(source)}: aggregate version ` +
+			`${position.aggregateVersion} was already recorded with commitSize ` +
+			`${recordedCommitSize}, not ${position.commitSize}. An aggregate that ` +
+			"was removed and created again under the same identity causes this " +
+			"too; the kit does not support that, so give the new aggregate a new id.",
 		event.type,
 	);
 }

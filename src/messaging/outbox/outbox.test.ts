@@ -695,6 +695,34 @@ describe("InMemoryOutbox", () => {
 		);
 	});
 
+	it("names a re-created identity as a cause when a new event of an ended source takes an owned head position with another commit size", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>();
+		const event = (eventId: string) =>
+			createDomainEvent(
+				"OrderCreated",
+				{ orderId: "o-1" },
+				{ eventId, aggregateId: "o-1", aggregateType: "Order" },
+			);
+		await outbox.add([candidate(event("evt-removed-v1"), 1)]);
+		await outbox.endEventSources([
+			{ aggregateType: "Order", aggregateId: "o-1" },
+		]);
+		const recreated = {
+			...candidate(event("evt-recreated-v1"), 1),
+			position: { aggregateVersion: 1, commitSequence: 0, commitSize: 2 },
+		};
+
+		const rejection = await outbox.add([recreated]).then(
+			() => "accepted",
+			(error: unknown) => error,
+		);
+
+		expect(rejection).toBeInstanceOf(EventHarvestError);
+		expect((rejection as EventHarvestError).message).toMatch(
+			/removed and created again under the same identity/,
+		);
+	});
+
 	it("names a re-created identity as a cause when a new event lands below the source head", async () => {
 		const outbox = new InMemoryOutbox<OrderCreated>();
 		const event = (eventId: string) =>
