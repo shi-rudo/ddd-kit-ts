@@ -93,15 +93,15 @@ export type IdempotencyClaim =
  * production pattern and the only family that proves atomic command effect +
  * idempotency completion without reconciliation.
  *
- * A NON-transactional store (the in-memory reference, a separate durable
- * store) cannot see commits or rollbacks. Every fresh claim therefore returns
- * a store-minted token and bounded lease. The wrapper renews it while the
- * transaction runs; `complete`, `renew`, `confirm`, `abandon`, and `reconcile`
- * compare the token so a stale owner cannot mutate a successor claim. An
- * expired PENDING claim may be replaced. An expired STAGED outcome is never
- * replayed or released automatically: `claim` returns
- * `reconciliation-required`, and the application must consult the source of
- * truth. `unknown` keeps it blocked.
+ * A NON-transactional store (the in-memory reference on its own, a separate
+ * durable store) cannot see commits or rollbacks. Every fresh claim
+ * therefore returns a store-minted token and bounded lease. The wrapper
+ * renews it while the transaction runs; `complete`, `renew`, `confirm`,
+ * `abandon`, and `reconcile` compare the token so a stale owner cannot
+ * mutate a successor claim. An expired PENDING claim may be replaced. An
+ * expired STAGED outcome is never replayed or released automatically:
+ * `claim` returns `reconciliation-required`, and the application must
+ * consult the source of truth. `unknown` keeps it blocked.
  *
  * A lease is coordination, not a security or exactly-once boundary. To return
  * `not-committed` safely, the source transaction must persist an idempotency

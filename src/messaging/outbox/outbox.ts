@@ -13,6 +13,10 @@ import {
 	assertPositiveSafeInteger,
 } from "../../internal/validate";
 import type {
+	InMemoryTransaction,
+	InMemoryTransactionParticipant,
+} from "../../persistence/repository/in-memory-transaction";
+import type {
 	EventCommitCandidate,
 	EventCommitCandidatePosition,
 } from "../committed-event";
@@ -117,10 +121,10 @@ type DispatchedEventReceipt = {
  * recent-dispatch receipt cache keeps retries idempotent after acknowledgement.
  * Re-adding a pending event refreshes the stored commit envelope while the
  * delivery attempt count survives. Its commit sequence and size remain
- * immutable; only this transaction-unaware adapter may move a still-pending
- * event to another aggregate version after an outer rollback leaked the first
- * add. Dead-lettered and acknowledged retries must match the complete original
- * candidate receipt. Reusing an `eventId` for another source or commit position
+ * immutable. Only this in-memory adapter may move a still-pending event to
+ * another aggregate version. Without an `InMemoryTransactionScope`, it keeps
+ * the first add of a rolled-back attempt. Dead-lettered and acknowledged
+ * retries must match the complete original candidate receipt. Reusing an `eventId` for another source or commit position
  * throws {@link EventHarvestError} while the pending, dead-letter, or bounded
  * dispatched receipt still proves the collision. Insertion order is preserved:
  * `getPending` returns records in commit order, as the port contract requires.
@@ -148,15 +152,21 @@ type DispatchedEventReceipt = {
  * that are never `markDispatched` accumulate until `maxRecords` rejects a new
  * add, or without that option grow unbounded. For a deliberate no-delivery
  * setup use {@link outboxWriterAcceptingEventLoss} instead. Sharper still:
- * events `add()`ed inside a transaction that later rolls back are NOT
- * removed (the Map knows nothing about your scope's rollback), and a source
+ * on its own, the outbox knows nothing about your scope's rollback. Events
+ * `add()`ed inside a transaction that later rolls back stay, and a source
  * that `endEventSources` ended inside such a transaction stays ended: the
- * outbox rejects every later event of that aggregate, also on the retry of
- * a `RetryingTransactionScope`. Tests that roll back or retry a removal, or
- * that assert rollback purity, need an outbox that participates in the
- * test store's transactional semantics; see the reference adapter at
- * https://github.com/shi-rudo/ddd-kit-ts/blob/main/src/testing/repository-contract.test.ts
- * (repo-only, not shipped to npm).
+ * outbox then rejects every later event of that aggregate, also on the retry
+ * of a `RetryingTransactionScope`. For tests that roll back or retry,
+ * register the outbox with an `InMemoryTransactionScope`. A rollback then
+ * returns the outbox to its state at the start of the attempt.
+ *
+ * A relay reads only committed records. While a transaction is open,
+ * `getPending` returns a record that the transaction wrote as it was
+ * committed at the first write, with its current attempts. It skips a record
+ * that was not pending at that write, such as a new or a requeued record. A
+ * rollback also undoes an acknowledgement or a failure report that a
+ * dispatcher made while the transaction was open. The dispatcher then
+ * delivers that record again.
  *
  * @example
  * ```ts
@@ -175,7 +185,7 @@ type DispatchedEventReceipt = {
  * ```
  */
 export class InMemoryOutbox<Evt extends AnyDomainEvent>
-	implements DispatchTrackingOutbox<Evt>
+	implements DispatchTrackingOutbox<Evt>, InMemoryTransactionParticipant
 {
 	private readonly pending = new Map<string, TrackedRecord<Evt>>();
 	private readonly dead = new Map<string, DeadLetterRecord<Evt>>();
@@ -188,6 +198,13 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 		string,
 		DispatchedEventReceipt
 	>();
+	/**
+	 * The committed pending record of each event id that the open transaction
+	 * wrote, captured at its first write. `undefined` marks an id without one.
+	 */
+	private committedVersions:
+		| Map<string, TrackedRecord<Evt> | undefined>
+		| undefined;
 	private readonly maxDeliveryAttempts: number;
 	private readonly maxRetainedDispatchedEventIds: number;
 	private readonly maxRecords: number | undefined;
@@ -251,8 +268,8 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 			if (existing !== undefined) {
 				assertSameEventSource(event, source, existing.source);
 				// A pending record may move to another aggregateVersion only because
-				// this in-memory adapter cannot observe rollback and the same event is
-				// re-harvested. Its index and commit cardinality remain immutable.
+				// an unregistered outbox cannot observe a rollback and the same event
+				// is re-harvested. Its index and commit cardinality remain immutable.
 				assertSameCandidateReceiptAllowingVersionRefresh(
 					event,
 					position,
@@ -265,6 +282,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				// Requeue the durable record exactly as committed. A dead letter is a
 				// delivery state, not a new aggregate commit to re-finalize.
 				this.dead.delete(event.eventId);
+				this.recordCommittedVersion(event.eventId);
 				this.pending.set(event.eventId, {
 					dispatchId: deadLetter.dispatchId,
 					event: deadLetter.event,
@@ -314,7 +332,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				existing !== undefined &&
 				existing.position.aggregateVersion !== position.aggregateVersion;
 			if (refreshesLeakedCommit) {
-				// InMemoryOutbox cannot observe transaction rollback. A pending
+				// An unregistered outbox cannot observe a rollback. A pending
 				// record with the same eventId but a new commit version is therefore
 				// a replacement for the leaked attempt, not its successor. Preserve
 				// the event-source predecessor and move the in-memory source head.
@@ -382,11 +400,13 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				// eventId with a new commit position. Dispatching the stale
 				// envelope would hand consumers a position from a commit that
 				// never happened. Attempts belong to delivery, so they survive.
+				this.recordCommittedVersion(event.eventId);
 				existing.event = event;
 				existing.source = ownedSource;
 				existing.position = ownedPosition;
 				continue;
 			}
+			this.recordCommittedVersion(event.eventId);
 			this.pending.set(event.eventId, {
 				dispatchId: event.eventId,
 				event,
@@ -584,14 +604,19 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				? Math.max(0, Number.isNaN(limit) ? 0 : limit)
 				: Number.POSITIVE_INFINITY;
 		const batch: Array<OutboxRecord<Evt>> = [];
-		for (const record of this.pending.values()) {
+		const versions = this.committedVersions;
+		for (const [eventId, live] of this.pending) {
 			if (batch.length >= max) break;
+			const committed = versions?.has(eventId) ? versions.get(eventId) : live;
+			if (committed === undefined) continue;
 			batch.push({
-				dispatchId: record.dispatchId,
-				event: record.event,
-				source: record.source,
-				position: record.position,
-				attempts: record.attempts,
+				dispatchId: committed.dispatchId,
+				event: committed.event,
+				source: committed.source,
+				position: committed.position,
+				// Attempts are delivery state that a dispatcher writes outside
+				// the transaction, so they come from the live record.
+				attempts: live.attempts,
 			});
 		}
 		return batch;
@@ -604,10 +629,64 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				this.rememberDispatched(id, record.source, record.position);
 			}
 			this.pending.delete(id);
+			this.forgetCommittedVersion(id);
 			// Manual redelivery then ack: dispatching a dead-lettered record
 			// clears it too.
 			this.dead.delete(id);
 		}
+	}
+
+	/**
+	 * Records the state that a rollback of an `InMemoryTransactionScope`
+	 * returns to: pending and dead-letter records, receipts, source cursors,
+	 * and ended sources, in their order. Until the transaction ends,
+	 * `getPending` returns the committed record of each event id that the
+	 * transaction writes.
+	 */
+	beginTransaction(): InMemoryTransaction {
+		const pending = [...this.pending].map(
+			([id, record]) => [id, { ...record }] as const,
+		);
+		const dead = [...this.dead];
+		const receipts = [...this.dispatchedEventIds];
+		const cursors = [...this.sourceCursors];
+		const ended = [...this.endedSourceKeys];
+		const versions = new Map<string, TrackedRecord<Evt> | undefined>();
+		this.committedVersions = versions;
+		const end = () => {
+			if (this.committedVersions === versions) {
+				this.committedVersions = undefined;
+			}
+		};
+		return {
+			commit: end,
+			rollback: () => {
+				refill(this.pending, pending);
+				refill(this.dead, dead);
+				refill(this.dispatchedEventIds, receipts);
+				refill(this.sourceCursors, cursors);
+				this.endedSourceKeys.clear();
+				for (const key of ended) this.endedSourceKeys.add(key);
+				end();
+			},
+		};
+	}
+
+	/** A record that a dispatcher removed is no longer pending in the committed state. */
+	private forgetCommittedVersion(eventId: string): void {
+		if (this.committedVersions?.has(eventId)) {
+			this.committedVersions.set(eventId, undefined);
+		}
+	}
+
+	private recordCommittedVersion(eventId: string): void {
+		const versions = this.committedVersions;
+		if (versions === undefined || versions.has(eventId)) return;
+		const committed = this.pending.get(eventId);
+		versions.set(
+			eventId,
+			committed === undefined ? undefined : { ...committed },
+		);
 	}
 
 	async endEventSources(
@@ -733,6 +812,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 			error instanceof Error ? error.message : String(error ?? "unknown");
 		if (record.attempts >= this.maxDeliveryAttempts) {
 			this.pending.delete(dispatchId);
+			this.forgetCommittedVersion(dispatchId);
 			const deadLetter: DeadLetterRecord<Evt> = {
 				dispatchId: record.dispatchId,
 				event: record.event,
@@ -775,9 +855,10 @@ function assertSameCandidateReceipt(
 }
 
 /**
- * The lenient variant for PENDING records only: this in-memory adapter
- * cannot observe rollback, so a re-harvested event may legitimately arrive
- * at a new aggregateVersion. Index and commit cardinality stay immutable.
+ * The lenient variant for PENDING records only: an outbox without an
+ * `InMemoryTransactionScope` cannot observe a rollback, so a re-harvested
+ * event may legitimately arrive at a new aggregateVersion. Index and commit
+ * cardinality stay immutable.
  */
 function assertSameCandidateReceiptAllowingVersionRefresh(
 	event: AnyDomainEvent,
@@ -811,6 +892,15 @@ function assertReceiptShape(
 			"An exact redelivery must keep its source position immutable.",
 		event.type,
 	);
+}
+
+/** Replaces the entries of a map with recorded ones, in their order. */
+function refill<K, V>(
+	map: Map<K, V>,
+	entries: Iterable<readonly [K, V]>,
+): void {
+	map.clear();
+	for (const [key, value] of entries) map.set(key, value);
 }
 
 function commitSizeMismatchError(

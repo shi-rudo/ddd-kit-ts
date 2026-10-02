@@ -7,6 +7,7 @@ import {
 	EventHarvestError,
 	InMemoryCapacityExceededError,
 } from "../../errors/kit-errors";
+import { InMemoryTransactionScope } from "../../persistence/repository/adapters/in-memory-transaction-scope";
 import type { EventCommitCandidate } from "../committed-event";
 import { InMemoryOutbox, outboxWriterAcceptingEventLoss } from "./outbox";
 
@@ -29,6 +30,320 @@ function candidate(
 		},
 	};
 }
+
+describe("InMemoryOutbox in an InMemoryTransactionScope", () => {
+	const orderEvent = (eventId: string, orderId = "o-1") =>
+		createDomainEvent(
+			"OrderCreated",
+			{ orderId },
+			{ eventId, aggregateId: orderId, aggregateType: "Order" },
+		);
+	const failed = (work: Promise<unknown>) =>
+		work.then(
+			() => "committed",
+			(error: unknown) => error,
+		);
+
+	async function holdOpen(
+		scope: InMemoryTransactionScope,
+		work: () => Promise<void>,
+	): Promise<{ commit(): Promise<void> }> {
+		let release!: () => void;
+		const released = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let workDone!: () => void;
+		const workFinished = new Promise<void>((resolve) => {
+			workDone = resolve;
+		});
+		const transaction = scope.transactional(async () => {
+			await work();
+			workDone();
+			await released;
+		});
+		await workFinished;
+		return {
+			commit: async () => {
+				release();
+				await transaction;
+			},
+		};
+	}
+	const pendingIds = async (outbox: InMemoryOutbox<OrderCreated>) =>
+		(await outbox.getPending()).map((record) => record.event.eventId);
+
+	it("hides the records of an open transaction from getPending until the commit", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>();
+		const scope = new InMemoryTransactionScope([outbox]);
+		await scope.transactional(() =>
+			outbox.add([candidate(orderEvent("evt-1", "o-1"), 1)]),
+		);
+
+		const transaction = await holdOpen(scope, () =>
+			outbox.add([candidate(orderEvent("evt-2", "o-2"), 1)]),
+		);
+		const duringTransaction = await pendingIds(outbox);
+		await transaction.commit();
+
+		expect(duringTransaction).toEqual(["evt-1"]);
+		expect(await pendingIds(outbox)).toEqual(["evt-1", "evt-2"]);
+	});
+
+	it("hides a dead letter that an open transaction requeued", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>({ maxDeliveryAttempts: 1 });
+		const scope = new InMemoryTransactionScope([outbox]);
+		const event = orderEvent("evt-1");
+		await scope.transactional(() => outbox.add([candidate(event, 1)]));
+		await outbox.markFailed("evt-1", new Error("broker down"));
+
+		const transaction = await holdOpen(scope, () =>
+			outbox.add([candidate(event, 1)]),
+		);
+		const duringTransaction = await pendingIds(outbox);
+		await transaction.commit();
+
+		expect(duringTransaction).toEqual([]);
+		expect(await pendingIds(outbox)).toEqual(["evt-1"]);
+	});
+
+	it("returns the committed copy of a record that an open transaction refreshed", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>();
+		const scope = new InMemoryTransactionScope([outbox]);
+		const first = orderEvent("evt-1");
+		await outbox.add([candidate(first, 1)]);
+		await outbox.add([candidate(orderEvent("evt-2"), 2)]);
+
+		const transaction = await holdOpen(scope, () =>
+			outbox.add([candidate(first, 3)]),
+		);
+		const duringTransaction = await outbox.getPending();
+		await transaction.commit();
+		const afterCommit = await outbox.getPending();
+
+		expect(
+			duringTransaction.map((record) => [
+				record.event.eventId,
+				record.position.aggregateVersion,
+			]),
+		).toEqual([
+			["evt-1", 1],
+			["evt-2", 2],
+		]);
+		expect(
+			afterCommit.map((record) => [
+				record.event.eventId,
+				record.position.aggregateVersion,
+			]),
+		).toEqual([
+			["evt-1", 3],
+			["evt-2", 2],
+		]);
+	});
+
+	it("keeps a committed record visible when an open transaction retries it exactly", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>();
+		const scope = new InMemoryTransactionScope([outbox]);
+		const first = orderEvent("evt-1");
+		await scope.transactional(() => outbox.add([candidate(first, 1)]));
+		await scope.transactional(() =>
+			outbox.add([candidate(orderEvent("evt-2"), 2)]),
+		);
+
+		const transaction = await holdOpen(scope, () =>
+			outbox.add([candidate(first, 1)]),
+		);
+		const duringTransaction = await pendingIds(outbox);
+		await transaction.commit();
+
+		expect(duringTransaction).toEqual(["evt-1", "evt-2"]);
+	});
+
+	async function afterBeginAndOutsideWrite(
+		scope: InMemoryTransactionScope,
+		outsideWrite: () => Promise<unknown>,
+		transactionWrite: () => Promise<void>,
+	) {
+		let began!: () => void;
+		const transactionBegan = new Promise<void>((resolve) => {
+			began = resolve;
+		});
+		let outsideWritten!: () => void;
+		const outsideWriteDone = new Promise<void>((resolve) => {
+			outsideWritten = resolve;
+		});
+		let written!: () => void;
+		const transactionWritten = new Promise<void>((resolve) => {
+			written = resolve;
+		});
+		let release!: () => void;
+		const released = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const transaction = scope.transactional(async () => {
+			began();
+			await outsideWriteDone;
+			await transactionWrite();
+			written();
+			await released;
+		});
+		await transactionBegan;
+		await outsideWrite();
+		outsideWritten();
+		await transactionWritten;
+		return {
+			commit: async () => {
+				release();
+				await transaction;
+			},
+		};
+	}
+
+	it("reports the attempts of a failure report made after the transaction began", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>({ maxDeliveryAttempts: 5 });
+		const scope = new InMemoryTransactionScope([outbox]);
+		const event = orderEvent("evt-1");
+		await scope.transactional(() => outbox.add([candidate(event, 1)]));
+
+		const transaction = await afterBeginAndOutsideWrite(
+			scope,
+			() => outbox.markFailed("evt-1", new Error("broker down")),
+			() => outbox.add([candidate(event, 1)]),
+		);
+		const duringTransaction = await outbox.getPending();
+		await transaction.commit();
+
+		expect(duringTransaction).toMatchObject([
+			{ dispatchId: "evt-1", attempts: 1 },
+		]);
+	});
+
+	it("skips a record that a dispatcher dead-lettered before the transaction requeued it", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>({ maxDeliveryAttempts: 1 });
+		const scope = new InMemoryTransactionScope([outbox]);
+		const event = orderEvent("evt-1");
+		await scope.transactional(() => outbox.add([candidate(event, 1)]));
+
+		const transaction = await afterBeginAndOutsideWrite(
+			scope,
+			() => outbox.markFailed("evt-1", new Error("poison")),
+			() => outbox.add([candidate(event, 1)]),
+		);
+		const duringTransaction = await pendingIds(outbox);
+		await transaction.commit();
+
+		expect(duringTransaction).toEqual([]);
+		expect(await pendingIds(outbox)).toEqual(["evt-1"]);
+	});
+
+	it("skips a record that a dispatcher dead-lettered after the first write when the transaction requeues it", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>({ maxDeliveryAttempts: 1 });
+		const scope = new InMemoryTransactionScope([outbox]);
+		const event = orderEvent("evt-1");
+		await scope.transactional(() => outbox.add([candidate(event, 1)]));
+		let firstWritten!: () => void;
+		const firstWrite = new Promise<void>((resolve) => {
+			firstWritten = resolve;
+		});
+		let deadLettered!: () => void;
+		const deadLetter = new Promise<void>((resolve) => {
+			deadLettered = resolve;
+		});
+		let secondWritten!: () => void;
+		const secondWrite = new Promise<void>((resolve) => {
+			secondWritten = resolve;
+		});
+		let release!: () => void;
+		const released = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const transaction = scope.transactional(async () => {
+			await outbox.add([candidate(event, 1)]);
+			firstWritten();
+			await deadLetter;
+			await outbox.add([candidate(event, 1)]);
+			secondWritten();
+			await released;
+		});
+		await firstWrite;
+
+		await outbox.markFailed("evt-1", new Error("poison"));
+		deadLettered();
+		await secondWrite;
+		const duringTransaction = await pendingIds(outbox);
+		release();
+		await transaction;
+
+		expect(duringTransaction).toEqual([]);
+	});
+
+	it("leaves no record and no cursor change after a rolled-back add", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>();
+		const scope = new InMemoryTransactionScope([outbox]);
+		const event = orderEvent("evt-1");
+
+		await failed(
+			scope.transactional(async () => {
+				await outbox.add([candidate(event, 1)]);
+				throw new Error("commit failed");
+			}),
+		);
+		await outbox.add([candidate(orderEvent("evt-2"), 1)]);
+
+		const pending = await outbox.getPending();
+		expect(pending.map((record) => record.event.eventId)).toEqual(["evt-2"]);
+		expect(pending[0]?.position.previousEventfulAggregateVersion).toBeNull();
+	});
+
+	it("leaves the source open after a rolled-back endEventSources", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>();
+		const scope = new InMemoryTransactionScope([outbox]);
+		await outbox.add([candidate(orderEvent("evt-1"), 1)]);
+
+		await failed(
+			scope.transactional(async () => {
+				await outbox.endEventSources([
+					{ aggregateType: "Order", aggregateId: "o-1" },
+				]);
+				throw new Error("commit failed");
+			}),
+		);
+		await outbox.add([candidate(orderEvent("evt-2"), 2)]);
+
+		expect(
+			(await outbox.getPending()).map((record) => record.event.eventId),
+		).toEqual(["evt-1", "evt-2"]);
+	});
+
+	it("restores a pending record that a rolled-back add refreshed", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>();
+		const scope = new InMemoryTransactionScope([outbox]);
+		const event = orderEvent("evt-1");
+		await outbox.add([candidate(event, 1)]);
+
+		await failed(
+			scope.transactional(async () => {
+				await outbox.add([candidate(event, 2)]);
+				throw new Error("commit failed");
+			}),
+		);
+
+		const [record] = await outbox.getPending();
+		expect(record?.position.aggregateVersion).toBe(1);
+	});
+
+	it("keeps the writes of a transaction that succeeds", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>();
+		const scope = new InMemoryTransactionScope([outbox]);
+
+		await scope.transactional(async () => {
+			await outbox.add([candidate(orderEvent("evt-1"), 1)]);
+		});
+
+		expect(
+			(await outbox.getPending()).map((record) => record.event.eventId),
+		).toEqual(["evt-1"]);
+	});
+});
 
 describe("InMemoryOutbox", () => {
 	describe("batch atomicity", () => {

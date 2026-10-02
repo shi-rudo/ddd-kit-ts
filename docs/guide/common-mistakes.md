@@ -578,6 +578,15 @@ The useful seam is usually one level lower. If the handler talks to a repository
 
 Senior review rule: mock across process or infrastructure boundaries, not across cheap in-process control flow. The bus is control flow. See [CQRS & Buses](./cqrs-and-buses.md).
 
+### Testing a retry without an in-memory transaction
+
+A `RetryingTransactionScope` around a scope without a rollback runs the work
+again on stores that kept the writes of the failed attempt. The in-memory
+outbox then holds events of an attempt that never committed, or rejects the
+retry. The test fails for a reason that production does not have. Register the
+in-memory stores with one `InMemoryTransactionScope`; see
+[In-memory transactions](./unit-of-work.md#in-memory-transactions).
+
 ## Review Checklist
 
 When you review code that uses the kit, make sure that these rules apply:

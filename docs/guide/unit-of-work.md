@@ -403,6 +403,86 @@ scope retries without that call, `run()` cannot see the new attempt. A retry
 that cannot open its transaction then reaches the caller as the `CommitError`
 or `RollbackError` of the attempt before it.
 
+## In-memory transactions
+
+On their own, the in-memory stores do not see the rollbacks of your
+`TransactionScope`. A rolled-back write stays, also on the retry of a
+`RetryingTransactionScope`. To test a rollback or a retry, register the stores
+with one `InMemoryTransactionScope`:
+
+```ts
+import {
+  InMemoryEventStore,
+  InMemoryOutbox,
+  InMemoryTransactionScope,
+  RetryingTransactionScope,
+  UnitOfWork,
+} from "@shirudo/ddd-kit";
+
+const outbox = new InMemoryOutbox<OrderEvent>();
+const events = new InMemoryEventStore<OrderEvent>();
+const scope = new InMemoryTransactionScope([events, outbox]);
+
+const uow = new UnitOfWork({
+  scope: new RetryingTransactionScope(scope),
+  outbox,
+  repositories: { orders: eventSourcedOrdersIn(events) },
+});
+```
+
+- If the work fails, every registered store undoes the writes of the attempt,
+  so the retry does not see them.
+- The scope runs one transaction at a time, in call order. A queued
+  transaction stops waiting when its abort signal fires. Work that waits
+  inside a transaction for another transaction of the same scope never
+  finishes. Only the abort signal of the inner transaction ends that wait. The
+  scope thus works like a database with one connection, and it cannot host
+  the repository contract suites.
+- A store belongs to one scope. Register all stores of a test with one scope.
+  A second scope with a registered store throws at construction.
+- Code outside a transaction, such as a dispatcher, reads only committed
+  writes from outbox `getPending`, deadline `due`, and checkpoint
+  `hasReached`. Other reads also see the writes of an open transaction.
+- A store that is not registered keeps its behavior: it does not roll back.
+
+Each store decides what its rollback undoes. "Meanwhile" means while the
+transaction was open:
+
+| Store | A rollback undoes |
+| --- | --- |
+| `InMemoryOutbox` | every write since the start of the transaction, also acknowledgements and failure reports that a dispatcher made meanwhile; the dispatcher then delivers such a record again |
+| `InMemoryEventStore` | every write since the start of the transaction, also appends made outside the transaction meanwhile |
+| `InMemoryDeadlineStore` | every write since the start of the transaction, also acknowledgements and failure reports that a processor made meanwhile; the processor then delivers such a deadline again |
+| `InMemoryProjectionCheckpointStore` | every write since the start of the transaction, also saves and resets made outside the transaction meanwhile; the checkpoint locks stay |
+| `InMemorySnapshotStore` | every write since the start of the transaction, also saves and deletes made outside the transaction meanwhile; a snapshot is derived data, so a later load replays more events or discards a restored snapshot |
+| `InMemoryIdempotencyStore` | the writes of `claim` and `complete`; the lease operations `renew`, `confirm`, `abandon`, and `reconcile` keep their writes on every other key |
+
+You can register an in-memory table of your own. It implements
+`InMemoryTransactionParticipant`:
+
+```ts
+import type { InMemoryTransactionParticipant } from "@shirudo/ddd-kit";
+
+class OrderTable implements InMemoryTransactionParticipant {
+  readonly rows = new Map<string, OrderRow>();
+
+  beginTransaction() {
+    const recorded = [...this.rows];
+    return {
+      commit: () => {},
+      rollback: () => {
+        this.rows.clear();
+        for (const [id, row] of recorded) this.rows.set(id, row);
+      },
+    };
+  }
+}
+```
+
+The scope proves your rollback and retry logic. It does not prove your SQL or
+the isolation of your database. Run the contract suites against the real
+database for that.
+
 ## Contract tests
 
 TypeScript can describe the protocol, but it cannot prove your SQL predicate

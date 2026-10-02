@@ -68,8 +68,8 @@ export interface DeadlineStoreContractHarness {
 	/**
 	 * Declare `true` when environments provide {@link
 	 * DeadlineStoreContractEnvironment.runRolledBack}. Without it, the
-	 * rollback tests are marked skipped: the honest state of an
-	 * in-memory fake, and a loud gap for a transactional adapter.
+	 * rollback tests are marked skipped: the honest state of a store
+	 * without a rollback, and a loud gap for a transactional adapter.
 	 */
 	providesRolledBackRuns?: boolean;
 
@@ -548,6 +548,9 @@ export function createDeadlineStoreContractTests(
 							// The rollback mechanism may surface as a rejection; the
 							// contract under test is the store state afterwards.
 						});
+					// An empty committed run ends a transaction that the rollback
+					// left open, so a leaked write shows in the read below.
+					await env.run(async () => {});
 					assertEqual(
 						(await env.store.due(at(T2), 10)).length,
 						0,
@@ -582,6 +585,9 @@ export function createDeadlineStoreContractTests(
 						.catch(() => {
 							// See above: only the state afterwards is the contract.
 						});
+					// An empty committed run ends a transaction that the rollback
+					// left open, so a leaked write shows in the read below.
+					await env.run(async () => {});
 					assertEqual(
 						(await env.store.due(at(T1), 10)).length,
 						1,

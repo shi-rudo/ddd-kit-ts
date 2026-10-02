@@ -219,8 +219,9 @@ durable external delivery behind a transactional outbox.
 
 ::: warning Retry needs a transactional outbox
 The outbox write must use the same database transaction as aggregate state.
-`InMemoryOutbox` cannot roll back rows from a failed attempt and is therefore a
-test and demo adapter, not a production companion for transaction retries.
+On its own, `InMemoryOutbox` cannot roll back rows from a failed attempt. An
+`InMemoryTransactionScope` gives it a rollback for tests. It stays a test and
+demo adapter, not a production companion for transaction retries.
 :::
 
 ## Isolation levels

@@ -43,8 +43,7 @@ export interface OutboxContractEnvironment<Evt extends AnyDomainEvent> {
 	 * Optional capability: runs `outbox.add(candidates)` inside a
 	 * transaction that ROLLS BACK. Enables the rollback-purity test: a
 	 * rolled-back add must leave nothing behind. Transactional adapters
-	 * should always provide this; it is the half of the outbox promise
-	 * that in-memory fakes cannot keep.
+	 * should always provide this.
 	 */
 	addRolledBack?(
 		events: ReadonlyArray<EventCommitCandidate<Evt>>,
@@ -109,8 +108,8 @@ export interface OutboxContractHarness<Evt extends AnyDomainEvent> {
 	/**
 	 * Declare `true` when environments provide {@link
 	 * OutboxContractEnvironment.addRolledBack}. Without it, the
-	 * rollback-purity test is marked skipped: the honest state of an
-	 * in-memory fake, and a loud gap for a transactional adapter.
+	 * rollback-purity test is marked skipped: the honest state of a store
+	 * without a rollback, and a loud gap for a transactional adapter.
 	 */
 	providesRolledBackAdds?: boolean;
 
@@ -556,7 +555,8 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 		),
 	];
 
-	// Rollback purity: capability-gated (in-memory fakes cannot keep it).
+	// Rollback purity: capability-gated (a store without a rollback cannot
+	// keep it).
 	tests.push(
 		gatedContractTest(
 			{
@@ -580,9 +580,19 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 					await env.addCommitted(commit([harness.createEvent(2)], 2));
 					const [afterRollback] = await takeAndAck(env, 1);
 					assertEqual(
+						afterRollback?.event.eventId,
+						harness.createEvent(2).eventId,
+						"the only pending record after a rolled-back add must be the committed event",
+					);
+					assertEqual(
 						afterRollback?.position.previousEventfulAggregateVersion,
 						null,
 						"a rolled-back add must not advance the event-source head",
+					);
+					assertEqual(
+						(await env.outbox.getPending(10)).length,
+						0,
+						"a rolled-back add must leave no record behind",
 					);
 				}),
 			},
@@ -605,7 +615,13 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 					}
 					await env.addCommitted(commit([harness.createEvent(1)], 1));
 					await env.endEventSourcesRolledBack([defaultSource]);
-					await env.addCommitted(commit([harness.createEvent(2)], 2));
+					const rejection = await captureRejection(
+						env.addCommitted(commit([harness.createEvent(2)], 2)),
+					);
+					assert(
+						rejection === undefined,
+						`an end in a rolled-back transaction must not end the event source, but the next event of the source was rejected: ${describeError(rejection)}`,
+					);
 
 					const [, next] = await takeAndAck(env, 2);
 					assertEqual(

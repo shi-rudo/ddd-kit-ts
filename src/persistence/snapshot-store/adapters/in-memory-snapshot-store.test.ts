@@ -4,6 +4,7 @@ import type {
 	Version,
 } from "../../../domain/aggregate/aggregate";
 import type { Id } from "../../../domain/identity/id";
+import { InMemoryTransactionScope } from "../../repository/adapters/in-memory-transaction-scope";
 import { InMemorySnapshotStore } from "./in-memory-snapshot-store";
 
 interface TestState {
@@ -133,5 +134,39 @@ describe("InMemorySnapshotStore retention", () => {
 				snapshot("first", 1),
 			),
 		).rejects.toThrow(TypeError);
+	});
+});
+
+describe("InMemorySnapshotStore in an InMemoryTransactionScope", () => {
+	const order = { aggregateType: "Order", aggregateId: id("o-1") };
+
+	it("keeps the earlier snapshot after a rolled-back save", async () => {
+		const store = new InMemorySnapshotStore<TestState>();
+		const scope = new InMemoryTransactionScope([store]);
+		await store.save(order, snapshot("committed", 3));
+
+		await scope
+			.transactional(async () => {
+				await store.save(order, snapshot("rolled back", 5));
+				throw new Error("work failed");
+			})
+			.catch(() => {});
+
+		expect(await store.load(order)).toEqual(snapshot("committed", 3));
+	});
+
+	it("restores the snapshot of a rolled-back delete", async () => {
+		const store = new InMemorySnapshotStore<TestState>();
+		const scope = new InMemoryTransactionScope([store]);
+		await store.save(order, snapshot("committed", 3));
+
+		await scope
+			.transactional(async () => {
+				await store.delete(order);
+				throw new Error("work failed");
+			})
+			.catch(() => {});
+
+		expect(await store.load(order)).toEqual(snapshot("committed", 3));
 	});
 });

@@ -48,7 +48,7 @@ export interface ProjectionCheckpointStoreContractEnvironment<TCtx> {
 	 * BACK. Enables the rollback test: a rolled-back save must leave no
 	 * checkpoint behind, the half of the atomic update+checkpoint
 	 * promise the store contributes. Transactional adapters should
-	 * always provide this; in-memory fakes cannot.
+	 * always provide this.
 	 */
 	runRolledBack?<R>(work: (ctx: TCtx) => Promise<R>): Promise<R>;
 
@@ -72,7 +72,8 @@ export interface ProjectionCheckpointStoreContractHarness<TCtx> {
 	 * Declare `true` when environments provide {@link
 	 * ProjectionCheckpointStoreContractEnvironment.runRolledBack}.
 	 * Without it, the rollback test is marked skipped: the honest state
-	 * of an in-memory fake, and a loud gap for a transactional adapter.
+	 * of a store without a rollback, and a loud gap for a transactional
+	 * adapter.
 	 */
 	providesRolledBackRuns?: boolean;
 

@@ -398,7 +398,7 @@ single-projector topology for each projection. A no-op
 deployment restriction, but it is not safe for competing consumers and does
 not conform to the concurrency contract test. The in-memory reference provides
 process-local exclusion only across projectors sharing the same store instance;
-it is not a distributed lock and remains non-transactional.
+it is not a distributed lock.
 
 Checkpoint rows are correctness state, not a cache: never TTL or prune an
 active aggregate's row. Reclaim one only after the source guarantees that the
@@ -416,8 +416,12 @@ absent and existing checkpoint rows; a skipped capability leaves that guarantee
 explicitly unproven. Transactional adapters should also enable the rollback
 capability.
 
-`InMemoryProjectionCheckpointStore` is a test/reference implementation. It is
-not transaction-aware, so it does not prove production rollback behavior.
+`InMemoryProjectionCheckpointStore` is a test/reference implementation. It
+rolls back only when you register it with an `InMemoryTransactionScope`; see
+[In-memory transactions](./unit-of-work.md#in-memory-transactions). While a
+transaction is open, `hasReached` answers from the checkpoints at the start of
+the transaction. The
+in-memory rollback does not prove production rollback behavior.
 Without `maxCheckpoints`, its checkpoint map is unbounded and intended only for
 finite-lifetime tests and demos. A configured limit counts aggregate identities across all
 projection names. New aggregate identities then fail before mutation with

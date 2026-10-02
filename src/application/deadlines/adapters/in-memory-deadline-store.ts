@@ -4,6 +4,10 @@ import {
 	assertPositiveSafeInteger,
 } from "../../../internal/validate";
 import type {
+	InMemoryTransaction,
+	InMemoryTransactionParticipant,
+} from "../../../persistence/repository/in-memory-transaction";
+import type {
 	DeadLetterDeadline,
 	DeadlineStore,
 	DueDeadline,
@@ -40,17 +44,27 @@ interface StoredDeadline<TPayload> {
  * limit rejects a new address before mutation; delivery state is never
  * silently evicted.
  *
- * **Not transaction-aware**, the same documented limitation as the
- * other in-memory references: a rolled-back `schedule` or `cancel`
- * stays applied here. The transactional half of the contract is the
- * SQL adapter's job; prove it with `createDeadlineStoreContractTests`
- * and its rollback capability.
+ * On its own, the store knows nothing about your `TransactionScope`
+ * rollbacks: a rolled-back `schedule` or `cancel` stays applied. Register
+ * the store with an `InMemoryTransactionScope` for tests that roll back or
+ * retry.
+ *
+ * A processor reads only committed deadlines. While a transaction is open,
+ * `due` skips a deadline that the transaction scheduled. For an address that
+ * the transaction rescheduled or cancelled, it returns the committed
+ * deadline as it was at the first write of the transaction. A failure report
+ * against that deadline counts its attempts. At the ceiling, `due` stops
+ * returning it until the transaction ends. A rollback also undoes an acknowledgement or a failure report
+ * that a processor made while the transaction was open. The processor then
+ * delivers that deadline again. For production, prove the transactional half
+ * of the contract with `createDeadlineStoreContractTests` and its rollback
+ * capability.
  *
  * Payloads are deep-copied on schedule and on delivery
  * (`structuredClone`), so neither side can mutate the other's copy.
  */
 export class InMemoryDeadlineStore<TPayload = unknown>
-	implements DeadlineStore<TPayload>
+	implements DeadlineStore<TPayload>, InMemoryTransactionParticipant
 {
 	private readonly pending = new Map<string, StoredDeadline<TPayload>>();
 	/** Keyed by deliveryId: several incarnations of one address can be dead. */
@@ -58,6 +72,13 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 	private readonly maxDeliveryAttempts: number;
 	private readonly maxRecords: number | undefined;
 	private nextSequence = 0;
+	/**
+	 * The committed deadline of each address that the open transaction wrote,
+	 * captured at its first write. `undefined` marks an address without one.
+	 */
+	private committedVersions:
+		| Map<string, StoredDeadline<TPayload> | undefined>
+		| undefined;
 
 	constructor(options: InMemoryDeadlineStoreOptions = {}) {
 		const max = options.maxDeliveryAttempts ?? 5;
@@ -71,6 +92,43 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 			);
 		}
 		this.maxRecords = options.maxRecords;
+	}
+
+	/**
+	 * Records the state that a rollback of an `InMemoryTransactionScope`
+	 * returns to: the pending and the dead-letter records. The rollback
+	 * keeps the sequence counter, as a database sequence does, so a
+	 * delivery id stays unique. Until the transaction ends, `due` returns the
+	 * committed deadline of each address that the transaction writes.
+	 */
+	beginTransaction(): InMemoryTransaction {
+		const pending = [...this.pending].map(
+			([key, deadline]) => [key, { ...deadline }] as const,
+		);
+		const dead = [...this.dead].map(
+			([deliveryId, deadline]) => [deliveryId, { ...deadline }] as const,
+		);
+		const versions = new Map<string, StoredDeadline<TPayload> | undefined>();
+		this.committedVersions = versions;
+		const end = () => {
+			if (this.committedVersions === versions) {
+				this.committedVersions = undefined;
+			}
+		};
+		return {
+			commit: end,
+			rollback: () => {
+				this.pending.clear();
+				for (const [key, deadline] of pending) {
+					this.pending.set(key, { ...deadline });
+				}
+				this.dead.clear();
+				for (const [deliveryId, deadline] of dead) {
+					this.dead.set(deliveryId, { ...deadline });
+				}
+				end();
+			},
+		};
 	}
 
 	async schedule(deadline: {
@@ -93,23 +151,30 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 				attempted: 1,
 			});
 		}
+		// Copied before the sequence and the committed version change: a
+		// payload that cannot be cloned must reject before any write.
+		const payload = structuredClone(deadline.payload);
 		const sequence = this.nextSequence++;
 		// Replacing an occupied address gets a FRESH incarnation: a late
 		// ack or failure report against the old deliveryId must not touch
 		// the successor.
-		this.pending.set(deadlineAddress, {
+		const incarnation: StoredDeadline<TPayload> = {
 			deliveryId: `deadline-${sequence}`,
 			scope: deadline.scope,
 			key: deadline.key,
 			dueAt: new Date(deadline.dueAt),
-			payload: structuredClone(deadline.payload),
+			payload,
 			attempts: 0,
 			sequence,
-		});
+		};
+		this.recordCommittedVersion(deadlineAddress);
+		this.pending.set(deadlineAddress, incarnation);
 	}
 
 	async cancel(scope: string, key: string): Promise<void> {
-		this.pending.delete(address(scope, key));
+		const deadlineAddress = address(scope, key);
+		this.recordCommittedVersion(deadlineAddress);
+		this.pending.delete(deadlineAddress);
 	}
 
 	async due(
@@ -124,7 +189,7 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 		// "Up to limit": zero is a legal page size and yields an empty page
 		// (a loop computing capacity - inFlight may legitimately pass it).
 		if (limit === 0) return [];
-		return [...this.pending.values()]
+		return this.committedPending()
 			.filter((deadline) => deadline.dueAt.getTime() <= now.getTime())
 			.sort(
 				(a, b) =>
@@ -134,8 +199,47 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 			.map((deadline) => toRecord(deadline));
 	}
 
+	private recordCommittedVersion(deadlineAddress: string): void {
+		const versions = this.committedVersions;
+		if (versions === undefined || versions.has(deadlineAddress)) return;
+		const committed = this.pending.get(deadlineAddress);
+		versions.set(
+			deadlineAddress,
+			committed === undefined ? undefined : { ...committed },
+		);
+	}
+
+	/**
+	 * The pending deadlines that a processor may see. For an address that the
+	 * open transaction wrote, it is the committed deadline, if any, and not
+	 * the live record.
+	 */
+	private committedPending(): StoredDeadline<TPayload>[] {
+		const versions = this.committedVersions;
+		if (versions === undefined) return [...this.pending.values()];
+		const deadlines = [...this.pending]
+			.filter(([deadlineAddress]) => !versions.has(deadlineAddress))
+			.map(([, deadline]) => deadline);
+		for (const committed of versions.values()) {
+			if (committed !== undefined) deadlines.push(committed);
+		}
+		return deadlines;
+	}
+
+	/** The address of the committed deadline with this delivery id, if any. */
+	private committedVersionAddress(deliveryId: string): string | undefined {
+		for (const [deadlineAddress, committed] of this.committedVersions ?? []) {
+			if (committed?.deliveryId === deliveryId) return deadlineAddress;
+		}
+		return undefined;
+	}
+
 	async markDelivered(deliveryIds: ReadonlyArray<string>): Promise<void> {
 		for (const deliveryId of deliveryIds) {
+			const committedAddress = this.committedVersionAddress(deliveryId);
+			if (committedAddress !== undefined) {
+				this.committedVersions?.set(committedAddress, undefined);
+			}
 			this.dead.delete(deliveryId);
 			for (const [key, deadline] of this.pending) {
 				if (deadline.deliveryId === deliveryId) {
@@ -159,6 +263,22 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 				this.pending.delete(key);
 				this.dead.set(deadline.deliveryId, deadline);
 				return toDeadLetter(deadline);
+			}
+			return undefined;
+		}
+		const committedAddress = this.committedVersionAddress(deliveryId);
+		const committed =
+			committedAddress === undefined
+				? undefined
+				: this.committedVersions?.get(committedAddress);
+		if (committedAddress !== undefined && committed !== undefined) {
+			// The open transaction decides whether this deadline still exists,
+			// so the report only counts. At the ceiling, `due` stops returning
+			// it until the transaction ends.
+			committed.attempts += 1;
+			if (error !== undefined) committed.lastError = String(error);
+			if (committed.attempts >= this.maxDeliveryAttempts) {
+				this.committedVersions?.set(committedAddress, undefined);
 			}
 			return undefined;
 		}
