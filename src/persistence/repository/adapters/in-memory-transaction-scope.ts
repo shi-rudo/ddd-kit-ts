@@ -1,3 +1,4 @@
+import { createGlobalCapabilityRegistry } from "../../../domain/aggregate/internal/global-capability-registry";
 import {
 	abortReason,
 	waitRejectingOnAbort,
@@ -10,7 +11,13 @@ import type { TransactionalOptions, TransactionScope } from "../scope";
 
 const ABORT_MESSAGE = "InMemoryTransactionScope aborted";
 
-const heldParticipants = new WeakSet<InMemoryTransactionParticipant>();
+// The key version stamps the registry shape: participant to the scope that
+// registered it. A registry on globalThis lets a scope of another kit copy
+// see the registration too.
+const { registry: registeredParticipants } =
+	createGlobalCapabilityRegistry<InMemoryTransactionScope>(
+		Symbol.for("@shirudo/ddd-kit/in-memory-transaction-participants/v1"),
+	);
 
 /**
  * A {@link TransactionScope} for tests and demos that gives in-memory stores
@@ -50,7 +57,7 @@ export class InMemoryTransactionScope implements TransactionScope<undefined> {
 	private lastTransaction: Promise<void> = Promise.resolve();
 
 	constructor(participants: ReadonlyArray<InMemoryTransactionParticipant>) {
-		const listed = new Set<InMemoryTransactionParticipant>();
+		const listed = new Map<InMemoryTransactionParticipant, number>();
 		for (const [index, participant] of participants.entries()) {
 			if (typeof participant?.beginTransaction !== "function") {
 				throw new TypeError(
@@ -58,17 +65,26 @@ export class InMemoryTransactionScope implements TransactionScope<undefined> {
 						"beginTransaction method.",
 				);
 			}
-			if (heldParticipants.has(participant) || listed.has(participant)) {
+			const firstIndex = listed.get(participant);
+			if (firstIndex !== undefined) {
+				throw new TypeError(
+					`InMemoryTransactionScope: participant ${index} repeats ` +
+						`participant ${firstIndex}.`,
+				);
+			}
+			if (registeredParticipants.has(participant)) {
 				throw new TypeError(
 					`InMemoryTransactionScope: participant ${index} already belongs ` +
 						"to an InMemoryTransactionScope. Share one scope for all " +
 						"in-memory stores.",
 				);
 			}
-			listed.add(participant);
+			listed.set(participant, index);
 		}
-		for (const participant of listed) heldParticipants.add(participant);
-		this.participants = [...listed];
+		for (const participant of listed.keys()) {
+			registeredParticipants.set(participant, this);
+		}
+		this.participants = [...listed.keys()];
 	}
 
 	async transactional<T>(

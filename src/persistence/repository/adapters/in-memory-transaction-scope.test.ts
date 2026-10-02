@@ -290,7 +290,23 @@ describe("InMemoryTransactionScope", () => {
 		const store = recordingParticipant("outbox", []);
 
 		expect(() => new InMemoryTransactionScope([store, store])).toThrow(
-			/participant 1 already belongs to an InMemoryTransactionScope/,
+			/participant 1 repeats participant 0/,
+		);
+	});
+
+	it("rejects a store that a scope of another kit copy holds", async () => {
+		const otherCopyPath = "./in-memory-transaction-scope.ts?copy=2";
+		const otherCopy = (await import(
+			/* @vite-ignore */ otherCopyPath
+		)) as typeof import("./in-memory-transaction-scope");
+		const store = recordingParticipant("outbox", []);
+		new InMemoryTransactionScope([store]);
+
+		expect(otherCopy.InMemoryTransactionScope).not.toBe(
+			InMemoryTransactionScope,
+		);
+		expect(() => new otherCopy.InMemoryTransactionScope([store])).toThrow(
+			/participant 0 already belongs to an InMemoryTransactionScope/,
 		);
 	});
 
