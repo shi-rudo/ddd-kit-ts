@@ -373,12 +373,12 @@ describe("InMemoryEventStore", () => {
 			store.append(streamA, [renamed("second"), uncloneable], {
 				expectedVersion: 1,
 			}),
-		).rejects.toThrow();
+		).rejects.toMatchObject({ name: "DataCloneError" });
 		await expect(
 			store.append(streamB, [renamed("other"), uncloneable], {
 				expectedVersion: 0,
 			}),
-		).rejects.toThrow();
+		).rejects.toMatchObject({ name: "DataCloneError" });
 
 		expect(await store.readStream(streamA, allEvents)).toMatchObject({
 			lastVersion: 1,
@@ -388,11 +388,101 @@ describe("InMemoryEventStore", () => {
 			lastVersion: 0,
 			events: [],
 		});
+	});
+
+	it("does not count the events of a rejected batch against maxEvents", async () => {
+		const store = new InMemoryEventStore<OrderEvent>({ maxEvents: 3 });
+		await store.append(streamA, [renamed("first")], { expectedVersion: 0 });
+		const uncloneable = {
+			...renamed("x"),
+			payload: { name: "x", note: () => "not cloneable" },
+		} as unknown as OrderEvent;
+		await store
+			.append(streamA, [renamed("second"), uncloneable], { expectedVersion: 1 })
+			.catch(() => {});
+
 		await expect(
 			store.append(streamA, [renamed("second"), renamed("third")], {
 				expectedVersion: 1,
 			}),
 		).resolves.toBeUndefined();
+	});
+
+	describe("with an event getter that runs caller code during the copy", () => {
+		function eventWithGetter(name: string, onRead: () => void): OrderEvent {
+			const event = { ...renamed(name) } as Record<string, unknown>;
+			const payload = { name };
+			Object.defineProperty(event, "payload", {
+				enumerable: true,
+				get() {
+					onRead();
+					return payload;
+				},
+			});
+			return event as unknown as OrderEvent;
+		}
+		const names = async (store: InMemoryEventStore<OrderEvent>) =>
+			(await store.readStream(streamA, allEvents)).events.map(
+				(event) => event.payload.name,
+			);
+
+		it("rejects the later of two appends to a new stream", async () => {
+			const store = new InMemoryEventStore<OrderEvent>();
+			let inner: Promise<void> | undefined;
+			const outer = eventWithGetter("outer", () => {
+				inner ??= store.append(streamA, [renamed("inner")], {
+					expectedVersion: 0,
+				});
+			});
+
+			const outerAppend = store.append(streamA, [outer], {
+				expectedVersion: 0,
+			});
+
+			await expect(outerAppend).rejects.toBeInstanceOf(
+				ConcurrencyConflictError,
+			);
+			await expect(inner).resolves.toBeUndefined();
+			expect(await names(store)).toEqual(["inner"]);
+		});
+
+		it("rejects the later of two appends at the same version of an existing stream", async () => {
+			const store = new InMemoryEventStore<OrderEvent>();
+			await store.append(streamA, [renamed("first")], { expectedVersion: 0 });
+			let inner: Promise<void> | undefined;
+			const outer = eventWithGetter("outer", () => {
+				inner ??= store.append(streamA, [renamed("inner")], {
+					expectedVersion: 1,
+				});
+			});
+
+			const outerAppend = store.append(streamA, [outer], {
+				expectedVersion: 1,
+			});
+
+			await expect(outerAppend).rejects.toBeInstanceOf(
+				ConcurrencyConflictError,
+			);
+			await expect(inner).resolves.toBeUndefined();
+			expect(await names(store)).toEqual(["first", "inner"]);
+		});
+
+		it("counts only the events that it stores when the copy grows the batch", async () => {
+			const store = new InMemoryEventStore<OrderEvent>({ maxEvents: 2 });
+			const batch: OrderEvent[] = [];
+			batch.push(
+				eventWithGetter("first", () => {
+					if (batch.length === 1) batch.push(renamed("late"));
+				}),
+			);
+			await store.append(streamA, batch, { expectedVersion: 0 });
+			const stored = (await store.readStream(streamA, allEvents)).lastVersion;
+
+			await expect(
+				store.append(streamA, [renamed("second")], { expectedVersion: stored }),
+			).resolves.toBeUndefined();
+			expect(stored).toBe(1);
+		});
 	});
 
 	it("treats an empty append as a no-op", async () => {

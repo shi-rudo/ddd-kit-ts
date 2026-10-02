@@ -115,6 +115,11 @@ export class InMemoryEventStore<Evt extends AnyDomainEvent>
 		options: EventStoreAppendOptions,
 	): Promise<void> {
 		if (events.length === 0) return;
+		// The copy comes first. It detaches stored history from the caller,
+		// and it can throw or run caller code, for example a getter. After
+		// it, nothing reads caller data until the write ends, so every check
+		// sees the state that the write changes.
+		const owned = events.map((event) => structuredClone(event));
 		const key = encodeAggregateIdentity(stream);
 		const existing = this.streams.get(key);
 		if ((existing?.length ?? 0) !== options.expectedVersion) {
@@ -142,38 +147,28 @@ export class InMemoryEventStore<Evt extends AnyDomainEvent>
 		}
 		if (
 			this.maxEvents !== undefined &&
-			this.totalEvents + events.length > this.maxEvents
+			this.totalEvents + owned.length > this.maxEvents
 		) {
 			throw new InMemoryCapacityExceededError({
 				store: "InMemoryEventStore",
 				resource: "events",
 				limit: this.maxEvents,
 				current: this.totalEvents,
-				attempted: events.length,
+				attempted: owned.length,
 			});
 		}
-		// Detached on write and on read: the port forbids handing out live
-		// internal state, and a caller-mutated plain event must not rewrite
-		// stored history. Kit-minted events are already frozen; the clone
-		// detaches them from the shared graph as well. The whole batch is
-		// cloned first, because an event that cannot be cloned must reject
-		// the append before anything is written.
-		const owned = events.map((event) => structuredClone(event));
-		// Atomic by construction: every check and the clone above throw
-		// before anything is written (including the get-or-create, so a
-		// rejected append on a nonexistent stream leaves no empty entry
-		// behind). Pushing in place keeps append O(batch) instead of
-		// O(stream) per call; no caller ever holds the internal array
-		// (readStream slices). Element-wise, not push(...owned): a spread
-		// into arguments overflows the engine's argument limit on huge
-		// batches.
+		// The checks above throw before the get-or-create, so a rejected
+		// append to a new stream leaves no empty stream behind. Pushing in
+		// place keeps append O(batch); no caller holds the internal array,
+		// because readStream returns copies. The push is element-wise: a
+		// spread into arguments overflows the argument limit on huge batches.
 		let storedEvents = existing;
 		if (storedEvents === undefined) {
 			storedEvents = [];
 			this.streams.set(key, storedEvents);
 		}
 		for (const event of owned) storedEvents.push(event);
-		this.totalEvents += events.length;
+		this.totalEvents += owned.length;
 	}
 
 	async readStream(
