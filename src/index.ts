@@ -464,6 +464,11 @@ export {
 	reconstituteAggregateFromStreamPages,
 } from "./persistence/event-store/reconstitute-from-stream-pages";
 export {
+	type InMemoryTransaction,
+	type InMemoryTransactionParticipant,
+	InMemoryTransactionScope,
+} from "./persistence/repository/adapters/in-memory-transaction-scope";
+export {
 	type AggregateClass,
 	IdentityMap,
 } from "./persistence/repository/identity-map";

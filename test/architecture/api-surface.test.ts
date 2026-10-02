@@ -149,6 +149,7 @@ const INDEX_SURFACE = [
 	"InMemoryOutbox",
 	"InMemoryProjectionCheckpointStore",
 	"InMemorySnapshotStore",
+	"InMemoryTransactionScope",
 	"InfrastructureError",
 	"InvalidCommandMessageError",
 	"InvalidDomainMachineContextError",

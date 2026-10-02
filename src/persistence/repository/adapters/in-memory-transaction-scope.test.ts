@@ -1,0 +1,163 @@
+import { describe, expect, it } from "vite-plus/test";
+import {
+	type InMemoryTransactionParticipant,
+	InMemoryTransactionScope,
+} from "./in-memory-transaction-scope";
+
+function recordingParticipant(
+	name: string,
+	steps: string[],
+	options: { readonly rollbackFails?: boolean } = {},
+): InMemoryTransactionParticipant {
+	return {
+		beginTransaction: () => {
+			steps.push(`begin ${name}`);
+			return {
+				rollback: () => {
+					steps.push(`rollback ${name}`);
+					if (options.rollbackFails) {
+						throw new Error(`rollback of ${name} failed`);
+					}
+				},
+			};
+		},
+	};
+}
+
+describe("InMemoryTransactionScope", () => {
+	it("rolls every participant back in reverse order when the work fails", async () => {
+		const steps: string[] = [];
+		const failure = new Error("work failed");
+		const scope = new InMemoryTransactionScope([
+			recordingParticipant("outbox", steps),
+			recordingParticipant("events", steps),
+		]);
+
+		const rejection = await scope
+			.transactional(async () => {
+				steps.push("work");
+				throw failure;
+			})
+			.then(
+				() => "committed",
+				(error: unknown) => error,
+			);
+
+		expect(rejection).toBe(failure);
+		expect(steps).toEqual([
+			"begin outbox",
+			"begin events",
+			"work",
+			"rollback events",
+			"rollback outbox",
+		]);
+	});
+
+	it("keeps the changes of the participants when the work succeeds", async () => {
+		const steps: string[] = [];
+		const scope = new InMemoryTransactionScope([
+			recordingParticipant("outbox", steps),
+		]);
+
+		const result = await scope.transactional(async () => "done");
+
+		expect(result).toBe("done");
+		expect(steps).toEqual(["begin outbox"]);
+	});
+
+	it("runs one transaction at a time", async () => {
+		const steps: string[] = [];
+		const scope = new InMemoryTransactionScope([
+			recordingParticipant("outbox", steps),
+		]);
+		let releaseFirst!: () => void;
+		const firstReleased = new Promise<void>((resolve) => {
+			releaseFirst = resolve;
+		});
+
+		const first = scope.transactional(async () => {
+			steps.push("first work");
+			await firstReleased;
+			steps.push("first done");
+		});
+		const second = scope.transactional(async () => {
+			steps.push("second work");
+		});
+		await Promise.resolve();
+		releaseFirst();
+		await Promise.all([first, second]);
+
+		expect(steps).toEqual([
+			"begin outbox",
+			"first work",
+			"first done",
+			"begin outbox",
+			"second work",
+		]);
+	});
+
+	it("runs the next transaction after a failed one", async () => {
+		const steps: string[] = [];
+		const scope = new InMemoryTransactionScope([
+			recordingParticipant("outbox", steps),
+		]);
+
+		const failed = scope.transactional(async () => {
+			throw new Error("work failed");
+		});
+		const next = scope.transactional(async () => "next");
+
+		await expect(failed).rejects.toThrow("work failed");
+		await expect(next).resolves.toBe("next");
+		expect(steps).toEqual(["begin outbox", "rollback outbox", "begin outbox"]);
+	});
+
+	it("rolls back every participant and reports the first rollback failure", async () => {
+		const steps: string[] = [];
+		const scope = new InMemoryTransactionScope([
+			recordingParticipant("outbox", steps),
+			recordingParticipant("events", steps, { rollbackFails: true }),
+		]);
+
+		const rejection = await scope
+			.transactional(async () => {
+				throw new Error("work failed");
+			})
+			.then(
+				() => "committed",
+				(error: unknown) => error,
+			);
+
+		expect(rejection).toBeInstanceOf(Error);
+		expect((rejection as Error).message).toBe("rollback of events failed");
+		expect(steps).toEqual([
+			"begin outbox",
+			"begin events",
+			"rollback events",
+			"rollback outbox",
+		]);
+	});
+
+	it("rejects with the abort reason before the transaction begins", async () => {
+		const steps: string[] = [];
+		const scope = new InMemoryTransactionScope([
+			recordingParticipant("outbox", steps),
+		]);
+		const controller = new AbortController();
+		controller.abort(new Error("caller gave up"));
+
+		await expect(
+			scope.transactional(async () => "done", { signal: controller.signal }),
+		).rejects.toThrow("caller gave up");
+		expect(steps).toEqual([]);
+	});
+
+	it("rejects a participant without beginTransaction", () => {
+		expect(
+			() =>
+				new InMemoryTransactionScope([
+					{} as unknown as InMemoryTransactionParticipant,
+				]),
+		).toThrow(TypeError);
+	});
+});
