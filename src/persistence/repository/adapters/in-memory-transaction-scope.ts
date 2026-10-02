@@ -1,4 +1,7 @@
-import { abortReason } from "../../../internal/async/abort";
+import {
+	abortReason,
+	waitRejectingOnAbort,
+} from "../../../internal/async/abort";
 import type { TransactionalOptions, TransactionScope } from "../scope";
 
 /** The transaction of one in-memory store inside an {@link InMemoryTransactionScope}. */
@@ -31,11 +34,12 @@ const heldParticipants = new WeakSet<InMemoryTransactionParticipant>();
  * also on the retry of a `RetryingTransactionScope`.
  *
  * **One transaction at a time.** A store cannot tell which of two open
- * transactions a write belongs to, so the scope runs its transactions one
- * after the other, in call order. A transaction that waits inside for another
- * transaction of the same scope to commit therefore never finishes, as with a
- * database that has only one connection. Use a database with real isolation
- * to test concurrent transactions.
+ * transactions a write belongs to. The scope therefore runs its transactions
+ * one after the other, in call order. A queued transaction stops its wait
+ * when its abort signal fires. A transaction that waits inside for another
+ * transaction of the same scope never finishes, unless its signal aborts. A
+ * database with only one connection behaves the same way. Use a database
+ * with real isolation to test concurrent transactions.
  *
  * **Code outside a transaction.** A dispatcher, a deadline processor, and a
  * `hasReached` check run outside the transactions. Outbox `getPending`,
@@ -90,9 +94,9 @@ export class InMemoryTransactionScope implements TransactionScope<undefined> {
 		this.lastTransaction = new Promise<void>((resolve) => {
 			finish = resolve;
 		});
+		const signal = options?.signal;
 		try {
-			await previous;
-			const signal = options?.signal;
+			await waitRejectingOnAbort(previous, signal, ABORT_MESSAGE);
 			if (signal?.aborted) throw abortReason(signal, ABORT_MESSAGE);
 			const transactions: InMemoryTransaction[] = [];
 			let result: T;
@@ -113,7 +117,9 @@ export class InMemoryTransactionScope implements TransactionScope<undefined> {
 			if (commit.failed) throw commit.failure;
 			return result;
 		} finally {
-			finish();
+			// A transaction that stopped waiting releases its place only after the
+			// transaction ahead of it ended, so the queue keeps its order.
+			void previous.then(finish);
 		}
 	}
 }

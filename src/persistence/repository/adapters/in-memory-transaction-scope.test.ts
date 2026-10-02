@@ -205,6 +205,66 @@ describe("InMemoryTransactionScope", () => {
 		]);
 	});
 
+	it("rejects a queued transaction when its signal aborts", async () => {
+		const steps: string[] = [];
+		const scope = new InMemoryTransactionScope([
+			recordingParticipant("outbox", steps),
+		]);
+		let releaseFirst!: () => void;
+		const firstReleased = new Promise<void>((resolve) => {
+			releaseFirst = resolve;
+		});
+		const first = scope.transactional(() => firstReleased);
+		const controller = new AbortController();
+		const queued = scope.transactional(async () => "ran", {
+			signal: controller.signal,
+		});
+
+		controller.abort(new Error("caller gave up"));
+
+		await expect(queued).rejects.toThrow("caller gave up");
+		releaseFirst();
+		await first;
+		expect(steps).toEqual(["begin outbox", "commit outbox"]);
+	});
+
+	it("keeps the order of the queue when a queued transaction aborts", async () => {
+		const steps: string[] = [];
+		const scope = new InMemoryTransactionScope([
+			recordingParticipant("outbox", steps),
+		]);
+		let releaseFirst!: () => void;
+		const firstReleased = new Promise<void>((resolve) => {
+			releaseFirst = resolve;
+		});
+		const first = scope.transactional(async () => {
+			await firstReleased;
+			steps.push("first done");
+		});
+		const controller = new AbortController();
+		const aborted = scope.transactional(async () => "ran", {
+			signal: controller.signal,
+		});
+		const third = scope.transactional(async () => {
+			steps.push("third work");
+		});
+
+		controller.abort(new Error("caller gave up"));
+		await expect(aborted).rejects.toThrow("caller gave up");
+		await Promise.resolve();
+		releaseFirst();
+		await Promise.all([first, third]);
+
+		expect(steps).toEqual([
+			"begin outbox",
+			"first done",
+			"commit outbox",
+			"begin outbox",
+			"third work",
+			"commit outbox",
+		]);
+	});
+
 	it("rejects with the abort reason before the transaction begins", async () => {
 		const steps: string[] = [];
 		const scope = new InMemoryTransactionScope([

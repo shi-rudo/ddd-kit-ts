@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { abortReason } from "./abort";
+import { abortReason, waitRejectingOnAbort } from "./abort";
 
 describe("abortReason", () => {
 	it("returns the signal's reason when it is set", () => {
@@ -28,5 +28,39 @@ describe("abortReason", () => {
 		const r = abortReason(polyfillSignal, "the fallback message");
 		expect(r).toBeInstanceOf(Error);
 		expect((r as Error).message).toBe("the fallback message");
+	});
+});
+
+describe("waitRejectingOnAbort", () => {
+	it("resolves with the value of the promise", async () => {
+		const controller = new AbortController();
+
+		await expect(
+			waitRejectingOnAbort(Promise.resolve("done"), controller.signal, "x"),
+		).resolves.toBe("done");
+	});
+
+	it("rejects with the abort reason while the promise still runs", async () => {
+		const controller = new AbortController();
+		const reason = new Error("caller gave up");
+		const waiting = waitRejectingOnAbort(
+			new Promise<never>(() => {}),
+			controller.signal,
+			"x",
+		);
+
+		controller.abort(reason);
+
+		await expect(waiting).rejects.toBe(reason);
+	});
+
+	it("rejects at once when the signal is already aborted", async () => {
+		const controller = new AbortController();
+		const reason = new Error("caller gave up");
+		controller.abort(reason);
+
+		await expect(
+			waitRejectingOnAbort(Promise.resolve("done"), controller.signal, "x"),
+		).rejects.toBe(reason);
 	});
 });

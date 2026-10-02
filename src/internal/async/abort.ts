@@ -18,3 +18,34 @@ export function abortReason(
 ): unknown {
 	return signal.reason ?? new Error(fallbackMessage);
 }
+
+/**
+ * Waits for `promise`, but REJECTS with the signal's reason as soon as the
+ * signal fires. The promise keeps running; only the wait ends. The abort
+ * listener goes away when the promise settles.
+ */
+export function waitRejectingOnAbort<T>(
+	promise: Promise<T>,
+	signal: AbortSignal | undefined,
+	abortMessage: string,
+): Promise<T> {
+	if (signal === undefined) return promise;
+	return new Promise<T>((resolve, reject) => {
+		if (signal.aborted) {
+			reject(abortReason(signal, abortMessage));
+			return;
+		}
+		const onAbort = (): void => reject(abortReason(signal, abortMessage));
+		signal.addEventListener("abort", onAbort, { once: true });
+		promise.then(
+			(value) => {
+				signal.removeEventListener("abort", onAbort);
+				resolve(value);
+			},
+			(error: unknown) => {
+				signal.removeEventListener("abort", onAbort);
+				reject(error);
+			},
+		);
+	});
+}
