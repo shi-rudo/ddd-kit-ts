@@ -47,7 +47,11 @@ interface StoredDeadline<TPayload> {
  * On its own, the store knows nothing about your `TransactionScope`
  * rollbacks: a rolled-back `schedule` or `cancel` stays applied. Register
  * the store with an `InMemoryTransactionScope` for tests that roll back or
- * retry. For production, prove the transactional half of the contract with
+ * retry. While a transaction is open, `due` does not return the deadlines
+ * that the transaction scheduled, because a processor reads only committed
+ * deadlines. A rollback also undoes an acknowledgement that a processor made
+ * while the transaction was open, so that deadline is delivered again. For
+ * production, prove the transactional half of the contract with
  * `createDeadlineStoreContractTests` and its rollback capability.
  *
  * Payloads are deep-copied on schedule and on delivery
@@ -62,6 +66,8 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 	private readonly maxDeliveryAttempts: number;
 	private readonly maxRecords: number | undefined;
 	private nextSequence = 0;
+	/** Delivery ids of the deadlines that the open transaction scheduled. */
+	private scheduledInTransaction: Set<string> | undefined;
 
 	constructor(options: InMemoryDeadlineStoreOptions = {}) {
 		const max = options.maxDeliveryAttempts ?? 5;
@@ -80,9 +86,9 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 	/**
 	 * Records the state that a rollback of an `InMemoryTransactionScope`
 	 * returns to: the pending and the dead-letter records. The rollback
-	 * keeps the sequence counter, as a database sequence does: a delivery
-	 * id that a poller saw during the transaction never names a later
-	 * deadline.
+	 * keeps the sequence counter, as a database sequence does, so a
+	 * delivery id stays unique. Until the transaction ends, `due` hides the
+	 * deadlines that it schedules.
 	 */
 	beginTransaction(): InMemoryTransaction {
 		const pending = [...this.pending].map(
@@ -91,8 +97,15 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 		const dead = [...this.dead].map(
 			([deliveryId, deadline]) => [deliveryId, { ...deadline }] as const,
 		);
+		const scheduled = new Set<string>();
+		this.scheduledInTransaction = scheduled;
+		const end = () => {
+			if (this.scheduledInTransaction === scheduled) {
+				this.scheduledInTransaction = undefined;
+			}
+		};
 		return {
-			commit: () => {},
+			commit: end,
 			rollback: () => {
 				this.pending.clear();
 				for (const [key, deadline] of pending) {
@@ -102,6 +115,7 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 				for (const [deliveryId, deadline] of dead) {
 					this.dead.set(deliveryId, { ...deadline });
 				}
+				end();
 			},
 		};
 	}
@@ -127,11 +141,13 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 			});
 		}
 		const sequence = this.nextSequence++;
+		const deliveryId = `deadline-${sequence}`;
+		this.scheduledInTransaction?.add(deliveryId);
 		// Replacing an occupied address gets a FRESH incarnation: a late
 		// ack or failure report against the old deliveryId must not touch
 		// the successor.
 		this.pending.set(deadlineAddress, {
-			deliveryId: `deadline-${sequence}`,
+			deliveryId,
 			scope: deadline.scope,
 			key: deadline.key,
 			dueAt: new Date(deadline.dueAt),
@@ -158,7 +174,11 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 		// (a loop computing capacity - inFlight may legitimately pass it).
 		if (limit === 0) return [];
 		return [...this.pending.values()]
-			.filter((deadline) => deadline.dueAt.getTime() <= now.getTime())
+			.filter(
+				(deadline) =>
+					deadline.dueAt.getTime() <= now.getTime() &&
+					!this.scheduledInTransaction?.has(deadline.deliveryId),
+			)
 			.sort(
 				(a, b) =>
 					a.dueAt.getTime() - b.dueAt.getTime() || a.sequence - b.sequence,

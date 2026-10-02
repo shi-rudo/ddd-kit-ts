@@ -83,28 +83,35 @@ describe("InMemoryDeadlineStore in an InMemoryTransactionScope", () => {
 		]);
 	});
 
-	it("never reuses the delivery id of a rolled-back schedule", async () => {
+	it("hides the deadlines of an open transaction from due until the commit", async () => {
 		const store = new InMemoryDeadlineStore();
 		const scope = new InMemoryTransactionScope([store]);
-		let ghost: string | undefined;
-		await scope
-			.transactional(async () => {
-				await store.schedule({
-					scope: "orders",
-					key: "o-1",
-					dueAt,
-					payload: 1,
-				});
-				ghost = (await store.due(dueAt, 1))[0]?.deliveryId;
-				throw new Error("work failed");
-			})
-			.catch(() => {});
+		await scope.transactional(() =>
+			store.schedule({ scope: "orders", key: "o-1", dueAt, payload: 1 }),
+		);
+		let release!: () => void;
+		const released = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let scheduled!: () => void;
+		const workScheduled = new Promise<void>((resolve) => {
+			scheduled = resolve;
+		});
 
-		await store.schedule({ scope: "orders", key: "o-2", dueAt, payload: 2 });
-		await store.markDelivered([ghost ?? ""]);
+		const transaction = scope.transactional(async () => {
+			await store.schedule({ scope: "orders", key: "o-2", dueAt, payload: 2 });
+			scheduled();
+			await released;
+		});
+		await workScheduled;
+		const duringTransaction = await store.due(dueAt, 10);
+		release();
+		await transaction;
 
-		expect(ghost).toBeDefined();
-		expect(await store.due(dueAt, 10)).toMatchObject([{ key: "o-2" }]);
+		expect(duringTransaction.map((deadline) => deadline.key)).toEqual(["o-1"]);
+		expect(
+			(await store.due(dueAt, 10)).map((deadline) => deadline.key),
+		).toEqual(["o-1", "o-2"]);
 	});
 
 	it("keeps the writes of a committed transaction", async () => {
