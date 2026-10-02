@@ -83,6 +83,63 @@ describe("InMemoryDeadlineStore in an InMemoryTransactionScope", () => {
 		]);
 	});
 
+	async function dueWhileOpen(
+		scope: InMemoryTransactionScope,
+		store: InMemoryDeadlineStore,
+		write: () => Promise<void>,
+	) {
+		let release!: () => void;
+		const released = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let written!: () => void;
+		const workWritten = new Promise<void>((resolve) => {
+			written = resolve;
+		});
+		const transaction = scope.transactional(async () => {
+			await write();
+			written();
+			await released;
+		});
+		await workWritten;
+		const due = await store.due(dueAt, 10);
+		release();
+		await transaction;
+		return due;
+	}
+
+	it("returns a committed deadline that an open transaction cancels", async () => {
+		const store = new InMemoryDeadlineStore();
+		const scope = new InMemoryTransactionScope([store]);
+		await scope.transactional(() =>
+			store.schedule({ scope: "orders", key: "o-1", dueAt, payload: 1 }),
+		);
+
+		const duringTransaction = await dueWhileOpen(scope, store, () =>
+			store.cancel("orders", "o-1"),
+		);
+
+		expect(duringTransaction).toMatchObject([{ key: "o-1" }]);
+		expect(await store.due(dueAt, 10)).toEqual([]);
+	});
+
+	it("returns the committed incarnation of a deadline that an open transaction reschedules", async () => {
+		const store = new InMemoryDeadlineStore();
+		const scope = new InMemoryTransactionScope([store]);
+		await scope.transactional(() =>
+			store.schedule({ scope: "orders", key: "o-1", dueAt, payload: 1 }),
+		);
+
+		const duringTransaction = await dueWhileOpen(scope, store, () =>
+			store.schedule({ scope: "orders", key: "o-1", dueAt, payload: 2 }),
+		);
+
+		expect(duringTransaction).toMatchObject([{ key: "o-1", payload: 1 }]);
+		expect(await store.due(dueAt, 10)).toMatchObject([
+			{ key: "o-1", payload: 2 },
+		]);
+	});
+
 	it("hides the deadlines of an open transaction from due until the commit", async () => {
 		const store = new InMemoryDeadlineStore();
 		const scope = new InMemoryTransactionScope([store]);
