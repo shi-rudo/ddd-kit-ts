@@ -152,6 +152,36 @@ describe("InMemoryTransactionScope", () => {
 		expect(steps).toEqual([]);
 	});
 
+	it("rejects a store that another scope holds", () => {
+		const store = recordingParticipant("outbox", []);
+		new InMemoryTransactionScope([store]);
+
+		expect(() => new InMemoryTransactionScope([store])).toThrow(
+			/participant 0 already belongs to an InMemoryTransactionScope/,
+		);
+	});
+
+	it("rejects a store that the participant list names twice", () => {
+		const store = recordingParticipant("outbox", []);
+
+		expect(() => new InMemoryTransactionScope([store, store])).toThrow(
+			/participant 1 already belongs to an InMemoryTransactionScope/,
+		);
+	});
+
+	it("registers no store when the construction fails", () => {
+		const store = recordingParticipant("outbox", []);
+		expect(
+			() =>
+				new InMemoryTransactionScope([
+					store,
+					{} as unknown as InMemoryTransactionParticipant,
+				]),
+		).toThrow(TypeError);
+
+		expect(() => new InMemoryTransactionScope([store])).not.toThrow();
+	});
+
 	it("rejects a participant without beginTransaction", () => {
 		expect(
 			() =>

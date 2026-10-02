@@ -19,6 +19,8 @@ export interface InMemoryTransactionParticipant {
 
 const ABORT_MESSAGE = "InMemoryTransactionScope aborted";
 
+const heldParticipants = new WeakSet<InMemoryTransactionParticipant>();
+
 /**
  * A {@link TransactionScope} for tests and demos that gives in-memory stores
  * a rollback. Register every store that the work writes inside the
@@ -39,6 +41,11 @@ const ABORT_MESSAGE = "InMemoryTransactionScope aborted";
  * outbox dispatcher. The documentation of each store says what its rollback
  * restores.
  *
+ * **A store belongs to one scope.** A scope works like one in-memory
+ * database, so share one scope for all stores of a test. A second scope with
+ * a store that a scope holds already throws at construction: the rollback of
+ * one scope would undo a commit of the other.
+ *
  * A store that is not registered keeps its own behavior: it does not roll
  * back.
  */
@@ -47,6 +54,7 @@ export class InMemoryTransactionScope implements TransactionScope<undefined> {
 	private lastTransaction: Promise<void> = Promise.resolve();
 
 	constructor(participants: ReadonlyArray<InMemoryTransactionParticipant>) {
+		const listed = new Set<InMemoryTransactionParticipant>();
 		for (const [index, participant] of participants.entries()) {
 			if (typeof participant?.beginTransaction !== "function") {
 				throw new TypeError(
@@ -54,8 +62,17 @@ export class InMemoryTransactionScope implements TransactionScope<undefined> {
 						"beginTransaction method.",
 				);
 			}
+			if (heldParticipants.has(participant) || listed.has(participant)) {
+				throw new TypeError(
+					`InMemoryTransactionScope: participant ${index} already belongs ` +
+						"to an InMemoryTransactionScope. Share one scope for all " +
+						"in-memory stores.",
+				);
+			}
+			listed.add(participant);
 		}
-		this.participants = [...participants];
+		for (const participant of listed) heldParticipants.add(participant);
+		this.participants = [...listed];
 	}
 
 	async transactional<T>(

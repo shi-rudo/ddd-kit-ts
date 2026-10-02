@@ -168,8 +168,9 @@ describe("InMemoryTransactionScope with a unit of work", () => {
 		const table = new OrderTable();
 		const outbox = new InMemoryOutbox<OrderEvent>();
 		const id = "o-1" as OrderId;
+		const scope = new InMemoryTransactionScope([table, outbox]);
 		const setup = new UnitOfWork({
-			scope: new InMemoryTransactionScope([table, outbox]),
+			scope,
 			outbox,
 			repositories: { orders: ordersIn(table) },
 		});
@@ -177,10 +178,9 @@ describe("InMemoryTransactionScope with a unit of work", () => {
 			repositories.orders.add(Order.place(id));
 		});
 		const uow = new UnitOfWork({
-			scope: new RetryingTransactionScope(
-				commitFailsOnce(new InMemoryTransactionScope([table, outbox])),
-				{ sleep: async () => {} },
-			),
+			scope: new RetryingTransactionScope(commitFailsOnce(scope), {
+				sleep: async () => {},
+			}),
 			outbox,
 			repositories: { orders: ordersIn(table) },
 		});
