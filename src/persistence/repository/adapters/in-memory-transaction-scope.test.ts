@@ -277,7 +277,7 @@ describe("InMemoryTransactionScope", () => {
 		expect(steps).toEqual([]);
 	});
 
-	it("rejects a store that another scope holds", () => {
+	it("rejects a store that another scope registered", () => {
 		const store = recordingParticipant("outbox", []);
 		new InMemoryTransactionScope([store]);
 
@@ -294,7 +294,7 @@ describe("InMemoryTransactionScope", () => {
 		);
 	});
 
-	it("rejects a store that a scope of another kit copy holds", async () => {
+	it("rejects a store that a scope of another kit copy registered", async () => {
 		const otherCopyPath = "./in-memory-transaction-scope.ts?copy=2";
 		const otherCopy = (await import(
 			/* @vite-ignore */ otherCopyPath

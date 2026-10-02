@@ -171,7 +171,7 @@ await withCommit({ scope, outbox }, async () => ({
 
 This scope has no rollback. For a test that rolls back or retries, use
 `InMemoryTransactionScope`; see
-[In-memory transactions](/guide/unit-of-work#in-memory-transactions).
+[In-memory transactions](./unit-of-work.md#in-memory-transactions).
 
 `TransactionScope` does not track aggregates, repository intent, or deletes.
 That lives in `UnitOfWork` above it. `withCommit` remains the lower-level commit
@@ -352,7 +352,7 @@ a source inside a transaction that rolls back, the source stays ended. The
 outbox then rejects every later event of the aggregate, which still exists.
 This also happens on the retry of a `RetryingTransactionScope`. Register the
 outbox with an `InMemoryTransactionScope` for a test that rolls back or
-retries; see [In-memory transactions](/guide/unit-of-work#in-memory-transactions).
+retries; see [In-memory transactions](./unit-of-work.md#in-memory-transactions).
 While a transaction is open, `getPending` returns only committed records.
 
 ```ts

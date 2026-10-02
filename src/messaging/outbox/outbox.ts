@@ -122,9 +122,9 @@ type DispatchedEventReceipt = {
  * Re-adding a pending event refreshes the stored commit envelope while the
  * delivery attempt count survives. Its commit sequence and size remain
  * immutable. Only this in-memory adapter may move a still-pending event to
- * another aggregate version: without an `InMemoryTransactionScope`, it keeps
- * the first add of a rolled-back attempt. Dead-lettered and acknowledged retries must match the complete original
- * candidate receipt. Reusing an `eventId` for another source or commit position
+ * another aggregate version. Without an `InMemoryTransactionScope`, it keeps
+ * the first add of a rolled-back attempt. Dead-lettered and acknowledged
+ * retries must match the complete original candidate receipt. Reusing an `eventId` for another source or commit position
  * throws {@link EventHarvestError} while the pending, dead-letter, or bounded
  * dispatched receipt still proves the collision. Insertion order is preserved:
  * `getPending` returns records in commit order, as the port contract requires.

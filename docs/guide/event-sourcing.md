@@ -764,8 +764,9 @@ options it is unbounded and intended only for finite-lifetime tests and demos.
 Snapshots are rebuildable derived data. Thus, this in-memory store can forget
 state safely. If you register the store with an `InMemoryTransactionScope`, a
 rollback restores the snapshots, their LRU order, and their expiry from the
-start of the transaction. The rollback then also drops a snapshot that code
-saved meanwhile after an earlier commit. The next load replays more events.
+start of the transaction. It also undoes a save or a delete that code made
+outside the transaction meanwhile. A snapshot is derived data, so a later load
+replays more events or discards a restored snapshot again.
 
 `maxEntries` enables least-recently-used eviction. `ttlMs` expires
 entries relative to an optional instance-bound `clock`. Loading a snapshot

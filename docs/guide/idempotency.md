@@ -191,7 +191,7 @@ never evicts a confirmed decision because doing so would weaken idempotency.
 
 On its own, the store is the leased, non-transactional family. Register it
 with an `InMemoryTransactionScope` for a test that rolls back or retries; see
-[In-memory transactions](/guide/unit-of-work#in-memory-transactions). A
+[In-memory transactions](./unit-of-work.md#in-memory-transactions). A
 rollback then undoes `claim` and `complete`, which the port runs inside the
 transaction: it returns each key that they wrote to its earlier entry. The
 lease operations `renew`, `confirm`, `abandon`, and `reconcile` stay out of

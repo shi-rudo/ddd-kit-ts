@@ -207,9 +207,9 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 	}
 
 	/**
-	 * The pending deadlines that a processor may see: the live records, except
-	 * that an address which the open transaction wrote shows its committed
-	 * deadline, if any.
+	 * The pending deadlines that a processor may see. For an address that the
+	 * open transaction wrote, it is the committed deadline, if any, and not
+	 * the live record.
 	 */
 	private committedPending(): StoredDeadline<TPayload>[] {
 		const versions = this.committedVersions;

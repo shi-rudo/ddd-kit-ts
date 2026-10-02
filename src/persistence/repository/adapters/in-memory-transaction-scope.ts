@@ -23,17 +23,19 @@ const { registry: registeredParticipants } =
  * A {@link TransactionScope} for tests and demos that gives in-memory stores
  * a rollback. Register every store that the work writes inside the
  * transaction. When the work fails, each registered store undoes the writes
- * of the attempt. A retry of a `RetryingTransactionScope` thus starts from
- * the committed state. Each store decides what its rollback undoes, and its
- * documentation says so.
+ * of the attempt, so the retry of a `RetryingTransactionScope` does not see
+ * them. Each store decides what its rollback undoes, and its documentation
+ * says so.
  *
  * **One transaction at a time.** A store cannot tell which of two open
  * transactions a write belongs to. The scope therefore runs its transactions
  * one after the other, in call order. A queued transaction stops its wait
- * when its abort signal fires. A transaction that waits inside for another
- * transaction of the same scope never finishes, unless its signal aborts. A
- * database with only one connection behaves the same way. Use a database
- * with real isolation to test concurrent transactions.
+ * when its abort signal fires. Work that waits inside a transaction for
+ * another transaction of the same scope never finishes, because the inner
+ * transaction waits for the outer one. Only the abort signal of the inner
+ * transaction ends that wait. A database with only one connection behaves
+ * the same way. Use a database with real isolation to test concurrent
+ * transactions.
  *
  * **Code outside a transaction.** A dispatcher, a deadline processor, and a
  * `hasReached` check run outside the transactions. Outbox `getPending`,
@@ -75,8 +77,8 @@ export class InMemoryTransactionScope implements TransactionScope<undefined> {
 			if (registeredParticipants.has(participant)) {
 				throw new TypeError(
 					`InMemoryTransactionScope: participant ${index} already belongs ` +
-						"to an InMemoryTransactionScope. Share one scope for all " +
-						"in-memory stores.",
+						"to an InMemoryTransactionScope. Register all in-memory " +
+						"stores of a test with one scope.",
 				);
 			}
 			listed.set(participant, index);

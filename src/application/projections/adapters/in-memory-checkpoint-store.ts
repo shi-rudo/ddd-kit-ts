@@ -31,10 +31,10 @@ export interface InMemoryProjectionCheckpointStoreOptions {
  * `TransactionScope` rollbacks: a rolled-back projector batch keeps its
  * checkpoints. Register the store with an `InMemoryTransactionScope` for
  * tests that roll back or retry. While a transaction is open, `hasReached`
- * answers from the committed checkpoints. Use it for tests and disposable
- * in-memory read models; production atomicity is the durable adapter's
- * contract, proved with `createProjectionCheckpointStoreContractTests` and
- * its rollback capability.
+ * answers from the checkpoints at the start of the transaction. Use it for
+ * tests and disposable in-memory read models; production atomicity is the
+ * durable adapter's contract, proved with
+ * `createProjectionCheckpointStoreContractTests` and its rollback capability.
  *
  * Without `maxCheckpoints`, checkpoint retention is unbounded and supported
  * only for finite-lifetime tests and demos. A configured limit rejects a new
@@ -77,7 +77,7 @@ export class InMemoryProjectionCheckpointStore
 	/**
 	 * Records the state that a rollback of an `InMemoryTransactionScope`
 	 * returns to: the checkpoints and their count. Until the transaction
-	 * ends, `hasReached` reads these committed checkpoints. The rollback
+	 * ends, `hasReached` reads these recorded checkpoints. The rollback
 	 * keeps the checkpoint locks, because a caller still holds them.
 	 */
 	beginTransaction(): InMemoryTransaction {

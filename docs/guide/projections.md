@@ -418,8 +418,9 @@ capability.
 
 `InMemoryProjectionCheckpointStore` is a test/reference implementation. It
 rolls back only when you register it with an `InMemoryTransactionScope`; see
-[In-memory transactions](/guide/unit-of-work#in-memory-transactions). While a
-transaction is open, `hasReached` answers from the committed checkpoints. The
+[In-memory transactions](./unit-of-work.md#in-memory-transactions). While a
+transaction is open, `hasReached` answers from the checkpoints at the start of
+the transaction. The
 in-memory rollback does not prove production rollback behavior.
 Without `maxCheckpoints`, its checkpoint map is unbounded and intended only for
 finite-lifetime tests and demos. A configured limit counts aggregate identities across all
