@@ -2903,6 +2903,44 @@ describe("UnitOfWork", () => {
 			expect((rejection as RollbackError).cause).toBe(outboxError);
 		});
 
+		it("a scope that wraps an outbox failure reports a CommitError, not a RollbackError", async () => {
+			const outboxError = new Error("outbox write failed");
+			const scope: TransactionScope<undefined> = {
+				transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
+					try {
+						return await fn(undefined);
+					} catch (error) {
+						throw new Error("driver wrapped it", { cause: error });
+					}
+				},
+			};
+			const outbox: Outbox<TestEvent> = {
+				add: async () => {
+					throw outboxError;
+				},
+				endEventSources: async () => {},
+				getPending: async () => [],
+				markDispatched: async () => {},
+			};
+			const { uow } = createUow({ scope, outbox });
+			const agg = createMockAggregate("o-1", [testEvent("o-1")]);
+
+			const rejection = await uow
+				.run(async ({ repositories }) => {
+					repositories.orders.add(agg);
+					return undefined;
+				})
+				.then(
+					() => undefined,
+					(e: unknown) => e,
+				);
+
+			expect(rejection).toBeInstanceOf(CommitError);
+			expect(((rejection as CommitError).cause as Error).cause).toBe(
+				outboxError,
+			);
+		});
+
 		it("a commit that fails after the callback resolved stays a CommitError", async () => {
 			const commitFailure = new Error("COMMIT failed");
 			const scope: TransactionScope<undefined> = {
