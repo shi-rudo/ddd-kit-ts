@@ -15,6 +15,7 @@ import {
 } from "../../errors/kit-errors";
 import type { EventCommitCandidate } from "../../messaging/committed-event";
 import { InMemoryOutbox } from "../../messaging/outbox/outbox";
+import { InMemoryTransactionScope } from "../../persistence/repository/adapters/in-memory-transaction-scope";
 import { RetryingTransactionScope } from "../../persistence/repository/retrying-scope";
 import type { TransactionScope } from "../../persistence/repository/scope";
 import type {
@@ -431,7 +432,79 @@ describe("withIdempotentCommit", () => {
 	});
 });
 
+describe("withIdempotentCommit with an InMemoryTransactionScope", () => {
+	it("keeps a confirmed outcome when a later transaction of the same scope rolls back", async () => {
+		const idempotency = new InMemoryIdempotencyStore<undefined>();
+		const deps = {
+			outbox: new InMemoryOutbox<AnyDomainEvent>(),
+			scope: new InMemoryTransactionScope([idempotency]),
+			idempotency,
+		};
+		const first = withIdempotentCommit(
+			deps,
+			{ key: "req-1", fingerprint: "fp-1" },
+			async () => ({ result: "first", commits: [] }),
+		);
+		const second = withIdempotentCommit(
+			deps,
+			{ key: "req-2", fingerprint: "fp-2" },
+			async () => {
+				await first;
+				throw new Error("second failed");
+			},
+		);
+
+		await expect(second).rejects.toThrow("second failed");
+		await expect(first).resolves.toEqual({ replayed: false, result: "first" });
+		await expect(
+			withIdempotentCommit(
+				deps,
+				{ key: "req-1", fingerprint: "fp-1" },
+				async () => ({ result: "rerun", commits: [] }),
+			),
+		).resolves.toEqual({ replayed: true, result: "first" });
+	});
+});
+
 describe("InMemoryIdempotencyStore", () => {
+	it("returns a claim to pending after a rolled-back complete", async () => {
+		const store = new InMemoryIdempotencyStore<undefined>();
+		const scope = new InMemoryTransactionScope([store]);
+		const handle = await scope.transactional(() =>
+			claimHandle(store, "k", "fp"),
+		);
+
+		await scope
+			.transactional(async () => {
+				await store.complete(undefined, handle, "rolled back");
+				throw new Error("work failed");
+			})
+			.catch(() => {});
+		await store.complete(undefined, handle, "committed");
+		await store.confirm(handle);
+
+		await expect(store.claim(undefined, "k", "fp")).resolves.toEqual({
+			status: "completed",
+			outcome: "committed",
+		});
+	});
+
+	it("leaves the key free after a rolled-back claim", async () => {
+		const store = new InMemoryIdempotencyStore<undefined>();
+		const scope = new InMemoryTransactionScope([store]);
+
+		await scope
+			.transactional(async () => {
+				await claimHandle(store, "k", "fp");
+				throw new Error("work failed");
+			})
+			.catch(() => {});
+
+		await expect(store.claim(undefined, "k", "fp")).resolves.toMatchObject({
+			status: "claimed",
+		});
+	});
+
 	it("isolates stored outcomes from caller mutation", async () => {
 		const store = new InMemoryIdempotencyStore<undefined>();
 		const handle = await claimHandle(store, "k", "fp");

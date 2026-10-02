@@ -33,9 +33,11 @@ const ABORT_MESSAGE = "InMemoryTransactionScope aborted";
  * database that has only one connection. Use a database with real isolation
  * to test concurrent transactions.
  *
- * **The rollback restores the whole store.** A write that the store took
- * outside the transaction while it was open, for example an acknowledgement
- * of an outbox dispatcher, is undone too.
+ * **Each store decides what its rollback restores.** A store that restores
+ * its whole state also undoes a write that it took outside the transaction
+ * while the transaction was open, for example an acknowledgement of an
+ * outbox dispatcher. The documentation of each store says what its rollback
+ * restores.
  *
  * A store that is not registered keeps its own behavior: it does not roll
  * back.

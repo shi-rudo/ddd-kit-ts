@@ -10,6 +10,10 @@ import {
 	MAX_TIMER_DELAY_MS,
 } from "../../../internal/validate";
 import type {
+	InMemoryTransaction,
+	InMemoryTransactionParticipant,
+} from "../../../persistence/repository/adapters/in-memory-transaction-scope";
+import type {
 	IdempotencyClaim,
 	IdempotencyClaimHandle,
 	IdempotencyLease,
@@ -68,16 +72,29 @@ function positiveSafeInteger(value: number): boolean {
  * process must configure the limit or use a durable adapter; exhaustion
  * rejects new keys before mutation and never forgets an idempotency decision.
  *
- * It is deliberately not transaction-aware. Claims and staged outcomes carry
- * bounded leases, while every mutation compares the store-minted token. An
- * expired pending claim may be replaced; an expired staged outcome cannot be
- * guessed away and instead returns `reconciliation-required`. Only an
- * authoritative `committed` / `not-committed` decision can settle it.
+ * On its own, the store is the reference for the leased family: it cannot
+ * see commits or rollbacks. Claims and staged outcomes carry bounded leases,
+ * while every mutation compares the store-minted token. An expired pending
+ * claim may be replaced; an expired staged outcome cannot be guessed away and
+ * instead returns `reconciliation-required`. Only an authoritative
+ * `committed` / `not-committed` decision can settle it.
+ *
+ * Register the store with an `InMemoryTransactionScope` for tests that roll
+ * back or retry. A rollback then undoes the writes of `claim` and `complete`,
+ * which the port runs inside the transaction. The lease operations `renew`,
+ * `confirm`, `abandon`, and `reconcile` stay out of band, as the port defines
+ * them, so a rollback keeps their writes. A confirmation that arrives after
+ * the next transaction began therefore survives the rollback of that
+ * transaction.
  */
 export class InMemoryIdempotencyStore<TCtx = unknown>
-	implements IdempotencyStore<TCtx>
+	implements IdempotencyStore<TCtx>, InMemoryTransactionParticipant
 {
 	private readonly entries = new Map<string, IdempotencyEntry>();
+	/** The entries that `claim` and `complete` replaced since the latest transaction began. */
+	private replacedInTransaction:
+		| Array<readonly [string, IdempotencyEntry | undefined]>
+		| undefined;
 	private readonly clock: () => Date;
 	private readonly claimTokenFactory: () => string;
 	private readonly leaseDurationMs: number;
@@ -117,6 +134,27 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 				`renewAfterMs must be a positive safe integer below leaseDurationMs and no greater than ${MAX_TIMER_DELAY_MS}`,
 			);
 		}
+	}
+
+	/**
+	 * Starts to record the entries that `claim` and `complete` replace. The
+	 * rollback restores them in reverse order. It keeps the token generation,
+	 * so a token from a rolled-back claim never names a later claim.
+	 */
+	beginTransaction(): InMemoryTransaction {
+		const replaced: Array<readonly [string, IdempotencyEntry | undefined]> = [];
+		this.replacedInTransaction = replaced;
+		return {
+			rollback: () => {
+				for (const [key, entry] of [...replaced].reverse()) {
+					if (entry === undefined) this.entries.delete(key);
+					else this.entries.set(key, entry);
+				}
+				if (this.replacedInTransaction === replaced) {
+					this.replacedInTransaction = undefined;
+				}
+			},
+		};
 	}
 
 	async claim(
@@ -190,7 +228,7 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 		}
 		const expiresAtMs = now + this.leaseDurationMs;
 		this.lease(expiresAtMs);
-		this.entries.set(claim.key, {
+		this.writeInTransaction(claim.key, {
 			fingerprint: existing.fingerprint,
 			status: "staged",
 			token: existing.token,
@@ -303,7 +341,7 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 		const token = `${this.tokenGeneration}:${tokenPart}`;
 		const expiresAtMs = now + this.leaseDurationMs;
 		const lease = this.lease(expiresAtMs);
-		this.entries.set(key, {
+		this.writeInTransaction(key, {
 			fingerprint,
 			status: "pending",
 			token,
@@ -313,6 +351,11 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 			status: "claimed",
 			claim: Object.freeze({ key, token, lease }),
 		};
+	}
+
+	private writeInTransaction(key: string, entry: IdempotencyEntry): void {
+		this.replacedInTransaction?.push([key, this.entries.get(key)]);
+		this.entries.set(key, entry);
 	}
 
 	private lease(expiresAtMs: number): IdempotencyLease {
