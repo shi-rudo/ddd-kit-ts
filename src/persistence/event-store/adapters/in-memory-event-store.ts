@@ -100,6 +100,7 @@ export class InMemoryEventStore<Evt extends AnyDomainEvent>
 		);
 		const totalEvents = this.totalEvents;
 		return {
+			commit: () => {},
 			rollback: () => {
 				this.streams.clear();
 				for (const [key, events] of streams) this.streams.set(key, [...events]);

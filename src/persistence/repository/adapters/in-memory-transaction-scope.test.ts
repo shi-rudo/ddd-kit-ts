@@ -7,12 +7,21 @@ import {
 function recordingParticipant(
 	name: string,
 	steps: string[],
-	options: { readonly rollbackFails?: boolean } = {},
+	options: {
+		readonly commitFails?: boolean;
+		readonly rollbackFails?: boolean;
+	} = {},
 ): InMemoryTransactionParticipant {
 	return {
 		beginTransaction: () => {
 			steps.push(`begin ${name}`);
 			return {
+				commit: () => {
+					steps.push(`commit ${name}`);
+					if (options.commitFails) {
+						throw new Error(`commit of ${name} failed`);
+					}
+				},
 				rollback: () => {
 					steps.push(`rollback ${name}`);
 					if (options.rollbackFails) {
@@ -53,16 +62,44 @@ describe("InMemoryTransactionScope", () => {
 		]);
 	});
 
-	it("keeps the changes of the participants when the work succeeds", async () => {
+	it("commits every participant in order when the work succeeds", async () => {
 		const steps: string[] = [];
 		const scope = new InMemoryTransactionScope([
 			recordingParticipant("outbox", steps),
+			recordingParticipant("events", steps),
 		]);
 
-		const result = await scope.transactional(async () => "done");
+		const result = await scope.transactional(async () => {
+			steps.push("work");
+			return "done";
+		});
 
 		expect(result).toBe("done");
-		expect(steps).toEqual(["begin outbox"]);
+		expect(steps).toEqual([
+			"begin outbox",
+			"begin events",
+			"work",
+			"commit outbox",
+			"commit events",
+		]);
+	});
+
+	it("commits every participant and reports the first commit failure", async () => {
+		const steps: string[] = [];
+		const scope = new InMemoryTransactionScope([
+			recordingParticipant("outbox", steps, { commitFails: true }),
+			recordingParticipant("events", steps),
+		]);
+
+		await expect(scope.transactional(async () => "done")).rejects.toThrow(
+			"commit of outbox failed",
+		);
+		expect(steps).toEqual([
+			"begin outbox",
+			"begin events",
+			"commit outbox",
+			"commit events",
+		]);
 	});
 
 	it("runs one transaction at a time", async () => {
@@ -91,8 +128,10 @@ describe("InMemoryTransactionScope", () => {
 			"begin outbox",
 			"first work",
 			"first done",
+			"commit outbox",
 			"begin outbox",
 			"second work",
+			"commit outbox",
 		]);
 	});
 
@@ -109,7 +148,12 @@ describe("InMemoryTransactionScope", () => {
 
 		await expect(failed).rejects.toThrow("work failed");
 		await expect(next).resolves.toBe("next");
-		expect(steps).toEqual(["begin outbox", "rollback outbox", "begin outbox"]);
+		expect(steps).toEqual([
+			"begin outbox",
+			"rollback outbox",
+			"begin outbox",
+			"commit outbox",
+		]);
 	});
 
 	it("rolls back every participant and reports the first rollback failure", async () => {

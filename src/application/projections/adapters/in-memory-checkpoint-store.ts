@@ -80,6 +80,7 @@ export class InMemoryProjectionCheckpointStore
 		);
 		const checkpointCount = this.checkpointCount;
 		return {
+			commit: () => {},
 			rollback: () => {
 				this.checkpoints.clear();
 				for (const [projection, perAggregate] of checkpoints) {

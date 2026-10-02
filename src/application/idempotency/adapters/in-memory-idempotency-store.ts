@@ -91,7 +91,7 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 	implements IdempotencyStore<TCtx>, InMemoryTransactionParticipant
 {
 	private readonly entries = new Map<string, IdempotencyEntry>();
-	/** The entries that `claim` and `complete` replaced since the latest transaction began. */
+	/** The entries that `claim` and `complete` replaced in the open transaction. */
 	private replacedInTransaction:
 		| Array<readonly [string, IdempotencyEntry | undefined]>
 		| undefined;
@@ -144,15 +144,19 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 	beginTransaction(): InMemoryTransaction {
 		const replaced: Array<readonly [string, IdempotencyEntry | undefined]> = [];
 		this.replacedInTransaction = replaced;
+		const end = () => {
+			if (this.replacedInTransaction === replaced) {
+				this.replacedInTransaction = undefined;
+			}
+		};
 		return {
+			commit: end,
 			rollback: () => {
 				for (const [key, entry] of [...replaced].reverse()) {
 					if (entry === undefined) this.entries.delete(key);
 					else this.entries.set(key, entry);
 				}
-				if (this.replacedInTransaction === replaced) {
-					this.replacedInTransaction = undefined;
-				}
+				end();
 			},
 		};
 	}

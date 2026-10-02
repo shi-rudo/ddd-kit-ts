@@ -78,6 +78,7 @@ export class InMemorySnapshotStore<TState = unknown>
 	beginTransaction(): InMemoryTransaction {
 		const snapshots = [...this.snapshots];
 		return {
+			commit: () => {},
 			rollback: () => {
 				this.snapshots.clear();
 				for (const [key, stored] of snapshots) this.snapshots.set(key, stored);

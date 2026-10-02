@@ -626,6 +626,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 		const cursors = [...this.sourceCursors];
 		const ended = [...this.endedSourceKeys];
 		return {
+			commit: () => {},
 			rollback: () => {
 				refill(this.pending, pending);
 				refill(this.dead, dead);

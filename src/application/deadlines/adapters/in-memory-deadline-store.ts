@@ -92,6 +92,7 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 			([deliveryId, deadline]) => [deliveryId, { ...deadline }] as const,
 		);
 		return {
+			commit: () => {},
 			rollback: () => {
 				this.pending.clear();
 				for (const [key, deadline] of pending) {

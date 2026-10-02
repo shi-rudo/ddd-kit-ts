@@ -3,15 +3,17 @@ import type { TransactionalOptions, TransactionScope } from "../scope";
 
 /** The transaction of one in-memory store inside an {@link InMemoryTransactionScope}. */
 export interface InMemoryTransaction {
-	/** Returns the store to its state at the start of the transaction. */
+	/** Ends the transaction and keeps its writes. */
+	commit(): void;
+	/** Ends the transaction and undoes its writes. */
 	rollback(): void;
 }
 
 /**
  * An in-memory store that can join an {@link InMemoryTransactionScope}. The
- * store records its state when a transaction begins, and the transaction it
- * returns restores that state on rollback. The store keeps the form of its
- * state to itself.
+ * store records its state when a transaction begins. The transaction that it
+ * returns keeps the writes on commit and undoes them on rollback. The store
+ * keeps the form of its state to itself.
  */
 export interface InMemoryTransactionParticipant {
 	beginTransaction(): InMemoryTransaction;
@@ -91,12 +93,20 @@ export class InMemoryTransactionScope implements TransactionScope<undefined> {
 			const transactions = this.participants.map((participant) =>
 				participant.beginTransaction(),
 			);
+			let result: T;
 			try {
-				return await fn(undefined);
+				result = await fn(undefined);
 			} catch (error) {
-				const rollback = rollBackAll(transactions);
+				const rollback = endAll([...transactions].reverse(), (transaction) =>
+					transaction.rollback(),
+				);
 				throw rollback.failed ? rollback.failure : error;
 			}
+			const commit = endAll(transactions, (transaction) =>
+				transaction.commit(),
+			);
+			if (commit.failed) throw commit.failure;
+			return result;
 		} finally {
 			finish();
 		}
@@ -104,20 +114,22 @@ export class InMemoryTransactionScope implements TransactionScope<undefined> {
 }
 
 /**
- * Rolls back every transaction in reverse order, also after a failed
- * rollback, and returns the first failure. A scope that rejects with a
- * different error than the work tells `UnitOfWork.run` that the rollback
- * failed.
+ * Ends every transaction, also after a failed end, and returns the first
+ * failure. For a rollback, a scope that rejects with a different error than
+ * the work tells `UnitOfWork.run` that the rollback failed.
  */
-function rollBackAll(transactions: ReadonlyArray<InMemoryTransaction>): {
+function endAll(
+	transactions: ReadonlyArray<InMemoryTransaction>,
+	end: (transaction: InMemoryTransaction) => void,
+): {
 	readonly failed: boolean;
 	readonly failure: unknown;
 } {
 	let failure: unknown;
 	let failed = false;
-	for (const transaction of [...transactions].reverse()) {
+	for (const transaction of transactions) {
 		try {
-			transaction.rollback();
+			end(transaction);
 		} catch (error) {
 			if (!failed) {
 				failure = error;

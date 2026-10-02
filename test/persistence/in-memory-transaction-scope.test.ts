@@ -77,6 +77,7 @@ class OrderTable implements InMemoryTransactionParticipant {
 	beginTransaction() {
 		const recorded = [...this.rows];
 		return {
+			commit: () => {},
 			rollback: () => {
 				this.rows.clear();
 				for (const [id, row] of recorded) this.rows.set(id, row);
