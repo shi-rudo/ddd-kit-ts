@@ -152,25 +152,27 @@ export class InMemoryEventStore<Evt extends AnyDomainEvent>
 				attempted: events.length,
 			});
 		}
-		// Atomic by construction: the conflict check above throws before
-		// anything is written (including the get-or-create, so a rejected
-		// append on a nonexistent stream leaves no empty entry behind).
-		// Pushing in place keeps append O(batch) instead of O(stream) per
-		// call; no caller ever holds the internal array (readStream
-		// slices). Element-wise, not push(...events): a spread into
-		// arguments overflows the engine's argument limit on huge batches.
+		// Detached on write and on read: the port forbids handing out live
+		// internal state, and a caller-mutated plain event must not rewrite
+		// stored history. Kit-minted events are already frozen; the clone
+		// detaches them from the shared graph as well. The whole batch is
+		// cloned first, because an event that cannot be cloned must reject
+		// the append before anything is written.
+		const owned = events.map((event) => structuredClone(event));
+		// Atomic by construction: every check and the clone above throw
+		// before anything is written (including the get-or-create, so a
+		// rejected append on a nonexistent stream leaves no empty entry
+		// behind). Pushing in place keeps append O(batch) instead of
+		// O(stream) per call; no caller ever holds the internal array
+		// (readStream slices). Element-wise, not push(...owned): a spread
+		// into arguments overflows the engine's argument limit on huge
+		// batches.
 		let storedEvents = existing;
 		if (storedEvents === undefined) {
 			storedEvents = [];
 			this.streams.set(key, storedEvents);
 		}
-		for (const event of events) {
-			// Detached on write and on read: the port forbids handing out
-			// live internal state, and a caller-mutated plain event must not
-			// rewrite stored history. Kit-minted events are already frozen;
-			// the clone detaches them from the shared graph as well.
-			storedEvents.push(structuredClone(event));
-		}
+		for (const event of owned) storedEvents.push(event);
 		this.totalEvents += events.length;
 	}
 

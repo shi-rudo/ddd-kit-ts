@@ -361,6 +361,40 @@ describe("InMemoryEventStore", () => {
 		});
 	});
 
+	it("rejects a batch with an event that cannot be cloned and writes none of it", async () => {
+		const store = new InMemoryEventStore<OrderEvent>({ maxEvents: 3 });
+		await store.append(streamA, [renamed("first")], { expectedVersion: 0 });
+		const uncloneable = {
+			...renamed("third"),
+			payload: { name: "third", note: () => "not cloneable" },
+		} as unknown as OrderEvent;
+
+		await expect(
+			store.append(streamA, [renamed("second"), uncloneable], {
+				expectedVersion: 1,
+			}),
+		).rejects.toThrow();
+		await expect(
+			store.append(streamB, [renamed("other"), uncloneable], {
+				expectedVersion: 0,
+			}),
+		).rejects.toThrow();
+
+		expect(await store.readStream(streamA, allEvents)).toMatchObject({
+			lastVersion: 1,
+		});
+		expect(await store.readStream(streamB, allEvents)).toEqual({
+			exists: false,
+			lastVersion: 0,
+			events: [],
+		});
+		await expect(
+			store.append(streamA, [renamed("second"), renamed("third")], {
+				expectedVersion: 1,
+			}),
+		).resolves.toBeUndefined();
+	});
+
 	it("treats an empty append as a no-op", async () => {
 		const store = new InMemoryEventStore<OrderEvent>();
 
