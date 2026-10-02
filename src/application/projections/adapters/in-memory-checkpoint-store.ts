@@ -7,7 +7,7 @@ import { assertPositiveSafeInteger } from "../../../internal/validate";
 import type {
 	InMemoryTransaction,
 	InMemoryTransactionParticipant,
-} from "../../../persistence/repository/adapters/in-memory-transaction-scope";
+} from "../../../persistence/repository/in-memory-transaction";
 import {
 	isPositionAfter,
 	type ProjectionCheckpoint,

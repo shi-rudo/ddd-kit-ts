@@ -7,7 +7,7 @@ import { assertPositiveSafeInteger } from "../../../internal/validate";
 import type {
 	InMemoryTransaction,
 	InMemoryTransactionParticipant,
-} from "../../repository/adapters/in-memory-transaction-scope";
+} from "../../repository/in-memory-transaction";
 import type { SnapshotStore } from "../snapshot-store";
 
 export interface InMemorySnapshotStoreOptions {

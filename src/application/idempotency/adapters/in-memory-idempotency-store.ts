@@ -12,7 +12,7 @@ import {
 import type {
 	InMemoryTransaction,
 	InMemoryTransactionParticipant,
-} from "../../../persistence/repository/adapters/in-memory-transaction-scope";
+} from "../../../persistence/repository/in-memory-transaction";
 import type {
 	IdempotencyClaim,
 	IdempotencyClaimHandle,

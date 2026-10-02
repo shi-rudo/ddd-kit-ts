@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import { InMemoryDeadlineStore } from "../application/deadlines/adapters/in-memory-deadline-store";
-import {
-	type InMemoryTransaction,
-	InMemoryTransactionScope,
-} from "../persistence/repository/adapters/in-memory-transaction-scope";
+import { InMemoryTransactionScope } from "../persistence/repository/adapters/in-memory-transaction-scope";
+import type { InMemoryTransaction } from "../persistence/repository/in-memory-transaction";
 import {
 	createDeadlineStoreContractTests,
 	type DeadlineStoreContractEnvironment,

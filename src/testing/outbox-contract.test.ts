@@ -6,10 +6,8 @@ import {
 } from "../domain/event/domain-event";
 import { InMemoryOutbox } from "../messaging/outbox/outbox";
 import type { Outbox } from "../messaging/outbox/ports";
-import {
-	type InMemoryTransaction,
-	InMemoryTransactionScope,
-} from "../persistence/repository/adapters/in-memory-transaction-scope";
+import { InMemoryTransactionScope } from "../persistence/repository/adapters/in-memory-transaction-scope";
+import type { InMemoryTransaction } from "../persistence/repository/in-memory-transaction";
 import {
 	createOutboxContractTests,
 	type OutboxContractHarness,

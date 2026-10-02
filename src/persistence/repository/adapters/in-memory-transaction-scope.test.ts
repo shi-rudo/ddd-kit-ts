@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
-import {
-	type InMemoryTransactionParticipant,
-	InMemoryTransactionScope,
-} from "./in-memory-transaction-scope";
+import type { InMemoryTransactionParticipant } from "../in-memory-transaction";
+import { InMemoryTransactionScope } from "./in-memory-transaction-scope";
 
 function recordingParticipant(
 	name: string,

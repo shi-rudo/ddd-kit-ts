@@ -2,25 +2,11 @@ import {
 	abortReason,
 	waitRejectingOnAbort,
 } from "../../../internal/async/abort";
+import type {
+	InMemoryTransaction,
+	InMemoryTransactionParticipant,
+} from "../in-memory-transaction";
 import type { TransactionalOptions, TransactionScope } from "../scope";
-
-/** The transaction of one in-memory store inside an {@link InMemoryTransactionScope}. */
-export interface InMemoryTransaction {
-	/** Ends the transaction and keeps its writes. */
-	commit(): void;
-	/** Ends the transaction and undoes its writes. */
-	rollback(): void;
-}
-
-/**
- * An in-memory store that can join an {@link InMemoryTransactionScope}. The
- * store records its state when a transaction begins. The transaction that it
- * returns keeps the writes on commit and undoes them on rollback. The store
- * keeps the form of its state to itself.
- */
-export interface InMemoryTransactionParticipant {
-	beginTransaction(): InMemoryTransaction;
-}
 
 const ABORT_MESSAGE = "InMemoryTransactionScope aborted";
 
