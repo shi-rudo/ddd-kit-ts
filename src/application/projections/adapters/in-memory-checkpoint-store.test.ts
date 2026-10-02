@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import { InMemoryCapacityExceededError } from "../../../errors/kit-errors";
+import { InMemoryTransactionScope } from "../../../persistence/repository/adapters/in-memory-transaction-scope";
 import { InMemoryProjectionCheckpointStore } from "./in-memory-checkpoint-store";
 
 const identity = (aggregateId: string) => ({
@@ -65,4 +66,79 @@ describe("InMemoryProjectionCheckpointStore capacity", () => {
 			).toThrow(RangeError);
 		},
 	);
+});
+
+describe("InMemoryProjectionCheckpointStore in an InMemoryTransactionScope", () => {
+	it("restores the checkpoints of a rolled-back reset", async () => {
+		const store = new InMemoryProjectionCheckpointStore();
+		const scope = new InMemoryTransactionScope([store]);
+		await store.save(undefined, "orders", identity("o-1"), checkpoint(2));
+
+		await scope
+			.transactional(async () => {
+				await store.reset(undefined, "orders");
+				throw new Error("rebuild failed");
+			})
+			.catch(() => {});
+
+		expect(await store.load(undefined, "orders", identity("o-1"))).toEqual(
+			checkpoint(2),
+		);
+	});
+
+	it("releases the capacity of a rolled-back new checkpoint", async () => {
+		const store = new InMemoryProjectionCheckpointStore({ maxCheckpoints: 1 });
+		const scope = new InMemoryTransactionScope([store]);
+
+		await scope
+			.transactional(async () => {
+				await store.save(undefined, "orders", identity("o-1"), checkpoint(1));
+				throw new Error("batch failed");
+			})
+			.catch(() => {});
+
+		await expect(
+			store.save(undefined, "orders", identity("o-2"), checkpoint(1)),
+		).resolves.toBeUndefined();
+		expect(await store.load(undefined, "orders", identity("o-1"))).toBe(
+			undefined,
+		);
+	});
+
+	it("does not release a checkpoint lock that a caller still holds after a rollback", async () => {
+		const store = new InMemoryProjectionCheckpointStore();
+		const scope = new InMemoryTransactionScope([store]);
+		const steps: string[] = [];
+		let releaseHolder!: () => void;
+		const holderReleased = new Promise<void>((resolve) => {
+			releaseHolder = resolve;
+		});
+		let holder!: Promise<void>;
+
+		await scope
+			.transactional(async () => {
+				holder = store.withCheckpointLocks(
+					undefined,
+					"orders",
+					[identity("o-1")],
+					() => holderReleased,
+				);
+				throw new Error("batch failed");
+			})
+			.catch(() => {});
+		const waiter = store.withCheckpointLocks(
+			undefined,
+			"orders",
+			[identity("o-1")],
+			async () => {
+				steps.push("waiter");
+			},
+		);
+		await Promise.resolve();
+		steps.push("holder released");
+		releaseHolder();
+		await Promise.all([holder, waiter]);
+
+		expect(steps).toEqual(["holder released", "waiter"]);
+	});
 });
