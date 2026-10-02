@@ -629,6 +629,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				this.rememberDispatched(id, record.source, record.position);
 			}
 			this.pending.delete(id);
+			this.forgetCommittedVersion(id);
 			// Manual redelivery then ack: dispatching a dead-lettered record
 			// clears it too.
 			this.dead.delete(id);
@@ -669,6 +670,13 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				end();
 			},
 		};
+	}
+
+	/** A record that a dispatcher removed is no longer pending in the committed state. */
+	private forgetCommittedVersion(eventId: string): void {
+		if (this.committedVersions?.has(eventId)) {
+			this.committedVersions.set(eventId, undefined);
+		}
 	}
 
 	private recordCommittedVersion(eventId: string): void {
@@ -804,6 +812,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 			error instanceof Error ? error.message : String(error ?? "unknown");
 		if (record.attempts >= this.maxDeliveryAttempts) {
 			this.pending.delete(dispatchId);
+			this.forgetCommittedVersion(dispatchId);
 			const deadLetter: DeadLetterRecord<Evt> = {
 				dispatchId: record.dispatchId,
 				event: record.event,

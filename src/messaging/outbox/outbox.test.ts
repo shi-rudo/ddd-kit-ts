@@ -235,6 +235,47 @@ describe("InMemoryOutbox in an InMemoryTransactionScope", () => {
 		expect(await pendingIds(outbox)).toEqual(["evt-1"]);
 	});
 
+	it("skips a record that a dispatcher dead-lettered after the first write when the transaction requeues it", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>({ maxDeliveryAttempts: 1 });
+		const scope = new InMemoryTransactionScope([outbox]);
+		const event = orderEvent("evt-1");
+		await scope.transactional(() => outbox.add([candidate(event, 1)]));
+		let firstWritten!: () => void;
+		const firstWrite = new Promise<void>((resolve) => {
+			firstWritten = resolve;
+		});
+		let deadLettered!: () => void;
+		const deadLetter = new Promise<void>((resolve) => {
+			deadLettered = resolve;
+		});
+		let secondWritten!: () => void;
+		const secondWrite = new Promise<void>((resolve) => {
+			secondWritten = resolve;
+		});
+		let release!: () => void;
+		const released = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const transaction = scope.transactional(async () => {
+			await outbox.add([candidate(event, 1)]);
+			firstWritten();
+			await deadLetter;
+			await outbox.add([candidate(event, 1)]);
+			secondWritten();
+			await released;
+		});
+		await firstWrite;
+
+		await outbox.markFailed("evt-1", new Error("poison"));
+		deadLettered();
+		await secondWrite;
+		const duringTransaction = await pendingIds(outbox);
+		release();
+		await transaction;
+
+		expect(duringTransaction).toEqual([]);
+	});
+
 	it("leaves no record and no cursor change after a rolled-back add", async () => {
 		const outbox = new InMemoryOutbox<OrderCreated>();
 		const scope = new InMemoryTransactionScope([outbox]);
