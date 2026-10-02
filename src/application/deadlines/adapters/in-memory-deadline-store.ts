@@ -151,21 +151,24 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 				attempted: 1,
 			});
 		}
+		// Copied before the sequence and the committed version change: a
+		// payload that cannot be cloned must reject before any write.
+		const payload = structuredClone(deadline.payload);
 		const sequence = this.nextSequence++;
-		const deliveryId = `deadline-${sequence}`;
-		this.recordCommittedVersion(deadlineAddress);
 		// Replacing an occupied address gets a FRESH incarnation: a late
 		// ack or failure report against the old deliveryId must not touch
 		// the successor.
-		this.pending.set(deadlineAddress, {
-			deliveryId,
+		const incarnation: StoredDeadline<TPayload> = {
+			deliveryId: `deadline-${sequence}`,
 			scope: deadline.scope,
 			key: deadline.key,
 			dueAt: new Date(deadline.dueAt),
-			payload: structuredClone(deadline.payload),
+			payload,
 			attempts: 0,
 			sequence,
-		});
+		};
+		this.recordCommittedVersion(deadlineAddress);
+		this.pending.set(deadlineAddress, incarnation);
 	}
 
 	async cancel(scope: string, key: string): Promise<void> {

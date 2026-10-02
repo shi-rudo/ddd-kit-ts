@@ -292,6 +292,28 @@ describe("InMemoryDeadlineStore in an InMemoryTransactionScope", () => {
 		expect(polls).toEqual([1, 1, 0]);
 	});
 
+	it("keeps returning the live deadline after a schedule that failed before it wrote", async () => {
+		const store = new InMemoryDeadlineStore<unknown>({
+			maxDeliveryAttempts: 5,
+		});
+		const scope = new InMemoryTransactionScope([store]);
+		await scope.transactional(() =>
+			store.schedule({ scope: "orders", key: "o-1", dueAt, payload: 1 }),
+		);
+		const [committed] = await store.due(dueAt, 10);
+
+		const duringTransaction = await dueWhileOpen(scope, store, async () => {
+			await store
+				.schedule({ scope: "orders", key: "o-1", dueAt, payload: () => 2 })
+				.catch(() => {});
+			await store.markFailed(committed?.deliveryId ?? "", "boom");
+		});
+
+		expect(duringTransaction).toMatchObject([
+			{ deliveryId: committed?.deliveryId, attempts: 1 },
+		]);
+	});
+
 	it("hides the deadlines of an open transaction from due until the commit", async () => {
 		const store = new InMemoryDeadlineStore();
 		const scope = new InMemoryTransactionScope([store]);
