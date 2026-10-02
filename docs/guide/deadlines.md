@@ -215,9 +215,12 @@ this payload" plus the delivery bookkeeping. If you need "every night at
 three", use your platform's scheduler to run the poll loop; the deadlines
 themselves stay single-shot inputs.
 
-`InMemoryDeadlineStore` is the reference implementation for tests and demos
-(not transaction-aware, like every in-memory reference). An adapter proves
-itself with `createDeadlineStoreContractTests` from
+`InMemoryDeadlineStore` is the reference implementation for tests and demos.
+It rolls back only when you register it with an `InMemoryTransactionScope`;
+see [In-memory transactions](/guide/unit-of-work#in-memory-transactions).
+While a transaction is open, `due` does not return the deadlines that the
+transaction scheduled. An adapter proves itself with
+`createDeadlineStoreContractTests` from
 `@shirudo/ddd-kit/testing`; a Postgres implementation is a single table with
 an index on `(due_at)` and the usual `ON CONFLICT` upsert for the
 one-per-address rule.

@@ -169,6 +169,10 @@ await withCommit({ scope, outbox }, async () => ({
 }));
 ```
 
+This scope has no rollback. For a test that rolls back or retries, use
+`InMemoryTransactionScope`; see
+[In-memory transactions](/guide/unit-of-work#in-memory-transactions).
+
 `TransactionScope` does not track aggregates, repository intent, or deletes.
 That lives in `UnitOfWork` above it. `withCommit` remains the lower-level commit
 lifecycle for custom infrastructure compositions.
@@ -343,11 +347,14 @@ no-op without touching the source head. Unbounded production
 workloads need a durable adapter with an explicit source-head retention policy
 that keeps ended heads, and a transactional unique key on `eventId`.
 
-`InMemoryOutbox` cannot see a rollback. If `endEventSources` ends a source
-inside a transaction that rolls back, the source stays ended. The outbox then
-rejects every later event of the aggregate, which still exists. This also
-happens on the retry of a `RetryingTransactionScope`. A test that rolls back
-or retries a removal needs an outbox that joins the test's transaction.
+On its own, `InMemoryOutbox` cannot see a rollback. If `endEventSources` ends
+a source inside a transaction that rolls back, the source stays ended. The
+outbox then rejects every later event of the aggregate, which still exists.
+This also happens on the retry of a `RetryingTransactionScope`. Register the
+outbox with an `InMemoryTransactionScope` for a test that rolls back or
+retries; see [In-memory transactions](/guide/unit-of-work#in-memory-transactions).
+While a transaction is open, `getPending` does not return the records that
+the transaction wrote.
 
 ```ts
 import { InMemoryOutbox, type DomainEvent } from "@shirudo/ddd-kit";

@@ -359,8 +359,10 @@ A database adapter must also reject duplicate or non-contiguous persisted
 positions rather than silently folding a truncated stream.
 
 `InMemoryEventStore` is the reference implementation for finite-lifetime tests
-and demos. It is memory-only and does not participate in your database
-transaction. Without options, its streams and events are unbounded. A
+and demos. It is memory-only. It rolls back only when you register it with an
+`InMemoryTransactionScope`; see
+[In-memory transactions](/guide/unit-of-work#in-memory-transactions). Without
+options, its streams and events are unbounded. A
 long-lived process must configure both `maxStreams` and `maxEvents`; crossing a
 limit throws `InMemoryCapacityExceededError` before the append changes any
 stream. History is never evicted automatically. Production adapters must
@@ -760,7 +762,9 @@ transaction context.
 `InMemorySnapshotStore` is the reference implementation. Without retention
 options it is unbounded and intended only for finite-lifetime tests and demos.
 Snapshots are rebuildable derived data. Thus, this in-memory store can forget
-state safely.
+state safely. If a test writes snapshots inside a transaction, register the
+store with an `InMemoryTransactionScope`. A rollback then restores the
+snapshots, their LRU order, and their expiry.
 
 `maxEntries` enables least-recently-used eviction. `ttlMs` expires
 entries relative to an optional instance-bound `clock`. Loading a snapshot

@@ -259,8 +259,8 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 			if (existing !== undefined) {
 				assertSameEventSource(event, source, existing.source);
 				// A pending record may move to another aggregateVersion only because
-				// this in-memory adapter cannot observe rollback and the same event is
-				// re-harvested. Its index and commit cardinality remain immutable.
+				// an unregistered outbox cannot observe a rollback and the same event
+				// is re-harvested. Its index and commit cardinality remain immutable.
 				assertSameCandidateReceiptAllowingVersionRefresh(
 					event,
 					position,
@@ -323,7 +323,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				existing !== undefined &&
 				existing.position.aggregateVersion !== position.aggregateVersion;
 			if (refreshesLeakedCommit) {
-				// InMemoryOutbox cannot observe transaction rollback. A pending
+				// An unregistered outbox cannot observe a rollback. A pending
 				// record with the same eventId but a new commit version is therefore
 				// a replacement for the leaked attempt, not its successor. Preserve
 				// the event-source predecessor and move the in-memory source head.
@@ -822,9 +822,10 @@ function assertSameCandidateReceipt(
 }
 
 /**
- * The lenient variant for PENDING records only: this in-memory adapter
- * cannot observe rollback, so a re-harvested event may legitimately arrive
- * at a new aggregateVersion. Index and commit cardinality stay immutable.
+ * The lenient variant for PENDING records only: an outbox without an
+ * `InMemoryTransactionScope` cannot observe a rollback, so a re-harvested
+ * event may legitimately arrive at a new aggregateVersion. Index and commit
+ * cardinality stay immutable.
  */
 function assertSameCandidateReceiptAllowingVersionRefresh(
 	event: AnyDomainEvent,

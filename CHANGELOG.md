@@ -273,6 +273,16 @@ immutable. Run one kit version per process during a cutover.
   domain criteria with `and`, `or`, and `not`.
 - The in-memory stores accept fail-loud capacities, and a store beyond its
   capacity throws `InMemoryCapacityExceededError`.
+- `InMemoryTransactionScope` gives the in-memory stores a rollback, for tests
+  that roll back or retry. Every in-memory store implements
+  `InMemoryTransactionParticipant`. A registered store undoes the writes of a
+  failed attempt, and a store that is not registered keeps its behavior. The
+  scope runs one transaction at a time, and a store belongs to one scope.
+  While a transaction is open, outbox `getPending`, deadline `due`, and
+  checkpoint `hasReached` read only committed writes. The idempotency store
+  rolls back `claim` and `complete` and keeps the lease operations. The
+  in-memory references pass the rollback tests of the outbox, deadline, and
+  checkpoint contract suites.
 
 #### Aggregates and events
 
@@ -305,9 +315,10 @@ immutable. Run one kit version per process during a cutover.
   `endEventSources`, and the outbox then rejects a new event of that
   source. With an outbox that keeps source heads, an aggregate created
   again under a removed identity fails loud when the removed aggregate
-  committed events and the new one commits events. `InMemoryOutbox` implements it; it cannot see a rollback, so a
-  rolled-back end stays. It still dedupes a retry at the source head after
-  the receipt of the event expired, independent of its place in the batch.
+  committed events and the new one commits events. `InMemoryOutbox`
+  implements it. Registered with an `InMemoryTransactionScope`, it undoes a
+  rolled-back end. It still dedupes a retry at the source head after the
+  receipt of the event expired, independent of its place in the batch.
 - `IntegrationMessage` is the JSON-safe broker contract, with
   `createIntegrationMessage`, `encodeIntegrationMessage`,
   `decodeIntegrationMessage`, and `integrationMessageToCommittedEvent`.
