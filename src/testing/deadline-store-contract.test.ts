@@ -26,6 +26,14 @@ class DeadlineStoreKeepingRolledBackWrites extends InMemoryDeadlineStore<SuitePa
 	}
 }
 
+/** A store whose rollback never ends the transaction: the rollback tests must reject it. */
+class DeadlineStoreLeavingRollbackOpen extends InMemoryDeadlineStore<SuitePayload> {
+	override beginTransaction(): InMemoryTransaction {
+		const transaction = super.beginTransaction();
+		return { commit: () => transaction.commit(), rollback: () => {} };
+	}
+}
+
 function createInMemoryHarness(
 	createStore = () =>
 		new InMemoryDeadlineStore<SuitePayload>({ maxDeliveryAttempts: CEILING }),
@@ -122,6 +130,25 @@ describe("deadline-store contract suite against the in-memory reference", () => 
 			createInMemoryHarness(
 				() =>
 					new DeadlineStoreKeepingRolledBackWrites({
+						maxDeliveryAttempts: CEILING,
+					}),
+			),
+		);
+		const rollbackTests = mutantTests.filter((test) =>
+			test.name.startsWith("a rolled-back"),
+		);
+
+		expect(rollbackTests).toHaveLength(2);
+		for (const test of rollbackTests) {
+			await expect(test.run()).rejects.toThrow(/Contract violated/);
+		}
+	});
+
+	it("the rollback tests reject a store whose rollback never ends the transaction", async () => {
+		const mutantTests = createDeadlineStoreContractTests(
+			createInMemoryHarness(
+				() =>
+					new DeadlineStoreLeavingRollbackOpen({
 						maxDeliveryAttempts: CEILING,
 					}),
 			),
