@@ -4,6 +4,10 @@ import {
 	encodeAggregateIdentity,
 } from "../../../domain/aggregate/aggregate-identity";
 import { assertPositiveSafeInteger } from "../../../internal/validate";
+import type {
+	InMemoryTransaction,
+	InMemoryTransactionParticipant,
+} from "../../repository/adapters/in-memory-transaction-scope";
 import type { SnapshotStore } from "../snapshot-store";
 
 export interface InMemorySnapshotStoreOptions {
@@ -32,9 +36,15 @@ interface StoredSnapshot<TState> {
  * rebuildable derived data, so `maxEntries` may evict the least recently used
  * entry and `ttlMs` may expire it safely. A load updates LRU recency but does
  * not extend TTL; only another save does.
+ *
+ * The port keeps snapshot writes out of the write transaction, so the store
+ * does not roll back on its own. Register it with an
+ * `InMemoryTransactionScope` when a test writes snapshots inside a
+ * transaction. A rollback then restores the snapshots, their LRU order, and
+ * their expiry.
  */
 export class InMemorySnapshotStore<TState = unknown>
-	implements SnapshotStore<TState>
+	implements SnapshotStore<TState>, InMemoryTransactionParticipant
 {
 	private readonly snapshots = new Map<string, StoredSnapshot<TState>>();
 	private readonly maxEntries: number | undefined;
@@ -59,6 +69,20 @@ export class InMemorySnapshotStore<TState = unknown>
 		this.maxEntries = options.maxEntries;
 		this.ttlMs = options.ttlMs;
 		this.clock = options.clock ?? (() => new Date());
+	}
+
+	/**
+	 * Records the state that a rollback of an `InMemoryTransactionScope`
+	 * returns to: every snapshot in LRU order.
+	 */
+	beginTransaction(): InMemoryTransaction {
+		const snapshots = [...this.snapshots];
+		return {
+			rollback: () => {
+				this.snapshots.clear();
+				for (const [key, stored] of snapshots) this.snapshots.set(key, stored);
+			},
+		};
 	}
 
 	async load(
