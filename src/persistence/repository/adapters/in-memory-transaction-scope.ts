@@ -37,11 +37,15 @@ const heldParticipants = new WeakSet<InMemoryTransactionParticipant>();
  * database that has only one connection. Use a database with real isolation
  * to test concurrent transactions.
  *
- * **Each store decides what its rollback restores.** A store that restores
- * its whole state also undoes a write that it took outside the transaction
- * while the transaction was open, for example an acknowledgement of an
- * outbox dispatcher. The documentation of each store says what its rollback
- * restores.
+ * **Code outside a transaction.** A dispatcher, a deadline processor, and a
+ * `hasReached` check run outside the transactions. Outbox `getPending`,
+ * deadline `due`, and checkpoint `hasReached` read only committed writes.
+ * Other reads also see the writes of an open transaction. Each store decides
+ * what its rollback restores, and its documentation says so. A store that
+ * restores its whole state also undoes a write that code outside the
+ * transaction made while the transaction was open, for example an
+ * acknowledgement of an outbox dispatcher. The record is then delivered
+ * again, which the at-least-once contract allows.
  *
  * **A store belongs to one scope.** A scope works like one in-memory
  * database, so share one scope for all stores of a test. A second scope with

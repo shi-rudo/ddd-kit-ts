@@ -105,6 +105,41 @@ describe("InMemoryProjectionCheckpointStore in an InMemoryTransactionScope", () 
 		);
 	});
 
+	it("answers hasReached from the committed checkpoints while a transaction is open", async () => {
+		const store = new InMemoryProjectionCheckpointStore();
+		const scope = new InMemoryTransactionScope([store]);
+		await scope.transactional(() =>
+			store.save(undefined, "orders", identity("o-1"), checkpoint(1)),
+		);
+		let release!: () => void;
+		const released = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let saved!: () => void;
+		const workSaved = new Promise<void>((resolve) => {
+			saved = resolve;
+		});
+
+		const transaction = scope.transactional(async () => {
+			await store.save(undefined, "orders", identity("o-1"), checkpoint(2));
+			saved();
+			await released;
+		});
+		await workSaved;
+		const reachedDuringTransaction = await store.hasReached(
+			"orders",
+			identity("o-1"),
+			checkpoint(2).position,
+		);
+		release();
+		await transaction;
+
+		expect(reachedDuringTransaction).toBe(false);
+		expect(
+			await store.hasReached("orders", identity("o-1"), checkpoint(2).position),
+		).toBe(true);
+	});
+
 	it("does not release a checkpoint lock that a caller still holds after a rollback", async () => {
 		const store = new InMemoryProjectionCheckpointStore();
 		const scope = new InMemoryTransactionScope([store]);

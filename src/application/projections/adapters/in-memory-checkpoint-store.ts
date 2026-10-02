@@ -30,10 +30,11 @@ export interface InMemoryProjectionCheckpointStoreOptions {
  * the `ctx` parameter. On its own, it knows nothing about your
  * `TransactionScope` rollbacks: a rolled-back projector batch keeps its
  * checkpoints. Register the store with an `InMemoryTransactionScope` for
- * tests that roll back or retry. Use it for tests and disposable in-memory
- * read models; production atomicity is the durable adapter's contract,
- * proved with `createProjectionCheckpointStoreContractTests` and its
- * rollback capability.
+ * tests that roll back or retry. While a transaction is open, `hasReached`
+ * answers from the committed checkpoints. Use it for tests and disposable
+ * in-memory read models; production atomicity is the durable adapter's
+ * contract, proved with `createProjectionCheckpointStoreContractTests` and
+ * its rollback capability.
  *
  * Without `maxCheckpoints`, checkpoint retention is unbounded and supported
  * only for finite-lifetime tests and demos. A configured limit rejects a new
@@ -57,6 +58,10 @@ export class InMemoryProjectionCheckpointStore
 	private readonly lockTails = new Map<string, Promise<void>>();
 	private readonly maxCheckpoints: number | undefined;
 	private checkpointCount = 0;
+	/** The checkpoints at the start of the open transaction. */
+	private committedCheckpoints:
+		| ReadonlyMap<string, ReadonlyMap<string, ProjectionCheckpoint>>
+		| undefined;
 
 	constructor(options: InMemoryProjectionCheckpointStoreOptions = {}) {
 		if (options.maxCheckpoints !== undefined) {
@@ -71,22 +76,33 @@ export class InMemoryProjectionCheckpointStore
 
 	/**
 	 * Records the state that a rollback of an `InMemoryTransactionScope`
-	 * returns to: the checkpoints and their count. The rollback keeps the
-	 * checkpoint locks, because a caller still holds them.
+	 * returns to: the checkpoints and their count. Until the transaction
+	 * ends, `hasReached` reads these committed checkpoints. The rollback
+	 * keeps the checkpoint locks, because a caller still holds them.
 	 */
 	beginTransaction(): InMemoryTransaction {
-		const checkpoints = [...this.checkpoints].map(
-			([projection, perAggregate]) => [projection, [...perAggregate]] as const,
+		const committed = new Map(
+			[...this.checkpoints].map(
+				([projection, perAggregate]) =>
+					[projection, new Map(perAggregate)] as const,
+			),
 		);
 		const checkpointCount = this.checkpointCount;
+		this.committedCheckpoints = committed;
+		const end = () => {
+			if (this.committedCheckpoints === committed) {
+				this.committedCheckpoints = undefined;
+			}
+		};
 		return {
-			commit: () => {},
+			commit: end,
 			rollback: () => {
 				this.checkpoints.clear();
-				for (const [projection, perAggregate] of checkpoints) {
+				for (const [projection, perAggregate] of committed) {
 					this.checkpoints.set(projection, new Map(perAggregate));
 				}
 				this.checkpointCount = checkpointCount;
+				end();
 			},
 		};
 	}
@@ -187,7 +203,7 @@ export class InMemoryProjectionCheckpointStore
 		identity: AggregateIdentity,
 		position: ProjectionPosition,
 	): Promise<boolean> {
-		const stored = this.checkpoints
+		const stored = (this.committedCheckpoints ?? this.checkpoints)
 			.get(projection)
 			?.get(encodeAggregateIdentity(identity));
 		if (stored === undefined) return false;
