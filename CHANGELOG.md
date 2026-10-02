@@ -386,6 +386,12 @@ immutable. Run one kit version per process during a cutover.
 
 ### Fixed
 
+- `UnitOfWork.run` reports a failed rollback as `RollbackError` also when a
+  step after the work failed inside the transaction, for example the outbox
+  write. Before, it reported a `CommitError` whose cause was the rollback
+  failure, and the outbox failure was lost. The `RollbackError` keeps the
+  failure inside the transaction as its cause and the scope's error as
+  `rollbackCause`.
 - An own `"__proto__"` key in an entity state, or in event metadata passed to
   `mergeMetadata` or `copyMetadata`, throws `HostileStateKeyError`. Before,
   the state copy replaced its prototype, and the key vanished.

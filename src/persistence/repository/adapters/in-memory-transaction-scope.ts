@@ -131,7 +131,8 @@ export class InMemoryTransactionScope implements TransactionScope<undefined> {
 /**
  * Ends every transaction, also after a failed end, and returns the first
  * failure. For a rollback, a scope that rejects with a different error than
- * the work tells `UnitOfWork.run` that the rollback failed.
+ * the failure inside the transaction tells `UnitOfWork.run` that the
+ * rollback failed.
  */
 function endAll(
 	transactions: ReadonlyArray<InMemoryTransaction>,

@@ -530,6 +530,11 @@ export interface CheckedWorkResult<Evt extends AnyDomainEvent, R>
 	 * commit. A check that throws rolls the transaction back.
 	 */
 	readonly checkBeforeCommit?: () => void;
+	/**
+	 * Receives the error of a step that ran after the work callback and failed
+	 * inside the transaction, before the scope rolls back.
+	 */
+	readonly onFailureBeforeCommit?: (error: unknown) => void;
 }
 
 /**
@@ -571,119 +576,124 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 				// instead of being accepted after the harvest snapshot.
 				tokenScope.close();
 			}
-			const commitRecords = tokenScope.resolve(fnResult.commits);
-			// Prepare each bare domain event for source finalization in the outbox.
-			// The aggregate's event remains untouched and is what the in-process
-			// domain bus receives.
-			const candidates = commitRecords.flatMap((record) => {
-				const enrolled = record.aggregate.aggregateIdentity;
-				if (
-					record.events.length > 0 &&
-					record.persistedVersion !== undefined &&
-					(record.version as number) <= (record.persistedVersion as number)
-				) {
-					throw new EventHarvestError(
-						`withCommit: aggregate ${describeAggregateIdentity(enrolled)} recorded events but ` +
-							`did not advance its version beyond the persisted version ` +
-							`(${String(record.persistedVersion)}). An eventful commit needs a unique ` +
-							`cursor; use StateStoredAggregate.setState(currentState, event) instead ` +
-							`of addDomainEvent(event) alone.`,
-					);
-				}
-				const enrolledId = enrolled.aggregateId;
-				const enrolledType = enrolled.aggregateType;
-				return record.events.map((event, index) => {
-					if (!isRecordedDomainEvent(event)) {
+			try {
+				const commitRecords = tokenScope.resolve(fnResult.commits);
+				// Prepare each bare domain event for source finalization in the outbox.
+				// The aggregate's event remains untouched and is what the in-process
+				// domain bus receives.
+				const candidates = commitRecords.flatMap((record) => {
+					const enrolled = record.aggregate.aggregateIdentity;
+					if (
+						record.events.length > 0 &&
+						record.persistedVersion !== undefined &&
+						(record.version as number) <= (record.persistedVersion as number)
+					) {
 						throw new EventHarvestError(
-							`withCommit: event "${event.type}" has not been recorded. ` +
-								"Call recordPendingEvents(aggregate, createStamp) in the " +
-								"application shell before persistence or outbox harvest.",
-							event.type,
+							`withCommit: aggregate ${describeAggregateIdentity(enrolled)} recorded events but ` +
+								`did not advance its version beyond the persisted version ` +
+								`(${String(record.persistedVersion)}). An eventful commit needs a unique ` +
+								`cursor; use StateStoredAggregate.setState(currentState, event) instead ` +
+								`of addDomainEvent(event) alone.`,
 						);
 					}
-					const recordedEvent = event as Evt;
-					const commitSize = record.events.length;
-					const aggregateId = recordedEvent.aggregateId;
-					const aggregateType = recordedEvent.aggregateType;
-					const missing: string[] = [];
-					if (!aggregateId) missing.push("aggregateId");
-					if (!aggregateType) missing.push("aggregateType");
-					if (!aggregateId || !aggregateType) {
-						throw new EventHarvestError(
-							`withCommit: event "${recordedEvent.type}" is missing ${missing.join(
-								" and ",
-							)}. ` +
-								`Use this.createEvent(type, payload) inside aggregate methods ` +
-								`instead of createDomainEvent(...); createEvent auto-injects ` +
-								`aggregateId and aggregateType. Outbox dispatchers and ` +
-								`projection handlers rely on the envelope source.`,
-							recordedEvent.type,
-						);
-					}
-					// Backstop behind the aggregate identity check of the aggregate
-					// itself: the envelope source is copied from the event, so an
-					// event that names another aggregate must never become this commit.
-					if (aggregateId !== enrolledId || aggregateType !== enrolledType) {
-						throw new EventHarvestError(
-							`withCommit: event "${recordedEvent.type}" belongs to ` +
-								`${describeAggregateIdentity({ aggregateType, aggregateId })} but ` +
-								"was enrolled under " +
-								`${describeAggregateIdentity({ aggregateType: enrolledType, aggregateId: enrolledId })}. ` +
-								"The aggregate base " +
-								"classes stamp the aggregate identity on every recording path; an " +
-								"instance from another package copy must stamp it the " +
-								"same way.",
-							recordedEvent.type,
-						);
-					}
-					return Object.freeze({
-						event: recordedEvent,
-						source: Object.freeze({ aggregateId, aggregateType }),
-						position: Object.freeze({
-							aggregateVersion: record.version as number,
-							commitSequence: index,
-							commitSize,
-						}),
-					}) as EventCommitCandidate<Evt>;
+					const enrolledId = enrolled.aggregateId;
+					const enrolledType = enrolled.aggregateType;
+					return record.events.map((event, index) => {
+						if (!isRecordedDomainEvent(event)) {
+							throw new EventHarvestError(
+								`withCommit: event "${event.type}" has not been recorded. ` +
+									"Call recordPendingEvents(aggregate, createStamp) in the " +
+									"application shell before persistence or outbox harvest.",
+								event.type,
+							);
+						}
+						const recordedEvent = event as Evt;
+						const commitSize = record.events.length;
+						const aggregateId = recordedEvent.aggregateId;
+						const aggregateType = recordedEvent.aggregateType;
+						const missing: string[] = [];
+						if (!aggregateId) missing.push("aggregateId");
+						if (!aggregateType) missing.push("aggregateType");
+						if (!aggregateId || !aggregateType) {
+							throw new EventHarvestError(
+								`withCommit: event "${recordedEvent.type}" is missing ${missing.join(
+									" and ",
+								)}. ` +
+									`Use this.createEvent(type, payload) inside aggregate methods ` +
+									`instead of createDomainEvent(...); createEvent auto-injects ` +
+									`aggregateId and aggregateType. Outbox dispatchers and ` +
+									`projection handlers rely on the envelope source.`,
+								recordedEvent.type,
+							);
+						}
+						// Backstop behind the aggregate identity check of the aggregate
+						// itself: the envelope source is copied from the event, so an
+						// event that names another aggregate must never become this commit.
+						if (aggregateId !== enrolledId || aggregateType !== enrolledType) {
+							throw new EventHarvestError(
+								`withCommit: event "${recordedEvent.type}" belongs to ` +
+									`${describeAggregateIdentity({ aggregateType, aggregateId })} but ` +
+									"was enrolled under " +
+									`${describeAggregateIdentity({ aggregateType: enrolledType, aggregateId: enrolledId })}. ` +
+									"The aggregate base " +
+									"classes stamp the aggregate identity on every recording path; an " +
+									"instance from another package copy must stamp it the " +
+									"same way.",
+								recordedEvent.type,
+							);
+						}
+						return Object.freeze({
+							event: recordedEvent,
+							source: Object.freeze({ aggregateId, aggregateType }),
+							position: Object.freeze({
+								aggregateVersion: record.version as number,
+								commitSequence: index,
+								commitSize,
+							}),
+						}) as EventCommitCandidate<Evt>;
+					});
 				});
-			});
-			const endedSources = commitRecords
-				.filter((record) => record.disposition === "deleted")
-				.map((record) =>
-					detachAggregateIdentity(record.aggregate.aggregateIdentity),
-				);
-			if (candidates.length > 0) {
-				// The bus publishes the events of these same candidates, so the
-				// outbox must not change them. A mutation of the frozen array
-				// throws in strict-mode code and has no effect otherwise.
-				await deps.outbox.add(Object.freeze(candidates));
-			}
-			if (endedSources.length > 0) {
-				await deps.outbox.endEventSources(Object.freeze(endedSources));
-			}
-			// The caller's own check runs first, so that it names a change in
-			// its own terms, with one code for every kind of change.
-			fnResult.checkBeforeCommit?.();
-			if (candidates.length > 0 || endedSources.length > 0) {
-				// The outbox write can yield. Work that the callback did not
-				// await could change an enrolled aggregate meanwhile, and the
-				// acknowledgement would then cover state or events that were
-				// never written.
-				for (const record of commitRecords) {
-					if (enrollmentDiverged(record)) {
-						throw new EventHarvestError(
-							`withCommit: aggregate ${describeAggregateIdentity(record.aggregate.aggregateIdentity)} ` +
-								"changed while its outbox write ran. Await every change " +
-								"inside the work callback.",
-						);
+				const endedSources = commitRecords
+					.filter((record) => record.disposition === "deleted")
+					.map((record) =>
+						detachAggregateIdentity(record.aggregate.aggregateIdentity),
+					);
+				if (candidates.length > 0) {
+					// The bus publishes the events of these same candidates, so the
+					// outbox must not change them. A mutation of the frozen array
+					// throws in strict-mode code and has no effect otherwise.
+					await deps.outbox.add(Object.freeze(candidates));
+				}
+				if (endedSources.length > 0) {
+					await deps.outbox.endEventSources(Object.freeze(endedSources));
+				}
+				// The caller's own check runs first, so that it names a change in
+				// its own terms, with one code for every kind of change.
+				fnResult.checkBeforeCommit?.();
+				if (candidates.length > 0 || endedSources.length > 0) {
+					// The outbox write can yield. Work that the callback did not
+					// await could change an enrolled aggregate meanwhile, and the
+					// acknowledgement would then cover state or events that were
+					// never written.
+					for (const record of commitRecords) {
+						if (enrollmentDiverged(record)) {
+							throw new EventHarvestError(
+								`withCommit: aggregate ${describeAggregateIdentity(record.aggregate.aggregateIdentity)} ` +
+									"changed while its outbox write ran. Await every change " +
+									"inside the work callback.",
+							);
+						}
 					}
 				}
+				return {
+					result: fnResult.result,
+					commitRecords,
+					events: candidates.map(({ event }) => event),
+				};
+			} catch (error) {
+				fnResult.onFailureBeforeCommit?.(error);
+				throw error;
 			}
-			return {
-				result: fnResult.result,
-				commitRecords,
-				events: candidates.map(({ event }) => event),
-			};
 		},
 		{ signal: deps.signal, onAttemptStart },
 	);
