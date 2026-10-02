@@ -158,6 +158,83 @@ describe("InMemoryOutbox in an InMemoryTransactionScope", () => {
 		expect(duringTransaction).toEqual(["evt-1", "evt-2"]);
 	});
 
+	async function afterBeginAndOutsideWrite(
+		scope: InMemoryTransactionScope,
+		outsideWrite: () => Promise<unknown>,
+		transactionWrite: () => Promise<void>,
+	) {
+		let began!: () => void;
+		const transactionBegan = new Promise<void>((resolve) => {
+			began = resolve;
+		});
+		let outsideWritten!: () => void;
+		const outsideWriteDone = new Promise<void>((resolve) => {
+			outsideWritten = resolve;
+		});
+		let written!: () => void;
+		const transactionWritten = new Promise<void>((resolve) => {
+			written = resolve;
+		});
+		let release!: () => void;
+		const released = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const transaction = scope.transactional(async () => {
+			began();
+			await outsideWriteDone;
+			await transactionWrite();
+			written();
+			await released;
+		});
+		await transactionBegan;
+		await outsideWrite();
+		outsideWritten();
+		await transactionWritten;
+		return {
+			commit: async () => {
+				release();
+				await transaction;
+			},
+		};
+	}
+
+	it("reports the attempts of a failure report made after the transaction began", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>({ maxDeliveryAttempts: 5 });
+		const scope = new InMemoryTransactionScope([outbox]);
+		const event = orderEvent("evt-1");
+		await scope.transactional(() => outbox.add([candidate(event, 1)]));
+
+		const transaction = await afterBeginAndOutsideWrite(
+			scope,
+			() => outbox.markFailed("evt-1", new Error("broker down")),
+			() => outbox.add([candidate(event, 1)]),
+		);
+		const duringTransaction = await outbox.getPending();
+		await transaction.commit();
+
+		expect(duringTransaction).toMatchObject([
+			{ dispatchId: "evt-1", attempts: 1 },
+		]);
+	});
+
+	it("skips a record that a dispatcher dead-lettered before the transaction requeued it", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>({ maxDeliveryAttempts: 1 });
+		const scope = new InMemoryTransactionScope([outbox]);
+		const event = orderEvent("evt-1");
+		await scope.transactional(() => outbox.add([candidate(event, 1)]));
+
+		const transaction = await afterBeginAndOutsideWrite(
+			scope,
+			() => outbox.markFailed("evt-1", new Error("poison")),
+			() => outbox.add([candidate(event, 1)]),
+		);
+		const duringTransaction = await pendingIds(outbox);
+		await transaction.commit();
+
+		expect(duringTransaction).toEqual([]);
+		expect(await pendingIds(outbox)).toEqual(["evt-1"]);
+	});
+
 	it("leaves no record and no cursor change after a rolled-back add", async () => {
 		const outbox = new InMemoryOutbox<OrderCreated>();
 		const scope = new InMemoryTransactionScope([outbox]);
