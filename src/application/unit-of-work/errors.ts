@@ -418,13 +418,14 @@ export class CommitError extends InfrastructureError<"COMMIT_FAILED"> {
 }
 
 /**
- * The work callback threw AND the transaction scope rejected with a
- * DIFFERENT error that does not wrap the callback's error in its cause
- * chain - the strongest available signal that the rollback itself
- * failed. The callback's (primary) error is preserved as `cause`, so
- * cause-chain helpers (`someChainRetryable`, `findInCauseChain`) still
- * see a wrapped `ConcurrencyConflictError` & co.; the scope's error is
- * carried in {@link rollbackCause}.
+ * A step inside the transaction threw AND the transaction scope rejected
+ * with a DIFFERENT error that does not wrap that failure in its cause
+ * chain - the strongest available signal that the rollback itself failed.
+ * The step is the work callback, or a step after it and before the commit,
+ * for example the outbox write. The failure inside the transaction is
+ * preserved as `cause`, so cause-chain helpers (`someChainRetryable`,
+ * `findInCauseChain`) still see a wrapped `ConcurrencyConflictError` & co.;
+ * the scope's error is carried in {@link rollbackCause}.
  *
  * Scopes that rethrow the original error (Drizzle, Prisma do) never
  * produce this; scopes that WRAP the original are detected via the
@@ -438,9 +439,10 @@ export class RollbackError extends InfrastructureError<"ROLLBACK_FAILED"> {
 		super({
 			code: "ROLLBACK_FAILED",
 			message:
-				"The work callback failed and the transaction scope rejected with a " +
-				"different error (possible rollback failure). The callback's error " +
-				"is the cause; the scope's error is in rollbackCause.",
+				"A step inside the transaction failed and the transaction scope " +
+				"rejected with a different error (possible rollback failure). The " +
+				"failure inside the transaction is the cause; the scope's error is " +
+				"in rollbackCause.",
 			cause,
 		});
 	}

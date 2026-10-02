@@ -778,6 +778,10 @@ export class UnitOfWork<
 							result,
 							commits,
 							checkBeforeCommit: () => s.assertReadyToCommitLastTime(),
+							onFailureBeforeCommit: (error) => {
+								current.failedBeforeCommit = true;
+								current.failureBeforeCommit = error;
+							},
 						};
 					} catch (error) {
 						current.workThrew = true;
@@ -854,10 +858,18 @@ interface RunAttempt {
 	workCompleted: boolean;
 	workThrew: boolean;
 	workError: unknown;
+	failedBeforeCommit: boolean;
+	failureBeforeCommit: unknown;
 }
 
 function startAttempt(): RunAttempt {
-	return { workCompleted: false, workThrew: false, workError: undefined };
+	return {
+		workCompleted: false,
+		workThrew: false,
+		workError: undefined,
+		failedBeforeCommit: false,
+		failureBeforeCommit: undefined,
+	};
 }
 
 /**
@@ -880,9 +892,12 @@ function startAttempt(): RunAttempt {
  *   through; it does NOT extend `InfrastructureError`, so a
  *   retry-on-Infrastructure handler skips it. It is thrown inside
  *   `scope.transactional()`, so a wrapping scope can nest it: walk the
- *   chain rather than a bare `instanceof`. Only genuinely unforeseeable
- *   post-completion failures (outbox write, the commit itself) become
- *   {@link CommitError}.
+ *   chain rather than a bare `instanceof`. A step that failed inside the
+ *   transaction after the callback (`failedBeforeCommit`, for example the
+ *   outbox write) and a scope rejection that neither is nor wraps that
+ *   failure mean that the rollback failed: a {@link RollbackError}. Only
+ *   genuinely unforeseeable post-completion failures (outbox write, the
+ *   commit itself) become {@link CommitError}.
  * - Neither flag set: `withCommit` rejected before the callback ran (the
  *   scope failed to even open a transaction); pass the error through.
  */
@@ -917,6 +932,13 @@ function classifyRunError(
 		const wiringError = wiringErrorInCauseChain(error);
 		if (wiringError) {
 			return wiringError;
+		}
+		if (
+			state.failedBeforeCommit &&
+			error !== state.failureBeforeCommit &&
+			!causeChainContains(error, state.failureBeforeCommit)
+		) {
+			return new RollbackError(state.failureBeforeCommit, error);
 		}
 		return new CommitError(error);
 	}

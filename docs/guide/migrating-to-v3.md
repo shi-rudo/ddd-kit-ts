@@ -1195,6 +1195,10 @@ this list if your code observes one of these paths:
 - `run()` rethrows the caller's abort reason unchanged when cancellation
   interrupts a retry wait. Before, the abort surfaced as
   `ROLLBACK_FAILED` with a retryable cause.
+- `run()` reports `ROLLBACK_FAILED` when a step after the work fails
+  inside the transaction, for example the outbox write, and the rollback
+  fails too. Before, it reported `COMMIT_FAILED` with the rollback failure
+  as its cause, and the outbox failure was lost.
 - `withIdempotentCommit` abandons the staged claim when the commit
   fails. The key is free for a retry. Before, the key stayed blocked
   until lease expiry.

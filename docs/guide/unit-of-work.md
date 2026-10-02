@@ -380,7 +380,7 @@ The most useful failures are intentionally specific:
 | `DuplicateAggregateError` | an `add` collided with an existing identity |
 | `InvalidRepositoryAdapterError` | a repository factory returned no adapter object, or an adapter that defines `add`, `update`, or `remove` |
 | `CommitError` | work completed, but the outbox write or transaction commit failed |
-| `RollbackError` | work failed and the scope reported a different rollback failure |
+| `RollbackError` | a step inside the transaction failed (the work, or a step after it such as the outbox write) and the scope reported a different rollback failure |
 | `NestedUnitOfWorkError` | one instance was entered while already running |
 | `TransactionClosedError` | a leaked context or tracking capability was used after close |
 
