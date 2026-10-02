@@ -3196,6 +3196,47 @@ describe("UnitOfWork", () => {
 			expect(readDuringBackoff).toBeInstanceOf(TransactionClosedError);
 		});
 
+		it("closes the facade of an attempt whose outbox write failed before the retry waits", async () => {
+			const outboxFailure = new Error("outbox write failed");
+			let leaked!: { add(order: MockAggregate): void };
+			let addDuringBackoff: unknown = "not attempted";
+			const inner: TransactionScope<undefined> = {
+				transactional: <T>(fn: (_ctx: undefined) => Promise<T>) =>
+					fn(undefined),
+			};
+			const scope = new RetryingTransactionScope(inner, {
+				maxAttempts: 2,
+				isRetryable: (error) => error === outboxFailure,
+				sleep: async () => {
+					try {
+						leaked.add(createMockAggregate("late-1"));
+						addDuringBackoff = "accepted";
+					} catch (error) {
+						addDuringBackoff = error;
+					}
+				},
+			});
+			let outboxCalls = 0;
+			const outbox: Outbox<TestEvent> = {
+				add: async () => {
+					outboxCalls += 1;
+					if (outboxCalls === 1) throw outboxFailure;
+				},
+				endEventSources: async () => {},
+				getPending: async () => [],
+				markDispatched: async () => {},
+			};
+			const { uow } = createUow({ scope, outbox });
+
+			await uow.run(async ({ repositories }) => {
+				leaked = repositories.orders;
+				repositories.orders.add(createMockAggregate("o-1", [testEvent("o-1")]));
+				return undefined;
+			});
+
+			expect(addDuringBackoff).toBeInstanceOf(TransactionClosedError);
+		});
+
 		it("checks an abandoned attempt against its own session when the scope still commits it", async () => {
 			let reachOutbox!: () => void;
 			const outboxReached = new Promise<void>((resolve) => {

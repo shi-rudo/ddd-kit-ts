@@ -781,6 +781,10 @@ export class UnitOfWork<
 							onFailureBeforeCommit: (error) => {
 								current.failedBeforeCommit = true;
 								current.failureBeforeCommit = error;
+								// The failure rolls this attempt back, so it can never
+								// commit. Ending the session closes its late
+								// registrations before a retry waits.
+								s.end();
 							},
 						};
 					} catch (error) {

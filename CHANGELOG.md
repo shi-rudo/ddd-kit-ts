@@ -386,6 +386,10 @@ immutable. Run one kit version per process during a cutover.
 
 ### Fixed
 
+- `UnitOfWork.run` also closes the repository facades of an attempt whose
+  step after the work failed, for example the outbox write, before a retry
+  waits. A leaked write then gets `TransactionClosedError`. Before, it got
+  `AggregateTrackingError` with the reason `registered_during_flush`.
 - `InMemoryEventStore.append` writes all of a batch or nothing. A batch with
   an event that `structuredClone` cannot copy rejects with a `TypeError` that
   names the event and the stream, and it writes nothing. Before, the store
