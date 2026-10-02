@@ -6,7 +6,10 @@ import {
 } from "../domain/event/domain-event";
 import { InMemoryOutbox } from "../messaging/outbox/outbox";
 import type { Outbox } from "../messaging/outbox/ports";
-import { InMemoryTransactionScope } from "../persistence/repository/adapters/in-memory-transaction-scope";
+import {
+	type InMemoryTransaction,
+	InMemoryTransactionScope,
+} from "../persistence/repository/adapters/in-memory-transaction-scope";
 import {
 	createOutboxContractTests,
 	type OutboxContractHarness,
@@ -17,12 +20,21 @@ type TestEvent = DomainEvent<"ThingHappened", { n: number }>;
 const MAX_ATTEMPTS = 3;
 const ROLLBACK = Symbol("rollback");
 
-function createInMemoryHarness(): OutboxContractHarness<TestEvent> {
+/** An outbox whose rollback does nothing: the rollback tests must reject it. */
+class OutboxWithoutRollback extends InMemoryOutbox<TestEvent> {
+	override beginTransaction(): InMemoryTransaction {
+		const transaction = super.beginTransaction();
+		return { commit: () => transaction.commit(), rollback: () => {} };
+	}
+}
+
+function createInMemoryHarness(
+	createOutbox = () =>
+		new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: MAX_ATTEMPTS }),
+): OutboxContractHarness<TestEvent> {
 	return {
 		createEnvironment: async () => {
-			const outbox = new InMemoryOutbox<TestEvent>({
-				maxDeliveryAttempts: MAX_ATTEMPTS,
-			});
+			const outbox = createOutbox();
 			const scope = new InMemoryTransactionScope([outbox]);
 			const rolledBack = (write: () => Promise<void>) =>
 				scope
@@ -66,6 +78,22 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 
 	it("no test is skipped for the in-memory reference", () => {
 		expect(tests.filter((test) => test.skipped)).toEqual([]);
+	});
+
+	it("the rollback tests reject an outbox whose rollback does nothing", async () => {
+		const mutantTests = createOutboxContractTests(
+			createInMemoryHarness(
+				() => new OutboxWithoutRollback({ maxDeliveryAttempts: MAX_ATTEMPTS }),
+			),
+		);
+		const rollbackTests = mutantTests.filter((test) =>
+			test.name.startsWith("a rolled-back"),
+		);
+
+		expect(rollbackTests).toHaveLength(2);
+		for (const test of rollbackTests) {
+			await expect(test.run()).rejects.toThrow();
+		}
 	});
 
 	it("pins the source-position integrity laws in the portable suite", () => {

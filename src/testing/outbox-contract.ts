@@ -580,9 +580,19 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 					await env.addCommitted(commit([harness.createEvent(2)], 2));
 					const [afterRollback] = await takeAndAck(env, 1);
 					assertEqual(
+						afterRollback?.event.eventId,
+						harness.createEvent(2).eventId,
+						"the only pending record after a rolled-back add must be the committed event",
+					);
+					assertEqual(
 						afterRollback?.position.previousEventfulAggregateVersion,
 						null,
 						"a rolled-back add must not advance the event-source head",
+					);
+					assertEqual(
+						(await env.outbox.getPending(10)).length,
+						0,
+						"a rolled-back add must leave no record behind",
 					);
 				}),
 			},
