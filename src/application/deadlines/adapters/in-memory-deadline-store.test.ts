@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import { InMemoryCapacityExceededError } from "../../../errors/kit-errors";
+import { InMemoryTransactionScope } from "../../../persistence/repository/adapters/in-memory-transaction-scope";
 import { InMemoryDeadlineStore } from "./in-memory-deadline-store";
 
 const dueAt = new Date("2026-07-15T08:00:00.000Z");
@@ -58,4 +59,62 @@ describe("InMemoryDeadlineStore capacity", () => {
 			);
 		},
 	);
+});
+
+describe("InMemoryDeadlineStore in an InMemoryTransactionScope", () => {
+	it("restores attempts and the pending state after a rolled-back dead-lettering", async () => {
+		const store = new InMemoryDeadlineStore({ maxDeliveryAttempts: 2 });
+		const scope = new InMemoryTransactionScope([store]);
+		await store.schedule({ scope: "orders", key: "o-1", dueAt, payload: 1 });
+		const [record] = await store.due(dueAt, 1);
+		if (record === undefined) throw new Error("expected a due deadline");
+		await store.markFailed(record.deliveryId, "first");
+
+		await scope
+			.transactional(async () => {
+				await store.markFailed(record.deliveryId, "second");
+				throw new Error("work failed");
+			})
+			.catch(() => {});
+
+		expect(await store.deadLetters()).toEqual([]);
+		expect(await store.due(dueAt, 1)).toMatchObject([
+			{ deliveryId: record.deliveryId, attempts: 1 },
+		]);
+	});
+
+	it("never reuses the delivery id of a rolled-back schedule", async () => {
+		const store = new InMemoryDeadlineStore();
+		const scope = new InMemoryTransactionScope([store]);
+		let ghost: string | undefined;
+		await scope
+			.transactional(async () => {
+				await store.schedule({
+					scope: "orders",
+					key: "o-1",
+					dueAt,
+					payload: 1,
+				});
+				ghost = (await store.due(dueAt, 1))[0]?.deliveryId;
+				throw new Error("work failed");
+			})
+			.catch(() => {});
+
+		await store.schedule({ scope: "orders", key: "o-2", dueAt, payload: 2 });
+		await store.markDelivered([ghost ?? ""]);
+
+		expect(ghost).toBeDefined();
+		expect(await store.due(dueAt, 10)).toMatchObject([{ key: "o-2" }]);
+	});
+
+	it("keeps the writes of a committed transaction", async () => {
+		const store = new InMemoryDeadlineStore();
+		const scope = new InMemoryTransactionScope([store]);
+
+		await scope.transactional(() =>
+			store.schedule({ scope: "orders", key: "o-1", dueAt, payload: 1 }),
+		);
+
+		expect(await store.due(dueAt, 10)).toMatchObject([{ key: "o-1" }]);
+	});
 });

@@ -4,6 +4,10 @@ import {
 	assertPositiveSafeInteger,
 } from "../../../internal/validate";
 import type {
+	InMemoryTransaction,
+	InMemoryTransactionParticipant,
+} from "../../../persistence/repository/adapters/in-memory-transaction-scope";
+import type {
 	DeadLetterDeadline,
 	DeadlineStore,
 	DueDeadline,
@@ -40,17 +44,17 @@ interface StoredDeadline<TPayload> {
  * limit rejects a new address before mutation; delivery state is never
  * silently evicted.
  *
- * **Not transaction-aware**, the same documented limitation as the
- * other in-memory references: a rolled-back `schedule` or `cancel`
- * stays applied here. The transactional half of the contract is the
- * SQL adapter's job; prove it with `createDeadlineStoreContractTests`
- * and its rollback capability.
+ * On its own, the store knows nothing about your `TransactionScope`
+ * rollbacks: a rolled-back `schedule` or `cancel` stays applied. Register
+ * the store with an `InMemoryTransactionScope` for tests that roll back or
+ * retry. For production, prove the transactional half of the contract with
+ * `createDeadlineStoreContractTests` and its rollback capability.
  *
  * Payloads are deep-copied on schedule and on delivery
  * (`structuredClone`), so neither side can mutate the other's copy.
  */
 export class InMemoryDeadlineStore<TPayload = unknown>
-	implements DeadlineStore<TPayload>
+	implements DeadlineStore<TPayload>, InMemoryTransactionParticipant
 {
 	private readonly pending = new Map<string, StoredDeadline<TPayload>>();
 	/** Keyed by deliveryId: several incarnations of one address can be dead. */
@@ -71,6 +75,34 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 			);
 		}
 		this.maxRecords = options.maxRecords;
+	}
+
+	/**
+	 * Records the state that a rollback of an `InMemoryTransactionScope`
+	 * returns to: the pending and the dead-letter records. The rollback
+	 * keeps the sequence counter, as a database sequence does: a delivery
+	 * id that a poller saw during the transaction never names a later
+	 * deadline.
+	 */
+	beginTransaction(): InMemoryTransaction {
+		const pending = [...this.pending].map(
+			([key, deadline]) => [key, { ...deadline }] as const,
+		);
+		const dead = [...this.dead].map(
+			([deliveryId, deadline]) => [deliveryId, { ...deadline }] as const,
+		);
+		return {
+			rollback: () => {
+				this.pending.clear();
+				for (const [key, deadline] of pending) {
+					this.pending.set(key, { ...deadline });
+				}
+				this.dead.clear();
+				for (const [deliveryId, deadline] of dead) {
+					this.dead.set(deliveryId, { ...deadline });
+				}
+			},
+		};
 	}
 
 	async schedule(deadline: {

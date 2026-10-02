@@ -1,22 +1,45 @@
 import { describe, expect, it } from "vite-plus/test";
 import { InMemoryDeadlineStore } from "../application/deadlines/adapters/in-memory-deadline-store";
+import { InMemoryTransactionScope } from "../persistence/repository/adapters/in-memory-transaction-scope";
 import {
 	createDeadlineStoreContractTests,
+	type DeadlineStoreContractEnvironment,
 	type DeadlineStoreContractHarness,
 } from "./deadline-store-contract";
 
+type SuitePayload = Parameters<
+	DeadlineStoreContractEnvironment["store"]["schedule"]
+>[0]["payload"];
+
 const CEILING = 3;
+const ROLLBACK = Symbol("rollback");
 
 function createInMemoryHarness(): DeadlineStoreContractHarness {
 	return {
-		createEnvironment: async () => ({
-			store: new InMemoryDeadlineStore({ maxDeliveryAttempts: CEILING }),
-			run: (work) => work(),
-			// No runRolledBack: the in-memory store is not transaction-aware
-			// (documented limitation); the rollback tests stay visible as
-			// skipped.
-		}),
+		createEnvironment: async () => {
+			const store = new InMemoryDeadlineStore<SuitePayload>({
+				maxDeliveryAttempts: CEILING,
+			});
+			const scope = new InMemoryTransactionScope([store]);
+			return {
+				store,
+				run: (work) => scope.transactional(() => work()),
+				runRolledBack: async (work) => {
+					let result: Awaited<ReturnType<typeof work>> | undefined;
+					await scope
+						.transactional(async () => {
+							result = await work();
+							throw ROLLBACK;
+						})
+						.catch((error: unknown) => {
+							if (error !== ROLLBACK) throw error;
+						});
+					return result as Awaited<ReturnType<typeof work>>;
+				},
+			};
+		},
 		failuresToDeadLetter: CEILING,
+		providesRolledBackRuns: true,
 	};
 }
 
@@ -27,12 +50,8 @@ describe("deadline-store contract suite against the in-memory reference", () => 
 		(test.skipped ? it.skip : it)(test.name, test.run);
 	}
 
-	it("only the two rollback tests are skipped for the in-memory reference", () => {
-		const skipped = tests.filter((test) => test.skipped);
-		expect(skipped.map((test) => test.skipped?.capability)).toEqual([
-			"providesRolledBackRuns",
-			"providesRolledBackRuns",
-		]);
+	it("no test is skipped for the in-memory reference", () => {
+		expect(tests.filter((test) => test.skipped)).toEqual([]);
 	});
 
 	it("a claiming-due harness skips every un-acked re-poll test", () => {
@@ -40,13 +59,10 @@ describe("deadline-store contract suite against the in-memory reference", () => 
 		claiming.claimsOnDue = true;
 		const claimingTests = createDeadlineStoreContractTests(claiming);
 		const skipped = claimingTests.filter((test) => test.skipped);
-		// Reschedule-race successor visibility, attempts/neighbor flow, and
-		// the two rollback gates of the in-memory harness.
+		// Reschedule-race successor visibility and attempts/neighbor flow.
 		expect(skipped.map((test) => test.skipped?.capability)).toEqual([
 			"non-claiming due",
 			"non-claiming due",
-			"providesRolledBackRuns",
-			"providesRolledBackRuns",
 		]);
 	});
 

@@ -68,8 +68,8 @@ export interface DeadlineStoreContractHarness {
 	/**
 	 * Declare `true` when environments provide {@link
 	 * DeadlineStoreContractEnvironment.runRolledBack}. Without it, the
-	 * rollback tests are marked skipped: the honest state of an
-	 * in-memory fake, and a loud gap for a transactional adapter.
+	 * rollback tests are marked skipped: the honest state of a store
+	 * without a rollback, and a loud gap for a transactional adapter.
 	 */
 	providesRolledBackRuns?: boolean;
 
