@@ -361,7 +361,7 @@ positions rather than silently folding a truncated stream.
 `InMemoryEventStore` is the reference implementation for finite-lifetime tests
 and demos. It is memory-only. It rolls back only when you register it with an
 `InMemoryTransactionScope`; see
-[In-memory transactions](/guide/unit-of-work#in-memory-transactions). Without
+[In-memory transactions](./unit-of-work.md#in-memory-transactions). Without
 options, its streams and events are unbounded. A
 long-lived process must configure both `maxStreams` and `maxEvents`; crossing a
 limit throws `InMemoryCapacityExceededError` before the append changes any
@@ -762,9 +762,10 @@ transaction context.
 `InMemorySnapshotStore` is the reference implementation. Without retention
 options it is unbounded and intended only for finite-lifetime tests and demos.
 Snapshots are rebuildable derived data. Thus, this in-memory store can forget
-state safely. If a test writes snapshots inside a transaction, register the
-store with an `InMemoryTransactionScope`. A rollback then restores the
-snapshots, their LRU order, and their expiry.
+state safely. If you register the store with an `InMemoryTransactionScope`, a
+rollback restores the snapshots, their LRU order, and their expiry from the
+start of the transaction. The rollback then also drops a snapshot that code
+saved meanwhile after an earlier commit. The next load replays more events.
 
 `maxEntries` enables least-recently-used eviction. `ttlMs` expires
 entries relative to an optional instance-bound `clock`. Loading a snapshot

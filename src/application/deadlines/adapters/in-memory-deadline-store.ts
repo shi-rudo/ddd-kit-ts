@@ -97,8 +97,7 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 	 * returns to: the pending and the dead-letter records. The rollback
 	 * keeps the sequence counter, as a database sequence does, so a
 	 * delivery id stays unique. Until the transaction ends, `due` reads the
-	 * recorded deadline of each address that the transaction writes. Only an
-	 * `InMemoryTransactionScope` calls this method.
+	 * recorded deadline of each address that the transaction writes.
 	 */
 	beginTransaction(): InMemoryTransaction {
 		const committed = new Map(

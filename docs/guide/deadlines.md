@@ -217,10 +217,9 @@ themselves stay single-shot inputs.
 
 `InMemoryDeadlineStore` is the reference implementation for tests and demos.
 It rolls back only when you register it with an `InMemoryTransactionScope`;
-see [In-memory transactions](/guide/unit-of-work#in-memory-transactions).
-While a transaction is open, `due` does not return the deadlines that the
-transaction scheduled. An adapter proves itself with
-`createDeadlineStoreContractTests` from
+see [In-memory transactions](./unit-of-work.md#in-memory-transactions).
+While a transaction is open, `due` returns only committed deadlines. An
+adapter proves itself with `createDeadlineStoreContractTests` from
 `@shirudo/ddd-kit/testing`; a Postgres implementation is a single table with
 an index on `(due_at)` and the usual `ON CONFLICT` upsert for the
 one-per-address rule.

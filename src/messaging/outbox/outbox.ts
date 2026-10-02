@@ -638,8 +638,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 	 * returns to: pending and dead-letter records, receipts, source cursors,
 	 * and ended sources, in their order. Until the transaction ends,
 	 * `getPending` reads the recorded copy of each pending record that the
-	 * transaction writes. Only an `InMemoryTransactionScope` calls this
-	 * method.
+	 * transaction writes.
 	 */
 	beginTransaction(): InMemoryTransaction {
 		const committed = new Map(

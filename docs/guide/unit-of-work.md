@@ -426,35 +426,36 @@ const scope = new InMemoryTransactionScope([events, outbox]);
 const uow = new UnitOfWork({
   scope: new RetryingTransactionScope(scope),
   outbox,
-  repositories: { orders: ordersIn(events) },
+  repositories: { orders: eventSourcedOrdersIn(events) },
 });
 ```
 
 - If the work fails, every registered store undoes the writes of the attempt.
   The retry starts from the committed state.
 - The scope runs one transaction at a time, in call order. A transaction that
-  waits for another transaction of the same scope never finishes. The scope
-  thus works like a database with one connection, and it cannot host the
-  repository contract suites.
-- A store belongs to one scope. Share one scope for all stores of a test. A
-  second scope with the same store throws at construction.
+  waits for another transaction of the same scope never finishes, unless its
+  abort signal fires. The scope thus works like a database with one
+  connection, and it cannot host the repository contract suites.
+- A store belongs to one scope. Register all stores of a test with one scope.
+  A second scope with a registered store throws at construction.
 - Code outside a transaction, such as a dispatcher, reads only committed
   writes from outbox `getPending`, deadline `due`, and checkpoint
   `hasReached`. Other reads also see the writes of an open transaction.
 - A store that is not registered keeps its behavior: it does not roll back.
 
-Each store decides what its rollback undoes:
+Each store decides what its rollback undoes. "Meanwhile" means while the
+transaction was open:
 
 | Store | A rollback undoes |
 | --- | --- |
-| `InMemoryOutbox` | the whole store, also an acknowledgement that a dispatcher made meanwhile; that record is delivered again |
-| `InMemoryEventStore` | the appends |
-| `InMemoryDeadlineStore` | the whole store, also an acknowledgement that a processor made meanwhile; the sequence of delivery ids keeps counting |
+| `InMemoryOutbox` | the whole store, also acknowledgements and failure reports that a dispatcher made meanwhile; the dispatcher then delivers such a record again |
+| `InMemoryEventStore` | the whole store, also appends made outside the transaction meanwhile |
+| `InMemoryDeadlineStore` | the whole store, also acknowledgements and failure reports that a processor made meanwhile; the processor then delivers such a deadline again |
 | `InMemoryProjectionCheckpointStore` | the saves and resets; the checkpoint locks stay |
-| `InMemorySnapshotStore` | the saves and deletes |
-| `InMemoryIdempotencyStore` | `claim` and `complete`; the lease operations `renew`, `confirm`, `abandon`, and `reconcile` stay |
+| `InMemorySnapshotStore` | the whole store, also a snapshot that code saved meanwhile after an earlier commit; a snapshot is derived data, so the next load replays more events |
+| `InMemoryIdempotencyStore` | the writes of `claim` and `complete`; the lease operations `renew`, `confirm`, `abandon`, and `reconcile` keep their writes on every other key |
 
-An in-memory table of your own takes part through
+You can register an in-memory table of your own. It implements
 `InMemoryTransactionParticipant`:
 
 ```ts

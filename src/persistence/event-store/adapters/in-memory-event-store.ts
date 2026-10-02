@@ -58,10 +58,10 @@ function assertStreamPosition(
  * the aggregate transaction share atomicity (a table with a
  * `(aggregate_type, aggregate_id, position)` unique key inside the same
  * transaction, or a dedicated event store). Same caveat as
- * `InMemoryOutbox`: this class lives in memory only, and on its own it
- * knows nothing about your `TransactionScope` rollbacks, so events appended
- * inside a transaction that later rolls back stay. Register the store with
- * an `InMemoryTransactionScope` for tests that roll back or retry.
+ * `InMemoryOutbox`: this class lives in memory only. On its own, it knows
+ * nothing about your `TransactionScope` rollbacks, so events appended inside
+ * a transaction that later rolls back stay. Register the store with an
+ * `InMemoryTransactionScope` for tests that roll back or retry.
  */
 export class InMemoryEventStore<Evt extends AnyDomainEvent>
 	implements EventStore<Evt>, InMemoryTransactionParticipant

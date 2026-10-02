@@ -277,9 +277,10 @@ immutable. Run one kit version per process during a cutover.
   that roll back or retry. Every in-memory store implements
   `InMemoryTransactionParticipant`. A registered store undoes the writes of a
   failed attempt, and a store that is not registered keeps its behavior. The
-  scope runs one transaction at a time, and a store belongs to one scope.
-  While a transaction is open, outbox `getPending`, deadline `due`, and
-  checkpoint `hasReached` read only committed writes. The idempotency store
+  scope runs one transaction at a time, and a queued transaction stops
+  waiting when its abort signal fires. A store belongs to one scope. While a
+  transaction is open, outbox `getPending`, deadline `due`, and checkpoint
+  `hasReached` read only committed writes. The idempotency store
   rolls back `claim` and `complete` and keeps the lease operations. The
   in-memory references pass the rollback tests of the outbox, deadline, and
   checkpoint contract suites.

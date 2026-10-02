@@ -81,11 +81,12 @@ function positiveSafeInteger(value: number): boolean {
  *
  * Register the store with an `InMemoryTransactionScope` for tests that roll
  * back or retry. A rollback then undoes the writes of `claim` and `complete`,
- * which the port runs inside the transaction. The lease operations `renew`,
- * `confirm`, `abandon`, and `reconcile` stay out of band, as the port defines
- * them, so a rollback keeps their writes. A confirmation that arrives after
- * the next transaction began therefore survives the rollback of that
- * transaction.
+ * which the port runs inside the transaction: it returns each key that they
+ * wrote to its earlier entry. The lease operations `renew`, `confirm`,
+ * `abandon`, and `reconcile` stay out of band, as the port defines them. A
+ * rollback keeps their writes on every other key. A confirmation that
+ * arrives after the next transaction began therefore survives the rollback
+ * of that transaction.
  */
 export class InMemoryIdempotencyStore<TCtx = unknown>
 	implements IdempotencyStore<TCtx>, InMemoryTransactionParticipant

@@ -193,7 +193,14 @@ On its own, the store is the leased, non-transactional family. Register it
 with an `InMemoryTransactionScope` for a test that rolls back or retries; see
 [In-memory transactions](/guide/unit-of-work#in-memory-transactions). A
 rollback then undoes `claim` and `complete`, which the port runs inside the
-transaction. The lease operations `renew`, `confirm`, `abandon`, and
-`reconcile` stay out of band, so a rollback keeps their writes. A confirmation
-that `withIdempotentCommit` makes after the commit therefore survives the
-rollback of the next transaction.
+transaction: it returns each key that they wrote to its earlier entry. The
+lease operations `renew`, `confirm`, `abandon`, and `reconcile` stay out of
+band, so a rollback keeps their writes on every other key. A confirmation that
+`withIdempotentCommit` makes after the commit therefore survives the rollback
+of the next transaction.
+
+The scope can begin the next transaction before that confirmation. A
+duplicate request that the scope queues behind the first one can therefore
+still find the first outcome staged. It then gets `IdempotencyInFlightError`,
+which is retryable. Wrap the scope in a `RetryingTransactionScope` to get the
+replay.

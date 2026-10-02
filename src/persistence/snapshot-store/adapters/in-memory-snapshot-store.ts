@@ -38,10 +38,11 @@ interface StoredSnapshot<TState> {
  * not extend TTL; only another save does.
  *
  * The port keeps snapshot writes out of the write transaction, so the store
- * does not roll back on its own. Register it with an
- * `InMemoryTransactionScope` when a test writes snapshots inside a
- * transaction. A rollback then restores the snapshots, their LRU order, and
- * their expiry.
+ * does not roll back on its own. If you register it with an
+ * `InMemoryTransactionScope`, a rollback restores the snapshots, their LRU
+ * order, and their expiry from the start of the transaction. The rollback
+ * then also drops a snapshot that code saved meanwhile after an earlier
+ * commit. This is safe, because a snapshot is derived data.
  */
 export class InMemorySnapshotStore<TState = unknown>
 	implements SnapshotStore<TState>, InMemoryTransactionParticipant

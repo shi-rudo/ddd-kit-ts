@@ -22,9 +22,10 @@ const { registry: registeredParticipants } =
 /**
  * A {@link TransactionScope} for tests and demos that gives in-memory stores
  * a rollback. Register every store that the work writes inside the
- * transaction. When the work fails, each registered store returns to its state
- * at the start of the attempt, so a rolled-back write leaves nothing behind,
- * also on the retry of a `RetryingTransactionScope`.
+ * transaction. When the work fails, each registered store undoes the writes
+ * of the attempt. A retry of a `RetryingTransactionScope` thus starts from
+ * the committed state. Each store decides what its rollback undoes, and its
+ * documentation says so.
  *
  * **One transaction at a time.** A store cannot tell which of two open
  * transactions a write belongs to. The scope therefore runs its transactions
@@ -37,16 +38,15 @@ const { registry: registeredParticipants } =
  * **Code outside a transaction.** A dispatcher, a deadline processor, and a
  * `hasReached` check run outside the transactions. Outbox `getPending`,
  * deadline `due`, and checkpoint `hasReached` read only committed writes.
- * Other reads also see the writes of an open transaction. Each store decides
- * what its rollback restores, and its documentation says so. A store that
- * restores its whole state also undoes a write that code outside the
- * transaction made while the transaction was open, for example an
- * acknowledgement of an outbox dispatcher. The record is then delivered
- * again, which the at-least-once contract allows.
+ * Other reads also see the writes of an open transaction. A store that
+ * restores its whole state on rollback also undoes the writes that code
+ * outside the transaction made meanwhile. An example is an acknowledgement
+ * of an outbox dispatcher. The dispatcher then delivers the record again,
+ * which the at-least-once contract allows.
  *
  * **A store belongs to one scope.** A scope works like one in-memory
- * database, so share one scope for all stores of a test. A second scope with
- * a store that a scope holds already throws at construction: the rollback of
+ * database, so register all stores of a test with one scope. A second scope
+ * with a registered store throws at construction, because the rollback of
  * one scope would undo a commit of the other.
  *
  * A store that is not registered keeps its own behavior: it does not roll

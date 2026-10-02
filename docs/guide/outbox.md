@@ -353,8 +353,7 @@ outbox then rejects every later event of the aggregate, which still exists.
 This also happens on the retry of a `RetryingTransactionScope`. Register the
 outbox with an `InMemoryTransactionScope` for a test that rolls back or
 retries; see [In-memory transactions](/guide/unit-of-work#in-memory-transactions).
-While a transaction is open, `getPending` does not return the records that
-the transaction wrote.
+While a transaction is open, `getPending` returns only committed records.
 
 ```ts
 import { InMemoryOutbox, type DomainEvent } from "@shirudo/ddd-kit";
