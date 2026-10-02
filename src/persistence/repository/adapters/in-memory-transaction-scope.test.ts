@@ -182,6 +182,29 @@ describe("InMemoryTransactionScope", () => {
 		]);
 	});
 
+	it("rolls back the participants that began when a later one fails to begin", async () => {
+		const steps: string[] = [];
+		const scope = new InMemoryTransactionScope([
+			recordingParticipant("outbox", steps),
+			recordingParticipant("events", steps),
+			{
+				beginTransaction: () => {
+					throw new Error("begin of checkpoints failed");
+				},
+			},
+		]);
+
+		await expect(scope.transactional(async () => "done")).rejects.toThrow(
+			"begin of checkpoints failed",
+		);
+		expect(steps).toEqual([
+			"begin outbox",
+			"begin events",
+			"rollback events",
+			"rollback outbox",
+		]);
+	});
+
 	it("rejects with the abort reason before the transaction begins", async () => {
 		const steps: string[] = [];
 		const scope = new InMemoryTransactionScope([

@@ -94,11 +94,12 @@ export class InMemoryTransactionScope implements TransactionScope<undefined> {
 			await previous;
 			const signal = options?.signal;
 			if (signal?.aborted) throw abortReason(signal, ABORT_MESSAGE);
-			const transactions = this.participants.map((participant) =>
-				participant.beginTransaction(),
-			);
+			const transactions: InMemoryTransaction[] = [];
 			let result: T;
 			try {
+				for (const participant of this.participants) {
+					transactions.push(participant.beginTransaction());
+				}
 				result = await fn(undefined);
 			} catch (error) {
 				const rollback = endAll([...transactions].reverse(), (transaction) =>
