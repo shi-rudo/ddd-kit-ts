@@ -158,7 +158,11 @@ type DispatchedEventReceipt = {
  * outbox then rejects every later event of that aggregate, also on the retry
  * of a `RetryingTransactionScope`. Register the outbox with an
  * `InMemoryTransactionScope` for tests that roll back or retry: a rollback
- * then returns it to its state at the start of the attempt.
+ * then returns it to its state at the start of the attempt. While a
+ * transaction is open, `getPending` does not return the records that the
+ * transaction wrote, because a relay reads only committed records. A
+ * rollback also undoes an acknowledgement that a dispatcher made while the
+ * transaction was open, so that record is dispatched again.
  *
  * @example
  * ```ts
@@ -190,6 +194,8 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 		string,
 		DispatchedEventReceipt
 	>();
+	/** Event ids of the pending records that the open transaction wrote. */
+	private writtenInTransaction: Set<string> | undefined;
 	private readonly maxDeliveryAttempts: number;
 	private readonly maxRetainedDispatchedEventIds: number;
 	private readonly maxRecords: number | undefined;
@@ -267,6 +273,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				// Requeue the durable record exactly as committed. A dead letter is a
 				// delivery state, not a new aggregate commit to re-finalize.
 				this.dead.delete(event.eventId);
+				this.writtenInTransaction?.add(event.eventId);
 				this.pending.set(event.eventId, {
 					dispatchId: deadLetter.dispatchId,
 					event: deadLetter.event,
@@ -384,11 +391,13 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				// eventId with a new commit position. Dispatching the stale
 				// envelope would hand consumers a position from a commit that
 				// never happened. Attempts belong to delivery, so they survive.
+				this.writtenInTransaction?.add(event.eventId);
 				existing.event = event;
 				existing.source = ownedSource;
 				existing.position = ownedPosition;
 				continue;
 			}
+			this.writtenInTransaction?.add(event.eventId);
 			this.pending.set(event.eventId, {
 				dispatchId: event.eventId,
 				event,
@@ -586,8 +595,9 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				? Math.max(0, Number.isNaN(limit) ? 0 : limit)
 				: Number.POSITIVE_INFINITY;
 		const batch: Array<OutboxRecord<Evt>> = [];
-		for (const record of this.pending.values()) {
+		for (const [eventId, record] of this.pending) {
 			if (batch.length >= max) break;
+			if (this.writtenInTransaction?.has(eventId)) continue;
 			batch.push({
 				dispatchId: record.dispatchId,
 				event: record.event,
@@ -615,7 +625,8 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 	/**
 	 * Records the state that a rollback of an `InMemoryTransactionScope`
 	 * returns to: pending and dead-letter records, receipts, source cursors,
-	 * and ended sources, in their order.
+	 * and ended sources, in their order. Until the transaction ends,
+	 * `getPending` hides the pending records that it writes.
 	 */
 	beginTransaction(): InMemoryTransaction {
 		const pending = [...this.pending].map(
@@ -625,8 +636,15 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 		const receipts = [...this.dispatchedEventIds];
 		const cursors = [...this.sourceCursors];
 		const ended = [...this.endedSourceKeys];
+		const written = new Set<string>();
+		this.writtenInTransaction = written;
+		const end = () => {
+			if (this.writtenInTransaction === written) {
+				this.writtenInTransaction = undefined;
+			}
+		};
 		return {
-			commit: () => {},
+			commit: end,
 			rollback: () => {
 				refill(this.pending, pending);
 				refill(this.dead, dead);
@@ -634,6 +652,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				refill(this.sourceCursors, cursors);
 				this.endedSourceKeys.clear();
 				for (const key of ended) this.endedSourceKeys.add(key);
+				end();
 			},
 		};
 	}

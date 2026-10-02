@@ -44,6 +44,88 @@ describe("InMemoryOutbox in an InMemoryTransactionScope", () => {
 			(error: unknown) => error,
 		);
 
+	async function holdOpen(
+		scope: InMemoryTransactionScope,
+		work: () => Promise<void>,
+	): Promise<{ commit(): Promise<void> }> {
+		let release!: () => void;
+		const released = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let workDone!: () => void;
+		const workFinished = new Promise<void>((resolve) => {
+			workDone = resolve;
+		});
+		const transaction = scope.transactional(async () => {
+			await work();
+			workDone();
+			await released;
+		});
+		await workFinished;
+		return {
+			commit: async () => {
+				release();
+				await transaction;
+			},
+		};
+	}
+	const pendingIds = async (outbox: InMemoryOutbox<OrderCreated>) =>
+		(await outbox.getPending()).map((record) => record.event.eventId);
+
+	it("hides the records of an open transaction from getPending until the commit", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>();
+		const scope = new InMemoryTransactionScope([outbox]);
+		await scope.transactional(() =>
+			outbox.add([candidate(orderEvent("evt-1", "o-1"), 1)]),
+		);
+
+		const transaction = await holdOpen(scope, () =>
+			outbox.add([candidate(orderEvent("evt-2", "o-2"), 1)]),
+		);
+		const duringTransaction = await pendingIds(outbox);
+		await transaction.commit();
+
+		expect(duringTransaction).toEqual(["evt-1"]);
+		expect(await pendingIds(outbox)).toEqual(["evt-1", "evt-2"]);
+	});
+
+	it("hides a dead letter that an open transaction requeued", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>({ maxDeliveryAttempts: 1 });
+		const scope = new InMemoryTransactionScope([outbox]);
+		const event = orderEvent("evt-1");
+		await scope.transactional(() => outbox.add([candidate(event, 1)]));
+		await outbox.markFailed("evt-1", new Error("broker down"));
+
+		const transaction = await holdOpen(scope, () =>
+			outbox.add([candidate(event, 1)]),
+		);
+		const duringTransaction = await pendingIds(outbox);
+		await transaction.commit();
+
+		expect(duringTransaction).toEqual([]);
+		expect(await pendingIds(outbox)).toEqual(["evt-1"]);
+	});
+
+	it("hides a record that an open transaction refreshed", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>();
+		const scope = new InMemoryTransactionScope([outbox]);
+		const event = orderEvent("evt-1");
+		await outbox.add([candidate(event, 1)]);
+
+		const transaction = await holdOpen(scope, () =>
+			outbox.add([candidate(event, 2)]),
+		);
+		const duringTransaction = await pendingIds(outbox);
+		await transaction.commit();
+
+		expect(duringTransaction).toEqual([]);
+		expect(
+			(await outbox.getPending()).map(
+				(record) => record.position.aggregateVersion,
+			),
+		).toEqual([2]);
+	});
+
 	it("leaves no record and no cursor change after a rolled-back add", async () => {
 		const outbox = new InMemoryOutbox<OrderCreated>();
 		const scope = new InMemoryTransactionScope([outbox]);
