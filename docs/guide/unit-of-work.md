@@ -379,7 +379,7 @@ The most useful failures are intentionally specific:
 | `ConcurrencyConflictError` | the adapter's expected-version predicate lost a race |
 | `DuplicateAggregateError` | an `add` collided with an existing identity |
 | `InvalidRepositoryAdapterError` | a repository factory returned no adapter object, or an adapter that defines `add`, `update`, or `remove` |
-| `CommitError` | work completed, but the outbox write or transaction commit failed |
+| `CommitError` | work completed, but a step after it (such as the outbox write) failed and the rollback succeeded, or the transaction commit failed |
 | `RollbackError` | a step inside the transaction failed (the work, or a step after it such as the outbox write) and the scope reported a different rollback failure |
 | `NestedUnitOfWorkError` | one instance was entered while already running |
 | `TransactionClosedError` | a leaked context or tracking capability was used after close |

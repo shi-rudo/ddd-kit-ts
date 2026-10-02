@@ -1195,10 +1195,6 @@ this list if your code observes one of these paths:
 - `run()` rethrows the caller's abort reason unchanged when cancellation
   interrupts a retry wait. Before, the abort surfaced as
   `ROLLBACK_FAILED` with a retryable cause.
-- `run()` reports `ROLLBACK_FAILED` when a step after the work fails
-  inside the transaction, for example the outbox write, and the rollback
-  fails too. Before, it reported `COMMIT_FAILED` with the rollback failure
-  as its cause, and the outbox failure was lost.
 - `withIdempotentCommit` abandons the staged claim when the commit
   fails. The key is free for a retry. Before, the key stayed blocked
   until lease expiry.
@@ -1336,6 +1332,10 @@ Behavior that a use case or an adapter can notice:
   time option throws a `RangeError` in place of an `Error`.
 - A custom scope that retries calls `onAttemptStart` from the transactional
   options before each attempt, so `run()` labels a failure by its attempt.
+- `run()` reports `ROLLBACK_FAILED` when a step after the work fails
+  inside the transaction, for example the outbox write, and the rollback
+  fails too. Before, it reported `COMMIT_FAILED` with the rollback failure
+  as its cause, and the outbox failure was lost.
 - The kit does not support an identity that is created again after a
   removal. Give the new aggregate a new id. Once the removed aggregate
   committed events, an outbox that keeps source heads rejects the first

@@ -2903,6 +2903,45 @@ describe("UnitOfWork", () => {
 			expect((rejection as RollbackError).cause).toBe(outboxError);
 		});
 
+		it("a wiring error after the work, then a failed rollback: RollbackError keeps the wiring error", async () => {
+			const rollbackFailure = new Error("ROLLBACK failed");
+			const scope: TransactionScope<undefined> = {
+				transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
+					try {
+						return await fn(undefined);
+					} catch {
+						throw rollbackFailure;
+					}
+				},
+			};
+			const agg = createMockAggregate("o-1", [testEvent("o-1")]);
+			const outbox: Outbox<TestEvent> = {
+				add: async () => {
+					agg.change(testEvent("o-1"));
+				},
+				endEventSources: async () => {},
+				getPending: async () => [],
+				markDispatched: async () => {},
+			};
+			const { uow } = createUow({ scope, outbox });
+
+			const rejection = await uow
+				.run(async ({ repositories }) => {
+					repositories.orders.add(agg);
+					return undefined;
+				})
+				.then(
+					() => undefined,
+					(e: unknown) => e,
+				);
+
+			expect(rejection).toBeInstanceOf(RollbackError);
+			expect((rejection as RollbackError).cause).toBeInstanceOf(
+				AggregateTrackingError,
+			);
+			expect((rejection as RollbackError).rollbackCause).toBe(rollbackFailure);
+		});
+
 		it("a scope that wraps an outbox failure reports a CommitError, not a RollbackError", async () => {
 			const outboxError = new Error("outbox write failed");
 			const scope: TransactionScope<undefined> = {

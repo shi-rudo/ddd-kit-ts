@@ -531,7 +531,7 @@ export interface CheckedWorkResult<Evt extends AnyDomainEvent, R>
 	 */
 	readonly checkBeforeCommit?: () => void;
 	/**
-	 * Receives the error of a step after the work callback that failed
+	 * Receives the error of a step that ran after the work callback and failed
 	 * inside the transaction, before the scope rolls back.
 	 */
 	readonly onFailureBeforeCommit?: (error: unknown) => void;

@@ -418,18 +418,21 @@ export class CommitError extends InfrastructureError<"COMMIT_FAILED"> {
 }
 
 /**
- * A step inside the transaction threw AND the transaction scope rejected
- * with a DIFFERENT error that does not wrap that failure in its cause
- * chain - the strongest available signal that the rollback itself failed.
+ * A step inside the transaction threw, and the transaction scope rejected
+ * with a different error that does not wrap that failure in its cause chain.
+ * This is the strongest available signal that the rollback itself failed.
  * The step is the work callback, or a step after it and before the commit,
- * for example the outbox write. The failure inside the transaction is
- * preserved as `cause`, so cause-chain helpers (`someChainRetryable`,
- * `findInCauseChain`) still see a wrapped `ConcurrencyConflictError` & co.;
- * the scope's error is carried in {@link rollbackCause}.
+ * for example the outbox write. The failure inside the transaction is the
+ * `cause`, so cause-chain helpers (`someChainRetryable`, `findInCauseChain`)
+ * still see a wrapped `ConcurrencyConflictError` & co. The scope's error is
+ * in {@link rollbackCause}. A wiring error as that failure is the cause too,
+ * so both facts stay visible.
  *
- * Scopes that rethrow the original error (Drizzle, Prisma do) never
- * produce this; scopes that WRAP the original are detected via the
- * cause chain and passed through unchanged instead.
+ * A scope that rethrows the failure (Drizzle and Prisma do) never produces
+ * this. A scope that wraps the failure is detected through the cause chain.
+ * A wrapped failure of the work passes through unchanged. A wrapped failure
+ * after the work becomes a `CommitError`, or passes through when it is a
+ * wiring error.
  */
 export class RollbackError extends InfrastructureError<"ROLLBACK_FAILED"> {
 	constructor(
@@ -452,7 +455,9 @@ export class RollbackError extends InfrastructureError<"ROLLBACK_FAILED"> {
  * The first kit wiring error in the cause chain of `error`, also from another
  * copy of the kit. A wiring error states a defect of the wiring, so the unit
  * of work passes it to the caller and never lets a mapper or a retry
- * relabel it, even when an adapter or a scope wrapped it.
+ * relabel it, even when an adapter or a scope wrapped it. If the rollback
+ * failed as well, the wiring error becomes the cause of a `RollbackError`,
+ * so the rollback failure stays visible.
  */
 export function wiringErrorInCauseChain(error: unknown): object | undefined {
 	return findInCauseChain(error, (link) =>

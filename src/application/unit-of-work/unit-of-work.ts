@@ -887,17 +887,19 @@ function startAttempt(): RunAttempt {
  *   callback's error indicates the rollback itself failed, which becomes a
  *   {@link RollbackError}.
  * - `workCompleted`: the callback finished; the failure is post-completion.
- *   A wiring error (a harvest-guard violation, or an aggregate that changed
- *   after its registration) is a deterministic programming bug and passes
- *   through; it does NOT extend `InfrastructureError`, so a
- *   retry-on-Infrastructure handler skips it. It is thrown inside
- *   `scope.transactional()`, so a wrapping scope can nest it: walk the
- *   chain rather than a bare `instanceof`. A step that failed inside the
- *   transaction after the callback (`failedBeforeCommit`, for example the
- *   outbox write) and a scope rejection that neither is nor wraps that
- *   failure mean that the rollback failed: a {@link RollbackError}. Only
- *   genuinely unforeseeable post-completion failures (outbox write, the
- *   commit itself) become {@link CommitError}.
+ *   The checks run in this order. First, a wiring error in the rejection (a
+ *   harvest-guard violation, or an aggregate that changed after its
+ *   registration) is a deterministic programming bug and passes through; it
+ *   does NOT extend `InfrastructureError`, so a retry-on-Infrastructure
+ *   handler skips it. It is thrown inside `scope.transactional()`, so a
+ *   wrapping scope can nest it: walk the chain rather than a bare
+ *   `instanceof`. Second, a step that failed inside the transaction after
+ *   the callback (`failedBeforeCommit`) and a rejection that neither is nor
+ *   wraps that failure indicate a possible rollback failure: a
+ *   {@link RollbackError} with that failure as its cause, also when it is a
+ *   wiring error, as in the work phase. Every other post-completion failure
+ *   (a failed step whose rollback succeeded, the commit itself) becomes a
+ *   {@link CommitError}.
  * - Neither flag set: `withCommit` rejected before the callback ran (the
  *   scope failed to even open a transaction); pass the error through.
  */
