@@ -171,6 +171,127 @@ describe("InMemoryDeadlineStore in an InMemoryTransactionScope", () => {
 		expect(nextPoll).toEqual([]);
 	});
 
+	it("does not return a committed deadline that a processor dead-lettered before the transaction cancelled it", async () => {
+		const store = new InMemoryDeadlineStore({ maxDeliveryAttempts: 1 });
+		const scope = new InMemoryTransactionScope([store]);
+		await scope.transactional(() =>
+			store.schedule({ scope: "orders", key: "o-1", dueAt, payload: 1 }),
+		);
+		const [committed] = await store.due(dueAt, 10);
+		let releaseWork!: () => void;
+		const workReleased = new Promise<void>((resolve) => {
+			releaseWork = resolve;
+		});
+		let deadLettered!: () => void;
+		const failureReported = new Promise<void>((resolve) => {
+			deadLettered = resolve;
+		});
+		let cancelled!: () => void;
+		const workCancelled = new Promise<void>((resolve) => {
+			cancelled = resolve;
+		});
+		let began!: () => void;
+		const transactionBegan = new Promise<void>((resolve) => {
+			began = resolve;
+		});
+		const transaction = scope.transactional(async () => {
+			began();
+			await failureReported;
+			await store.cancel("orders", "o-1");
+			cancelled();
+			await workReleased;
+		});
+		await transactionBegan;
+
+		await store.markFailed(committed?.deliveryId ?? "", "poison");
+		deadLettered();
+		await workCancelled;
+		const duringTransaction = await store.due(dueAt, 10);
+		releaseWork();
+		await transaction;
+
+		expect(duringTransaction).toEqual([]);
+	});
+
+	it("returns the attempts that a failure report recorded before the transaction rescheduled the deadline", async () => {
+		const store = new InMemoryDeadlineStore({ maxDeliveryAttempts: 5 });
+		const scope = new InMemoryTransactionScope([store]);
+		await scope.transactional(() =>
+			store.schedule({ scope: "orders", key: "o-1", dueAt, payload: 1 }),
+		);
+		const [committed] = await store.due(dueAt, 10);
+		let began!: () => void;
+		const transactionBegan = new Promise<void>((resolve) => {
+			began = resolve;
+		});
+		let failed!: () => void;
+		const failureReported = new Promise<void>((resolve) => {
+			failed = resolve;
+		});
+		let rescheduled!: () => void;
+		const workRescheduled = new Promise<void>((resolve) => {
+			rescheduled = resolve;
+		});
+		let releaseWork!: () => void;
+		const workReleased = new Promise<void>((resolve) => {
+			releaseWork = resolve;
+		});
+		const transaction = scope.transactional(async () => {
+			began();
+			await failureReported;
+			await store.schedule({ scope: "orders", key: "o-1", dueAt, payload: 2 });
+			rescheduled();
+			await workReleased;
+		});
+		await transactionBegan;
+
+		await store.markFailed(committed?.deliveryId ?? "", "first");
+		failed();
+		await workRescheduled;
+		const duringTransaction = await store.due(dueAt, 10);
+		releaseWork();
+		await transaction;
+
+		expect(duringTransaction).toMatchObject([
+			{ deliveryId: committed?.deliveryId, attempts: 1 },
+		]);
+	});
+
+	it("stops returning a committed deadline at the attempt ceiling while the transaction is open", async () => {
+		const store = new InMemoryDeadlineStore({ maxDeliveryAttempts: 2 });
+		const scope = new InMemoryTransactionScope([store]);
+		await scope.transactional(() =>
+			store.schedule({ scope: "orders", key: "o-1", dueAt, payload: 1 }),
+		);
+		let releaseWork!: () => void;
+		const workReleased = new Promise<void>((resolve) => {
+			releaseWork = resolve;
+		});
+		let cancelled!: () => void;
+		const workCancelled = new Promise<void>((resolve) => {
+			cancelled = resolve;
+		});
+		const transaction = scope.transactional(async () => {
+			await store.cancel("orders", "o-1");
+			cancelled();
+			await workReleased;
+		});
+		await workCancelled;
+
+		const polls: number[] = [];
+		for (let poll = 0; poll < 3; poll += 1) {
+			const due = await store.due(dueAt, 10);
+			polls.push(due.length);
+			for (const deadline of due) {
+				await store.markFailed(deadline.deliveryId, "handler failed");
+			}
+		}
+		releaseWork();
+		await transaction;
+
+		expect(polls).toEqual([1, 1, 0]);
+	});
+
 	it("hides the deadlines of an open transaction from due until the commit", async () => {
 		const store = new InMemoryDeadlineStore();
 		const scope = new InMemoryTransactionScope([store]);

@@ -52,7 +52,9 @@ interface StoredDeadline<TPayload> {
  * A processor reads only committed deadlines. While a transaction is open,
  * `due` skips a deadline that the transaction scheduled. For an address that
  * the transaction rescheduled or cancelled, it returns the committed
- * deadline. A rollback also undoes an acknowledgement or a failure report
+ * deadline as it was at the first write of the transaction. A failure report
+ * against that deadline counts its attempts. At the ceiling, `due` stops
+ * returning it until the transaction ends. A rollback also undoes an acknowledgement or a failure report
  * that a processor made while the transaction was open. The processor then
  * delivers that deadline again. For production, prove the transactional half
  * of the contract with `createDeadlineStoreContractTests` and its rollback
@@ -71,16 +73,11 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 	private readonly maxRecords: number | undefined;
 	private nextSequence = 0;
 	/**
-	 * The pending deadlines at the start of the open transaction, the
-	 * addresses it wrote, and the delivery ids that processors acknowledged
-	 * while it was open.
+	 * The committed deadline of each address that the open transaction wrote,
+	 * captured at its first write. `undefined` marks an address without one.
 	 */
-	private openTransaction:
-		| {
-				readonly committed: ReadonlyMap<string, StoredDeadline<TPayload>>;
-				readonly written: Set<string>;
-				readonly delivered: Set<string>;
-		  }
+	private committedVersions:
+		| Map<string, StoredDeadline<TPayload> | undefined>
 		| undefined;
 
 	constructor(options: InMemoryDeadlineStoreOptions = {}) {
@@ -101,34 +98,28 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 	 * Records the state that a rollback of an `InMemoryTransactionScope`
 	 * returns to: the pending and the dead-letter records. The rollback
 	 * keeps the sequence counter, as a database sequence does, so a
-	 * delivery id stays unique. Until the transaction ends, `due` reads the
-	 * recorded deadline of each address that the transaction writes.
+	 * delivery id stays unique. Until the transaction ends, `due` returns the
+	 * committed deadline of each address that the transaction writes.
 	 */
 	beginTransaction(): InMemoryTransaction {
-		const committed = new Map(
-			[...this.pending].map(
-				([key, deadline]) => [key, { ...deadline }] as const,
-			),
+		const pending = [...this.pending].map(
+			([key, deadline]) => [key, { ...deadline }] as const,
 		);
 		const dead = [...this.dead].map(
 			([deliveryId, deadline]) => [deliveryId, { ...deadline }] as const,
 		);
-		const transaction = {
-			committed,
-			written: new Set<string>(),
-			delivered: new Set<string>(),
-		};
-		this.openTransaction = transaction;
+		const versions = new Map<string, StoredDeadline<TPayload> | undefined>();
+		this.committedVersions = versions;
 		const end = () => {
-			if (this.openTransaction === transaction) {
-				this.openTransaction = undefined;
+			if (this.committedVersions === versions) {
+				this.committedVersions = undefined;
 			}
 		};
 		return {
 			commit: end,
 			rollback: () => {
 				this.pending.clear();
-				for (const [key, deadline] of committed) {
+				for (const [key, deadline] of pending) {
 					this.pending.set(key, { ...deadline });
 				}
 				this.dead.clear();
@@ -162,7 +153,7 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 		}
 		const sequence = this.nextSequence++;
 		const deliveryId = `deadline-${sequence}`;
-		this.openTransaction?.written.add(deadlineAddress);
+		this.recordCommittedVersion(deadlineAddress);
 		// Replacing an occupied address gets a FRESH incarnation: a late
 		// ack or failure report against the old deliveryId must not touch
 		// the successor.
@@ -179,7 +170,7 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 
 	async cancel(scope: string, key: string): Promise<void> {
 		const deadlineAddress = address(scope, key);
-		this.openTransaction?.written.add(deadlineAddress);
+		this.recordCommittedVersion(deadlineAddress);
 		this.pending.delete(deadlineAddress);
 	}
 
@@ -205,32 +196,47 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 			.map((deadline) => toRecord(deadline));
 	}
 
+	private recordCommittedVersion(deadlineAddress: string): void {
+		const versions = this.committedVersions;
+		if (versions === undefined || versions.has(deadlineAddress)) return;
+		const committed = this.pending.get(deadlineAddress);
+		versions.set(
+			deadlineAddress,
+			committed === undefined ? undefined : { ...committed },
+		);
+	}
+
 	/**
 	 * The pending deadlines that a processor may see: the live records, except
 	 * that an address which the open transaction wrote shows its committed
-	 * record, if any, until a processor acknowledges it.
+	 * deadline, if any.
 	 */
 	private committedPending(): StoredDeadline<TPayload>[] {
-		const transaction = this.openTransaction;
-		if (transaction === undefined) return [...this.pending.values()];
+		const versions = this.committedVersions;
+		if (versions === undefined) return [...this.pending.values()];
 		const deadlines = [...this.pending]
-			.filter(([deadlineAddress]) => !transaction.written.has(deadlineAddress))
+			.filter(([deadlineAddress]) => !versions.has(deadlineAddress))
 			.map(([, deadline]) => deadline);
-		for (const deadlineAddress of transaction.written) {
-			const committed = transaction.committed.get(deadlineAddress);
-			if (
-				committed !== undefined &&
-				!transaction.delivered.has(committed.deliveryId)
-			) {
-				deadlines.push(committed);
-			}
+		for (const committed of versions.values()) {
+			if (committed !== undefined) deadlines.push(committed);
 		}
 		return deadlines;
 	}
 
+	/** The address of the committed deadline with this delivery id, if any. */
+	private committedVersionAddress(deliveryId: string): string | undefined {
+		for (const [deadlineAddress, committed] of this.committedVersions ?? []) {
+			if (committed?.deliveryId === deliveryId) return deadlineAddress;
+		}
+		return undefined;
+	}
+
 	async markDelivered(deliveryIds: ReadonlyArray<string>): Promise<void> {
 		for (const deliveryId of deliveryIds) {
-			this.openTransaction?.delivered.add(deliveryId);
+			const committedAddress = this.committedVersionAddress(deliveryId);
+			if (committedAddress !== undefined) {
+				this.committedVersions?.set(committedAddress, undefined);
+			}
 			this.dead.delete(deliveryId);
 			for (const [key, deadline] of this.pending) {
 				if (deadline.deliveryId === deliveryId) {
@@ -254,6 +260,22 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 				this.pending.delete(key);
 				this.dead.set(deadline.deliveryId, deadline);
 				return toDeadLetter(deadline);
+			}
+			return undefined;
+		}
+		const committedAddress = this.committedVersionAddress(deliveryId);
+		const committed =
+			committedAddress === undefined
+				? undefined
+				: this.committedVersions?.get(committedAddress);
+		if (committedAddress !== undefined && committed !== undefined) {
+			// The open transaction decides whether this deadline still exists,
+			// so the report only counts. At the ceiling, `due` stops returning
+			// it until the transaction ends.
+			committed.attempts += 1;
+			if (error !== undefined) committed.lastError = String(error);
+			if (committed.attempts >= this.maxDeliveryAttempts) {
+				this.committedVersions?.set(committedAddress, undefined);
 			}
 			return undefined;
 		}
