@@ -7,6 +7,7 @@ import {
 	EventHarvestError,
 	InMemoryCapacityExceededError,
 } from "../../errors/kit-errors";
+import { InMemoryTransactionScope } from "../../persistence/repository/adapters/in-memory-transaction-scope";
 import type { EventCommitCandidate } from "../committed-event";
 import { InMemoryOutbox, outboxWriterAcceptingEventLoss } from "./outbox";
 
@@ -29,6 +30,88 @@ function candidate(
 		},
 	};
 }
+
+describe("InMemoryOutbox in an InMemoryTransactionScope", () => {
+	const orderEvent = (eventId: string, orderId = "o-1") =>
+		createDomainEvent(
+			"OrderCreated",
+			{ orderId },
+			{ eventId, aggregateId: orderId, aggregateType: "Order" },
+		);
+	const failed = (work: Promise<unknown>) =>
+		work.then(
+			() => "committed",
+			(error: unknown) => error,
+		);
+
+	it("leaves no record and no cursor change after a rolled-back add", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>();
+		const scope = new InMemoryTransactionScope([outbox]);
+		const event = orderEvent("evt-1");
+
+		await failed(
+			scope.transactional(async () => {
+				await outbox.add([candidate(event, 1)]);
+				throw new Error("commit failed");
+			}),
+		);
+		await outbox.add([candidate(orderEvent("evt-2"), 1)]);
+
+		const pending = await outbox.getPending();
+		expect(pending.map((record) => record.event.eventId)).toEqual(["evt-2"]);
+		expect(pending[0]?.position.previousEventfulAggregateVersion).toBeNull();
+	});
+
+	it("leaves the source open after a rolled-back endEventSources", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>();
+		const scope = new InMemoryTransactionScope([outbox]);
+		await outbox.add([candidate(orderEvent("evt-1"), 1)]);
+
+		await failed(
+			scope.transactional(async () => {
+				await outbox.endEventSources([
+					{ aggregateType: "Order", aggregateId: "o-1" },
+				]);
+				throw new Error("commit failed");
+			}),
+		);
+		await outbox.add([candidate(orderEvent("evt-2"), 2)]);
+
+		expect(
+			(await outbox.getPending()).map((record) => record.event.eventId),
+		).toEqual(["evt-1", "evt-2"]);
+	});
+
+	it("restores a pending record that a rolled-back add refreshed", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>();
+		const scope = new InMemoryTransactionScope([outbox]);
+		const event = orderEvent("evt-1");
+		await outbox.add([candidate(event, 1)]);
+
+		await failed(
+			scope.transactional(async () => {
+				await outbox.add([candidate(event, 2)]);
+				throw new Error("commit failed");
+			}),
+		);
+
+		const [record] = await outbox.getPending();
+		expect(record?.position.aggregateVersion).toBe(1);
+	});
+
+	it("keeps the writes of a transaction that succeeds", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>();
+		const scope = new InMemoryTransactionScope([outbox]);
+
+		await scope.transactional(async () => {
+			await outbox.add([candidate(orderEvent("evt-1"), 1)]);
+		});
+
+		expect(
+			(await outbox.getPending()).map((record) => record.event.eventId),
+		).toEqual(["evt-1"]);
+	});
+});
 
 describe("InMemoryOutbox", () => {
 	describe("batch atomicity", () => {

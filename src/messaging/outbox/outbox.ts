@@ -13,6 +13,10 @@ import {
 	assertPositiveSafeInteger,
 } from "../../internal/validate";
 import type {
+	InMemoryTransaction,
+	InMemoryTransactionParticipant,
+} from "../../persistence/repository/adapters/in-memory-transaction-scope";
+import type {
 	EventCommitCandidate,
 	EventCommitCandidatePosition,
 } from "../committed-event";
@@ -148,15 +152,13 @@ type DispatchedEventReceipt = {
  * that are never `markDispatched` accumulate until `maxRecords` rejects a new
  * add, or without that option grow unbounded. For a deliberate no-delivery
  * setup use {@link outboxWriterAcceptingEventLoss} instead. Sharper still:
- * events `add()`ed inside a transaction that later rolls back are NOT
- * removed (the Map knows nothing about your scope's rollback), and a source
+ * on its own, the outbox knows nothing about your scope's rollback. Events
+ * `add()`ed inside a transaction that later rolls back stay, and a source
  * that `endEventSources` ended inside such a transaction stays ended: the
- * outbox rejects every later event of that aggregate, also on the retry of
- * a `RetryingTransactionScope`. Tests that roll back or retry a removal, or
- * that assert rollback purity, need an outbox that participates in the
- * test store's transactional semantics; see the reference adapter at
- * https://github.com/shi-rudo/ddd-kit-ts/blob/main/src/testing/repository-contract.test.ts
- * (repo-only, not shipped to npm).
+ * outbox then rejects every later event of that aggregate, also on the retry
+ * of a `RetryingTransactionScope`. Register the outbox with an
+ * `InMemoryTransactionScope` for tests that roll back or retry: a rollback
+ * then returns it to its state at the start of the attempt.
  *
  * @example
  * ```ts
@@ -175,7 +177,7 @@ type DispatchedEventReceipt = {
  * ```
  */
 export class InMemoryOutbox<Evt extends AnyDomainEvent>
-	implements DispatchTrackingOutbox<Evt>
+	implements DispatchTrackingOutbox<Evt>, InMemoryTransactionParticipant
 {
 	private readonly pending = new Map<string, TrackedRecord<Evt>>();
 	private readonly dead = new Map<string, DeadLetterRecord<Evt>>();
@@ -610,6 +612,31 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 		}
 	}
 
+	/**
+	 * Records the state that a rollback of an `InMemoryTransactionScope`
+	 * returns to: pending and dead-letter records, receipts, source cursors,
+	 * and ended sources, in their order.
+	 */
+	beginTransaction(): InMemoryTransaction {
+		const pending = [...this.pending].map(
+			([id, record]) => [id, { ...record }] as const,
+		);
+		const dead = [...this.dead];
+		const receipts = [...this.dispatchedEventIds];
+		const cursors = [...this.sourceCursors];
+		const ended = [...this.endedSourceKeys];
+		return {
+			rollback: () => {
+				refill(this.pending, pending);
+				refill(this.dead, dead);
+				refill(this.dispatchedEventIds, receipts);
+				refill(this.sourceCursors, cursors);
+				this.endedSourceKeys.clear();
+				for (const key of ended) this.endedSourceKeys.add(key);
+			},
+		};
+	}
+
 	async endEventSources(
 		sources: ReadonlyArray<AggregateIdentity>,
 	): Promise<void> {
@@ -811,6 +838,15 @@ function assertReceiptShape(
 			"An exact redelivery must keep its source position immutable.",
 		event.type,
 	);
+}
+
+/** Replaces the entries of a map with recorded ones, in their order. */
+function refill<K, V>(
+	map: Map<K, V>,
+	entries: ReadonlyArray<readonly [K, V]>,
+): void {
+	map.clear();
+	for (const [key, value] of entries) map.set(key, value);
 }
 
 function commitSizeMismatchError(
