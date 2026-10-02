@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { Aggregate, Version } from "../../domain/aggregate/aggregate";
+import type { AggregateIdentity } from "../../domain/aggregate/aggregate-identity";
 import { pendingEventLifecycleReadViewFor } from "../../domain/aggregate/pending-event-lifecycle";
 import { StateStoredAggregate } from "../../domain/aggregate/state-stored-aggregate";
 import {
@@ -79,12 +80,18 @@ function createMockScope(): TransactionScope<undefined> {
 
 function createMockOutbox(): Outbox<TestEvent> & {
 	added: EventCommitCandidate<TestEvent>[][];
+	ended: AggregateIdentity[][];
 } {
 	const added: EventCommitCandidate<TestEvent>[][] = [];
+	const ended: AggregateIdentity[][] = [];
 	return {
 		added,
+		ended,
 		add: async (events) => {
 			added.push([...events]);
+		},
+		endEventSources: async (sources) => {
+			ended.push([...sources]);
 		},
 		getPending: async () => [],
 		markDispatched: async () => {},
@@ -197,6 +204,69 @@ describe("withCommit", () => {
 		expect(outbox.added[0]).toEqual([stamped(event)]);
 	});
 
+	it("ends the event source of a removed aggregate after its outbox write", async () => {
+		const event = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "o-1" },
+			{ aggregateId: "o-1", aggregateType: "MockOrder" },
+		);
+		const removed = createMockAggregate([event], 2, 1, "o-1" as TestId);
+		const steps: string[] = [];
+		const outbox: Outbox<TestEvent> = {
+			add: async () => {
+				steps.push("add");
+			},
+			endEventSources: async (sources) => {
+				steps.push(
+					`end ${sources.map((source) => `${source.aggregateType}(${source.aggregateId})`).join(", ")}`,
+				);
+			},
+			getPending: async () => [],
+			markDispatched: async () => {},
+		};
+
+		await withCommit(
+			{ outbox, scope: createMockScope() },
+			async (_ctx, enrollment) =>
+				enrolledResult(enrollment, "ok", [removed], [removed]),
+		);
+
+		expect(steps).toEqual(["add", "end MockOrder(o-1)"]);
+	});
+
+	it("ends the event source of a removed aggregate that recorded no event", async () => {
+		const outbox = createMockOutbox();
+		const removed = createMockAggregate([], 1, 1, "o-1" as TestId);
+
+		await withCommit(
+			{ outbox, scope: createMockScope() },
+			async (_ctx, enrollment) =>
+				enrolledResult(enrollment, "ok", [removed], [removed]),
+		);
+
+		expect(outbox.added).toEqual([]);
+		expect(outbox.ended).toEqual([
+			[{ aggregateType: "MockOrder", aggregateId: "o-1" }],
+		]);
+	});
+
+	it("ends no event source when nothing was removed", async () => {
+		const outbox = createMockOutbox();
+		const event = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "agg-1" },
+			{ aggregateId: "agg-1", aggregateType: "MockOrder" },
+		);
+
+		await withCommit(
+			{ outbox, scope: createMockScope() },
+			async (_ctx, enrollment) =>
+				enrolledResult(enrollment, "ok", [createMockAggregate([event])]),
+		);
+
+		expect(outbox.ended).toEqual([]);
+	});
+
 	it("an outbox that mutates its input fails the commit instead of changing what the bus publishes", async () => {
 		const event = createDomainEvent(
 			"OrderCreated",
@@ -209,6 +279,7 @@ describe("withCommit", () => {
 			add: async (candidates) => {
 				(candidates as EventCommitCandidate<TestEvent>[]).length = 0;
 			},
+			endEventSources: async () => {},
 			getPending: async () => [],
 			markDispatched: async () => {},
 		};
@@ -635,6 +706,7 @@ describe("withCommit", () => {
 			add: async () => {
 				throw new Error("Outbox failed");
 			},
+			endEventSources: async () => {},
 			getPending: async () => [],
 			markDispatched: async () => {},
 		};
@@ -668,6 +740,7 @@ describe("withCommit", () => {
 			add: async () => {
 				callOrder.push("outbox.add");
 			},
+			endEventSources: async () => {},
 			getPending: async () => [],
 			markDispatched: async () => {},
 		};
@@ -1866,6 +1939,7 @@ describe("withCommit", () => {
 				add: async () => {
 					throw new Error("outbox write failed");
 				},
+				endEventSources: async () => {},
 				getPending: async () => [],
 				markDispatched: async () => {},
 			};

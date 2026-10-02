@@ -18,6 +18,7 @@ import {
 } from "../../errors/kit-errors";
 import type { EventCommitCandidate } from "../../messaging/committed-event";
 import type { EventBus } from "../../messaging/event-bus/ports";
+import { InMemoryOutbox } from "../../messaging/outbox/outbox";
 import type { Outbox } from "../../messaging/outbox/ports";
 import type { AggregateClass } from "../../persistence/repository/identity-map";
 import type { PersistenceModel } from "../../persistence/repository/persistence-model";
@@ -117,6 +118,7 @@ function createMockOutbox(): Outbox<TestEvent> & {
 		add: async (events) => {
 			added.push([...events]);
 		},
+		endEventSources: async () => {},
 		getPending: async () => [],
 		markDispatched: async () => {},
 	};
@@ -1736,6 +1738,7 @@ describe("UnitOfWork", () => {
 					callOrder.push("outbox.add");
 					outbox.added.push([...events]);
 				},
+				endEventSources: async () => {},
 				getPending: async () => [],
 				markDispatched: async () => {},
 			};
@@ -2019,6 +2022,7 @@ describe("UnitOfWork", () => {
 			let lateEnrollError: unknown;
 			const outbox: Outbox<TestEvent> = {
 				add: async () => {},
+				endEventSources: async () => {},
 				getPending: async () => [],
 				markDispatched: async () => {},
 			};
@@ -2563,6 +2567,7 @@ describe("UnitOfWork", () => {
 							leakedMap.has(OrderAggregate, "o-1" as TestId),
 						);
 					},
+					endEventSources: async () => {},
 				},
 				repositories: {
 					orders: defineTestRepository({
@@ -2661,6 +2666,7 @@ describe("UnitOfWork", () => {
 				add: async () => {
 					throw outboxError;
 				},
+				endEventSources: async () => {},
 				getPending: async () => [],
 				markDispatched: async () => {},
 			};
@@ -3068,6 +3074,7 @@ describe("UnitOfWork", () => {
 						await outboxReleased;
 					}
 				},
+				endEventSources: async () => {},
 				getPending: async () => [],
 				markDispatched: async () => {},
 			};
@@ -3123,6 +3130,7 @@ describe("UnitOfWork", () => {
 						await outboxReleased;
 					}
 				},
+				endEventSources: async () => {},
 				getPending: async () => [],
 				markDispatched: async () => {},
 			};
@@ -3637,6 +3645,38 @@ describe("UnitOfWork", () => {
 		);
 	});
 
+	describe("an ended event source", () => {
+		it("rejects the events of an aggregate created again under a removed identity", async () => {
+			const outbox = new InMemoryOutbox<TestEvent>();
+			const { uow } = createUow({ outbox });
+			await uow.run(async ({ repositories }) => {
+				repositories.orders.add(createMockAggregate("o-1", [testEvent("o-1")]));
+			});
+			await uow.run(async ({ repositories }) => {
+				const removed = createMockAggregate("o-1");
+				repositories.orders.trackLoaded(removed);
+				repositories.orders.remove(removed);
+			});
+			const recreated = createMockAggregate("o-1", [testEvent("o-1")]);
+			recreated.change(testEvent("o-1"));
+
+			const rejection = await uow
+				.run(async ({ repositories }) => {
+					repositories.orders.add(recreated);
+				})
+				.then(
+					() => "committed",
+					(error: unknown) => error,
+				);
+
+			expect(rejection).toBeInstanceOf(EventHarvestError);
+			expect((rejection as EventHarvestError).message).toMatch(
+				/event source ended/,
+			);
+			expect(persistedVersionOf(recreated)).toBeUndefined();
+		});
+	});
+
 	describe("registration window", () => {
 		function uowWithGatedFlush() {
 			let enterFlush!: () => void;
@@ -3726,6 +3766,7 @@ describe("UnitOfWork", () => {
 							registerLate();
 							await new Promise((resolve) => setTimeout(resolve, 0));
 						},
+						endEventSources: async () => {},
 					},
 					repositories: {
 						orders: defineTestRepository({
@@ -3889,6 +3930,7 @@ describe("UnitOfWork", () => {
 						onOutboxWrite();
 						await new Promise((resolve) => setTimeout(resolve, 0));
 					},
+					endEventSources: async () => {},
 				},
 				repositories: {
 					orders: defineTestRepository({

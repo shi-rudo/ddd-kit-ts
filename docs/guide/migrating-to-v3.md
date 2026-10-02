@@ -977,8 +977,11 @@ not bare events. An `OutboxRecord` is a `CommittedDomainEvent` with a
 `position`. `DispatchTrackingOutbox.markFailed` returns the dead-letter record
 on the call that crosses the attempt ceiling, and `undefined` otherwise. The
 poll methods accept an optional `ExecutionContext`. `InMemoryOutbox` users
-need no change. A custom outbox passes `createOutboxContractTests`, which
-proves the commit positions and the source cursor.
+need no change. A custom outbox implements the new required
+`endEventSources(sources)`: it marks the head of each removed aggregate's
+source as ended, in the same transaction, and rejects a new event of an ended
+source. It passes `createOutboxContractTests`, which proves the commit
+positions, the source head, and ended sources.
 
 `DomainEvent` has no `aggregateVersion` any more, and `createDomainEvent`
 takes no such option. The commit envelope carries the position: an outbox
@@ -1329,5 +1332,14 @@ Behavior that a use case or an adapter can notice:
   time option throws a `RangeError` in place of an `Error`.
 - A custom scope that retries calls `onAttemptStart` from the transactional
   options before each attempt, so `run()` labels a failure by its attempt.
-- An identity whose aggregate committed events cannot be created again after
-  a removal. Give the new aggregate a new id.
+- The kit does not support an identity that is created again after a
+  removal. Give the new aggregate a new id. Once the removed aggregate
+  committed events, an outbox that keeps source heads rejects the first
+  event of the new aggregate. A re-creation that commits only state persists
+  until that first event.
+- `OutboxWriter` and `CommandOutboxWriter` require `endEventSources`. A
+  durable adapter keeps an `ended` flag on the source head, sets it there,
+  and rejects a new event of an ended source. `outboxWriterAcceptingEventLoss`
+  and `routeEventsToCommandOutbox` implement it. A contract harness supplies
+  `endEventSourcesCommitted`, and `endEventSourcesRolledBack` with
+  `providesRolledBackEnds`.

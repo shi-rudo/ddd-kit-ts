@@ -386,6 +386,7 @@ function createInMemoryEsHarness(
 							}
 							db.addToOutbox(events);
 						},
+						endEventSources: async () => {},
 						getPending: async () => [],
 						markDispatched: async () => {},
 					};

@@ -11,6 +11,7 @@ import {
 import type { Id } from "../../domain/identity/id";
 import {
 	describeAggregateIdentity,
+	detachAggregateIdentity,
 	EventHarvestError,
 } from "../../errors/kit-errors";
 import { abortReason } from "../../internal/async/abort";
@@ -646,16 +647,24 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 					}) as EventCommitCandidate<Evt>;
 				});
 			});
+			const endedSources = commitRecords
+				.filter((record) => record.disposition === "deleted")
+				.map((record) =>
+					detachAggregateIdentity(record.aggregate.aggregateIdentity),
+				);
 			if (candidates.length > 0) {
 				// The bus publishes the events of these same candidates, so the
 				// outbox must not change them. A mutation of the frozen array
 				// throws in strict-mode code and has no effect otherwise.
 				await deps.outbox.add(Object.freeze(candidates));
 			}
+			if (endedSources.length > 0) {
+				await deps.outbox.endEventSources(Object.freeze(endedSources));
+			}
 			// The caller's own check runs first, so that it names a change in
 			// its own terms, with one code for every kind of change.
 			fnResult.checkBeforeCommit?.();
-			if (candidates.length > 0) {
+			if (candidates.length > 0 || endedSources.length > 0) {
 				// The outbox write can yield. Work that the callback did not
 				// await could change an enrolled aggregate meanwhile, and the
 				// acknowledgement would then cover state or events that were

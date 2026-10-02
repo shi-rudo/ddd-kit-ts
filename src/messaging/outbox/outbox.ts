@@ -51,6 +51,7 @@ export function outboxWriterAcceptingEventLoss<
 >(): OutboxWriter<Evt> {
 	return {
 		add: async () => {},
+		endEventSources: async () => {},
 	};
 }
 
@@ -131,7 +132,9 @@ type DispatchedEventReceipt = {
  * inverse of `deadLetters()`); `markDispatched` acks pending AND
  * dead-lettered records (manual redelivery then ack).
  * To link future eventful commits, the implementation also retains one
- * source cursor per qualified aggregate after dispatch. Consequently a
+ * source cursor per qualified aggregate after dispatch. `endEventSources`
+ * marks the cursor of a removed aggregate as ended, and a new event of that
+ * source then throws {@link EventHarvestError}. Consequently a
  * long-lived instance is bounded only when `maxRecords` and `maxSources` are
  * configured, plus `maxRetainedDispatchedEventIds`; use a durable adapter with
  * an explicit source-head lifecycle and an event-id unique key for unbounded
@@ -146,8 +149,11 @@ type DispatchedEventReceipt = {
  * add, or without that option grow unbounded. For a deliberate no-delivery
  * setup use {@link outboxWriterAcceptingEventLoss} instead. Sharper still:
  * events `add()`ed inside a transaction that later rolls back are NOT
- * removed (the Map knows nothing about your scope's rollback). Tests
- * that assert rollback purity need an outbox that participates in the
+ * removed (the Map knows nothing about your scope's rollback), and a source
+ * that `endEventSources` ended inside such a transaction stays ended: the
+ * outbox rejects every later event of that aggregate, also on the retry of
+ * a `RetryingTransactionScope`. Tests that roll back or retry a removal, or
+ * that assert rollback purity, need an outbox that participates in the
  * test store's transactional semantics; see the reference adapter at
  * https://github.com/shi-rudo/ddd-kit-ts/blob/main/src/testing/repository-contract.test.ts
  * (repo-only, not shipped to npm).
@@ -175,6 +181,8 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 	private readonly dead = new Map<string, DeadLetterRecord<Evt>>();
 	/** Latest eventful commit and its predecessor per qualified source. */
 	private readonly sourceCursors = new Map<string, EventSourceCursor>();
+	/** Keys of source cursors whose aggregate was removed. */
+	private readonly endedSourceKeys = new Set<string>();
 	/** Bounded insertion-ordered receipts for exact retries after acknowledgement. */
 	private readonly dispatchedEventIds = new Map<
 		string,
@@ -287,12 +295,11 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 			}
 			if (sourceCursor?.aggregateVersion === position.aggregateVersion) {
 				if (sourceCursor.commitSize !== position.commitSize) {
-					throw new EventHarvestError(
-						`InMemoryOutbox rejected event "${event.eventId}" for ` +
-							`${describeAggregateIdentity(source)}: aggregate version ` +
-							`${position.aggregateVersion} was already recorded with commitSize ` +
-							`${sourceCursor.commitSize}, not ${position.commitSize}.`,
-						event.type,
+					throw commitSizeMismatchError(
+						event,
+						source,
+						position,
+						sourceCursor.commitSize,
 					);
 				}
 				const positionOwner = sourceCursor.eventIdsBySequence.get(
@@ -495,6 +502,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 		for (const { event, source, position } of events) {
 			if (headRetries.has(event.eventId)) continue;
 			const sourceKey = encodeAggregateIdentity(source);
+			this.assertSourceNotEnded(event, source, position, sourceKey);
 			const cursor =
 				simulatedCursors.get(sourceKey) ?? this.sourceCursors.get(sourceKey);
 			if (
@@ -538,12 +546,11 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				continue;
 			}
 			if (cursor.commitSize !== position.commitSize) {
-				throw new EventHarvestError(
-					`InMemoryOutbox rejected event "${event.eventId}" for ` +
-						`${describeAggregateIdentity(source)}: aggregate version ` +
-						`${position.aggregateVersion} was already recorded with commitSize ` +
-						`${cursor.commitSize}, not ${position.commitSize}.`,
-					event.type,
+				throw commitSizeMismatchError(
+					event,
+					source,
+					position,
+					cursor.commitSize,
 				);
 			}
 			const positionOwner = cursor.eventIdsBySequence.get(
@@ -601,6 +608,58 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 			// clears it too.
 			this.dead.delete(id);
 		}
+	}
+
+	async endEventSources(
+		sources: ReadonlyArray<AggregateIdentity>,
+	): Promise<void> {
+		for (const source of sources) {
+			const sourceKey = encodeAggregateIdentity(source);
+			if (this.sourceCursors.has(sourceKey)) {
+				this.endedSourceKeys.add(sourceKey);
+			}
+		}
+	}
+
+	/**
+	 * Rejects a new event of an ended source above its head. An exact retry of
+	 * a stored event of an ended source stays a retry; the caller skips
+	 * retries at the source head before this check. The stale-head, commit
+	 * size, and position checks reject a candidate below the head or at a
+	 * position that another event owns, and their messages name the
+	 * re-created identity as a cause.
+	 */
+	private assertSourceNotEnded(
+		event: AnyDomainEvent,
+		source: AggregateIdentity,
+		position: EventCommitCandidatePosition,
+		sourceKey: string,
+	): void {
+		if (!this.endedSourceKeys.has(sourceKey)) return;
+		if (
+			this.pending.has(event.eventId) ||
+			this.dead.has(event.eventId) ||
+			this.dispatchedEventIds.has(event.eventId)
+		) {
+			return;
+		}
+		const cursor = this.sourceCursors.get(sourceKey);
+		if (
+			cursor !== undefined &&
+			(position.aggregateVersion < cursor.aggregateVersion ||
+				(position.aggregateVersion === cursor.aggregateVersion &&
+					cursor.eventIdsBySequence.has(position.commitSequence)))
+		) {
+			return;
+		}
+		throw new EventHarvestError(
+			`InMemoryOutbox rejected event "${event.eventId}" for ` +
+				`${describeAggregateIdentity(source)}: the aggregate was removed, so ` +
+				"its event source ended. The kit does not support an aggregate that " +
+				"is created again under a removed identity. Give the new aggregate " +
+				"a new id.",
+			event.type,
+		);
 	}
 
 	/**
@@ -750,6 +809,23 @@ function assertReceiptShape(
 			`commitSize=${recorded.commitSize}) to (${received.aggregateVersion}, ` +
 			`${received.commitSequence}; commitSize=${received.commitSize}). ` +
 			"An exact redelivery must keep its source position immutable.",
+		event.type,
+	);
+}
+
+function commitSizeMismatchError(
+	event: { readonly eventId: string; readonly type: string },
+	source: AggregateIdentity,
+	position: EventCommitCandidatePosition,
+	recordedCommitSize: number,
+): EventHarvestError {
+	return new EventHarvestError(
+		`InMemoryOutbox rejected event "${event.eventId}" for ` +
+			`${describeAggregateIdentity(source)}: aggregate version ` +
+			`${position.aggregateVersion} was already recorded with commitSize ` +
+			`${recordedCommitSize}, not ${position.commitSize}. An aggregate that ` +
+			"was removed and created again under the same identity causes this " +
+			"too; the kit does not support that, so give the new aggregate a new id.",
 		event.type,
 	);
 }

@@ -74,6 +74,7 @@ function processDatabase() {
 			if (rejectCommandWrite) throw new Error("command outbox unavailable");
 			current().commandCommits.push(...commits);
 		},
+		endEventSources: async () => {},
 	};
 
 	return {

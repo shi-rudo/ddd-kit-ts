@@ -182,6 +182,7 @@ The write side depends only on `OutboxWriter`:
 ```ts
 interface OutboxWriter<Evt extends AnyDomainEvent> {
   add(events: ReadonlyArray<EventCommitCandidate<Evt>>): Promise<void>;
+  endEventSources(sources: ReadonlyArray<AggregateIdentity>): Promise<void>;
 }
 ```
 
@@ -195,6 +196,15 @@ commit sequence, and commit size. The writer owns the durable event-source
 head: it links the candidate to the preceding eventful commit and persists the
 resulting `CommittedDomainEvent`. That is the delivery and continuity
 guarantee. The actual delivery mechanism is a separate decision.
+
+When a use case removes an aggregate, `withCommit` calls `endEventSources()`
+in the same transaction, after `add()`. The writer marks the head of each
+source as ended, and a later `add()` rejects a new event of that source. The
+kit does not support an aggregate that is created again under a removed
+identity: give the new aggregate a new id. An exact retry of a stored event
+stays idempotent. A source without events has no head: it stays open, and its
+first event starts a new head. The kit detects a re-created identity only when
+both the removed and the new aggregate commit events.
 
 If the kit's dispatcher will poll the outbox, implement the full `Outbox`
 port:
@@ -255,6 +265,7 @@ create table event_source_head (
   aggregate_type text not null,
   aggregate_id text not null,
   last_eventful_aggregate_version integer not null,
+  ended boolean not null default false,
   primary key (aggregate_type, aggregate_id)
 );
 ```
@@ -307,12 +318,12 @@ The first source-head row also needs race-safe insert-or-lock behavior. Use the
 primary key and retry the losing transaction. Do not continue two concurrent
 genesis writes from separate missing-row reads.
 
-Reject a new event whose `aggregateVersion` is below the source head. An
-aggregate that was removed and then created again under the same identity
-usually produces such events, because its versions restart. The kit does not
-support a re-created identity: give the new aggregate a new id. The head alone
-cannot detect a new aggregate whose versions pass the earlier head; its events
-continue the earlier source.
+Reject a new event whose `aggregateVersion` is below the source head: the
+head only moves forward. Keep an `ended` flag on the source-head record.
+`endEventSources` sets it in the same transaction as the removal, and `add()`
+rejects a new event of an ended source, also above its head. Never prune an
+ended head: without it, the source opens again and a re-created identity
+passes.
 
 For a projection, the four fields form a gap-proof cursor: the consumer can
 reject missing sequences and commits. For general deduplication across all
@@ -330,7 +341,13 @@ dispatched receipts -- event ID, qualified source, and candidate commit
 position (10,000 by default) -- so an exact post-ack retry remains an idempotent
 no-op without touching the source head. Unbounded production
 workloads need a durable adapter with an explicit source-head retention policy
-and a transactional unique key on `eventId`.
+that keeps ended heads, and a transactional unique key on `eventId`.
+
+`InMemoryOutbox` cannot see a rollback. If `endEventSources` ends a source
+inside a transaction that rolls back, the source stays ended. The outbox then
+rejects every later event of the aggregate, which still exists. This also
+happens on the retry of a `RetryingTransactionScope`. A test that rolls back
+or retries a removal needs an outbox that joins the test's transaction.
 
 ```ts
 import { InMemoryOutbox, type DomainEvent } from "@shirudo/ddd-kit";
@@ -359,7 +376,9 @@ dedupes exact pending, dead-lettered, and recently dispatched re-adds by
 `eventId`, and implements dispatch tracking. A contradictory source or commit
 position rejects instead of being mistaken for a retry. Once a dispatched
 receipt is evicted, a candidate behind the current source head fails with
-`EventHarvestError` rather than rewinding the head. A retry of an event at the
+`EventHarvestError` rather than rewinding the head. `endEventSources` marks the
+cursor of a removed aggregate as ended, and a new event of that source fails
+with `EventHarvestError` too. A retry of an event at the
 current source head still dedupes, because the source cursor names it. This is
 intentionally fail-safe, not an unbounded idempotency promise. Durable outboxes keep the
 event-ID receipt in storage.
@@ -748,6 +767,8 @@ function makeOutboxWriter(tx: YourTxHandle): OutboxWriter<AnyDomainEvent> {
       for (const commit of groupByAggregateCommit(candidates)) {
         // SELECT ... FOR UPDATE, keyed by aggregateType + aggregateId.
         const head = await lockEventSourceHead(tx, commit.source);
+        // An ended source rejects new events; a stored event id is a retry.
+        await rejectNewEventsOfEndedSource(tx, head, commit);
 
         for (const candidate of commit.events) {
           await insertIntoDeliveryOutbox(tx, {
@@ -768,7 +789,13 @@ function makeOutboxWriter(tx: YourTxHandle): OutboxWriter<AnyDomainEvent> {
           tx,
           commit.source,
           commit.aggregateVersion,
-        });
+        );
+      }
+    },
+    endEventSources: async (sources) => {
+      for (const source of sources) {
+        // UPDATE ... SET ended = true, keyed by aggregateType + aggregateId.
+        await endEventSourceHead(tx, source);
       }
     },
   };
@@ -799,10 +826,11 @@ Use this checklist before calling an outbox production-ready:
 - Transactional adapter: outbox rows commit and roll back with aggregate rows.
 - Contract tests: run `@shirudo/ddd-kit/testing` outbox contracts against the
   real storage adapter. They prove commit sequence/size finalization, eventful
-  predecessor linkage, qualified source-head isolation, and immutable
-  source-position identity in addition to delivery behavior. Enable the
-  rollback capability to prove that a rolled-back add advances neither rows nor
-  the source head.
+  predecessor linkage, qualified source-head isolation, immutable
+  source-position identity, and ended event sources in addition to delivery
+  behavior. Enable both rollback capabilities to prove that a rolled-back add
+  advances neither rows nor the source head, and that a rolled-back end leaves
+  the source open.
 - Commit-order reads: `getPending` is ordered by a monotonic position.
 - Multi-instance claiming: if more than one dispatcher runs, `getPending`
   claims records or uses visibility timeouts.

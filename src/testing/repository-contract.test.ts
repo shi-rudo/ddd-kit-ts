@@ -327,6 +327,7 @@ function createRunInfrastructure(
 			if (failure) throw failure;
 			db.addToOutbox(events);
 		},
+		endEventSources: async () => {},
 		getPending: async () => [],
 		markDispatched: async () => {},
 	};
