@@ -140,6 +140,37 @@ describe("InMemoryDeadlineStore in an InMemoryTransactionScope", () => {
 		]);
 	});
 
+	it("does not return a committed deadline again after a processor acknowledged it", async () => {
+		const store = new InMemoryDeadlineStore();
+		const scope = new InMemoryTransactionScope([store]);
+		await scope.transactional(() =>
+			store.schedule({ scope: "orders", key: "o-1", dueAt, payload: 1 }),
+		);
+		let releaseWork!: () => void;
+		const workReleased = new Promise<void>((resolve) => {
+			releaseWork = resolve;
+		});
+		let cancelled!: () => void;
+		const workCancelled = new Promise<void>((resolve) => {
+			cancelled = resolve;
+		});
+		const transaction = scope.transactional(async () => {
+			await store.cancel("orders", "o-1");
+			cancelled();
+			await workReleased;
+		});
+		await workCancelled;
+
+		const [delivered] = await store.due(dueAt, 10);
+		await store.markDelivered([delivered?.deliveryId ?? ""]);
+		const nextPoll = await store.due(dueAt, 10);
+		releaseWork();
+		await transaction;
+
+		expect(delivered).toMatchObject({ key: "o-1" });
+		expect(nextPoll).toEqual([]);
+	});
+
 	it("hides the deadlines of an open transaction from due until the commit", async () => {
 		const store = new InMemoryDeadlineStore();
 		const scope = new InMemoryTransactionScope([store]);

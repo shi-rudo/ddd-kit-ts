@@ -70,11 +70,16 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 	private readonly maxDeliveryAttempts: number;
 	private readonly maxRecords: number | undefined;
 	private nextSequence = 0;
-	/** The pending deadlines at the start of the open transaction, and the addresses it wrote. */
+	/**
+	 * The pending deadlines at the start of the open transaction, the
+	 * addresses it wrote, and the delivery ids that processors acknowledged
+	 * while it was open.
+	 */
 	private openTransaction:
 		| {
 				readonly committed: ReadonlyMap<string, StoredDeadline<TPayload>>;
 				readonly written: Set<string>;
+				readonly delivered: Set<string>;
 		  }
 		| undefined;
 
@@ -108,7 +113,11 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 		const dead = [...this.dead].map(
 			([deliveryId, deadline]) => [deliveryId, { ...deadline }] as const,
 		);
-		const transaction = { committed, written: new Set<string>() };
+		const transaction = {
+			committed,
+			written: new Set<string>(),
+			delivered: new Set<string>(),
+		};
 		this.openTransaction = transaction;
 		const end = () => {
 			if (this.openTransaction === transaction) {
@@ -199,7 +208,7 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 	/**
 	 * The pending deadlines that a processor may see: the live records, except
 	 * that an address which the open transaction wrote shows its committed
-	 * record, if any.
+	 * record, if any, until a processor acknowledges it.
 	 */
 	private committedPending(): StoredDeadline<TPayload>[] {
 		const transaction = this.openTransaction;
@@ -209,13 +218,19 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 			.map(([, deadline]) => deadline);
 		for (const deadlineAddress of transaction.written) {
 			const committed = transaction.committed.get(deadlineAddress);
-			if (committed !== undefined) deadlines.push(committed);
+			if (
+				committed !== undefined &&
+				!transaction.delivered.has(committed.deliveryId)
+			) {
+				deadlines.push(committed);
+			}
 		}
 		return deadlines;
 	}
 
 	async markDelivered(deliveryIds: ReadonlyArray<string>): Promise<void> {
 		for (const deliveryId of deliveryIds) {
+			this.openTransaction?.delivered.add(deliveryId);
 			this.dead.delete(deliveryId);
 			for (const [key, deadline] of this.pending) {
 				if (deadline.deliveryId === deliveryId) {
