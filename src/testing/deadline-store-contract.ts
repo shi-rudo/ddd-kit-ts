@@ -549,7 +549,7 @@ export function createDeadlineStoreContractTests(
 							// contract under test is the store state afterwards.
 						});
 					assertEqual(
-						(await env.run(() => env.store.due(at(T2), 10))).length,
+						(await env.store.due(at(T2), 10)).length,
 						0,
 						"a deadline from a rolled-back transaction is a ghost input and must not exist",
 					);
@@ -583,7 +583,7 @@ export function createDeadlineStoreContractTests(
 							// See above: only the state afterwards is the contract.
 						});
 					assertEqual(
-						(await env.run(() => env.store.due(at(T1), 10))).length,
+						(await env.store.due(at(T1), 10)).length,
 						1,
 						"a cancel from a rolled-back transaction must not have removed the deadline",
 					);

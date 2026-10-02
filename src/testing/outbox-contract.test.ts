@@ -18,11 +18,14 @@ type TestEvent = DomainEvent<"ThingHappened", { n: number }>;
 const MAX_ATTEMPTS = 3;
 const ROLLBACK = Symbol("rollback");
 
-/** An outbox whose rollback does nothing: the rollback tests must reject it. */
-class OutboxWithoutRollback extends InMemoryOutbox<TestEvent> {
+/** An outbox whose rollback keeps the writes: the rollback tests must reject it. */
+class OutboxKeepingRolledBackWrites extends InMemoryOutbox<TestEvent> {
 	override beginTransaction(): InMemoryTransaction {
 		const transaction = super.beginTransaction();
-		return { commit: () => transaction.commit(), rollback: () => {} };
+		return {
+			commit: () => transaction.commit(),
+			rollback: () => transaction.commit(),
+		};
 	}
 }
 
@@ -78,10 +81,13 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 		expect(tests.filter((test) => test.skipped)).toEqual([]);
 	});
 
-	it("the rollback tests reject an outbox whose rollback does nothing", async () => {
+	it("the rollback tests reject an outbox whose rollback keeps the writes", async () => {
 		const mutantTests = createOutboxContractTests(
 			createInMemoryHarness(
-				() => new OutboxWithoutRollback({ maxDeliveryAttempts: MAX_ATTEMPTS }),
+				() =>
+					new OutboxKeepingRolledBackWrites({
+						maxDeliveryAttempts: MAX_ATTEMPTS,
+					}),
 			),
 		);
 		const rollbackTests = mutantTests.filter((test) =>
@@ -90,7 +96,7 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 
 		expect(rollbackTests).toHaveLength(2);
 		for (const test of rollbackTests) {
-			await expect(test.run()).rejects.toThrow();
+			await expect(test.run()).rejects.toThrow(/Contract violated/);
 		}
 	});
 

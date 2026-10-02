@@ -615,7 +615,13 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 					}
 					await env.addCommitted(commit([harness.createEvent(1)], 1));
 					await env.endEventSourcesRolledBack([defaultSource]);
-					await env.addCommitted(commit([harness.createEvent(2)], 2));
+					const rejection = await captureRejection(
+						env.addCommitted(commit([harness.createEvent(2)], 2)),
+					);
+					assert(
+						rejection === undefined,
+						`an end in a rolled-back transaction must not end the event source, but the next event of the source was rejected: ${describeError(rejection)}`,
+					);
 
 					const [, next] = await takeAndAck(env, 2);
 					assertEqual(
