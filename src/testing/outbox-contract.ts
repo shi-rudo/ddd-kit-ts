@@ -43,8 +43,7 @@ export interface OutboxContractEnvironment<Evt extends AnyDomainEvent> {
 	 * Optional capability: runs `outbox.add(candidates)` inside a
 	 * transaction that ROLLS BACK. Enables the rollback-purity test: a
 	 * rolled-back add must leave nothing behind. Transactional adapters
-	 * should always provide this; it is the half of the outbox promise
-	 * that in-memory fakes cannot keep.
+	 * should always provide this.
 	 */
 	addRolledBack?(
 		events: ReadonlyArray<EventCommitCandidate<Evt>>,
@@ -109,8 +108,8 @@ export interface OutboxContractHarness<Evt extends AnyDomainEvent> {
 	/**
 	 * Declare `true` when environments provide {@link
 	 * OutboxContractEnvironment.addRolledBack}. Without it, the
-	 * rollback-purity test is marked skipped: the honest state of an
-	 * in-memory fake, and a loud gap for a transactional adapter.
+	 * rollback-purity test is marked skipped: the honest state of a store
+	 * without a rollback, and a loud gap for a transactional adapter.
 	 */
 	providesRolledBackAdds?: boolean;
 
@@ -556,7 +555,8 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 		),
 	];
 
-	// Rollback purity: capability-gated (in-memory fakes cannot keep it).
+	// Rollback purity: capability-gated (a store without a rollback cannot
+	// keep it).
 	tests.push(
 		gatedContractTest(
 			{

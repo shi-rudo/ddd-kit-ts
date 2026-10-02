@@ -6,6 +6,7 @@ import {
 } from "../domain/event/domain-event";
 import { InMemoryOutbox } from "../messaging/outbox/outbox";
 import type { Outbox } from "../messaging/outbox/ports";
+import { InMemoryTransactionScope } from "../persistence/repository/adapters/in-memory-transaction-scope";
 import {
 	createOutboxContractTests,
 	type OutboxContractHarness,
@@ -14,6 +15,7 @@ import {
 type TestEvent = DomainEvent<"ThingHappened", { n: number }>;
 
 const MAX_ATTEMPTS = 3;
+const ROLLBACK = Symbol("rollback");
 
 function createInMemoryHarness(): OutboxContractHarness<TestEvent> {
 	return {
@@ -21,13 +23,24 @@ function createInMemoryHarness(): OutboxContractHarness<TestEvent> {
 			const outbox = new InMemoryOutbox<TestEvent>({
 				maxDeliveryAttempts: MAX_ATTEMPTS,
 			});
+			const scope = new InMemoryTransactionScope([outbox]);
+			const rolledBack = (write: () => Promise<void>) =>
+				scope
+					.transactional(async () => {
+						await write();
+						throw ROLLBACK;
+					})
+					.catch((error: unknown) => {
+						if (error !== ROLLBACK) throw error;
+					});
 			return {
 				outbox,
-				addCommitted: (events) => outbox.add(events),
-				endEventSourcesCommitted: (sources) => outbox.endEventSources(sources),
-				// No addRolledBack or endEventSourcesRolledBack: the in-memory
-				// outbox cannot keep rollback purity (documented limitation);
-				// the tests stay visible as skipped.
+				addCommitted: (events) => scope.transactional(() => outbox.add(events)),
+				addRolledBack: (events) => rolledBack(() => outbox.add(events)),
+				endEventSourcesCommitted: (sources) =>
+					scope.transactional(() => outbox.endEventSources(sources)),
+				endEventSourcesRolledBack: (sources) =>
+					rolledBack(() => outbox.endEventSources(sources)),
 			};
 		},
 		createEvent: (seed) =>
@@ -39,6 +52,8 @@ function createInMemoryHarness(): OutboxContractHarness<TestEvent> {
 		failuresToDeadLetter: MAX_ATTEMPTS,
 		// The in-memory reference dedupes on eventId and does not claim.
 		dedupesOnEventId: true,
+		providesRolledBackAdds: true,
+		providesRolledBackEnds: true,
 	};
 }
 
@@ -49,12 +64,8 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 		(test.skipped ? it.skip : it)(test.name, test.run);
 	}
 
-	it("only the rollback-purity tests are skipped for the in-memory reference", () => {
-		const skipped = tests.filter((test) => test.skipped);
-		expect(skipped.map((test) => test.skipped?.capability)).toEqual([
-			"providesRolledBackAdds",
-			"providesRolledBackEnds",
-		]);
+	it("no test is skipped for the in-memory reference", () => {
+		expect(tests.filter((test) => test.skipped)).toEqual([]);
 	});
 
 	it("pins the source-position integrity laws in the portable suite", () => {
@@ -152,7 +163,7 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 		plain.failuresToDeadLetter = undefined;
 		const plainTests = createOutboxContractTests(plain);
 		const skipped = plainTests.filter((test) => test.skipped);
-		expect(skipped.length).toBe(6); // two rollback + four tracking tests
+		expect(skipped.length).toBe(4); // the four tracking tests
 		await expect(skipped[1]?.run()).rejects.toThrow("skipped");
 	});
 
@@ -166,8 +177,6 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 		expect(skipped.map((test) => test.skipped?.capability)).toEqual([
 			"non-claiming getPending",
 			"non-claiming getPending",
-			"providesRolledBackAdds",
-			"providesRolledBackEnds",
 			"non-claiming getPending",
 		]);
 	});
@@ -180,8 +189,6 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 		// A single markFailed dead-letters the record before any re-poll
 		// could observe its attempt count; the other tracking tests run.
 		expect(skipped.map((test) => test.skipped?.capability)).toEqual([
-			"providesRolledBackAdds",
-			"providesRolledBackEnds",
 			"failuresToDeadLetter >= 2",
 		]);
 	});
@@ -194,8 +201,6 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 		expect(skipped.map((test) => test.skipped?.capability)).toEqual([
 			"dedupesOnEventId",
 			"dedupesOnEventId",
-			"providesRolledBackAdds",
-			"providesRolledBackEnds",
 		]);
 	});
 });
