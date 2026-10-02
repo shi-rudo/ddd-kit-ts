@@ -6,6 +6,7 @@ import {
 } from "../../../domain/event/domain-event";
 import type { Id } from "../../../domain/identity/id";
 import { ConcurrencyConflictError } from "../../../errors/kit-errors";
+import { InMemoryTransactionScope } from "../../repository/adapters/in-memory-transaction-scope";
 import { InMemoryEventStore } from "./in-memory-event-store";
 
 type StreamId = Id<"EsOrderId">;
@@ -27,6 +28,34 @@ function renamed(
 ): OrderEvent {
 	return createDomainEvent("OrderRenamed", { name }, stream);
 }
+
+describe("InMemoryEventStore in an InMemoryTransactionScope", () => {
+	it("leaves no event and no version change after a rolled-back append", async () => {
+		const store = new InMemoryEventStore<OrderEvent>({ maxEvents: 2 });
+		const scope = new InMemoryTransactionScope([store]);
+		await store.append(streamA, [renamed("first")], { expectedVersion: 0 });
+
+		await scope
+			.transactional(async () => {
+				await store.append(streamA, [renamed("rolled back")], {
+					expectedVersion: 1,
+				});
+				await store.append(streamB, [renamed("rolled back")], {
+					expectedVersion: 0,
+				});
+				throw new Error("commit failed");
+			})
+			.catch(() => undefined);
+		await store.append(streamA, [renamed("second")], { expectedVersion: 1 });
+
+		const stream = await store.readStream(streamA, allEvents);
+		expect(stream.events.map((event) => event.payload.name)).toEqual([
+			"first",
+			"second",
+		]);
+		expect((await store.readStream(streamB, allEvents)).events).toEqual([]);
+	});
+});
 
 describe("InMemoryEventStore", () => {
 	it("hands out detached events so a mutated read result never rewrites history", async () => {

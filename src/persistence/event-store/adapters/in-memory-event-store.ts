@@ -10,6 +10,10 @@ import {
 import { abortReason } from "../../../internal/async/abort";
 import { assertPositiveSafeInteger } from "../../../internal/validate";
 import type {
+	InMemoryTransaction,
+	InMemoryTransactionParticipant,
+} from "../../repository/adapters/in-memory-transaction-scope";
+import type {
 	EventStore,
 	EventStoreAppendOptions,
 	ReadStreamOptions,
@@ -54,15 +58,13 @@ function assertStreamPosition(
  * the aggregate transaction share atomicity (a table with a
  * `(aggregate_type, aggregate_id, position)` unique key inside the same
  * transaction, or a dedicated event store). Same caveat as
- * `InMemoryOutbox`: this class
- * lives in memory only and knows nothing about your `TransactionScope`
- * rollbacks; events appended inside a transaction that later rolls back
- * are NOT removed. The event-sourced repository contract suite's
- * reference environment shows the snapshot/restore pattern for
- * rollback-pure in-memory testing.
+ * `InMemoryOutbox`: this class lives in memory only, and on its own it
+ * knows nothing about your `TransactionScope` rollbacks, so events appended
+ * inside a transaction that later rolls back stay. Register the store with
+ * an `InMemoryTransactionScope` for tests that roll back or retry.
  */
 export class InMemoryEventStore<Evt extends AnyDomainEvent>
-	implements EventStore<Evt>
+	implements EventStore<Evt>, InMemoryTransactionParticipant
 {
 	private readonly streams = new Map<string, Evt[]>();
 	private readonly maxStreams: number | undefined;
@@ -86,6 +88,24 @@ export class InMemoryEventStore<Evt extends AnyDomainEvent>
 		}
 		this.maxStreams = options.maxStreams;
 		this.maxEvents = options.maxEvents;
+	}
+
+	/**
+	 * Records the state that a rollback of an `InMemoryTransactionScope`
+	 * returns to: every stream and the event count.
+	 */
+	beginTransaction(): InMemoryTransaction {
+		const streams = [...this.streams].map(
+			([key, events]) => [key, [...events]] as const,
+		);
+		const totalEvents = this.totalEvents;
+		return {
+			rollback: () => {
+				this.streams.clear();
+				for (const [key, events] of streams) this.streams.set(key, [...events]);
+				this.totalEvents = totalEvents;
+			},
+		};
 	}
 
 	async append(
