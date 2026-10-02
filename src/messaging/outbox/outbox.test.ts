@@ -106,24 +106,56 @@ describe("InMemoryOutbox in an InMemoryTransactionScope", () => {
 		expect(await pendingIds(outbox)).toEqual(["evt-1"]);
 	});
 
-	it("hides a record that an open transaction refreshed", async () => {
+	it("returns the committed copy of a record that an open transaction refreshed", async () => {
 		const outbox = new InMemoryOutbox<OrderCreated>();
 		const scope = new InMemoryTransactionScope([outbox]);
-		const event = orderEvent("evt-1");
-		await outbox.add([candidate(event, 1)]);
+		const first = orderEvent("evt-1");
+		await outbox.add([candidate(first, 1)]);
+		await outbox.add([candidate(orderEvent("evt-2"), 2)]);
 
 		const transaction = await holdOpen(scope, () =>
-			outbox.add([candidate(event, 2)]),
+			outbox.add([candidate(first, 3)]),
+		);
+		const duringTransaction = await outbox.getPending();
+		await transaction.commit();
+		const afterCommit = await outbox.getPending();
+
+		expect(
+			duringTransaction.map((record) => [
+				record.event.eventId,
+				record.position.aggregateVersion,
+			]),
+		).toEqual([
+			["evt-1", 1],
+			["evt-2", 2],
+		]);
+		expect(
+			afterCommit.map((record) => [
+				record.event.eventId,
+				record.position.aggregateVersion,
+			]),
+		).toEqual([
+			["evt-1", 3],
+			["evt-2", 2],
+		]);
+	});
+
+	it("keeps a committed record visible when an open transaction retries it exactly", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>();
+		const scope = new InMemoryTransactionScope([outbox]);
+		const first = orderEvent("evt-1");
+		await scope.transactional(() => outbox.add([candidate(first, 1)]));
+		await scope.transactional(() =>
+			outbox.add([candidate(orderEvent("evt-2"), 2)]),
+		);
+
+		const transaction = await holdOpen(scope, () =>
+			outbox.add([candidate(first, 1)]),
 		);
 		const duringTransaction = await pendingIds(outbox);
 		await transaction.commit();
 
-		expect(duringTransaction).toEqual([]);
-		expect(
-			(await outbox.getPending()).map(
-				(record) => record.position.aggregateVersion,
-			),
-		).toEqual([2]);
+		expect(duringTransaction).toEqual(["evt-1", "evt-2"]);
 	});
 
 	it("leaves no record and no cursor change after a rolled-back add", async () => {

@@ -121,9 +121,9 @@ type DispatchedEventReceipt = {
  * recent-dispatch receipt cache keeps retries idempotent after acknowledgement.
  * Re-adding a pending event refreshes the stored commit envelope while the
  * delivery attempt count survives. Its commit sequence and size remain
- * immutable; only this transaction-unaware adapter may move a still-pending
- * event to another aggregate version after an outer rollback leaked the first
- * add. Dead-lettered and acknowledged retries must match the complete original
+ * immutable. Only this in-memory adapter may move a still-pending event to
+ * another aggregate version: without an `InMemoryTransactionScope`, it keeps
+ * the first add of a rolled-back attempt. Dead-lettered and acknowledged retries must match the complete original
  * candidate receipt. Reusing an `eventId` for another source or commit position
  * throws {@link EventHarvestError} while the pending, dead-letter, or bounded
  * dispatched receipt still proves the collision. Insertion order is preserved:
@@ -156,13 +156,16 @@ type DispatchedEventReceipt = {
  * `add()`ed inside a transaction that later rolls back stay, and a source
  * that `endEventSources` ended inside such a transaction stays ended: the
  * outbox then rejects every later event of that aggregate, also on the retry
- * of a `RetryingTransactionScope`. Register the outbox with an
- * `InMemoryTransactionScope` for tests that roll back or retry: a rollback
- * then returns it to its state at the start of the attempt. While a
- * transaction is open, `getPending` does not return the records that the
- * transaction wrote, because a relay reads only committed records. A
- * rollback also undoes an acknowledgement that a dispatcher made while the
- * transaction was open, so that record is dispatched again.
+ * of a `RetryingTransactionScope`. For tests that roll back or retry,
+ * register the outbox with an `InMemoryTransactionScope`. A rollback then
+ * returns the outbox to its state at the start of the attempt.
+ *
+ * A relay reads only committed records. While a transaction is open,
+ * `getPending` skips a record that the transaction added or requeued. For a
+ * record that the transaction changed, it returns the committed copy. A
+ * rollback also undoes an acknowledgement or a failure report that a
+ * dispatcher made while the transaction was open. The dispatcher then
+ * delivers that record again.
  *
  * @example
  * ```ts
@@ -194,8 +197,13 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 		string,
 		DispatchedEventReceipt
 	>();
-	/** Event ids of the pending records that the open transaction wrote. */
-	private writtenInTransaction: Set<string> | undefined;
+	/** The pending records at the start of the open transaction, and the ids it wrote. */
+	private openTransaction:
+		| {
+				readonly committed: ReadonlyMap<string, TrackedRecord<Evt>>;
+				readonly written: Set<string>;
+		  }
+		| undefined;
 	private readonly maxDeliveryAttempts: number;
 	private readonly maxRetainedDispatchedEventIds: number;
 	private readonly maxRecords: number | undefined;
@@ -273,7 +281,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				// Requeue the durable record exactly as committed. A dead letter is a
 				// delivery state, not a new aggregate commit to re-finalize.
 				this.dead.delete(event.eventId);
-				this.writtenInTransaction?.add(event.eventId);
+				this.openTransaction?.written.add(event.eventId);
 				this.pending.set(event.eventId, {
 					dispatchId: deadLetter.dispatchId,
 					event: deadLetter.event,
@@ -391,13 +399,13 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				// eventId with a new commit position. Dispatching the stale
 				// envelope would hand consumers a position from a commit that
 				// never happened. Attempts belong to delivery, so they survive.
-				this.writtenInTransaction?.add(event.eventId);
+				this.openTransaction?.written.add(event.eventId);
 				existing.event = event;
 				existing.source = ownedSource;
 				existing.position = ownedPosition;
 				continue;
 			}
-			this.writtenInTransaction?.add(event.eventId);
+			this.openTransaction?.written.add(event.eventId);
 			this.pending.set(event.eventId, {
 				dispatchId: event.eventId,
 				event,
@@ -595,9 +603,12 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				? Math.max(0, Number.isNaN(limit) ? 0 : limit)
 				: Number.POSITIVE_INFINITY;
 		const batch: Array<OutboxRecord<Evt>> = [];
-		for (const [eventId, record] of this.pending) {
+		for (const [eventId, live] of this.pending) {
 			if (batch.length >= max) break;
-			if (this.writtenInTransaction?.has(eventId)) continue;
+			const record = this.openTransaction?.written.has(eventId)
+				? this.openTransaction.committed.get(eventId)
+				: live;
+			if (record === undefined) continue;
 			batch.push({
 				dispatchId: record.dispatchId,
 				event: record.event,
@@ -626,27 +637,29 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 	 * Records the state that a rollback of an `InMemoryTransactionScope`
 	 * returns to: pending and dead-letter records, receipts, source cursors,
 	 * and ended sources, in their order. Until the transaction ends,
-	 * `getPending` hides the pending records that it writes.
+	 * `getPending` reads the recorded copy of each pending record that the
+	 * transaction writes. Only an `InMemoryTransactionScope` calls this
+	 * method.
 	 */
 	beginTransaction(): InMemoryTransaction {
-		const pending = [...this.pending].map(
-			([id, record]) => [id, { ...record }] as const,
+		const committed = new Map(
+			[...this.pending].map(([id, record]) => [id, { ...record }] as const),
 		);
 		const dead = [...this.dead];
 		const receipts = [...this.dispatchedEventIds];
 		const cursors = [...this.sourceCursors];
 		const ended = [...this.endedSourceKeys];
-		const written = new Set<string>();
-		this.writtenInTransaction = written;
+		const transaction = { committed, written: new Set<string>() };
+		this.openTransaction = transaction;
 		const end = () => {
-			if (this.writtenInTransaction === written) {
-				this.writtenInTransaction = undefined;
+			if (this.openTransaction === transaction) {
+				this.openTransaction = undefined;
 			}
 		};
 		return {
 			commit: end,
 			rollback: () => {
-				refill(this.pending, pending);
+				refill(this.pending, committed);
 				refill(this.dead, dead);
 				refill(this.dispatchedEventIds, receipts);
 				refill(this.sourceCursors, cursors);
@@ -864,7 +877,7 @@ function assertReceiptShape(
 /** Replaces the entries of a map with recorded ones, in their order. */
 function refill<K, V>(
 	map: Map<K, V>,
-	entries: ReadonlyArray<readonly [K, V]>,
+	entries: Iterable<readonly [K, V]>,
 ): void {
 	map.clear();
 	for (const [key, value] of entries) map.set(key, value);
