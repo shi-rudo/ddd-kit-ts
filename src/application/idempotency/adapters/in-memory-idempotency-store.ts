@@ -219,26 +219,32 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 		claim: IdempotencyClaimHandle,
 		outcome: unknown,
 	): Promise<void> {
+		// The caller's claim and outcome are read and copied once, here. The
+		// copy can run caller code, for example a getter that abandons the
+		// claim, so it comes before every read of the store state.
+		const key = claim.key;
+		const token = claim.token;
+		const owned = structuredClone(outcome);
 		const now = this.nowMs();
-		const existing = this.entries.get(claim.key);
+		const existing = this.entries.get(key);
 		if (existing === undefined) {
-			throw new IdempotencyCompletionWithoutClaimError(claim.key);
+			throw new IdempotencyCompletionWithoutClaimError(key);
 		}
 		if (
 			existing.status !== "pending" ||
-			existing.token !== claim.token ||
+			existing.token !== token ||
 			now >= existing.expiresAtMs
 		) {
-			throw this.claimLost(claim);
+			throw this.claimLost({ key, token });
 		}
 		const expiresAtMs = now + this.leaseDurationMs;
 		this.lease(expiresAtMs);
-		this.writeInTransaction(claim.key, {
+		this.writeInTransaction(key, {
 			fingerprint: existing.fingerprint,
 			status: "staged",
 			token: existing.token,
 			expiresAtMs,
-			outcome: structuredClone(outcome),
+			outcome: owned,
 		});
 	}
 
