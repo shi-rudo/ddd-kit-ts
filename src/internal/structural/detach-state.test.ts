@@ -128,6 +128,47 @@ describe("detachState", () => {
 		expect(invoked).toBe(0);
 	});
 
+	it("walks a Map and a Set with their built-in iteration, not an own iterator", () => {
+		let iteratorReads = 0;
+		const tags = new Map([["a", new OwnerReview(true)]]);
+		Object.defineProperty(tags, Symbol.iterator, {
+			get() {
+				iteratorReads += 1;
+				return function* () {};
+			},
+		});
+		const members = new Set([new OwnerReview(false)]);
+		Object.defineProperty(members, Symbol.iterator, {
+			value: function* () {},
+		});
+
+		expect(() => detachState({ tags })).toThrow(/state\.tags<map value #0>/);
+		expect(() => detachState({ members })).toThrow(
+			/state\.members<set member #0>/,
+		);
+		expect(iteratorReads).toBe(0);
+	});
+
+	it("names a class without running a static name getter", () => {
+		let nameReads = 0;
+		class Price {
+			readonly cents = 100;
+			static get name() {
+				nameReads += 1;
+				return "Price";
+			}
+		}
+
+		expect(() => detachState({ price: new Price() })).toThrow(TypeError);
+		expect(nameReads).toBe(0);
+	});
+
+	it("names the subject in its messages", () => {
+		expect(() =>
+			detachState({ note: () => "x" }, "the event at index 0"),
+		).toThrow(/^the event at index 0\.note is a function/);
+	});
+
 	it("rejects an expando or a symbol key on a built-in that the clone would drop", () => {
 		const byId = Object.assign(new Map([["a", 1]]), { note: "x" });
 		const tags = Object.assign(new Set(), { [Symbol("brand")]: 1 });

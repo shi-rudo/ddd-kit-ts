@@ -16,6 +16,11 @@ import {
  * their memory. A Proxy is invisible to the walk and fails inside the
  * clone; that failure is rethrown as a `TypeError` with the cause.
  *
+ * The walk reads the graph through property descriptors and walks a Map
+ * or a Set with the built-in iteration, so no accessor and no own iterator
+ * of the state runs. A Proxy still runs its traps. `subject` names the
+ * state in the messages.
+ *
  * Plain objects (from any realm), arrays, Dates, Maps, Sets, bigints, and
  * typed arrays pass. A RegExp passes: pattern and flags survive the clone,
  * and `lastIndex` restores as 0. The scan state of a global or sticky
@@ -28,66 +33,72 @@ import {
  * state. A state that carries a class-based child is mapped to plain data
  * first, in the entity or in the model.
  */
-export function detachState<T>(state: T): T {
-	assertDetachable(state, "", new WeakSet());
+export function detachState<T>(state: T, subject = "detachState: state"): T {
+	assertDetachable(state, "", { seen: new WeakSet(), subject });
 	try {
 		return structuredClone(state);
 	} catch (cause) {
 		throw new TypeError(
-			"detachState: state holds a Proxy or a host object that cannot be cloned; map it to plain data",
+			`${subject} holds a Proxy or a host object that cannot be cloned; map it to plain data`,
 			{ cause },
 		);
 	}
 }
 
 const INDEX_KEY = /^(0|[1-9]\d*)$/;
+const mapEntries = Map.prototype.entries;
+const setValues = Set.prototype.values;
 
-function assertDetachable(
-	value: unknown,
-	path: string,
-	seen: WeakSet<object>,
-): void {
+/** The objects that the walk has seen, and the subject that its messages name. */
+interface Walk {
+	readonly seen: WeakSet<object>;
+	readonly subject: string;
+}
+
+function assertDetachable(value: unknown, path: string, walk: Walk): void {
 	if (typeof value === "function") {
 		throw new TypeError(
-			`detachState: state${path} is a function; map it to plain data`,
+			`${walk.subject}${path} is a function; map it to plain data`,
 		);
 	}
 	// Guided rejection instead of the raw DataCloneError DOMException that
 	// structuredClone throws for symbols, which no recovery channel catches.
 	if (typeof value === "symbol") {
 		throw new TypeError(
-			`detachState: state${path} is a symbol; map it to plain data`,
+			`${walk.subject}${path} is a symbol; map it to plain data`,
 		);
 	}
 	if (value === null || typeof value !== "object") return;
 	const object = value as object;
-	if (seen.has(object)) return;
-	seen.add(object);
+	if (walk.seen.has(object)) return;
+	walk.seen.add(object);
 
 	if (Array.isArray(object)) {
 		if (!hasIntrinsicPrototypeChain(object, "Array")) {
-			throwClassInstance(object, path);
+			throwClassInstance(object, path, walk.subject);
 		}
-		assertOwnPropertiesDetachable(object, path, seen, "array");
+		assertOwnPropertiesDetachable(object, path, walk, "array");
 		return;
 	}
 
 	const tag = builtInTagWithoutInvokingAccessors(object);
 	if (tag !== undefined) {
 		if (!hasIntrinsicPrototypeChain(object)) {
-			throwClassInstance(object, path);
+			throwClassInstance(object, path, walk.subject);
 		}
 		if (tag === "[object Map]") {
 			let index = 0;
-			for (const [key, entry] of object as Map<unknown, unknown>) {
-				assertDetachable(key, `${path}<map key #${index}>`, seen);
-				assertDetachable(entry, `${path}<map value #${index}>`, seen);
+			for (const [key, entry] of mapEntries.call(
+				object as Map<unknown, unknown>,
+			)) {
+				assertDetachable(key, `${path}<map key #${index}>`, walk);
+				assertDetachable(entry, `${path}<map value #${index}>`, walk);
 				index++;
 			}
 		} else if (tag === "[object Set]") {
 			let index = 0;
-			for (const member of object as Set<unknown>) {
-				assertDetachable(member, `${path}<set member #${index}>`, seen);
+			for (const member of setValues.call(object as Set<unknown>)) {
+				assertDetachable(member, `${path}<set member #${index}>`, walk);
 				index++;
 			}
 		} else if (
@@ -96,18 +107,18 @@ function assertDetachable(
 			tag === "[object WeakSet]"
 		) {
 			throw new TypeError(
-				`detachState: state${path} is a ${tag.slice(8, -1)} and cannot be detached`,
+				`${walk.subject}${path} is a ${tag.slice(8, -1)} and cannot be detached`,
 			);
 		} else if (tag === "[object Error]") {
 			throw new TypeError(
-				`detachState: state${path} is an Error; map it to plain data`,
+				`${walk.subject}${path} is an Error; map it to plain data`,
 			);
 		} else if (sharesMemory(object, tag)) {
 			throw new TypeError(
-				`detachState: state${path} is backed by a SharedArrayBuffer and the copy would share its memory; map it to plain data`,
+				`${walk.subject}${path} is backed by a SharedArrayBuffer and the copy would share its memory; map it to plain data`,
 			);
 		}
-		assertOwnPropertiesDetachable(object, path, seen, "built-in");
+		assertOwnPropertiesDetachable(object, path, walk, "built-in");
 		return;
 	}
 
@@ -117,9 +128,9 @@ function assertDetachable(
 		(isIntrinsicConstructorPrototype(prototype, "Object") &&
 			Object.getPrototypeOf(prototype) === null);
 	if (!isPlainRecord) {
-		throwClassInstance(object, path);
+		throwClassInstance(object, path, walk.subject);
 	}
-	assertOwnPropertiesDetachable(object, path, seen, "record");
+	assertOwnPropertiesDetachable(object, path, walk, "record");
 }
 
 /**
@@ -133,7 +144,7 @@ function assertDetachable(
 function assertOwnPropertiesDetachable(
 	object: object,
 	path: string,
-	seen: WeakSet<object>,
+	walk: Walk,
 	kind: "array" | "built-in" | "record",
 ): void {
 	for (const key of Reflect.ownKeys(object)) {
@@ -142,7 +153,7 @@ function assertOwnPropertiesDetachable(
 		if (typeof key === "symbol") {
 			if (!descriptor.enumerable) continue;
 			throw new TypeError(
-				`detachState: state${path} has a symbol-keyed property; map it to plain data`,
+				`${walk.subject}${path} has a symbol-keyed property; map it to plain data`,
 			);
 		}
 		if (kind === "array" && key === "length") continue;
@@ -150,22 +161,22 @@ function assertOwnPropertiesDetachable(
 		if (!descriptor.enumerable) {
 			if (kind === "built-in") continue;
 			throw new TypeError(
-				`detachState: state${path}.${key} is not enumerable and the clone would drop it; map it to plain data`,
+				`${walk.subject}${path}.${key} is not enumerable and the clone would drop it; map it to plain data`,
 			);
 		}
 		if (kind === "built-in" && isIndex) continue;
 		const memberPath = isIndex ? `${path}[${key}]` : `${path}.${key}`;
 		if (!("value" in descriptor)) {
 			throw new TypeError(
-				`detachState: state${memberPath} is an accessor property; map it to plain data`,
+				`${walk.subject}${memberPath} is an accessor property; map it to plain data`,
 			);
 		}
 		if (kind === "built-in") {
 			throw new TypeError(
-				`detachState: state${memberPath} is an expando on a ${object.constructor?.name ?? "built-in"} and the clone would drop it; map it to plain data`,
+				`${walk.subject}${memberPath} is an expando on a ${constructorName(Object.getPrototypeOf(object)) ?? "built-in"} and the clone would drop it; map it to plain data`,
 			);
 		}
-		assertDetachable(descriptor.value, memberPath, seen);
+		assertDetachable(descriptor.value, memberPath, walk);
 	}
 }
 
@@ -178,10 +189,29 @@ function sharesMemory(object: object, tag: string): boolean {
 	);
 }
 
-function throwClassInstance(object: object, path: string): never {
-	const name: string =
-		Object.getPrototypeOf(object)?.constructor?.name || "anonymous class";
+function throwClassInstance(
+	object: object,
+	path: string,
+	subject: string,
+): never {
+	const name =
+		constructorName(Object.getPrototypeOf(object)) ?? "anonymous class";
 	throw new TypeError(
-		`detachState: state${path} is a class instance (${name}); map it to plain data`,
+		`${subject}${path} is a class instance (${name}); map it to plain data`,
 	);
+}
+
+/**
+ * The name of the constructor of `prototype`, read through property
+ * descriptors, so that no accessor runs.
+ */
+function constructorName(prototype: object | null): string | undefined {
+	if (prototype === null) return undefined;
+	const owner = Object.getOwnPropertyDescriptor(
+		prototype,
+		"constructor",
+	)?.value;
+	if (typeof owner !== "function") return undefined;
+	const name = Object.getOwnPropertyDescriptor(owner, "name")?.value;
+	return typeof name === "string" && name !== "" ? name : undefined;
 }

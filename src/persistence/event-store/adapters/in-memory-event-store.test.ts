@@ -392,7 +392,6 @@ describe("InMemoryEventStore", () => {
 				.catch((error: unknown) => error);
 
 			expect(existingStream).toBeInstanceOf(TypeError);
-			expect((existingStream as TypeError).cause).toBeInstanceOf(TypeError);
 			expect(newStream).toBeInstanceOf(TypeError);
 			expect(await store.readStream(streamA, allEvents)).toMatchObject({
 				lastVersion: 1,
@@ -463,6 +462,52 @@ describe("InMemoryEventStore", () => {
 					expectedVersion: 1,
 				}),
 			).resolves.toBeUndefined();
+		});
+	});
+
+	it("passes a TypeError from a proxied event through unchanged", async () => {
+		const store = new InMemoryEventStore<OrderEvent>();
+		const failure = new TypeError("proxy trap failed");
+		const proxied = new Proxy(renamed("x"), {
+			ownKeys() {
+				throw failure;
+			},
+		});
+
+		await expect(
+			store.append(streamA, [proxied], { expectedVersion: 0 }),
+		).rejects.toBe(failure);
+	});
+
+	it("creates no stream for a batch whose iterator yields no event", async () => {
+		const store = new InMemoryEventStore<OrderEvent>({ maxStreams: 1 });
+		const events = [renamed("x")];
+		Object.defineProperty(events, Symbol.iterator, {
+			value: function* () {},
+		});
+
+		await store.append(streamA, events, { expectedVersion: 0 });
+
+		expect(await store.readStream(streamA, allEvents)).toEqual({
+			exists: false,
+			lastVersion: 0,
+			events: [],
+		});
+		await expect(
+			store.append(streamB, [renamed("y")], { expectedVersion: 0 }),
+		).resolves.toBeUndefined();
+	});
+
+	it("rejects a hole in the batch instead of storing it as an event", async () => {
+		const store = new InMemoryEventStore<OrderEvent>();
+		const batch = new Array<OrderEvent>(2);
+		batch[1] = renamed("x");
+
+		await expect(
+			store.append(streamA, batch, { expectedVersion: 0 }),
+		).rejects.toBeInstanceOf(TypeError);
+		expect(await store.readStream(streamA, allEvents)).toMatchObject({
+			exists: false,
 		});
 	});
 
