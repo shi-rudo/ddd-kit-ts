@@ -171,14 +171,12 @@ export class InMemoryProjectionCheckpointStore
 		identity: AggregateIdentity,
 		checkpoint: ProjectionCheckpoint,
 	): Promise<void> {
-		// The caller's checkpoint is read and copied once, here. The copy can
-		// run caller code, for example a getter, so it comes before every
+		// save reads and copies the caller's checkpoint once, here. The copy
+		// can run caller code, for example a getter, so it comes before every
 		// read of the store state.
 		const identityKey = encodeAggregateIdentity(identity);
-		const owned: ProjectionCheckpoint = {
-			...checkpoint,
-			position: { ...checkpoint.position },
-		};
+		const { position, ...rest } = checkpoint;
+		const owned: ProjectionCheckpoint = { ...rest, position: { ...position } };
 		let perAggregate = this.checkpoints.get(projection);
 		const isNewCheckpoint = perAggregate?.has(identityKey) !== true;
 		if (

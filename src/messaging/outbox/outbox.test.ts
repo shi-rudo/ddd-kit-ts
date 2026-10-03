@@ -73,6 +73,75 @@ describe("InMemoryOutbox and caller code in a candidate", () => {
 		]);
 	});
 
+	it("keeps maxRecords when a source getter adds another event", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>({ maxRecords: 1 });
+		let inner: Promise<void> | undefined;
+		const outer = {
+			event: orderEvent("evt-1"),
+			source: {
+				aggregateType: "Order",
+				get aggregateId() {
+					inner ??= outbox.add([
+						{
+							event: createDomainEvent(
+								"OrderCreated",
+								{ orderId: "o-2" },
+								{
+									eventId: "evt-2",
+									aggregateId: "o-2",
+									aggregateType: "Order",
+								},
+							),
+							source: { aggregateType: "Order", aggregateId: "o-2" },
+							position: {
+								aggregateVersion: 1,
+								commitSequence: 0,
+								commitSize: 1,
+							},
+						},
+					]);
+					return "o-1";
+				},
+			},
+			position: { aggregateVersion: 1, commitSequence: 0, commitSize: 1 },
+		};
+
+		await expect(outbox.add([outer])).rejects.toBeInstanceOf(
+			InMemoryCapacityExceededError,
+		);
+		await expect(inner).resolves.toBeUndefined();
+		expect(
+			(await outbox.getPending()).map((record) => record.event.eventId),
+		).toEqual(["evt-2"]);
+	});
+
+	it("rejects a candidate whose source or position has the wrong type", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>();
+		const event = orderEvent("evt-1");
+		const badSource = {
+			event,
+			source: { aggregateType: "Order", aggregateId: 1 as unknown as string },
+			position: { aggregateVersion: 1, commitSequence: 0, commitSize: 1 },
+		};
+		const badPosition = {
+			event,
+			source: { aggregateType: "Order", aggregateId: "o-1" },
+			position: {
+				aggregateVersion: "1" as unknown as number,
+				commitSequence: 0,
+				commitSize: 1,
+			},
+		};
+
+		await expect(outbox.add([badSource])).rejects.toBeInstanceOf(
+			EventHarvestError,
+		);
+		await expect(outbox.add([badPosition])).rejects.toBeInstanceOf(
+			EventHarvestError,
+		);
+		expect(await outbox.getPending()).toEqual([]);
+	});
+
 	it("rejects an event whose eventId is an accessor without running it", async () => {
 		const outbox = new InMemoryOutbox<OrderCreated>();
 		let idReads = 0;

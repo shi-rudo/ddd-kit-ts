@@ -124,9 +124,13 @@ type DispatchedEventReceipt = {
  * immutable. Only this in-memory adapter may move a still-pending event to
  * another aggregate version. Without an `InMemoryTransactionScope`, it keeps
  * the first add of a rolled-back attempt. Dead-lettered and acknowledged
- * retries must match the complete original candidate receipt. Reusing an `eventId` for another source or commit position
- * throws {@link EventHarvestError} while the pending, dead-letter, or bounded
- * dispatched receipt still proves the collision. Insertion order is preserved:
+ * retries must match the complete original candidate receipt. Reusing an
+ * `eventId` for another source or commit position throws
+ * {@link EventHarvestError} while the pending, dead-letter, or bounded
+ * dispatched receipt still proves the collision. `add` also throws
+ * {@link EventHarvestError} for a candidate whose event has no own data
+ * property `eventId` or `type`, or whose source or position fields have the
+ * wrong type. Insertion order is preserved:
  * `getPending` returns records in commit order, as the port contract requires.
  *
  * Dispatch tracking: `markFailed` increments the record's attempt count
@@ -240,8 +244,9 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 	}
 
 	async add(events: ReadonlyArray<EventCommitCandidate<Evt>>): Promise<void> {
-		// The candidates are read once, here, so no caller code runs between
-		// a check and a write below.
+		// add reads each candidate once, here, so no getter of the caller runs
+		// between a check and a write below. A Proxy event still runs its
+		// traps on each read of its eventId.
 		const batch = Array.from(events, ownCandidate);
 		// Prove identity/receipt and source-position consistency for the whole input
 		// before mutating pending records or source heads. Otherwise a conflict later
@@ -898,37 +903,45 @@ function assertReceiptShape(
 }
 
 /**
- * The fields of a candidate that the outbox reads, read once. The source and
- * the position are copied. The event stays the caller's object, because a
- * dispatcher gets the event that the commit recorded, so the fields that the
- * outbox reads from it must be data properties: reading them runs no code.
+ * The fields of a candidate that the outbox reads, read once and checked.
+ * The function copies the source and the position. The event stays the
+ * caller's object, because a dispatcher gets the event that the commit
+ * recorded. The outbox reads only `eventId` and `type` from it, so these
+ * must be own data properties: a read of them then runs no getter.
  */
 function ownCandidate<Evt extends AnyDomainEvent>(
 	candidate: EventCommitCandidate<Evt>,
 	index: number,
 ): EventCommitCandidate<Evt> {
 	const { event, source, position } = candidate;
+	const reject = (problem: string): never => {
+		throw new EventHarvestError(
+			`InMemoryOutbox rejected the candidate at index ${index}: ${problem}. ` +
+				"Add the event that the aggregate recorded.",
+		);
+	};
 	for (const field of ["eventId", "type"] as const) {
 		const descriptor = Object.getOwnPropertyDescriptor(event, field);
 		if (descriptor === undefined || !("value" in descriptor)) {
-			throw new EventHarvestError(
-				`InMemoryOutbox rejected the candidate at index ${index}: the ` +
-					`${field} of its event is not an own data property. Add the ` +
-					"event that the aggregate recorded.",
-			);
+			reject(`the ${field} of its event is not an own data property`);
 		}
+	}
+	const { aggregateId, aggregateType } = source;
+	if (typeof aggregateId !== "string" || typeof aggregateType !== "string") {
+		reject("its source must have a string aggregateId and aggregateType");
+	}
+	const { aggregateVersion, commitSequence, commitSize } = position;
+	if (
+		typeof aggregateVersion !== "number" ||
+		typeof commitSequence !== "number" ||
+		typeof commitSize !== "number"
+	) {
+		reject("its position must have number fields");
 	}
 	return {
 		event,
-		source: Object.freeze({
-			aggregateType: source.aggregateType,
-			aggregateId: source.aggregateId,
-		}),
-		position: Object.freeze({
-			aggregateVersion: position.aggregateVersion,
-			commitSequence: position.commitSequence,
-			commitSize: position.commitSize,
-		}),
+		source: Object.freeze({ aggregateId, aggregateType }),
+		position: Object.freeze({ aggregateVersion, commitSequence, commitSize }),
 	};
 }
 

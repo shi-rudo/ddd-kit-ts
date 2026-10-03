@@ -137,10 +137,10 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 		dueAt: Date;
 		payload: TPayload;
 	}): Promise<void> {
-		// The caller's deadline is read and copied once, here. The copy can
-		// run caller code, for example a getter in the payload, so it comes
-		// before every read of the store state. An uncloneable payload
-		// rejects before any write.
+		// schedule reads and copies the caller's deadline once, here. The copy
+		// can run caller code, for example a getter in the payload, so it
+		// comes before every read of the store state. A payload that cannot be
+		// cloned rejects before any write.
 		const scope = deadline.scope;
 		const key = deadline.key;
 		const dueAt = new Date(deadline.dueAt);

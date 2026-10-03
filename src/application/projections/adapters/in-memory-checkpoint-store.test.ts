@@ -99,20 +99,20 @@ describe("InMemoryProjectionCheckpointStore and caller code in a checkpoint", ()
 		);
 	});
 
-	it("reads the aggregate identity of a checkpoint once", async () => {
+	it("reads the position of a checkpoint once", async () => {
 		const store = new InMemoryProjectionCheckpointStore();
-		let idReads = 0;
+		let positionReads = 0;
 		const counted = {
-			aggregateType: "Order",
-			get aggregateId() {
-				idReads += 1;
-				return "o-1";
+			lastAppliedEventId: "evt-1",
+			get position() {
+				positionReads += 1;
+				return checkpoint(1).position;
 			},
 		};
 
-		await store.save(undefined, "orders", counted, checkpoint(1));
+		await store.save(undefined, "orders", identity("o-1"), counted);
 
-		expect(idReads).toBe(1);
+		expect(positionReads).toBe(1);
 	});
 });
 

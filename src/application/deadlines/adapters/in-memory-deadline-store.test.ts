@@ -93,9 +93,13 @@ describe("InMemoryDeadlineStore and caller code in a deadline", () => {
 
 	it("reads the address of a deadline once", async () => {
 		const store = new InMemoryDeadlineStore();
+		let scopeReads = 0;
 		let keyReads = 0;
 		const deadline = {
-			scope: "orders",
+			get scope() {
+				scopeReads += 1;
+				return "orders";
+			},
 			get key() {
 				keyReads += 1;
 				return "o-1";
@@ -106,7 +110,7 @@ describe("InMemoryDeadlineStore and caller code in a deadline", () => {
 
 		await store.schedule(deadline);
 
-		expect(keyReads).toBe(1);
+		expect({ scopeReads, keyReads }).toEqual({ scopeReads: 1, keyReads: 1 });
 	});
 });
 

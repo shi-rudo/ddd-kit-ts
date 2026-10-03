@@ -467,7 +467,7 @@ describe("withIdempotentCommit with an InMemoryTransactionScope", () => {
 });
 
 describe("InMemoryIdempotencyStore", () => {
-	it("reads a claim handle once per lease operation", async () => {
+	it("reads a claim handle once per call", async () => {
 		const store = new InMemoryIdempotencyStore<undefined>();
 		const handle = await claimHandle(store, "k", "fp");
 		let keyReads = 0;
