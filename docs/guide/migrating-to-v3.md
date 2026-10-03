@@ -1345,9 +1345,11 @@ Behavior that a use case or an adapter can notice:
   reject an `Error`, a host object such as a `File`, and shared memory in
   the payload or the metadata with a `TypeError`. In rc.10 they accepted
   these values, and the in-memory event store kept them.
-- `InMemoryOutbox.add` rejects an event whose `eventId` or `type` is an
-  accessor or inherited, with `EVENT_HARVEST_FAILED`. Events from
-  `createDomainEvent` have own data properties and pass unchanged.
+- `InMemoryOutbox.add` rejects a candidate with `EVENT_HARVEST_FAILED` when
+  the `eventId` or `type` of its event is missing, an accessor, or
+  inherited, or when its source or position fields have the wrong type.
+  Events from `createDomainEvent` have own data properties and pass
+  unchanged.
 - `run()` reports `ROLLBACK_FAILED` when a step after the work fails
   inside the transaction, for example the outbox write, and the rollback
   fails too. Before, it reported `COMMIT_FAILED` with the rollback failure

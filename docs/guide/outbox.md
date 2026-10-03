@@ -347,6 +347,11 @@ no-op without touching the source head. Unbounded production
 workloads need a durable adapter with an explicit source-head retention policy
 that keeps ended heads, and a transactional unique key on `eventId`.
 
+`add` reads each candidate once, before it reads its own state. It rejects a
+candidate with `EventHarvestError` when the `eventId` or `type` of the event is
+missing, an accessor, or inherited, or when the source or position fields have
+the wrong type. Events from `createDomainEvent` pass.
+
 On its own, `InMemoryOutbox` cannot see a rollback. If `endEventSources` ends
 a source inside a transaction that rolls back, the source stays ended. The
 outbox then rejects every later event of the aggregate, which still exists.
