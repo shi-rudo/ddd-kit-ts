@@ -105,17 +105,34 @@ const INTRINSIC_CONSTRUCTOR_NAMES = [
 	"BigUint64Array",
 ] as const;
 
-const intrinsicConstructorSources: ReadonlyMap<string, string> = new Map(
+// Each intrinsic accepts two source texts: the one of the local constructor
+// and the canonical native one. A runtime can replace a local constructor,
+// so that its source drops the name (the Vercel Edge runtime gives
+// "function () { [native code] }" for Object), while a structured clone
+// from the host realm still has the original constructor. Only a native
+// function gives the canonical text, so a user class cannot claim it.
+const intrinsicConstructorSources: ReadonlyMap<
+	string,
+	ReadonlySet<string>
+> = new Map(
 	INTRINSIC_CONSTRUCTOR_NAMES.flatMap((name) => {
 		const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
 		const intrinsic = descriptor?.value;
 		return typeof intrinsic === "function"
-			? [[name, functionToString.call(intrinsic)] as const]
+			? [
+					[
+						name,
+						new Set([
+							functionToString.call(intrinsic),
+							`function ${name}() { [native code] }`,
+						]),
+					] as const,
+				]
 			: [];
 	}),
 );
 const intrinsicConstructorSourceSet: ReadonlySet<string> = new Set(
-	intrinsicConstructorSources.values(),
+	[...intrinsicConstructorSources.values()].flatMap((sources) => [...sources]),
 );
 const ERROR_INTRINSIC_NAMES = [
 	"Error",
@@ -151,13 +168,13 @@ export function isIntrinsicConstructorPrototype(
 	} catch {
 		return false;
 	}
-	const expectedSource =
+	const expectedSources =
 		expectedName === undefined
 			? undefined
 			: intrinsicConstructorSources.get(expectedName);
 	if (
-		(expectedSource !== undefined && candidateSource !== expectedSource) ||
-		(expectedSource === undefined &&
+		(expectedSources !== undefined && !expectedSources.has(candidateSource)) ||
+		(expectedSources === undefined &&
 			!intrinsicConstructorSourceSet.has(candidateSource))
 	) {
 		return false;
@@ -174,14 +191,14 @@ export function isIntrinsicConstructorPrototype(
 			? nameDescriptor.value
 			: undefined;
 	const intrinsicName = expectedName ?? candidateName;
-	const intrinsicSource =
+	const intrinsicSources =
 		intrinsicName === undefined
 			? undefined
 			: intrinsicConstructorSources.get(intrinsicName);
 	return (
 		candidateName === intrinsicName &&
-		intrinsicSource !== undefined &&
-		candidateSource === intrinsicSource &&
+		intrinsicSources !== undefined &&
+		intrinsicSources.has(candidateSource) &&
 		Object.getOwnPropertyDescriptor(candidateConstructor, "prototype")
 			?.value === prototype
 	);
