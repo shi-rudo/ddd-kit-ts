@@ -868,7 +868,7 @@ function cloneOwnedEventData<T>(value: T, field: "payload" | "metadata"): T {
 	// do not survive JSON either, the wire discipline events already
 	// document; encode binary as a string (base64/hex) or store it
 	// outside the event and reference it.
-	assertNoBinaryData(value, field);
+	assertStorableEventData(value, field);
 	try {
 		return structuredClone(value);
 	} catch (cause) {
@@ -891,13 +891,15 @@ function isBinaryData(value: object): boolean {
 }
 
 /**
- * Walks caller-supplied event data and rejects binary buffers anywhere
- * in the graph (TypedArray, DataView, ArrayBuffer, SharedArrayBuffer):
- * they are mutable by construction, so the deep-freeze that backs the
- * mint guarantee cannot cover them. Runs before the structured clone,
+ * Walks caller-supplied event data and rejects two kinds of values
+ * anywhere in the graph. A binary buffer (TypedArray, DataView,
+ * ArrayBuffer, SharedArrayBuffer) is mutable by construction, so the
+ * deep-freeze that backs the mint guarantee cannot cover it. An Error
+ * survives the structured clone but not JSON, and an event store that
+ * keeps only plain data rejects it. Runs before the structured clone,
  * on the small plain-data graphs events are documented to carry.
  */
-function assertNoBinaryData(
+function assertStorableEventData(
 	value: unknown,
 	field: "payload" | "metadata",
 	visited = new WeakSet<object>(),
@@ -911,25 +913,39 @@ function assertNoBinaryData(
 				`a string (base64/hex) or store it outside the event.`,
 		);
 	}
+	if (
+		value instanceof Error ||
+		Object.prototype.toString.call(value) === "[object Error]"
+	) {
+		throw new TypeError(
+			`createDomainEvent: ${field} must not contain an Error: an event ` +
+				`stores facts as plain data, and an Error does not survive JSON. ` +
+				`Map it to plain data, for example its message and code.`,
+		);
+	}
 	if (visited.has(value)) return;
 	visited.add(value);
 	if (value instanceof Map) {
 		for (const [k, v] of value) {
-			assertNoBinaryData(k, field, visited);
-			assertNoBinaryData(v, field, visited);
+			assertStorableEventData(k, field, visited);
+			assertStorableEventData(v, field, visited);
 		}
 		return;
 	}
 	if (value instanceof Set) {
-		for (const v of value) assertNoBinaryData(v, field, visited);
+		for (const v of value) assertStorableEventData(v, field, visited);
 		return;
 	}
 	if (Array.isArray(value)) {
-		for (const v of value) assertNoBinaryData(v, field, visited);
+		for (const v of value) assertStorableEventData(v, field, visited);
 		return;
 	}
 	for (const key of Object.keys(value)) {
-		assertNoBinaryData((value as Record<string, unknown>)[key], field, visited);
+		assertStorableEventData(
+			(value as Record<string, unknown>)[key],
+			field,
+			visited,
+		);
 	}
 }
 

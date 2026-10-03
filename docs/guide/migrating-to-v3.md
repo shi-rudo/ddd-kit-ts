@@ -667,8 +667,10 @@ this.apply(this.createEvent("OrderConfirmed", payload));
 `createDomainEvent` rejects binary buffers in the payload and the metadata:
 `ArrayBuffer`, `SharedArrayBuffer`, a typed array, and a `DataView`. Freezing
 does not cover them, and JSON does not keep them. Encode binary data as a
-string, or store it outside the event. `EventMetadata` fields are readonly,
-and the metadata gains `traceparent` and `tracestate`.
+string, or store it outside the event. It also rejects an `Error`, which
+JSON does not keep either; map it to plain data, for example its message and
+code. `EventMetadata` fields are readonly, and the metadata gains
+`traceparent` and `tracestate`.
 
 #### Entity state is protected, and its field is private
 
@@ -1335,9 +1337,11 @@ Behavior that a use case or an adapter can notice:
 - `InMemoryEventStore.append` rejects an event that is not plain data with
   a `TypeError`. Examples are a function, a class instance, an accessor, an
   `Error`, and a hidden or symbol-keyed property anywhere in the event.
-  Before, it stored a copy that lost these values. An event from
-  `createDomainEvent` passes, unless its payload or metadata holds an
-  `Error`, which `createDomainEvent` accepts.
+  Before, it stored a copy that lost these values. Events from
+  `createDomainEvent` pass unchanged.
+- `createDomainEvent` rejects an `Error` anywhere in the payload or the
+  metadata with a `TypeError`. Before, it accepted it, and the in-memory
+  event store rejected the event only at the commit.
 - `run()` reports `ROLLBACK_FAILED` when a step after the work fails
   inside the transaction, for example the outbox write, and the rollback
   fails too. Before, it reported `COMMIT_FAILED` with the rollback failure

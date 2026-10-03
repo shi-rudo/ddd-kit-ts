@@ -386,6 +386,10 @@ immutable. Run one kit version per process during a cutover.
 
 ### Fixed
 
+- `createDomainEvent` rejects an `Error` anywhere in the payload or the
+  metadata with a `TypeError`. Before, it minted the event, and the
+  in-memory event store rejected it only at the commit, far from the
+  producer.
 - `detachState` and the other plain-data checks of the kit accept a
   structured clone in the Vercel Edge runtime. That runtime replaces the
   global `Object`, so its source text no longer names `Object`, while a

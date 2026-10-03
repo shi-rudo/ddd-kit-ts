@@ -980,6 +980,29 @@ describe("binary payloads are rejected at the mint", () => {
 		).toThrow(/binary buffers/);
 	});
 
+	it("rejects an Error anywhere in the payload or the metadata", () => {
+		const failure = new RangeError("card declined");
+
+		expect(() => createDomainEvent("PaymentFailed", { failure })).toThrow(
+			TypeError,
+		);
+		expect(() =>
+			createDomainEvent("PaymentFailed", { attempts: [{ failure }] }),
+		).toThrow(TypeError);
+		expect(() =>
+			createDomainEvent("PaymentFailed", {
+				byAttempt: new Map([[1, failure]]),
+			}),
+		).toThrow(TypeError);
+		expect(() =>
+			createDomainEvent(
+				"PaymentFailed",
+				{ orderId: "o-1" },
+				{ metadata: { custom: { failure } } },
+			),
+		).toThrow(TypeError);
+	});
+
 	it("rejects buffers in metadata too", () => {
 		expect(() =>
 			createDomainEvent(
