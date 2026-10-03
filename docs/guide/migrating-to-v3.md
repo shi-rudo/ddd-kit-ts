@@ -1332,6 +1332,9 @@ Behavior that a use case or an adapter can notice:
   time option throws a `RangeError` in place of an `Error`.
 - A custom scope that retries calls `onAttemptStart` from the transactional
   options before each attempt, so `run()` labels a failure by its attempt.
+- `InMemoryOutbox.add` rejects an event whose `eventId` or `type` is an
+  accessor or inherited, with `EVENT_HARVEST_FAILED`. Events from
+  `createDomainEvent` have own data properties and pass unchanged.
 - `run()` reports `ROLLBACK_FAILED` when a step after the work fails
   inside the transaction, for example the outbox write, and the rollback
   fails too. Before, it reported `COMMIT_FAILED` with the rollback failure
