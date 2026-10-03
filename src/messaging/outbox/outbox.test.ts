@@ -31,6 +31,68 @@ function candidate(
 	};
 }
 
+describe("InMemoryOutbox and caller code in a candidate", () => {
+	const orderEvent = (eventId: string) =>
+		createDomainEvent(
+			"OrderCreated",
+			{ orderId: "o-1" },
+			{ eventId, aggregateId: "o-1", aggregateType: "Order" },
+		);
+
+	it("reads the source and the position of a candidate once", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>();
+		let sourceReads = 0;
+		let positionReads = 0;
+		const counted = {
+			event: orderEvent("evt-1"),
+			source: {
+				aggregateType: "Order",
+				get aggregateId() {
+					sourceReads += 1;
+					return "o-1";
+				},
+			},
+			position: {
+				get aggregateVersion() {
+					positionReads += 1;
+					return 1;
+				},
+				commitSequence: 0,
+				commitSize: 1,
+			},
+		};
+
+		await outbox.add([counted]);
+
+		expect({ sourceReads, positionReads }).toEqual({
+			sourceReads: 1,
+			positionReads: 1,
+		});
+		expect(await outbox.getPending()).toMatchObject([
+			{ source: { aggregateId: "o-1" }, position: { aggregateVersion: 1 } },
+		]);
+	});
+
+	it("rejects an event whose eventId is an accessor without running it", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>();
+		let idReads = 0;
+		const event = { ...orderEvent("evt-1") } as Record<string, unknown>;
+		Object.defineProperty(event, "eventId", {
+			enumerable: true,
+			get() {
+				idReads += 1;
+				return "evt-1";
+			},
+		});
+
+		await expect(
+			outbox.add([candidate(event as unknown as OrderCreated, 1)]),
+		).rejects.toBeInstanceOf(EventHarvestError);
+		expect(idReads).toBe(0);
+		expect(await outbox.getPending()).toEqual([]);
+	});
+});
+
 describe("InMemoryOutbox in an InMemoryTransactionScope", () => {
 	const orderEvent = (eventId: string, orderId = "o-1") =>
 		createDomainEvent(
