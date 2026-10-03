@@ -110,9 +110,11 @@ const result2 = deepOmit(obj, {
 
 ---
 
-### `detachState(state)`
+### `detachState(state, subject?)`
 
-Returns a copy of `state` that shares no object with the original. The copy is a `structuredClone`, taken after a walk that rejects every value the clone would lose or silently degrade. A class instance keeps its data properties in a clone and loses the methods on its prototype; the walk throws a `TypeError` that names the path and the class instead.
+Returns a copy of `state` that shares no object with the original. The copy is a `structuredClone`, taken after a walk that rejects every value the clone would lose or silently degrade. A class instance keeps its data properties in a clone and loses the methods on its prototype; the walk throws a `TypeError` that names the path and the class instead. The optional `subject` replaces `detachState: state` at the start of every message.
+
+The walk reads the graph through property descriptors and walks a `Map` or a `Set` with the built-in iteration. No accessor and no own iterator of the state runs; a `Proxy` still runs its traps.
 
 #### Rejected values
 

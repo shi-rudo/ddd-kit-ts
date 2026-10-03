@@ -34,25 +34,21 @@ export interface InMemoryEventStoreOptions {
 /**
  * A copy of `event` that shares nothing with the caller. `detachState`
  * rejects a value that a copy would lose or change, for example a function,
- * a class instance, or an accessor, and it never runs an accessor.
+ * a class instance, or an accessor, and it runs no accessor. Its rejection
+ * names the event, and any other error passes unchanged.
  */
 function copyForStorage<Evt>(
 	event: Evt,
 	index: number,
 	stream: AggregateIdentity,
 ): Evt {
-	try {
-		return detachState(event);
-	} catch (error) {
-		// Only the rejection of `detachState` gets the event context. An error
-		// from caller code, for example a Proxy trap, passes unchanged.
-		if (!(error instanceof TypeError)) throw error;
-		throw new TypeError(
-			`InMemoryEventStore.append: the event at index ${index} of stream ` +
-				`${describeAggregateIdentity(stream)} is not plain data`,
-			{ cause: error },
-		);
+	const subject =
+		`InMemoryEventStore.append: the event at index ${index} of stream ` +
+		describeAggregateIdentity(stream);
+	if (event === null || typeof event !== "object") {
+		throw new TypeError(`${subject} is not an event object`);
 	}
+	return detachState(event, subject);
 }
 
 function assertStreamPosition(
@@ -141,19 +137,19 @@ export class InMemoryEventStore<Evt extends AnyDomainEvent>
 		events: ReadonlyArray<Evt>,
 		options: EventStoreAppendOptions,
 	): Promise<void> {
-		if (events.length === 0) return;
 		// The arguments are read once, here. A getter on them runs before the
-		// first check, and a later change of the caller's objects does not
-		// reach the checks, the write, or an error.
+		// first check, and a later change of the caller's batch or identity
+		// does not reach the checks, the write, or an error.
+		const batch = Array.from(events);
+		if (batch.length === 0) return;
 		const identity = detachAggregateIdentity(stream);
 		const expectedVersion = options.expectedVersion;
-		const batch = Array.from(events);
 		const key = encodeAggregateIdentity(identity);
 		// A stale or oversized batch fails before the copy, without its cost.
 		this.existingStreamForAppend(identity, key, expectedVersion, batch.length);
-		// The copy runs no accessor, but a Proxy event runs its traps. The
-		// checks therefore run again after the copy, against the state that
-		// the write changes.
+		// The copy runs no accessor, but a Proxy in an event runs its traps.
+		// The checks therefore run again after the copy, against the state
+		// that the write changes.
 		const owned = batch.map((event, index) =>
 			copyForStorage(event, index, identity),
 		);
