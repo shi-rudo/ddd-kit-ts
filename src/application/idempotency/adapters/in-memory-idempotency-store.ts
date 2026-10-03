@@ -167,51 +167,62 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 		key: string,
 		fingerprint: string,
 	): Promise<IdempotencyClaim> {
-		const now = this.nowMs();
-		const existing = this.entries.get(key);
-		if (existing === undefined) {
-			if (
-				this.maxEntries !== undefined &&
-				this.entries.size >= this.maxEntries
-			) {
-				throw new InMemoryCapacityExceededError({
-					store: "InMemoryIdempotencyStore",
-					resource: "entries",
-					limit: this.maxEntries,
-					current: this.entries.size,
-					attempted: 1,
-				});
+		// The clock and the token factory are callbacks of the caller and can
+		// change the store. claim reads the clock before the store state, and
+		// it asks the factory only when it is about to create a claim. It then
+		// decides again, so a change by the factory meets every check.
+		let tokenPart: string | undefined;
+		for (;;) {
+			const now = this.nowMs();
+			const existing = this.entries.get(key);
+			if (existing === undefined) {
+				if (
+					this.maxEntries !== undefined &&
+					this.entries.size >= this.maxEntries
+				) {
+					throw new InMemoryCapacityExceededError({
+						store: "InMemoryIdempotencyStore",
+						resource: "entries",
+						limit: this.maxEntries,
+						current: this.entries.size,
+						attempted: 1,
+					});
+				}
+			} else {
+				if (existing.fingerprint !== fingerprint) {
+					throw new IdempotencyKeyReuseError({
+						key,
+						storedFingerprint: existing.fingerprint,
+						receivedFingerprint: fingerprint,
+					});
+				}
+				if (existing.status === "confirmed") {
+					return {
+						status: "completed",
+						outcome: structuredClone(existing.outcome),
+					};
+				}
+				if (now < existing.expiresAtMs) {
+					throw new IdempotencyInFlightError({ key });
+				}
+				if (existing.status === "staged") {
+					return {
+						status: "reconciliation-required",
+						reconciliation: Object.freeze({
+							key,
+							fingerprint,
+							token: existing.token,
+							expiredAt: new Date(existing.expiresAtMs).toISOString(),
+						}),
+					};
+				}
 			}
-			return this.createPending(key, fingerprint, now);
+			if (tokenPart === undefined) {
+				tokenPart = this.newTokenPart();
+				continue;
+			}
+			return this.createPending(key, fingerprint, now, tokenPart);
 		}
-		if (existing.fingerprint !== fingerprint) {
-			throw new IdempotencyKeyReuseError({
-				key,
-				storedFingerprint: existing.fingerprint,
-				receivedFingerprint: fingerprint,
-			});
-		}
-		if (existing.status === "confirmed") {
-			return {
-				status: "completed",
-				outcome: structuredClone(existing.outcome),
-			};
-		}
-		if (now < existing.expiresAtMs) {
-			throw new IdempotencyInFlightError({ key });
-		}
-		if (existing.status === "staged") {
-			return {
-				status: "reconciliation-required",
-				reconciliation: Object.freeze({
-					key,
-					fingerprint,
-					token: existing.token,
-					expiredAt: new Date(existing.expiresAtMs).toISOString(),
-				}),
-			};
-		}
-		return this.createPending(key, fingerprint, now);
 	}
 
 	async complete(
@@ -300,6 +311,9 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 				"reconcile decision must be committed or not-committed; uncertainty must leave the record untouched",
 			);
 		}
+		// The clock is a callback of the caller and can change the store, so
+		// reconcile reads it before the store state.
+		const now = this.nowMs();
 		const existing = this.entries.get(key);
 		if (
 			existing === undefined ||
@@ -307,7 +321,7 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 			existing.token !== token ||
 			existing.fingerprint !== fingerprint ||
 			new Date(existing.expiresAtMs).toISOString() !== expiredAt ||
-			this.nowMs() < existing.expiresAtMs
+			now < existing.expiresAtMs
 		) {
 			throw new IdempotencyClaimLostError({
 				key,
@@ -336,15 +350,20 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 		this.entries.clear();
 	}
 
-	private createPending(
-		key: string,
-		fingerprint: string,
-		now: number,
-	): IdempotencyClaim {
+	private newTokenPart(): string {
 		const tokenPart = this.claimTokenFactory();
 		if (typeof tokenPart !== "string" || tokenPart.length === 0) {
 			throw new TypeError("claimTokenFactory must return a non-empty string");
 		}
+		return tokenPart;
+	}
+
+	private createPending(
+		key: string,
+		fingerprint: string,
+		now: number,
+		tokenPart: string,
+	): IdempotencyClaim {
 		this.tokenGeneration += 1;
 		if (!Number.isSafeInteger(this.tokenGeneration)) {
 			throw new RangeError("idempotency claim-token generation exhausted");

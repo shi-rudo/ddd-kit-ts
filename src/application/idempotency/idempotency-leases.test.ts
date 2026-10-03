@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
+import { IdempotencyClaimLostError } from "../../errors/kit-errors";
 import { InMemoryOutbox } from "../../messaging/outbox/outbox";
 import type { TransactionScope } from "../../persistence/repository/scope";
 import { InMemoryIdempotencyStore } from "./adapters/in-memory-idempotency-store";
@@ -188,6 +189,38 @@ describe("staged idempotency reconciliation", () => {
 			status: "completed",
 			outcome: { orderId: "o-1" },
 		});
+	});
+
+	it("does not confirm an outcome that a clock callback released meanwhile", async () => {
+		const clock = mutableClock();
+		let onRead: (() => void) | undefined;
+		const store = new InMemoryIdempotencyStore<undefined>({
+			clock: () => {
+				const callback = onRead;
+				onRead = undefined;
+				callback?.();
+				return clock.now();
+			},
+			claimTokenFactory: tokenFactory(),
+			leaseDurationMs: 100,
+			renewAfterMs: 40,
+		});
+		const claim = claimedHandle(await store.claim(undefined, "key", "fp"));
+		await store.complete(undefined, claim, { orderId: "o-1" });
+		clock.advance(101);
+		const receipt = reconciliationReceipt(
+			await store.claim(undefined, "key", "fp"),
+		);
+		let inner: Promise<void> | undefined;
+		onRead = () => {
+			inner = store.reconcile(receipt, "not-committed");
+		};
+
+		const outer = store.reconcile(receipt, "committed");
+
+		await expect(outer).rejects.toBeInstanceOf(IdempotencyClaimLostError);
+		await expect(inner).resolves.toBeUndefined();
+		expect(store.size).toBe(0);
 	});
 
 	it("reads a reconciliation receipt once", async () => {

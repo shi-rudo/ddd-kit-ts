@@ -390,6 +390,10 @@ immutable. Run one kit version per process during a cutover.
 
 ### Fixed
 
+- `InMemoryIdempotencyStore` reads its clock before its state, and `claim`
+  asks the token factory before its final checks. A clock or a factory that
+  changes the store can no longer push it past `maxEntries` or confirm an
+  outcome that was released meanwhile.
 - The in-memory deadline, checkpoint, idempotency, and outbox stores read
   and copy the caller's data once, before they read their own state. A
   getter in a payload, a checkpoint, an outcome, or a candidate can no

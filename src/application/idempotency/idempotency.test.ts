@@ -12,6 +12,7 @@ import {
 	IdempotencyCompletionWithoutClaimError,
 	IdempotencyInFlightError,
 	IdempotencyKeyReuseError,
+	InMemoryCapacityExceededError,
 } from "../../errors/kit-errors";
 import type { EventCommitCandidate } from "../../messaging/committed-event";
 import { InMemoryOutbox } from "../../messaging/outbox/outbox";
@@ -467,6 +468,28 @@ describe("withIdempotentCommit with an InMemoryTransactionScope", () => {
 });
 
 describe("InMemoryIdempotencyStore", () => {
+	it("checks the capacity after a token factory claimed another key", async () => {
+		let inner: Promise<unknown> | undefined;
+		let claimedInside = false;
+		const store: InMemoryIdempotencyStore<undefined> =
+			new InMemoryIdempotencyStore<undefined>({
+				maxEntries: 1,
+				claimTokenFactory: () => {
+					if (!claimedInside) {
+						claimedInside = true;
+						inner = store.claim(undefined, "k-2", "fp");
+					}
+					return "token";
+				},
+			});
+
+		await expect(store.claim(undefined, "k-1", "fp")).rejects.toBeInstanceOf(
+			InMemoryCapacityExceededError,
+		);
+		await expect(inner).resolves.toMatchObject({ status: "claimed" });
+		expect(store.size).toBe(1);
+	});
+
 	it("reads a claim handle once per call", async () => {
 		const store = new InMemoryIdempotencyStore<undefined>();
 		const handle = await claimHandle(store, "k", "fp");
