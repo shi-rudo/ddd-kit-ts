@@ -3,6 +3,7 @@ import {
 	hasCooperativeBrand,
 	stampCooperativeBrand,
 } from "../../internal/cooperative-brand";
+import { assertDetachableState } from "../../internal/structural/detach-state";
 import { deepFreeze } from "../value-object/value-object";
 import { type ClockFactory, defaultClockFactory, readClock } from "./clock";
 import { DomainEventValidationError } from "./domain-event-errors";
@@ -361,6 +362,7 @@ export function createDomainEventFactory(
 			withFactorySource(createOptions, source),
 			eventIdFactory,
 			clock,
+			"createDomainEvent",
 		)) as DomainEventFactory["create"];
 	const createStamp = (
 		stampOptions: CreateDomainEventStampOptions = {},
@@ -382,6 +384,7 @@ export function createDomainEventFactory(
 		const metadata = cloneOwnedEventData(
 			withFactorySource(stampOptions, source).metadata,
 			"metadata",
+			"createStamp",
 		);
 		const stamp: DomainEventStamp = {
 			eventId,
@@ -418,7 +421,10 @@ export const defaultDomainEventFactory: DomainEventFactory =
  * event (same contract as `vo()`). The clone follows the plain-data event
  * contract via `structuredClone`: functions, Promise, and WeakMap/WeakSet
  * values throw a `TypeError`; symbol-keyed properties are not carried
- * over.
+ * over. The clone is then checked with the rule of the in-memory event
+ * store: an `Error`, a host object such as a `File`, a binary buffer, and
+ * shared memory throw a `TypeError`. A class instance or an accessor becomes
+ * plain data in the clone.
  *
  * **For aggregate-internal events, prefer `this.createEvent(...)` on
  * `StateStoredAggregate` / `EventSourcedAggregate`.** That helper auto-injects
@@ -531,7 +537,11 @@ export function createUncommittedDomainEvent<T extends string, P>(
 		type,
 		aggregateId: options?.aggregateId,
 		aggregateType: options?.aggregateType,
-		payload: cloneOwnedEventData(payload as P, "payload"),
+		payload: cloneOwnedEventData(
+			payload as P,
+			"payload",
+			"createUncommittedDomainEvent",
+		),
 		schemaVersion: options?.schemaVersion ?? 1,
 	};
 	stampUncommittedBrand(event);
@@ -579,7 +589,11 @@ export function recordDomainEvent<T extends string, P>(
 	// the stamp fields before they enter the immutable event.
 	assertNonBlankEventField(stamp.eventId, "eventId", "EVENT_ID_INVALID");
 	const occurredAt = deepFreeze(copyValidEventDate(stamp.occurredAt)) as Date;
-	const metadata = cloneOwnedEventData(stamp.metadata, "metadata");
+	const metadata = cloneOwnedEventData(
+		stamp.metadata,
+		"metadata",
+		"recordDomainEvent",
+	);
 	return mintRecordedEvent(
 		event,
 		stamp.eventId,
@@ -696,6 +710,7 @@ export function createDomainEventFromFacts<T extends string, P>(
 		options,
 		missingExplicitEventId,
 		missingExplicitOccurredAt,
+		"createDomainEventFromFacts",
 	);
 }
 
@@ -721,6 +736,7 @@ function mintDomainEvent<T extends string, P>(
 	options: CreateDomainEventOptions | undefined,
 	eventIdFactory: EventIdFactory,
 	clock: ClockFactory,
+	operation: string,
 ): DomainEvent<T, P> {
 	assertProducerOwnedEventFields(type, options);
 	const eventId = options?.eventId ?? eventIdFactory();
@@ -741,12 +757,12 @@ function mintDomainEvent<T extends string, P>(
 		// object across events, would freeze the caller's objects in place;
 		// the next mutation then throws far away from the cause. Same
 		// ownership contract as `vo()` and the occurredAt copy.
-		payload: cloneOwnedEventData(payload as P, "payload"),
+		payload: cloneOwnedEventData(payload as P, "payload", operation),
 		// A caller-supplied occurredAt and a factory reading are both copied
 		// before the event is frozen, so neither aliases caller-owned state.
 		occurredAt,
 		schemaVersion,
-		metadata: cloneOwnedEventData(options?.metadata, "metadata"),
+		metadata: cloneOwnedEventData(options?.metadata, "metadata", operation),
 	};
 	// Deep-freeze so a mutating subscriber cannot poison subsequent
 	// handlers: events are facts of the past and must be immutable
@@ -838,17 +854,21 @@ function readEventClock(clock: ClockFactory): Date {
  * are not carried over; a class instance would silently lose its
  * prototype, which the plain-data contract already rules out.
  */
-function cloneOwnedEventData<T>(value: T, field: "payload" | "metadata"): T {
+function cloneOwnedEventData<T>(
+	value: T,
+	field: "payload" | "metadata",
+	operation: string,
+): T {
 	if (typeof value === "function") {
 		throw new TypeError(
-			`createDomainEvent: ${field} must not be a function: domain events are plain data`,
+			`${operation}: ${field} must not be a function: domain events are plain data`,
 		);
 	}
 	// Metadata is an object or absent; a null from a JSON envelope would
 	// mint and then fail every metadata read far from the producer.
 	if (value === null && field === "metadata") {
 		throw new TypeError(
-			"createDomainEvent: metadata must be an object or undefined; received null",
+			`${operation}: metadata must be an object or undefined; received null`,
 		);
 	}
 	if (value === null || typeof value !== "object") {
@@ -861,24 +881,28 @@ function cloneOwnedEventData<T>(value: T, field: "payload" | "metadata"): T {
 		value,
 		field === "payload" ? "Event payload" : "Event metadata",
 	);
-	// Binary buffers are rejected BEFORE the clone: freezing cannot make
-	// them immutable (the spec forbids freezing a view with elements, and
-	// a frozen view still shares its mutable buffer), so accepting them
-	// would break the mint guarantee "minted implies deeply frozen". They
-	// do not survive JSON either, the wire discipline events already
-	// document; encode binary as a string (base64/hex) or store it
-	// outside the event and reference it.
-	assertStorableEventData(value, field);
+	let clone: T;
 	try {
-		return structuredClone(value);
+		clone = structuredClone(value);
 	} catch (cause) {
 		throw new TypeError(
-			`createDomainEvent: ${field} must be plain, structured-cloneable data ` +
+			`${operation}: ${field} must be plain, structured-cloneable data ` +
 				`(no functions, Promises, or WeakMap/WeakSet values): domain events ` +
 				`are plain data`,
 			{ cause },
 		);
 	}
+	// The checks run on the clone. It has no accessor, no own iterator, and
+	// no class prototype, so the checks run no caller code. A binary buffer
+	// stays mutable under freezing, which would break the mint guarantee
+	// "minted implies deeply frozen", and JSON does not keep it.
+	assertNoBinaryData(clone, field, operation);
+	// The in-memory event store copies events with the same walk, so an
+	// event that the mint accepts is one that the store accepts. The walk
+	// rejects what the clone keeps but plain data cannot hold, for example
+	// an Error or a host object such as a File.
+	assertDetachableState(clone, `${operation}: ${field}`);
+	return clone;
 }
 
 function isBinaryData(value: object): boolean {
@@ -891,59 +915,47 @@ function isBinaryData(value: object): boolean {
 }
 
 /**
- * Walks caller-supplied event data and rejects two kinds of values
- * anywhere in the graph. A binary buffer (TypedArray, DataView,
- * ArrayBuffer, SharedArrayBuffer) is mutable by construction, so the
- * deep-freeze that backs the mint guarantee cannot cover it. An Error
- * survives the structured clone but not JSON, and an event store that
- * keeps only plain data rejects it. Runs before the structured clone,
- * on the small plain-data graphs events are documented to carry.
+ * Walks the cloned event data and rejects binary buffers anywhere in the
+ * graph (TypedArray, DataView, ArrayBuffer, SharedArrayBuffer). Runs on the
+ * small plain-data graphs events are documented to carry.
  */
-function assertStorableEventData(
+function assertNoBinaryData(
 	value: unknown,
 	field: "payload" | "metadata",
+	operation: string,
 	visited = new WeakSet<object>(),
 ): void {
 	if (value === null || typeof value !== "object") return;
 	if (isBinaryData(value)) {
 		throw new TypeError(
-			`createDomainEvent: ${field} must not contain binary buffers ` +
+			`${operation}: ${field} must not contain binary buffers ` +
 				`(TypedArray, DataView, ArrayBuffer, SharedArrayBuffer): they stay ` +
 				`mutable under freezing and do not survive JSON. Encode binary as ` +
 				`a string (base64/hex) or store it outside the event.`,
-		);
-	}
-	if (
-		value instanceof Error ||
-		Object.prototype.toString.call(value) === "[object Error]"
-	) {
-		throw new TypeError(
-			`createDomainEvent: ${field} must not contain an Error: an event ` +
-				`stores facts as plain data, and an Error does not survive JSON. ` +
-				`Map it to plain data, for example its message and code.`,
 		);
 	}
 	if (visited.has(value)) return;
 	visited.add(value);
 	if (value instanceof Map) {
 		for (const [k, v] of value) {
-			assertStorableEventData(k, field, visited);
-			assertStorableEventData(v, field, visited);
+			assertNoBinaryData(k, field, operation, visited);
+			assertNoBinaryData(v, field, operation, visited);
 		}
 		return;
 	}
 	if (value instanceof Set) {
-		for (const v of value) assertStorableEventData(v, field, visited);
+		for (const v of value) assertNoBinaryData(v, field, operation, visited);
 		return;
 	}
 	if (Array.isArray(value)) {
-		for (const v of value) assertStorableEventData(v, field, visited);
+		for (const v of value) assertNoBinaryData(v, field, operation, visited);
 		return;
 	}
 	for (const key of Object.keys(value)) {
-		assertStorableEventData(
+		assertNoBinaryData(
 			(value as Record<string, unknown>)[key],
 			field,
+			operation,
 			visited,
 		);
 	}
