@@ -167,13 +167,14 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 		key: string,
 		fingerprint: string,
 	): Promise<IdempotencyClaim> {
-		// The clock and the token factory are callbacks of the caller and can
-		// change the store. claim reads the clock before the store state, and
-		// it asks the factory only when it is about to create a claim. It then
-		// decides again, so a change by the factory meets every check.
+		// The clock and the token factory come from the store options and can
+		// run code that changes the store. claim reads the clock once, before
+		// the store state, and it asks the factory only when it is about to
+		// create a claim. It then decides again, so a change by the factory
+		// meets every check.
+		const now = this.nowMs();
 		let tokenPart: string | undefined;
 		for (;;) {
-			const now = this.nowMs();
 			const existing = this.entries.get(key);
 			if (existing === undefined) {
 				if (
@@ -311,8 +312,8 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 				"reconcile decision must be committed or not-committed; uncertainty must leave the record untouched",
 			);
 		}
-		// The clock is a callback of the caller and can change the store, so
-		// reconcile reads it before the store state.
+		// The clock comes from the store options and can run code that changes
+		// the store, so reconcile reads it before the store state.
 		const now = this.nowMs();
 		const existing = this.entries.get(key);
 		if (

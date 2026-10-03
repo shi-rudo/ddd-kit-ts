@@ -223,6 +223,40 @@ describe("staged idempotency reconciliation", () => {
 		expect(store.size).toBe(0);
 	});
 
+	it("keeps a claim that a clock callback made while not-committed was reconciled", async () => {
+		const clock = mutableClock();
+		let onRead: (() => void) | undefined;
+		const store = new InMemoryIdempotencyStore<undefined>({
+			clock: () => {
+				const callback = onRead;
+				onRead = undefined;
+				callback?.();
+				return clock.now();
+			},
+			claimTokenFactory: tokenFactory(),
+			leaseDurationMs: 100,
+			renewAfterMs: 40,
+		});
+		const claim = claimedHandle(await store.claim(undefined, "key", "fp"));
+		await store.complete(undefined, claim, { orderId: "o-1" });
+		clock.advance(101);
+		const receipt = reconciliationReceipt(
+			await store.claim(undefined, "key", "fp"),
+		);
+		let fresh: Promise<unknown> | undefined;
+		onRead = () => {
+			fresh = store
+				.reconcile(receipt, "not-committed")
+				.then(() => store.claim(undefined, "key", "fp"));
+		};
+
+		await expect(
+			store.reconcile(receipt, "not-committed"),
+		).rejects.toBeInstanceOf(IdempotencyClaimLostError);
+		const freshClaim = claimedHandle(await fresh);
+		await expect(store.renew(freshClaim)).resolves.toBeDefined();
+	});
+
 	it("reads a reconciliation receipt once", async () => {
 		const clock = mutableClock();
 		const store = leasedStore(clock);
