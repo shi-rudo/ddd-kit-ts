@@ -386,13 +386,14 @@ immutable. Run one kit version per process during a cutover.
 
 ### Fixed
 
-- `InMemoryEventStore.append` writes all of a batch or nothing. A batch with
-  an event that `structuredClone` cannot copy rejects with a `TypeError` that
-  names the event and the stream, and it writes nothing. Before, the store
-  kept the events before that event, the `maxEvents` capacity did not count
-  them, and a new stream existed even with no event in it. The store reads
-  the expected version once and checks it again after the copy, so a getter
-  on an event or on the options cannot bypass the version check.
+- `InMemoryEventStore.append` writes all of a batch or nothing, and it stores
+  only plain data. It copies each event with the kit's state detachment: an
+  event with a function, a class instance, or an accessor in it rejects with
+  a `TypeError` that names the event index and the stream, before any
+  accessor runs. Before, the store dropped the prototype of a class instance
+  without a word, ran accessors, and could keep part of a failed batch. It
+  reads its arguments once, so a getter on them cannot bypass the version
+  check.
 - `UnitOfWork.run` reports a failed rollback as `RollbackError` also when a
   step after the work failed inside the transaction, for example the outbox
   write. Before, it reported a `CommitError` whose cause was the rollback

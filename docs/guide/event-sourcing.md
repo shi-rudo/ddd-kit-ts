@@ -359,7 +359,9 @@ A database adapter must also reject duplicate or non-contiguous persisted
 positions rather than silently folding a truncated stream.
 
 `InMemoryEventStore` is the reference implementation for finite-lifetime tests
-and demos. It is memory-only. It rolls back only when you register it with an
+and demos. It is memory-only. It stores a detached copy of each event and
+rejects an event that is not plain data, for example one with a class instance
+in its payload. It rolls back only when you register it with an
 `InMemoryTransactionScope`; see
 [In-memory transactions](./unit-of-work.md#in-memory-transactions). Without
 options, its streams and events are unbounded. A
