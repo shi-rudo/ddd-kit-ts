@@ -124,9 +124,13 @@ type DispatchedEventReceipt = {
  * immutable. Only this in-memory adapter may move a still-pending event to
  * another aggregate version. Without an `InMemoryTransactionScope`, it keeps
  * the first add of a rolled-back attempt. Dead-lettered and acknowledged
- * retries must match the complete original candidate receipt. Reusing an `eventId` for another source or commit position
- * throws {@link EventHarvestError} while the pending, dead-letter, or bounded
- * dispatched receipt still proves the collision. Insertion order is preserved:
+ * retries must match the complete original candidate receipt. Reusing an
+ * `eventId` for another source or commit position throws
+ * {@link EventHarvestError} while the pending, dead-letter, or bounded
+ * dispatched receipt still proves the collision. `add` also throws
+ * {@link EventHarvestError} for a candidate whose event has no own data
+ * property `eventId` or `type`, or whose source or position fields have the
+ * wrong type. Insertion order is preserved:
  * `getPending` returns records in commit order, as the port contract requires.
  *
  * Dispatch tracking: `markFailed` increments the record's attempt count
@@ -240,14 +244,18 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 	}
 
 	async add(events: ReadonlyArray<EventCommitCandidate<Evt>>): Promise<void> {
+		// add reads each candidate once, here, so no getter of the caller runs
+		// between a check and a write below. A Proxy event still runs its
+		// traps on each read of its eventId.
+		const batch = Array.from(events, ownCandidate);
 		// Prove identity/receipt and source-position consistency for the whole input
 		// before mutating pending records or source heads. Otherwise a conflict later
 		// in one add() call could reject only after its earlier prefix had leaked.
-		const headRetries = this.retriesAtSourceHead(events);
-		this.assertBatchEventReceiptIntegrity(events);
-		this.assertBatchPositionIntegrity(events, headRetries);
-		this.assertCapacity(events, headRetries);
-		for (const message of events) {
+		const headRetries = this.retriesAtSourceHead(batch);
+		this.assertBatchEventReceiptIntegrity(batch);
+		this.assertBatchPositionIntegrity(batch, headRetries);
+		this.assertCapacity(batch, headRetries);
+		for (const message of batch) {
 			const { event, source, position } = message;
 			if (headRetries.has(event.eventId)) continue;
 			const dispatchedReceipt = this.dispatchedEventIds.get(event.eventId);
@@ -419,7 +427,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 		// inside the loop could evict one that a later event of this batch
 		// needed. Without the receipt, the same event would read as stale
 		// once the head moves on.
-		for (const { event, source, position } of events) {
+		for (const { event, source, position } of batch) {
 			if (headRetries.has(event.eventId)) {
 				this.rememberDispatched(event.eventId, source, position);
 			}
@@ -892,6 +900,49 @@ function assertReceiptShape(
 			"An exact redelivery must keep its source position immutable.",
 		event.type,
 	);
+}
+
+/**
+ * The fields of a candidate that the outbox reads, read once and checked.
+ * The function copies the source and the position. The event stays the
+ * caller's object, because a dispatcher gets the event that the commit
+ * recorded. The outbox reads only `eventId` and `type` from it, so these
+ * must be own data properties: a read of them then runs no getter.
+ */
+function ownCandidate<Evt extends AnyDomainEvent>(
+	candidate: EventCommitCandidate<Evt>,
+	index: number,
+): EventCommitCandidate<Evt> {
+	const { event, source, position } = candidate;
+	const reject = (problem: string): never => {
+		throw new EventHarvestError(
+			`InMemoryOutbox rejected the candidate at index ${index}: ${problem}. ` +
+				"Add the event that the aggregate recorded.",
+		);
+	};
+	for (const field of ["eventId", "type"] as const) {
+		const descriptor = Object.getOwnPropertyDescriptor(event, field);
+		if (descriptor === undefined || !("value" in descriptor)) {
+			reject(`the ${field} of its event is not an own data property`);
+		}
+	}
+	const { aggregateId, aggregateType } = source;
+	if (typeof aggregateId !== "string" || typeof aggregateType !== "string") {
+		reject("its source must have a string aggregateId and aggregateType");
+	}
+	const { aggregateVersion, commitSequence, commitSize } = position;
+	if (
+		typeof aggregateVersion !== "number" ||
+		typeof commitSequence !== "number" ||
+		typeof commitSize !== "number"
+	) {
+		reject("its position must have number fields");
+	}
+	return {
+		event,
+		source: Object.freeze({ aggregateId, aggregateType }),
+		position: Object.freeze({ aggregateVersion, commitSequence, commitSize }),
+	};
 }
 
 /** Replaces the entries of a map with recorded ones, in their order. */

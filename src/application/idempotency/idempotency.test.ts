@@ -467,6 +467,42 @@ describe("withIdempotentCommit with an InMemoryTransactionScope", () => {
 });
 
 describe("InMemoryIdempotencyStore", () => {
+	it("reads a claim handle once per call", async () => {
+		const store = new InMemoryIdempotencyStore<undefined>();
+		const handle = await claimHandle(store, "k", "fp");
+		let keyReads = 0;
+		const counted = {
+			get key() {
+				keyReads += 1;
+				return handle.key;
+			},
+			token: handle.token,
+		};
+
+		await store.renew(counted);
+		await store.complete(undefined, counted, "done");
+		await store.confirm(counted);
+		await store.abandon(counted);
+
+		expect(keyReads).toBe(4);
+	});
+
+	it("does not stage an outcome whose getter abandoned the claim", async () => {
+		const store = new InMemoryIdempotencyStore<undefined>();
+		const handle = await claimHandle(store, "k", "fp");
+		const outcome = {
+			get total() {
+				void store.abandon(handle);
+				return 42;
+			},
+		};
+
+		await expect(
+			store.complete(undefined, handle, outcome),
+		).rejects.toBeInstanceOf(IdempotencyCompletionWithoutClaimError);
+		expect(store.size).toBe(0);
+	});
+
 	it("returns a claim to pending after a rolled-back complete", async () => {
 		const store = new InMemoryIdempotencyStore<undefined>();
 		const scope = new InMemoryTransactionScope([store]);

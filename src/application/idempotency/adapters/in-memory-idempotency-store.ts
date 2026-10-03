@@ -219,52 +219,59 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 		claim: IdempotencyClaimHandle,
 		outcome: unknown,
 	): Promise<void> {
+		// complete reads the caller's claim and copies the outcome once, here.
+		// The copy can run caller code, for example a getter that abandons the
+		// claim, so it comes before every read of the store state.
+		const { key, token } = claim;
+		const owned = structuredClone(outcome);
 		const now = this.nowMs();
-		const existing = this.entries.get(claim.key);
+		const existing = this.entries.get(key);
 		if (existing === undefined) {
-			throw new IdempotencyCompletionWithoutClaimError(claim.key);
+			throw new IdempotencyCompletionWithoutClaimError(key);
 		}
 		if (
 			existing.status !== "pending" ||
-			existing.token !== claim.token ||
+			existing.token !== token ||
 			now >= existing.expiresAtMs
 		) {
-			throw this.claimLost(claim);
+			throw this.claimLost({ key, token });
 		}
 		const expiresAtMs = now + this.leaseDurationMs;
 		this.lease(expiresAtMs);
-		this.writeInTransaction(claim.key, {
+		this.writeInTransaction(key, {
 			fingerprint: existing.fingerprint,
 			status: "staged",
 			token: existing.token,
 			expiresAtMs,
-			outcome: structuredClone(outcome),
+			outcome: owned,
 		});
 	}
 
 	async renew(
 		claim: IdempotencyClaimHandle,
 	): Promise<IdempotencyLease | undefined> {
+		const { key, token } = claim;
 		const now = this.nowMs();
-		const existing = this.entries.get(claim.key);
+		const existing = this.entries.get(key);
 		if (
 			existing === undefined ||
 			existing.status === "confirmed" ||
-			existing.token !== claim.token ||
+			existing.token !== token ||
 			now >= existing.expiresAtMs
 		) {
-			throw this.claimLost(claim);
+			throw this.claimLost({ key, token });
 		}
 		const expiresAtMs = now + this.leaseDurationMs;
 		const lease = this.lease(expiresAtMs);
-		this.entries.set(claim.key, { ...existing, expiresAtMs });
+		this.entries.set(key, { ...existing, expiresAtMs });
 		return lease;
 	}
 
 	async confirm(claim: IdempotencyClaimHandle): Promise<void> {
-		const existing = this.entries.get(claim.key);
-		if (existing?.status === "staged" && existing.token === claim.token) {
-			this.entries.set(claim.key, {
+		const { key, token } = claim;
+		const existing = this.entries.get(key);
+		if (existing?.status === "staged" && existing.token === token) {
+			this.entries.set(key, {
 				fingerprint: existing.fingerprint,
 				status: "confirmed",
 				token: existing.token,
@@ -274,13 +281,14 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 	}
 
 	async abandon(claim: IdempotencyClaimHandle): Promise<void> {
-		const existing = this.entries.get(claim.key);
+		const { key, token } = claim;
+		const existing = this.entries.get(key);
 		if (
 			existing !== undefined &&
 			existing.status !== "confirmed" &&
-			existing.token === claim.token
+			existing.token === token
 		) {
-			this.entries.delete(claim.key);
+			this.entries.delete(key);
 		}
 	}
 
@@ -288,28 +296,28 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 		reconciliation: IdempotencyReconciliation,
 		decision: Exclude<IdempotencyReconciliationDecision, "unknown">,
 	): Promise<void> {
+		const { key, token, fingerprint, expiredAt } = reconciliation;
 		if (decision !== "committed" && decision !== "not-committed") {
 			throw new TypeError(
 				"reconcile decision must be committed or not-committed; uncertainty must leave the record untouched",
 			);
 		}
-		const existing = this.entries.get(reconciliation.key);
+		const existing = this.entries.get(key);
 		if (
 			existing === undefined ||
 			existing.status !== "staged" ||
-			existing.token !== reconciliation.token ||
-			existing.fingerprint !== reconciliation.fingerprint ||
-			new Date(existing.expiresAtMs).toISOString() !==
-				reconciliation.expiredAt ||
+			existing.token !== token ||
+			existing.fingerprint !== fingerprint ||
+			new Date(existing.expiresAtMs).toISOString() !== expiredAt ||
 			this.nowMs() < existing.expiresAtMs
 		) {
 			throw new IdempotencyClaimLostError({
-				key: reconciliation.key,
-				token: reconciliation.token,
+				key,
+				token,
 			});
 		}
 		if (decision === "committed") {
-			this.entries.set(reconciliation.key, {
+			this.entries.set(key, {
 				fingerprint: existing.fingerprint,
 				status: "confirmed",
 				token: existing.token,
@@ -317,7 +325,7 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 			});
 			return;
 		}
-		this.entries.delete(reconciliation.key);
+		this.entries.delete(key);
 	}
 
 	/** Test hook: number of stored records in any state. */

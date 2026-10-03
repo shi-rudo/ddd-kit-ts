@@ -386,6 +386,14 @@ immutable. Run one kit version per process during a cutover.
 
 ### Fixed
 
+- The in-memory deadline, checkpoint, idempotency, and outbox stores read
+  and copy the caller's data once, before they read their own state. A
+  getter in a payload, a checkpoint, an outcome, or a candidate can no
+  longer run between a check and a write. It therefore cannot push a store
+  past its capacity or revive an abandoned claim.
+- `InMemoryOutbox.add` rejects a candidate with `EventHarvestError` when the
+  `eventId` or `type` of its event is missing, an accessor, or inherited, or
+  when its source or position fields have the wrong type.
 - `InMemoryEventStore.append` writes all of a batch or nothing. A batch with
   an event that `structuredClone` cannot copy rejects with a `TypeError` that
   names the event and the stream, and it writes nothing. Before, the store

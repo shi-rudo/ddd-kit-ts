@@ -137,7 +137,15 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 		dueAt: Date;
 		payload: TPayload;
 	}): Promise<void> {
-		const deadlineAddress = address(deadline.scope, deadline.key);
+		// schedule reads and copies the caller's deadline once, here. The copy
+		// can run caller code, for example a getter in the payload, so it
+		// comes before every read of the store state. A payload that cannot be
+		// cloned rejects before any write.
+		const scope = deadline.scope;
+		const key = deadline.key;
+		const dueAt = new Date(deadline.dueAt);
+		const payload = structuredClone(deadline.payload);
+		const deadlineAddress = address(scope, key);
 		if (
 			!this.pending.has(deadlineAddress) &&
 			this.maxRecords !== undefined &&
@@ -151,18 +159,15 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 				attempted: 1,
 			});
 		}
-		// Copied before the sequence and the committed version change: a
-		// payload that cannot be cloned must reject before any write.
-		const payload = structuredClone(deadline.payload);
 		const sequence = this.nextSequence++;
 		// Replacing an occupied address gets a FRESH incarnation: a late
 		// ack or failure report against the old deliveryId must not touch
 		// the successor.
 		const incarnation: StoredDeadline<TPayload> = {
 			deliveryId: `deadline-${sequence}`,
-			scope: deadline.scope,
-			key: deadline.key,
-			dueAt: new Date(deadline.dueAt),
+			scope,
+			key,
+			dueAt,
 			payload,
 			attempts: 0,
 			sequence,
