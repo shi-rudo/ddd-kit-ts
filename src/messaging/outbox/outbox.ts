@@ -244,9 +244,8 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 	}
 
 	async add(events: ReadonlyArray<EventCommitCandidate<Evt>>): Promise<void> {
-		// add reads each candidate once, here, so no getter of the caller runs
-		// between a check and a write below. A Proxy event still runs its
-		// traps on each read of its eventId.
+		// Copy first: the copy can run caller code. A Proxy event still runs
+		// its traps on each read of its eventId.
 		const batch = Array.from(events, ownCandidate);
 		// Prove identity/receipt and source-position consistency for the whole input
 		// before mutating pending records or source heads. Otherwise a conflict later

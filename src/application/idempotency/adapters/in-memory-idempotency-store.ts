@@ -219,9 +219,7 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 		claim: IdempotencyClaimHandle,
 		outcome: unknown,
 	): Promise<void> {
-		// complete reads the caller's claim and copies the outcome once, here.
-		// The copy can run caller code, for example a getter that abandons the
-		// claim, so it comes before every read of the store state.
+		// Copy first: the copy can run caller code.
 		const { key, token } = claim;
 		const owned = structuredClone(outcome);
 		const now = this.nowMs();
