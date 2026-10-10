@@ -348,9 +348,12 @@ workloads need a durable adapter with an explicit source-head retention policy
 that keeps ended heads, and a transactional unique key on `eventId`.
 
 `add` reads each candidate once, before it reads its own state. It rejects a
-candidate with `EventHarvestError` when the `eventId` or `type` of the event is
-missing, an accessor, or inherited, or when the source or position fields have
-the wrong type. Events from `createDomainEvent` pass.
+malformed candidate with `EventHarvestError`: a part that is not an object, an
+`eventId` or `type` that is not an own string data property of the event, a
+source field that is not a string, or a position that is not a valid commit
+position. A valid position has integer fields, an `aggregateVersion` of at
+least 0, and a `commitSequence` below `commitSize`. The candidates that
+`withCommit` builds pass.
 
 On its own, `InMemoryOutbox` cannot see a rollback. If `endEventSources` ends
 a source inside a transaction that rolls back, the source stays ended. The

@@ -124,13 +124,13 @@ type DispatchedEventReceipt = {
  * immutable. Only this in-memory adapter may move a still-pending event to
  * another aggregate version. Without an `InMemoryTransactionScope`, it keeps
  * the first add of a rolled-back attempt. Dead-lettered and acknowledged
- * retries must match the complete original candidate receipt. Reusing an
- * `eventId` for another source or commit position throws
- * {@link EventHarvestError} while the pending, dead-letter, or bounded
+ * retries must match the complete original candidate receipt. Reusing an `eventId` for another source or commit position
+ * throws {@link EventHarvestError} while the pending, dead-letter, or bounded
  * dispatched receipt still proves the collision. `add` also throws
- * {@link EventHarvestError} for a candidate whose event has no own data
- * property `eventId` or `type`, or whose source or position fields have the
- * wrong type. Insertion order is preserved:
+ * {@link EventHarvestError} for a malformed candidate: a part that is not an
+ * object, an `eventId` or `type` that is not an own string data property, a
+ * source field that is not a string, or a position that is not a valid
+ * commit position. Insertion order is preserved:
  * `getPending` returns records in commit order, as the port contract requires.
  *
  * Dispatch tracking: `markFailed` increments the record's attempt count
@@ -913,36 +913,103 @@ function ownCandidate<Evt extends AnyDomainEvent>(
 	candidate: EventCommitCandidate<Evt>,
 	index: number,
 ): EventCommitCandidate<Evt> {
-	const { event, source, position } = candidate;
-	const reject = (problem: string): never => {
-		throw new EventHarvestError(
-			`InMemoryOutbox rejected the candidate at index ${index}: ${problem}. ` +
-				"Add the event that the aggregate recorded.",
+	let subject = `the candidate at index ${index}`;
+	let eventType: string | undefined;
+	const rejection = (field: string, expected: string, observed: string) =>
+		new EventHarvestError(
+			`InMemoryOutbox rejected ${subject}: ${field} must be ${expected}, ` +
+				`but it is ${observed}. Pass the candidates that withCommit builds.`,
+			eventType,
 		);
-	};
-	for (const field of ["eventId", "type"] as const) {
-		const descriptor = Object.getOwnPropertyDescriptor(event, field);
-		if (descriptor === undefined || !("value" in descriptor)) {
-			reject(`the ${field} of its event is not an own data property`);
+	if (typeof candidate !== "object" || candidate === null) {
+		throw rejection("the candidate", "an object", describeRejected(candidate));
+	}
+	const { event, source, position } = candidate;
+	if (typeof event !== "object" || event === null) {
+		throw rejection("event", "an object", describeRejected(event));
+	}
+	const eventId = Object.getOwnPropertyDescriptor(event, "eventId");
+	const type = Object.getOwnPropertyDescriptor(event, "type");
+	if (typeof type?.value === "string") eventType = type.value;
+	if (typeof eventId?.value === "string") {
+		subject = `event "${eventId.value}" (the candidate at index ${index})`;
+	}
+	for (const [field, descriptor] of [
+		["event.eventId", eventId],
+		["event.type", type],
+	] as const) {
+		if (descriptor === undefined) {
+			throw rejection(field, "an own data property", "missing");
+		}
+		if (!("value" in descriptor)) {
+			throw rejection(field, "an own data property", "an accessor");
+		}
+		if (typeof descriptor.value !== "string") {
+			throw rejection(field, "a string", describeRejected(descriptor.value));
 		}
 	}
+	if (typeof source !== "object" || source === null) {
+		throw rejection("source", "an object", describeRejected(source));
+	}
 	const { aggregateId, aggregateType } = source;
-	if (typeof aggregateId !== "string" || typeof aggregateType !== "string") {
-		reject("its source must have a string aggregateId and aggregateType");
+	if (typeof aggregateType !== "string") {
+		throw rejection(
+			"source.aggregateType",
+			"a string",
+			describeRejected(aggregateType),
+		);
+	}
+	if (typeof aggregateId !== "string") {
+		throw rejection(
+			"source.aggregateId",
+			"a string",
+			describeRejected(aggregateId),
+		);
+	}
+	if (typeof position !== "object" || position === null) {
+		throw rejection("position", "an object", describeRejected(position));
 	}
 	const { aggregateVersion, commitSequence, commitSize } = position;
+	if (!Number.isSafeInteger(aggregateVersion) || aggregateVersion < 0) {
+		throw rejection(
+			"position.aggregateVersion",
+			"an integer >= 0",
+			describeRejected(aggregateVersion),
+		);
+	}
+	if (!Number.isSafeInteger(commitSize) || commitSize < 1) {
+		throw rejection(
+			"position.commitSize",
+			"an integer >= 1",
+			describeRejected(commitSize),
+		);
+	}
 	if (
-		typeof aggregateVersion !== "number" ||
-		typeof commitSequence !== "number" ||
-		typeof commitSize !== "number"
+		!Number.isSafeInteger(commitSequence) ||
+		commitSequence < 0 ||
+		commitSequence >= commitSize
 	) {
-		reject("its position must have number fields");
+		throw rejection(
+			"position.commitSequence",
+			`an integer from 0 to ${commitSize - 1}`,
+			describeRejected(commitSequence),
+		);
 	}
 	return {
 		event,
 		source: Object.freeze({ aggregateId, aggregateType }),
 		position: Object.freeze({ aggregateVersion, commitSequence, commitSize }),
 	};
+}
+
+/** Describes a rejected value. It does not call `toString` of an object. */
+function describeRejected(value: unknown): string {
+	if (typeof value === "string") return JSON.stringify(value);
+	if (value === null || value === undefined) return String(value);
+	if (typeof value === "object") return "an object";
+	if (typeof value === "function") return "a function";
+	if (typeof value === "symbol") return "a symbol";
+	return `${typeof value} ${String(value)}`;
 }
 
 /** Replaces the entries of a map with recorded ones, in their order. */
