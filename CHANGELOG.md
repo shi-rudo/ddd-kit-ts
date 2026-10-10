@@ -386,6 +386,13 @@ immutable. Run one kit version per process during a cutover.
 
 ### Fixed
 
+- `detachState` and the other plain-data checks of the kit accept a
+  structured clone in the Vercel Edge runtime. That runtime replaces the
+  global `Object`, so its source text no longer names `Object`, while a
+  clone keeps the constructor of the host. Before, the checks took every
+  cloned plain object for a class instance, and a snapshot restore from
+  `InMemorySnapshotStore` failed there. The edge smoke now checks a clone
+  and an event-store append.
 - `UnitOfWork.run` also closes the repository facades of an attempt whose
   step after the work failed, for example the outbox write, before a retry
   waits. A leaked write then gets `TransactionClosedError`. Before, it got

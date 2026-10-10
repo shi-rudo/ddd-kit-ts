@@ -1,6 +1,8 @@
 import {
 	CommandBus,
 	createDomainEventFactory,
+	detachState,
+	InMemoryEventStore,
 	recordPendingEvents,
 	StateStoredAggregate,
 } from "@shirudo/ddd-kit";
@@ -61,6 +63,17 @@ export async function runEdgeRuntimeSmoke(runtime) {
 		Object.isFrozen(orderView.pendingEvent.payload),
 		"domain-event payload is not frozen",
 	);
+
+	// A runtime can return a structured clone from another realm. The plain
+	// data check of the kit must accept it, and the event store must accept
+	// the event that the kit minted.
+	const detached = detachState(structuredClone({ line: { sku: "a", qty: 1 } }));
+	assert(detached.line.qty === 1, "detachState rejected a structured clone");
+	const events = new InMemoryEventStore();
+	const stream = { aggregateType: "EdgeOrder", aggregateId: order.id };
+	await events.append(stream, [orderView.pendingEvent], { expectedVersion: 0 });
+	const history = await events.readStream(stream, { limit: 10 });
+	assert(history.lastVersion === 1, "event store did not keep the event");
 
 	const bus = new CommandBus();
 	bus.register("ReadOrder", async () => ok(orderView));
