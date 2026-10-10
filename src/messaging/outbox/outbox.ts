@@ -300,7 +300,6 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				});
 				continue;
 			}
-			const ownedSource = Object.freeze({ ...source });
 			const sourceKey = encodeAggregateIdentity(source);
 			const sourceCursor = this.sourceCursors.get(sourceKey);
 			let staleHeadVersion: number | undefined;
@@ -410,7 +409,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				// never happened. Attempts belong to delivery, so they survive.
 				this.recordCommittedVersion(event.eventId);
 				existing.event = event;
-				existing.source = ownedSource;
+				existing.source = source;
 				existing.position = ownedPosition;
 				continue;
 			}
@@ -418,7 +417,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 			this.pending.set(event.eventId, {
 				dispatchId: event.eventId,
 				event,
-				source: ownedSource,
+				source,
 				position: ownedPosition,
 				attempts: 0,
 			});
