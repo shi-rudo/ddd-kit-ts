@@ -6,9 +6,11 @@ import type { AnyDomainEvent } from "../../../domain/event/domain-event";
 import {
 	ConcurrencyConflictError,
 	describeAggregateIdentity,
+	detachAggregateIdentity,
 	InMemoryCapacityExceededError,
 } from "../../../errors/kit-errors";
 import { abortReason } from "../../../internal/async/abort";
+import { detachState } from "../../../internal/structural/detach-state";
 import { assertPositiveSafeInteger } from "../../../internal/validate";
 import type {
 	InMemoryTransaction,
@@ -29,21 +31,24 @@ export interface InMemoryEventStoreOptions {
 	readonly maxEvents?: number;
 }
 
+/**
+ * A copy of `event` that shares nothing with the caller. `detachState`
+ * rejects a value that a copy would lose or change, for example a function,
+ * a class instance, or an accessor, and it runs no accessor. Its rejection
+ * names the event, and any other error passes unchanged.
+ */
 function copyForStorage<Evt>(
 	event: Evt,
 	index: number,
 	stream: AggregateIdentity,
 ): Evt {
-	try {
-		return structuredClone(event);
-	} catch (cause) {
-		throw new TypeError(
-			`InMemoryEventStore.append: event ${index} of stream ` +
-				`${describeAggregateIdentity(stream)} must be plain, ` +
-				"structured-cloneable data: domain events are plain data",
-			{ cause },
-		);
+	const subject =
+		`InMemoryEventStore.append: the event at index ${index} of stream ` +
+		describeAggregateIdentity(stream);
+	if (event === null || typeof event !== "object") {
+		throw new TypeError(`${subject} is not an event object`);
 	}
+	return detachState(event, subject);
 }
 
 function assertStreamPosition(
@@ -132,21 +137,24 @@ export class InMemoryEventStore<Evt extends AnyDomainEvent>
 		events: ReadonlyArray<Evt>,
 		options: EventStoreAppendOptions,
 	): Promise<void> {
-		if (events.length === 0) return;
-		// Caller data is read once, before the first check, so a getter on it
-		// runs here and never between a check and the write.
+		// The arguments are read once, here. A getter on them runs before the
+		// first check, and a later change of the caller's batch or identity
+		// does not reach the checks, the write, or an error.
+		const batch = Array.from(events);
+		if (batch.length === 0) return;
+		const identity = detachAggregateIdentity(stream);
 		const expectedVersion = options.expectedVersion;
-		const key = encodeAggregateIdentity(stream);
+		const key = encodeAggregateIdentity(identity);
 		// A stale or oversized batch fails before the copy, without its cost.
-		this.existingStreamForAppend(stream, key, expectedVersion, events.length);
-		// The copy detaches stored history from the caller. It can run caller
-		// code, for example a getter on an event, so the checks run again
-		// after it, against the state that the write changes.
-		const owned = events.map((event, index) =>
-			copyForStorage(event, index, stream),
+		this.existingStreamForAppend(identity, key, expectedVersion, batch.length);
+		// The copy runs no accessor, but a Proxy in an event runs its traps.
+		// The checks therefore run again after the copy, against the state
+		// that the write changes.
+		const owned = batch.map((event, index) =>
+			copyForStorage(event, index, identity),
 		);
 		const existing = this.existingStreamForAppend(
-			stream,
+			identity,
 			key,
 			expectedVersion,
 			owned.length,
