@@ -104,7 +104,11 @@ immutable. Run one kit version per process during a cutover.
   [The aggregate decides; the shell records](docs/guide/migrating-to-v3.md#the-aggregate-decides-the-shell-records).
 - Events are readonly and minted. A recording path accepts only an event
   that a kit constructor minted and throws `UnmintedEventError` for a hand-built
-  object. `createDomainEvent` rejects binary buffers. `EventMetadata` fields
+  object. `createDomainEvent` rejects binary buffers. It checks its copy of
+  the payload and the metadata with the walk of `detachState`, the rule of
+  the in-memory event store, so it also rejects an `Error`, a host object
+  such as a `File`, and shared memory. A class instance or an accessor still
+  becomes plain data in the copy. `EventMetadata` fields
   are readonly. `DomainEvent` loses `aggregateVersion`; the commit envelope
   carries the position.
 - `Entity.state` is protected, and `IEntity<TId, TState>` is `IEntity<TId>`.

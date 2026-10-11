@@ -1,3 +1,5 @@
+// @ts-expect-error Node's VM exists in the test runtime; the package stays Node-type-free.
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vite-plus/test";
 import { HostileStateKeyError } from "../../errors/kit-errors";
 import {
@@ -1156,5 +1158,77 @@ describe("mergeMetadata", () => {
 
 	it("returns an empty object for no inputs", () => {
 		expect(mergeMetadata()).toEqual({});
+	});
+});
+
+describe("event data follows the rule of the in-memory event store", () => {
+	it("rejects an Error anywhere in the payload or the metadata", () => {
+		const failure = new RangeError("card declined");
+
+		expect(() => createDomainEvent("PaymentFailed", { failure })).toThrow(
+			TypeError,
+		);
+		expect(() =>
+			createDomainEvent("PaymentFailed", { attempts: [{ failure }] }),
+		).toThrow(TypeError);
+		expect(() =>
+			createDomainEvent("PaymentFailed", {
+				byAttempt: new Map([[1, failure]]),
+			}),
+		).toThrow(TypeError);
+		expect(() =>
+			createDomainEvent(
+				"PaymentFailed",
+				{ orderId: "o-1" },
+				{ metadata: { custom: { failure } } },
+			),
+		).toThrow(TypeError);
+	});
+
+	it("rejects an Error from another realm that hides its tag", () => {
+		const foreign = runInNewContext(
+			"(() => { const e = new Error('card declined'); Object.defineProperty(e, Symbol.toStringTag, { value: 'Decline' }); return e; })()",
+		);
+
+		expect(() =>
+			createDomainEvent("PaymentFailed", { failure: foreign }),
+		).toThrow(TypeError);
+	});
+
+	it("rejects a host object that the clone keeps", () => {
+		expect(() =>
+			createDomainEvent("DocumentAttached", {
+				file: new File(["%PDF"], "contract.pdf"),
+			}),
+		).toThrow(TypeError);
+		expect(() =>
+			createDomainEvent("DocumentAttached", {
+				problem: new DOMException("aborted", "AbortError"),
+			}),
+		).toThrow(TypeError);
+	});
+
+	it("accepts a plain record that only claims an Error tag", () => {
+		const record = { [Symbol.toStringTag]: "Error", code: "CARD_DECLINED" };
+
+		const event = createDomainEvent("PaymentFailed", { failure: record });
+
+		expect(event.payload).toEqual({ failure: { code: "CARD_DECLINED" } });
+	});
+
+	it("flattens a class instance without running its tag getter", () => {
+		let tagReads = 0;
+		class Amount {
+			readonly value = 5;
+			get [Symbol.toStringTag]() {
+				tagReads += 1;
+				return "Amount";
+			}
+		}
+
+		const event = createDomainEvent("Paid", { amount: new Amount() });
+
+		expect(event.payload).toEqual({ amount: { value: 5 } });
+		expect(tagReads).toBe(0);
 	});
 });

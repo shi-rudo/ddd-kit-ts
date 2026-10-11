@@ -45,6 +45,19 @@ export function detachState<T>(state: T, subject = "detachState: state"): T {
 	}
 }
 
+/**
+ * Throws the `TypeError` of {@link detachState} when `state` holds a value
+ * that a structured clone would lose or change, and copies nothing. A
+ * caller that has a clone already checks it with this, so the rule is the
+ * same as for {@link detachState}.
+ */
+export function assertDetachableState(
+	state: unknown,
+	subject = "detachState: state",
+): void {
+	assertDetachable(state, "", { seen: new WeakSet(), subject });
+}
+
 const INDEX_KEY = /^(0|[1-9]\d*)$/;
 const mapEntries = Map.prototype.entries;
 const setValues = Set.prototype.values;
