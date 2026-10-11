@@ -171,7 +171,10 @@ export class InMemoryProjectionCheckpointStore
 		identity: AggregateIdentity,
 		checkpoint: ProjectionCheckpoint,
 	): Promise<void> {
+		// Copy first: the copy can run caller code.
 		const identityKey = encodeAggregateIdentity(identity);
+		const { position, ...rest } = checkpoint;
+		const owned: ProjectionCheckpoint = { ...rest, position: { ...position } };
 		let perAggregate = this.checkpoints.get(projection);
 		const isNewCheckpoint = perAggregate?.has(identityKey) !== true;
 		if (
@@ -191,10 +194,7 @@ export class InMemoryProjectionCheckpointStore
 			perAggregate = new Map();
 			this.checkpoints.set(projection, perAggregate);
 		}
-		perAggregate.set(identityKey, {
-			...checkpoint,
-			position: { ...checkpoint.position },
-		});
+		perAggregate.set(identityKey, owned);
 		if (isNewCheckpoint) this.checkpointCount += 1;
 	}
 

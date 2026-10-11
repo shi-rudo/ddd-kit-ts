@@ -61,6 +61,59 @@ describe("InMemoryDeadlineStore capacity", () => {
 	);
 });
 
+describe("InMemoryDeadlineStore and caller code in a deadline", () => {
+	it("checks the capacity after a payload getter scheduled another deadline", async () => {
+		const store = new InMemoryDeadlineStore<unknown>({ maxRecords: 1 });
+		let inner: Promise<void> | undefined;
+		const payload = {
+			get note() {
+				inner ??= store.schedule({
+					scope: "orders",
+					key: "o-2",
+					dueAt,
+					payload: 2,
+				});
+				return "outer";
+			},
+		};
+
+		const outer = store.schedule({
+			scope: "orders",
+			key: "o-1",
+			dueAt,
+			payload,
+		});
+
+		await expect(outer).rejects.toBeInstanceOf(InMemoryCapacityExceededError);
+		await expect(inner).resolves.toBeUndefined();
+		expect(
+			(await store.due(dueAt, 10)).map((deadline) => deadline.key),
+		).toEqual(["o-2"]);
+	});
+
+	it("reads the address of a deadline once", async () => {
+		const store = new InMemoryDeadlineStore();
+		let scopeReads = 0;
+		let keyReads = 0;
+		const deadline = {
+			get scope() {
+				scopeReads += 1;
+				return "orders";
+			},
+			get key() {
+				keyReads += 1;
+				return "o-1";
+			},
+			dueAt,
+			payload: 1,
+		};
+
+		await store.schedule(deadline);
+
+		expect({ scopeReads, keyReads }).toEqual({ scopeReads: 1, keyReads: 1 });
+	});
+});
+
 describe("InMemoryDeadlineStore in an InMemoryTransactionScope", () => {
 	it("restores attempts and the pending state after a rolled-back dead-lettering", async () => {
 		const store = new InMemoryDeadlineStore({ maxDeliveryAttempts: 2 });

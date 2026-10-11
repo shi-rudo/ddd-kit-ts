@@ -190,6 +190,29 @@ describe("staged idempotency reconciliation", () => {
 		});
 	});
 
+	it("reads a reconciliation receipt once", async () => {
+		const clock = mutableClock();
+		const store = leasedStore(clock);
+		const claim = claimedHandle(await store.claim(undefined, "key", "fp"));
+		await store.complete(undefined, claim, { orderId: "o-1" });
+		clock.advance(101);
+		const receipt = reconciliationReceipt(
+			await store.claim(undefined, "key", "fp"),
+		);
+		let keyReads = 0;
+		const counted = {
+			...receipt,
+			get key() {
+				keyReads += 1;
+				return receipt.key;
+			},
+		};
+
+		await store.reconcile(counted, "committed");
+
+		expect(keyReads).toBe(1);
+	});
+
 	it("a not-committed decision releases the staged outcome for fresh execution", async () => {
 		const clock = mutableClock();
 		const store = leasedStore(clock);

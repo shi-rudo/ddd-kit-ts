@@ -390,6 +390,17 @@ immutable. Run one kit version per process during a cutover.
 
 ### Fixed
 
+- The in-memory deadline, checkpoint, idempotency, and outbox stores read
+  and copy the caller's data once, before they read their own state. A
+  getter in a payload, a checkpoint, an outcome, or a candidate can no
+  longer run between a check and a write. It therefore cannot push a store
+  past its capacity or revive an abandoned claim.
+- `InMemoryOutbox.add` rejects a malformed candidate with `EventHarvestError`:
+  a part that is not an object, an `eventId` or `type` that is not an own
+  string data property of the event, a source field that is not a string, or
+  a position that is not a valid commit position. The message names the
+  event, the field, and the value. Before, such a candidate could reach the
+  outbox state, and a `NaN` position broke the order of its source.
 - `detachState` and the other plain-data checks of the kit accept a
   structured clone in the Vercel Edge runtime. That runtime replaces the
   global `Object`, so its source text no longer names `Object`, while a

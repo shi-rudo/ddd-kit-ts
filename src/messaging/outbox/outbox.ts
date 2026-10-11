@@ -126,7 +126,11 @@ type DispatchedEventReceipt = {
  * the first add of a rolled-back attempt. Dead-lettered and acknowledged
  * retries must match the complete original candidate receipt. Reusing an `eventId` for another source or commit position
  * throws {@link EventHarvestError} while the pending, dead-letter, or bounded
- * dispatched receipt still proves the collision. Insertion order is preserved:
+ * dispatched receipt still proves the collision. `add` also throws
+ * {@link EventHarvestError} for a malformed candidate: a part that is not an
+ * object, an `eventId` or `type` that is not an own string data property, a
+ * source field that is not a string, or a position that is not a valid
+ * commit position. Insertion order is preserved:
  * `getPending` returns records in commit order, as the port contract requires.
  *
  * Dispatch tracking: `markFailed` increments the record's attempt count
@@ -240,14 +244,17 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 	}
 
 	async add(events: ReadonlyArray<EventCommitCandidate<Evt>>): Promise<void> {
+		// Copy first: the copy can run caller code. A Proxy event still runs
+		// its traps on each read of its eventId.
+		const batch = Array.from(events, ownCandidate);
 		// Prove identity/receipt and source-position consistency for the whole input
 		// before mutating pending records or source heads. Otherwise a conflict later
 		// in one add() call could reject only after its earlier prefix had leaked.
-		const headRetries = this.retriesAtSourceHead(events);
-		this.assertBatchEventReceiptIntegrity(events);
-		this.assertBatchPositionIntegrity(events, headRetries);
-		this.assertCapacity(events, headRetries);
-		for (const message of events) {
+		const headRetries = this.retriesAtSourceHead(batch);
+		this.assertBatchEventReceiptIntegrity(batch);
+		this.assertBatchPositionIntegrity(batch, headRetries);
+		this.assertCapacity(batch, headRetries);
+		for (const message of batch) {
 			const { event, source, position } = message;
 			if (headRetries.has(event.eventId)) continue;
 			const dispatchedReceipt = this.dispatchedEventIds.get(event.eventId);
@@ -292,7 +299,6 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				});
 				continue;
 			}
-			const ownedSource = Object.freeze({ ...source });
 			const sourceKey = encodeAggregateIdentity(source);
 			const sourceCursor = this.sourceCursors.get(sourceKey);
 			let staleHeadVersion: number | undefined;
@@ -402,7 +408,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				// never happened. Attempts belong to delivery, so they survive.
 				this.recordCommittedVersion(event.eventId);
 				existing.event = event;
-				existing.source = ownedSource;
+				existing.source = source;
 				existing.position = ownedPosition;
 				continue;
 			}
@@ -410,7 +416,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 			this.pending.set(event.eventId, {
 				dispatchId: event.eventId,
 				event,
-				source: ownedSource,
+				source,
 				position: ownedPosition,
 				attempts: 0,
 			});
@@ -419,7 +425,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 		// inside the loop could evict one that a later event of this batch
 		// needed. Without the receipt, the same event would read as stale
 		// once the head moves on.
-		for (const { event, source, position } of events) {
+		for (const { event, source, position } of batch) {
 			if (headRetries.has(event.eventId)) {
 				this.rememberDispatched(event.eventId, source, position);
 			}
@@ -892,6 +898,116 @@ function assertReceiptShape(
 			"An exact redelivery must keep its source position immutable.",
 		event.type,
 	);
+}
+
+/**
+ * The fields of a candidate that the outbox reads, read once and checked.
+ * The function copies the source and the position. The event stays the
+ * caller's object, because a dispatcher gets the event that the commit
+ * recorded. The outbox reads only `eventId` and `type` from it, so these
+ * must be own data properties: a read of them then runs no getter.
+ */
+function ownCandidate<Evt extends AnyDomainEvent>(
+	candidate: EventCommitCandidate<Evt>,
+	index: number,
+): EventCommitCandidate<Evt> {
+	let subject = `the candidate at index ${index}`;
+	let eventType: string | undefined;
+	const rejection = (field: string, expected: string, observed: string) =>
+		new EventHarvestError(
+			`InMemoryOutbox rejected ${subject}: ${field} must be ${expected}, ` +
+				`but it is ${observed}. Pass the candidates that withCommit builds.`,
+			eventType,
+		);
+	if (typeof candidate !== "object" || candidate === null) {
+		throw rejection("the candidate", "an object", describeRejected(candidate));
+	}
+	const { event, source, position } = candidate;
+	if (typeof event !== "object" || event === null) {
+		throw rejection("event", "an object", describeRejected(event));
+	}
+	const eventId = Object.getOwnPropertyDescriptor(event, "eventId");
+	const type = Object.getOwnPropertyDescriptor(event, "type");
+	if (typeof type?.value === "string") eventType = type.value;
+	if (typeof eventId?.value === "string") {
+		subject = `event "${eventId.value}" (the candidate at index ${index})`;
+	}
+	for (const [field, descriptor] of [
+		["event.eventId", eventId],
+		["event.type", type],
+	] as const) {
+		if (descriptor === undefined) {
+			throw rejection(field, "an own data property", "missing");
+		}
+		if (!("value" in descriptor)) {
+			throw rejection(field, "an own data property", "an accessor");
+		}
+		if (typeof descriptor.value !== "string") {
+			throw rejection(field, "a string", describeRejected(descriptor.value));
+		}
+	}
+	if (typeof source !== "object" || source === null) {
+		throw rejection("source", "an object", describeRejected(source));
+	}
+	const { aggregateId, aggregateType } = source;
+	if (typeof aggregateType !== "string") {
+		throw rejection(
+			"source.aggregateType",
+			"a string",
+			describeRejected(aggregateType),
+		);
+	}
+	if (typeof aggregateId !== "string") {
+		throw rejection(
+			"source.aggregateId",
+			"a string",
+			describeRejected(aggregateId),
+		);
+	}
+	if (typeof position !== "object" || position === null) {
+		throw rejection("position", "an object", describeRejected(position));
+	}
+	const { aggregateVersion, commitSequence, commitSize } = position;
+	if (!Number.isSafeInteger(aggregateVersion) || aggregateVersion < 0) {
+		throw rejection(
+			"position.aggregateVersion",
+			"an integer >= 0",
+			describeRejected(aggregateVersion),
+		);
+	}
+	if (!Number.isSafeInteger(commitSize) || commitSize < 1) {
+		throw rejection(
+			"position.commitSize",
+			"an integer >= 1",
+			describeRejected(commitSize),
+		);
+	}
+	if (
+		!Number.isSafeInteger(commitSequence) ||
+		commitSequence < 0 ||
+		commitSequence >= commitSize
+	) {
+		throw rejection(
+			"position.commitSequence",
+			`an integer from 0 to ${commitSize - 1}`,
+			describeRejected(commitSequence),
+		);
+	}
+	return {
+		event,
+		source: Object.freeze({ aggregateId, aggregateType }),
+		position: Object.freeze({ aggregateVersion, commitSequence, commitSize }),
+	};
+}
+
+/** Describes a rejected value. It does not call `toString` of an object. */
+function describeRejected(value: unknown): string {
+	if (typeof value === "string") return JSON.stringify(value);
+	if (value === null || value === undefined) return String(value);
+	if (typeof value === "object") return "an object";
+	if (typeof value === "function") return "a function";
+	if (typeof value === "symbol") return "a symbol";
+	return `${typeof value} ${String(value)}`;
 }
 
 /** Replaces the entries of a map with recorded ones, in their order. */

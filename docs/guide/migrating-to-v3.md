@@ -1345,6 +1345,11 @@ Behavior that a use case or an adapter can notice:
   reject an `Error`, a host object such as a `File`, and shared memory in
   the payload or the metadata with a `TypeError`. In rc.10 they accepted
   these values, and the in-memory event store kept them.
+- `InMemoryOutbox.add` rejects a malformed candidate with
+  `EVENT_HARVEST_FAILED`: a part that is not an object, an `eventId` or
+  `type` that is not an own string data property of the event, a source
+  field that is not a string, or a position that is not a valid commit
+  position. The candidates that `withCommit` builds pass unchanged.
 - `run()` reports `ROLLBACK_FAILED` when a step after the work fails
   inside the transaction, for example the outbox write, and the rollback
   fails too. Before, it reported `COMMIT_FAILED` with the rollback failure

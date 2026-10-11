@@ -31,6 +31,223 @@ function candidate(
 	};
 }
 
+describe("InMemoryOutbox and caller code in a candidate", () => {
+	const orderEvent = (eventId: string) =>
+		createDomainEvent(
+			"OrderCreated",
+			{ orderId: "o-1" },
+			{ eventId, aggregateId: "o-1", aggregateType: "Order" },
+		);
+
+	it("reads the source and the position of a candidate once", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>();
+		let sourceReads = 0;
+		let positionReads = 0;
+		const counted = {
+			event: orderEvent("evt-1"),
+			source: {
+				aggregateType: "Order",
+				get aggregateId() {
+					sourceReads += 1;
+					return "o-1";
+				},
+			},
+			position: {
+				get aggregateVersion() {
+					positionReads += 1;
+					return 1;
+				},
+				commitSequence: 0,
+				commitSize: 1,
+			},
+		};
+
+		await outbox.add([counted]);
+
+		expect({ sourceReads, positionReads }).toEqual({
+			sourceReads: 1,
+			positionReads: 1,
+		});
+		expect(await outbox.getPending()).toMatchObject([
+			{ source: { aggregateId: "o-1" }, position: { aggregateVersion: 1 } },
+		]);
+	});
+
+	it("keeps maxRecords when a source getter adds another event", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>({ maxRecords: 1 });
+		let inner: Promise<void> | undefined;
+		const outer = {
+			event: orderEvent("evt-1"),
+			source: {
+				aggregateType: "Order",
+				get aggregateId() {
+					inner ??= outbox.add([
+						{
+							event: createDomainEvent(
+								"OrderCreated",
+								{ orderId: "o-2" },
+								{
+									eventId: "evt-2",
+									aggregateId: "o-2",
+									aggregateType: "Order",
+								},
+							),
+							source: { aggregateType: "Order", aggregateId: "o-2" },
+							position: {
+								aggregateVersion: 1,
+								commitSequence: 0,
+								commitSize: 1,
+							},
+						},
+					]);
+					return "o-1";
+				},
+			},
+			position: { aggregateVersion: 1, commitSequence: 0, commitSize: 1 },
+		};
+
+		await expect(outbox.add([outer])).rejects.toBeInstanceOf(
+			InMemoryCapacityExceededError,
+		);
+		await expect(inner).resolves.toBeUndefined();
+		expect(
+			(await outbox.getPending()).map((record) => record.event.eventId),
+		).toEqual(["evt-2"]);
+	});
+
+	it("rejects a candidate whose source or position has the wrong type", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>();
+		const event = orderEvent("evt-1");
+		const badSource = {
+			event,
+			source: { aggregateType: "Order", aggregateId: 1 as unknown as string },
+			position: { aggregateVersion: 1, commitSequence: 0, commitSize: 1 },
+		};
+		const badPosition = {
+			event,
+			source: { aggregateType: "Order", aggregateId: "o-1" },
+			position: {
+				aggregateVersion: "1" as unknown as number,
+				commitSequence: 0,
+				commitSize: 1,
+			},
+		};
+
+		await expect(outbox.add([badSource])).rejects.toBeInstanceOf(
+			EventHarvestError,
+		);
+		await expect(outbox.add([badPosition])).rejects.toBeInstanceOf(
+			EventHarvestError,
+		);
+		expect(await outbox.getPending()).toEqual([]);
+	});
+
+	it("rejects an event whose eventId is an accessor without running it", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>();
+		let idReads = 0;
+		const event = { ...orderEvent("evt-1") } as Record<string, unknown>;
+		Object.defineProperty(event, "eventId", {
+			enumerable: true,
+			get() {
+				idReads += 1;
+				return "evt-1";
+			},
+		});
+
+		await expect(
+			outbox.add([candidate(event as unknown as OrderCreated, 1)]),
+		).rejects.toBeInstanceOf(EventHarvestError);
+		expect(idReads).toBe(0);
+		expect(await outbox.getPending()).toEqual([]);
+	});
+
+	it.each([
+		["aggregateVersion NaN", { aggregateVersion: Number.NaN }],
+		[
+			"aggregateVersion Infinity",
+			{ aggregateVersion: Number.POSITIVE_INFINITY },
+		],
+		["a negative aggregateVersion", { aggregateVersion: -1 }],
+		["a fractional aggregateVersion", { aggregateVersion: 1.5 }],
+		["a negative commitSequence", { commitSequence: -1 }],
+		["a commitSequence at commitSize", { commitSequence: 1, commitSize: 1 }],
+		["commitSize 0", { commitSequence: 0, commitSize: 0 }],
+	])("rejects a position with %s", async (_case, override) => {
+		const outbox = new InMemoryOutbox<OrderCreated>();
+		const malformed = {
+			event: orderEvent("evt-1"),
+			source: { aggregateType: "Order", aggregateId: "o-1" },
+			position: {
+				aggregateVersion: 1,
+				commitSequence: 0,
+				commitSize: 1,
+				...override,
+			},
+		};
+
+		await expect(outbox.add([malformed])).rejects.toBeInstanceOf(
+			EventHarvestError,
+		);
+		expect(await outbox.getPending()).toEqual([]);
+	});
+
+	it.each([
+		["an eventId of undefined", { eventId: undefined }],
+		["a numeric eventId", { eventId: 1 }],
+		["a numeric type", { type: 1 }],
+	])("rejects an event with %s", async (_case, override) => {
+		const outbox = new InMemoryOutbox<OrderCreated>();
+		const event = { ...orderEvent("evt-1"), ...override };
+
+		await expect(
+			outbox.add([candidate(event as unknown as OrderCreated, 1)]),
+		).rejects.toBeInstanceOf(EventHarvestError);
+		expect(await outbox.getPending()).toEqual([]);
+	});
+
+	it.each([
+		["a null candidate", () => null],
+		[
+			"a null event",
+			() => ({ ...candidate(orderEvent("evt-1")), event: null }),
+		],
+		[
+			"an undefined source",
+			() => ({ ...candidate(orderEvent("evt-1")), source: undefined }),
+		],
+		[
+			"a null position",
+			() => ({ ...candidate(orderEvent("evt-1")), position: null }),
+		],
+	])("rejects %s with EventHarvestError", async (_case, malformed) => {
+		const outbox = new InMemoryOutbox<OrderCreated>();
+
+		await expect(
+			outbox.add([
+				malformed() as unknown as EventCommitCandidate<OrderCreated>,
+			]),
+		).rejects.toBeInstanceOf(EventHarvestError);
+		expect(await outbox.getPending()).toEqual([]);
+	});
+
+	it("names the event type when it rejects a candidate", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>();
+		const malformed = {
+			...candidate(orderEvent("evt-1")),
+			position: {
+				aggregateVersion: Number.NaN,
+				commitSequence: 0,
+				commitSize: 1,
+			},
+		};
+
+		await expect(outbox.add([malformed])).rejects.toMatchObject({
+			code: "EVENT_HARVEST_FAILED",
+			eventType: "OrderCreated",
+		});
+	});
+});
+
 describe("InMemoryOutbox in an InMemoryTransactionScope", () => {
 	const orderEvent = (eventId: string, orderId = "o-1") =>
 		createDomainEvent(

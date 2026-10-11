@@ -68,6 +68,54 @@ describe("InMemoryProjectionCheckpointStore capacity", () => {
 	);
 });
 
+describe("InMemoryProjectionCheckpointStore and caller code in a checkpoint", () => {
+	it("checks the capacity after a checkpoint getter saved another checkpoint", async () => {
+		const store = new InMemoryProjectionCheckpointStore({ maxCheckpoints: 1 });
+		let inner: Promise<void> | undefined;
+		const outerCheckpoint = {
+			...checkpoint(1),
+			get lastAppliedEventId() {
+				inner ??= store.save(
+					undefined,
+					"orders",
+					identity("o-2"),
+					checkpoint(1),
+				);
+				return "evt-1";
+			},
+		};
+
+		const outer = store.save(
+			undefined,
+			"orders",
+			identity("o-1"),
+			outerCheckpoint,
+		);
+
+		await expect(outer).rejects.toBeInstanceOf(InMemoryCapacityExceededError);
+		await expect(inner).resolves.toBeUndefined();
+		expect(await store.load(undefined, "orders", identity("o-1"))).toBe(
+			undefined,
+		);
+	});
+
+	it("reads the position of a checkpoint once", async () => {
+		const store = new InMemoryProjectionCheckpointStore();
+		let positionReads = 0;
+		const counted = {
+			lastAppliedEventId: "evt-1",
+			get position() {
+				positionReads += 1;
+				return checkpoint(1).position;
+			},
+		};
+
+		await store.save(undefined, "orders", identity("o-1"), counted);
+
+		expect(positionReads).toBe(1);
+	});
+});
+
 describe("InMemoryProjectionCheckpointStore in an InMemoryTransactionScope", () => {
 	it("restores the checkpoints of a rolled-back reset", async () => {
 		const store = new InMemoryProjectionCheckpointStore();
