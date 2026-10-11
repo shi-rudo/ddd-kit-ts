@@ -12,6 +12,7 @@ import {
 	IdempotencyCompletionWithoutClaimError,
 	IdempotencyInFlightError,
 	IdempotencyKeyReuseError,
+	InMemoryCapacityExceededError,
 } from "../../errors/kit-errors";
 import type { EventCommitCandidate } from "../../messaging/committed-event";
 import { InMemoryOutbox } from "../../messaging/outbox/outbox";
@@ -24,7 +25,7 @@ import type {
 	WithCommitWorkResult,
 } from "../cqrs/handler";
 import { InMemoryIdempotencyStore } from "./adapters/in-memory-idempotency-store";
-import type { IdempotencyClaimHandle } from "./idempotency";
+import type { IdempotencyClaim, IdempotencyClaimHandle } from "./idempotency";
 import { withIdempotentCommit } from "./idempotency";
 
 type OrderId = Id<"OrderId">;
@@ -467,6 +468,54 @@ describe("withIdempotentCommit with an InMemoryTransactionScope", () => {
 });
 
 describe("InMemoryIdempotencyStore", () => {
+	it("checks the capacity after a token factory claimed another key", async () => {
+		let inner: Promise<unknown> | undefined;
+		let claimedInside = false;
+		const store: InMemoryIdempotencyStore<undefined> =
+			new InMemoryIdempotencyStore<undefined>({
+				maxEntries: 1,
+				claimTokenFactory: () => {
+					if (!claimedInside) {
+						claimedInside = true;
+						inner = store.claim(undefined, "k-2", "fp");
+					}
+					return "token";
+				},
+			});
+
+		await expect(store.claim(undefined, "k-1", "fp")).rejects.toBeInstanceOf(
+			InMemoryCapacityExceededError,
+		);
+		await expect(inner).resolves.toMatchObject({ status: "claimed" });
+		expect(store.size).toBe(1);
+	});
+
+	it("keeps the claim that a token factory took on the same key", async () => {
+		let inner: Promise<IdempotencyClaim> | undefined;
+		let claimedInside = false;
+		const store: InMemoryIdempotencyStore<undefined> =
+			new InMemoryIdempotencyStore<undefined>({
+				claimTokenFactory: () => {
+					if (!claimedInside) {
+						claimedInside = true;
+						inner = store.claim(undefined, "k", "fp");
+					}
+					return "token";
+				},
+			});
+
+		await expect(store.claim(undefined, "k", "fp")).rejects.toBeInstanceOf(
+			IdempotencyInFlightError,
+		);
+		const innerClaim = await inner;
+		if (innerClaim?.status !== "claimed") {
+			throw new Error("expected the inner claim to own the key");
+		}
+		await expect(
+			store.complete(undefined, innerClaim.claim, "done"),
+		).resolves.toBeUndefined();
+	});
+
 	it("reads a claim handle once per call", async () => {
 		const store = new InMemoryIdempotencyStore<undefined>();
 		const handle = await claimHandle(store, "k", "fp");

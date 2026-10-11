@@ -167,51 +167,17 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 		key: string,
 		fingerprint: string,
 	): Promise<IdempotencyClaim> {
+		// The clock and the token factory come from the store options and can
+		// change the store. claim reads the clock before the store state, and
+		// it decides again after the factory ran.
 		const now = this.nowMs();
-		const existing = this.entries.get(key);
-		if (existing === undefined) {
-			if (
-				this.maxEntries !== undefined &&
-				this.entries.size >= this.maxEntries
-			) {
-				throw new InMemoryCapacityExceededError({
-					store: "InMemoryIdempotencyStore",
-					resource: "entries",
-					limit: this.maxEntries,
-					current: this.entries.size,
-					attempted: 1,
-				});
-			}
-			return this.createPending(key, fingerprint, now);
-		}
-		if (existing.fingerprint !== fingerprint) {
-			throw new IdempotencyKeyReuseError({
-				key,
-				storedFingerprint: existing.fingerprint,
-				receivedFingerprint: fingerprint,
-			});
-		}
-		if (existing.status === "confirmed") {
-			return {
-				status: "completed",
-				outcome: structuredClone(existing.outcome),
-			};
-		}
-		if (now < existing.expiresAtMs) {
-			throw new IdempotencyInFlightError({ key });
-		}
-		if (existing.status === "staged") {
-			return {
-				status: "reconciliation-required",
-				reconciliation: Object.freeze({
-					key,
-					fingerprint,
-					token: existing.token,
-					expiredAt: new Date(existing.expiresAtMs).toISOString(),
-				}),
-			};
-		}
-		return this.createPending(key, fingerprint, now);
+		const decided = this.decideFromStoredEntry(key, fingerprint, now);
+		if (decided !== undefined) return decided;
+		const tokenPart = this.newTokenPart();
+		return (
+			this.decideFromStoredEntry(key, fingerprint, now) ??
+			this.createPending(key, fingerprint, now, tokenPart)
+		);
 	}
 
 	async complete(
@@ -300,6 +266,9 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 				"reconcile decision must be committed or not-committed; uncertainty must leave the record untouched",
 			);
 		}
+		// The clock comes from the store options and can run code that changes
+		// the store, so reconcile reads it before the store state.
+		const now = this.nowMs();
 		const existing = this.entries.get(key);
 		if (
 			existing === undefined ||
@@ -307,7 +276,7 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 			existing.token !== token ||
 			existing.fingerprint !== fingerprint ||
 			new Date(existing.expiresAtMs).toISOString() !== expiredAt ||
-			this.nowMs() < existing.expiresAtMs
+			now < existing.expiresAtMs
 		) {
 			throw new IdempotencyClaimLostError({
 				key,
@@ -336,15 +305,76 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 		this.entries.clear();
 	}
 
-	private createPending(
+	/**
+	 * Returns the claim that the stored entry of the key decides, or
+	 * `undefined` when the store can create a pending claim. Throws for a
+	 * reused key, a claim in flight, and a full store.
+	 */
+	private decideFromStoredEntry(
 		key: string,
 		fingerprint: string,
 		now: number,
-	): IdempotencyClaim {
+	): IdempotencyClaim | undefined {
+		const existing = this.entries.get(key);
+		if (existing === undefined) {
+			if (
+				this.maxEntries !== undefined &&
+				this.entries.size >= this.maxEntries
+			) {
+				throw new InMemoryCapacityExceededError({
+					store: "InMemoryIdempotencyStore",
+					resource: "entries",
+					limit: this.maxEntries,
+					current: this.entries.size,
+					attempted: 1,
+				});
+			}
+			return undefined;
+		}
+		if (existing.fingerprint !== fingerprint) {
+			throw new IdempotencyKeyReuseError({
+				key,
+				storedFingerprint: existing.fingerprint,
+				receivedFingerprint: fingerprint,
+			});
+		}
+		if (existing.status === "confirmed") {
+			return {
+				status: "completed",
+				outcome: structuredClone(existing.outcome),
+			};
+		}
+		if (now < existing.expiresAtMs) {
+			throw new IdempotencyInFlightError({ key });
+		}
+		if (existing.status === "staged") {
+			return {
+				status: "reconciliation-required",
+				reconciliation: Object.freeze({
+					key,
+					fingerprint,
+					token: existing.token,
+					expiredAt: new Date(existing.expiresAtMs).toISOString(),
+				}),
+			};
+		}
+		return undefined;
+	}
+
+	private newTokenPart(): string {
 		const tokenPart = this.claimTokenFactory();
 		if (typeof tokenPart !== "string" || tokenPart.length === 0) {
 			throw new TypeError("claimTokenFactory must return a non-empty string");
 		}
+		return tokenPart;
+	}
+
+	private createPending(
+		key: string,
+		fingerprint: string,
+		now: number,
+		tokenPart: string,
+	): IdempotencyClaim {
 		this.tokenGeneration += 1;
 		if (!Number.isSafeInteger(this.tokenGeneration)) {
 			throw new RangeError("idempotency claim-token generation exhausted");
