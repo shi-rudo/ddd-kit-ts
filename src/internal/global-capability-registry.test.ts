@@ -4,7 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
 	CapabilityRegistryConflictError,
 	UnmanagedInstanceError,
-} from "../../../errors/kit-errors";
+} from "../errors/kit-errors";
 import { createGlobalCapabilityRegistry } from "./global-capability-registry";
 
 type Capability = { readonly name: string };

@@ -1,9 +1,9 @@
+import { createGlobalCapabilityRegistry } from "../../internal/global-capability-registry";
 import type {
 	AnyDomainEvent,
 	AnyUncommittedDomainEvent,
 	DomainEventStamp,
 } from "../event/domain-event";
-import { createGlobalCapabilityRegistry } from "./internal/global-capability-registry";
 
 export type PendingEventStampFactory = (
 	event: AnyUncommittedDomainEvent,

@@ -1,6 +1,6 @@
+import { createGlobalCapabilityRegistry } from "../../internal/global-capability-registry";
 import type { AnyDomainEvent, PendingDomainEvent } from "../event/domain-event";
 import type { Version } from "./aggregate";
-import { createGlobalCapabilityRegistry } from "./internal/global-capability-registry";
 
 /**
  * Kit-internal read view of the pending-event lifecycle. Kept out of every
