@@ -673,9 +673,10 @@ make it immutable. Keep the source and the flags of a pattern as strings. The
 in-memory event store rejects binary data and a `RegExp` too. `createDomainEvent` checks its copy of the event data with
 the rule of the in-memory event store, so it also rejects an `Error`, a host
 object such as a `File` or a `CryptoKey`, and shared memory. Map such a
-value to plain data, for example an error to its message and code.
-`EventMetadata` fields are readonly, and the metadata gains `traceparent` and
-`tracestate`.
+value to plain data, for example an error to its message and code. The
+metadata must be a plain object or absent: `null`, a string, a number, an
+array, or a `Map` throws a `TypeError`. `EventMetadata` fields are readonly,
+and the metadata gains `traceparent` and `tracestate`.
 
 #### Entity state is protected, and its field is private
 

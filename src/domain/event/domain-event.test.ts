@@ -1077,6 +1077,24 @@ describe("factory source strategy", () => {
 		expect(event.metadata?.source).toBe("checkout");
 	});
 
+	it.each([
+		["binary data", () => new Uint8Array([7, 8])],
+		["an Error", () => new Error("not metadata")],
+		["a Map", () => new Map([["k", 1]])],
+		["null", () => null],
+	])(
+		"checks metadata that is %s before it adds its origin",
+		(_case, metadata) => {
+			const factory = createDomainEventFactory({ source: "checkout" });
+			const options = { metadata: metadata() as unknown as EventMetadata };
+
+			expect(() => factory.create("OrderPlaced", {}, options)).toThrow(
+				TypeError,
+			);
+			expect(() => factory.createStamp(options)).toThrow(TypeError);
+		},
+	);
+
 	it("adds no metadata when the factory names no origin", () => {
 		const factory = createDomainEventFactory();
 
@@ -1087,6 +1105,19 @@ describe("factory source strategy", () => {
 });
 
 describe("metadata option", () => {
+	it.each([
+		["a string", () => "abc"],
+		["a number", () => 42],
+		["an array", () => [1, 2]],
+		["a Map", () => new Map([["k", 1]])],
+	])("rejects metadata that is %s", (_case, metadata) => {
+		const options = { metadata: metadata() as unknown as EventMetadata };
+
+		expect(() => createDomainEvent("OrderPlaced", {}, options)).toThrow(
+			TypeError,
+		);
+	});
+
 	it("stores the metadata the call site names, standard and custom fields alike", () => {
 		const metadata: EventMetadata = {
 			correlationId: "corr-123",

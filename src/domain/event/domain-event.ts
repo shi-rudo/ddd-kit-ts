@@ -328,23 +328,6 @@ export interface DomainEventFactory {
  * recordPendingEvents(order, domainEvents);
  * ```
  */
-/**
- * Fills the origin of a factory into options that name none.
- *
- * A call site that states its own source keeps it: an explicit fact about one
- * event outranks the default of the factory that mints it.
- */
-function withFactorySource<T extends { readonly metadata?: EventMetadata }>(
-	options: T | undefined,
-	source: string | undefined,
-): T {
-	const given = (options ?? {}) as T;
-	if (source === undefined || given.metadata?.source !== undefined) {
-		return given;
-	}
-	return { ...given, metadata: { ...given.metadata, source } };
-}
-
 export function createDomainEventFactory(
 	options: DomainEventFactoryOptions = {},
 ): DomainEventFactory {
@@ -359,10 +342,11 @@ export function createDomainEventFactory(
 		mintDomainEvent(
 			type,
 			payload,
-			withFactorySource(createOptions, source),
+			createOptions,
 			eventIdFactory,
 			clock,
 			"createDomainEvent",
+			source,
 		)) as DomainEventFactory["create"];
 	const createStamp = (
 		stampOptions: CreateDomainEventStampOptions = {},
@@ -381,10 +365,10 @@ export function createDomainEventFactory(
 		const eventId = stampOptions.eventId ?? eventIdFactory();
 		assertNonBlankEventField(eventId, "eventId", "EVENT_ID_INVALID");
 		const occurredAt = explicitOccurredAt ?? readEventClock(clock);
-		const metadata = cloneOwnedEventData(
-			withFactorySource(stampOptions, source).metadata,
-			"metadata",
+		const metadata = ownedEventMetadata(
+			stampOptions.metadata,
 			"createStamp",
+			source,
 		);
 		const stamp: DomainEventStamp = {
 			eventId,
@@ -589,11 +573,7 @@ export function recordDomainEvent<T extends string, P>(
 	// the stamp fields before they enter the immutable event.
 	assertNonBlankEventField(stamp.eventId, "eventId", "EVENT_ID_INVALID");
 	const occurredAt = deepFreeze(copyValidEventDate(stamp.occurredAt)) as Date;
-	const metadata = cloneOwnedEventData(
-		stamp.metadata,
-		"metadata",
-		"recordDomainEvent",
-	);
+	const metadata = ownedEventMetadata(stamp.metadata, "recordDomainEvent");
 	return mintRecordedEvent(
 		event,
 		stamp.eventId,
@@ -737,6 +717,7 @@ function mintDomainEvent<T extends string, P>(
 	eventIdFactory: EventIdFactory,
 	clock: ClockFactory,
 	operation: string,
+	factorySource?: string,
 ): DomainEvent<T, P> {
 	assertProducerOwnedEventFields(type, options);
 	const eventId = options?.eventId ?? eventIdFactory();
@@ -762,7 +743,7 @@ function mintDomainEvent<T extends string, P>(
 		// before the event is frozen, so neither aliases caller-owned state.
 		occurredAt,
 		schemaVersion,
-		metadata: cloneOwnedEventData(options?.metadata, "metadata", operation),
+		metadata: ownedEventMetadata(options?.metadata, operation, factorySource),
 	};
 	// Deep-freeze so a mutating subscriber cannot poison subsequent
 	// handlers: events are facts of the past and must be immutable
@@ -854,6 +835,46 @@ function readEventClock(clock: ClockFactory): Date {
  * are not carried over; a class instance would silently lose its
  * prototype, which the plain-data contract already rules out.
  */
+/**
+ * Copies the caller's metadata and checks the copy. Metadata is a plain
+ * record or absent; a null from a JSON envelope would mint and then fail
+ * every metadata read far from the producer. A factory origin fills
+ * `source` only after the check, and a call site that names its own source
+ * keeps it: an explicit fact about one event outranks the default of the
+ * factory that mints it.
+ */
+function ownedEventMetadata(
+	metadata: EventMetadata | undefined,
+	operation: string,
+	factorySource?: string,
+): EventMetadata | undefined {
+	if (metadata === undefined) {
+		return factorySource === undefined ? undefined : { source: factorySource };
+	}
+	const owned: unknown = cloneOwnedEventData(metadata, "metadata", operation);
+	if (
+		typeof owned !== "object" ||
+		owned === null ||
+		Object.getPrototypeOf(owned) !== Object.prototype
+	) {
+		// The copy is the kit's own, so its tag runs no caller code.
+		const received =
+			typeof owned === "object"
+				? owned === null
+					? "null"
+					: Object.prototype.toString.call(owned)
+				: `a ${typeof owned}`;
+		throw new TypeError(
+			`${operation}: metadata must be an object or undefined, and a plain record; received ${received}`,
+		);
+	}
+	const record = owned as EventMetadata;
+	if (factorySource === undefined || record.source !== undefined) {
+		return record;
+	}
+	return { ...record, source: factorySource };
+}
+
 function cloneOwnedEventData<T>(
 	value: T,
 	field: "payload" | "metadata",
@@ -862,13 +883,6 @@ function cloneOwnedEventData<T>(
 	if (typeof value === "function") {
 		throw new TypeError(
 			`${operation}: ${field} must not be a function: domain events are plain data`,
-		);
-	}
-	// Metadata is an object or absent; a null from a JSON envelope would
-	// mint and then fail every metadata read far from the producer.
-	if (value === null && field === "metadata") {
-		throw new TypeError(
-			`${operation}: metadata must be an object or undefined; received null`,
 		);
 	}
 	if (value === null || typeof value !== "object") {

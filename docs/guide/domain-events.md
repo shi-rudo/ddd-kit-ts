@@ -316,6 +316,11 @@ Use metadata for message relationships and operational context, not for core
 domain state. If a value is required to understand the event as a domain fact,
 put it in the payload.
 
+The event constructors require the metadata to be a plain object or absent.
+`null`, a string, a number, an array, or a `Map` as metadata throws a
+`TypeError`. A factory that names a `source` adds it after this check, unless
+the metadata names its own `source`.
+
 The application shell attaches the actor on the stamp. `userId` says who caused
 the fact and `correlationId` says in which operation. That is the audit record.
 The kit does not require it: attach it on every stamp, and every recorded event
