@@ -949,6 +949,24 @@ describe("commit cursor boundary", () => {
 	});
 });
 
+describe("a Proxy payload at the mint", () => {
+	it("is rejected without running a trap for the __proto__ check", () => {
+		let descriptorReads = 0;
+		const payload = new Proxy(
+			{},
+			{
+				getOwnPropertyDescriptor(target, key) {
+					descriptorReads += 1;
+					return Reflect.getOwnPropertyDescriptor(target, key);
+				},
+			},
+		);
+
+		expect(() => createDomainEvent("Proxied", payload)).toThrow(TypeError);
+		expect(descriptorReads).toBe(0);
+	});
+});
+
 describe("a symbol is rejected at the mint", () => {
 	it("rejects a symbol as the payload or the metadata", () => {
 		expect(() => createDomainEvent("Tagged", Symbol("tag"))).toThrow(TypeError);

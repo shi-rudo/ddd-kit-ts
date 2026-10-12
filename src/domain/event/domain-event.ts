@@ -331,6 +331,14 @@ export interface DomainEventFactory {
 export function createDomainEventFactory(
 	options: DomainEventFactoryOptions = {},
 ): DomainEventFactory {
+	return buildDomainEventFactory(options, "DomainEventFactory.create");
+}
+
+/** `createOperation` is the name that the errors of `create` give. */
+function buildDomainEventFactory(
+	options: DomainEventFactoryOptions,
+	createOperation: string,
+): DomainEventFactory {
 	const eventIdFactory = options.eventIdFactory ?? defaultEventIdFactory;
 	const clock = options.clock ?? defaultClockFactory;
 	const { source } = options;
@@ -345,7 +353,7 @@ export function createDomainEventFactory(
 			createOptions,
 			eventIdFactory,
 			clock,
-			"createDomainEvent",
+			createOperation,
 			source,
 		)) as DomainEventFactory["create"];
 	const createStamp = (
@@ -393,7 +401,7 @@ export function createDomainEventFactory(
  * with {@link createDomainEventFactory} for custom policy.
  */
 export const defaultDomainEventFactory: DomainEventFactory =
-	createDomainEventFactory();
+	buildDomainEventFactory({}, "createDomainEvent");
 
 /**
  * Creates a domain event with default values.
@@ -516,16 +524,31 @@ export function createUncommittedDomainEvent<T extends string, P>(
 	payload?: P,
 	options?: CreateUncommittedDomainEventOptions,
 ): UncommittedDomainEvent<T, P> {
+	return mintUncommittedDomainEvent(
+		type,
+		payload,
+		options,
+		"createUncommittedDomainEvent",
+	);
+}
+
+/**
+ * {@link createUncommittedDomainEvent} whose errors name `operation`, the
+ * function that the caller called. Module-internal export; not part of the
+ * package entries.
+ */
+export function mintUncommittedDomainEvent<T extends string, P>(
+	type: T,
+	payload: P | undefined,
+	options: CreateUncommittedDomainEventOptions | undefined,
+	operation: string,
+): UncommittedDomainEvent<T, P> {
 	assertProducerOwnedEventFields(type, options);
 	const event: UncommittedDomainEvent<T, P> = {
 		type,
 		aggregateId: options?.aggregateId,
 		aggregateType: options?.aggregateType,
-		payload: cloneOwnedEventData(
-			payload as P,
-			"payload",
-			"createUncommittedDomainEvent",
-		),
+		payload: cloneOwnedEventData(payload as P, "payload", operation),
 		schemaVersion: options?.schemaVersion ?? 1,
 	};
 	stampUncommittedBrand(event);
@@ -891,24 +914,24 @@ function cloneOwnedEventData<T>(
 		assertFreezableState(value, `${operation}: ${field}`);
 		return value;
 	}
-	// An own "__proto__" data key survives structuredClone and would
-	// re-arm prototype pollution in every [[Set]]-based consumer of the
-	// event; reject it at the root, the same contract as entity state.
-	assertNoHostileOwnProtoKey(
-		value,
-		field === "payload" ? "Event payload" : "Event metadata",
-	);
 	let clone: T;
 	try {
 		clone = structuredClone(value);
 	} catch (cause) {
 		throw new TypeError(
-			`${operation}: ${field} must be plain, structured-cloneable data ` +
-				`(no functions, Promises, or WeakMap/WeakSet values): domain events ` +
-				`are plain data`,
+			`${operation}: ${field} cannot be copied, because structuredClone ` +
+				"failed (the cause names the value); domain events are plain data",
 			{ cause },
 		);
 	}
+	// An own "__proto__" data key survives structuredClone and would
+	// re-arm prototype pollution in every [[Set]]-based consumer of the
+	// event; reject it at the root, the same contract as entity state. The
+	// check reads the clone, so a Proxy root runs no trap for it.
+	assertNoHostileOwnProtoKey(
+		clone as object,
+		field === "payload" ? "Event payload" : "Event metadata",
+	);
 	// The check runs on the clone. It has no accessor, no own iterator, and
 	// no class prototype, so the check runs no caller code. The in-memory
 	// event store checks with the same walk, so an event that the mint

@@ -16,9 +16,9 @@ import {
 	adoptRecordedDomainEvent,
 	adoptUncommittedDomainEvent,
 	type CreateUncommittedDomainEventOptions,
-	createUncommittedDomainEvent,
 	isRecordedDomainEvent,
 	isUncommittedDomainEvent,
+	mintUncommittedDomainEvent,
 	type PendingDomainEvent,
 	recordDomainEvent,
 	type UncommittedDomainEventOf,
@@ -525,11 +525,16 @@ export abstract class BaseAggregate<
 			"aggregateId" | "aggregateType"
 		>,
 	): UncommittedDomainEventOf<E> {
-		return createUncommittedDomainEvent(type, payload, {
-			...options,
-			aggregateId: this.id,
-			aggregateType: this.aggregateType,
-		}) as UncommittedDomainEventOf<E>;
+		return mintUncommittedDomainEvent(
+			type,
+			payload,
+			{
+				...options,
+				aggregateId: this.id,
+				aggregateType: this.aggregateType,
+			},
+			"createEvent",
+		) as UncommittedDomainEventOf<E>;
 	}
 }
 
