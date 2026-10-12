@@ -949,6 +949,20 @@ describe("commit cursor boundary", () => {
 	});
 });
 
+describe("a symbol is rejected at the mint", () => {
+	it("rejects a symbol as the payload or the metadata", () => {
+		expect(() => createDomainEvent("Tagged", Symbol("tag"))).toThrow(TypeError);
+		expect(() =>
+			createDomainEvent("Tagged", undefined, {
+				metadata: Symbol("tag") as unknown as EventMetadata,
+			}),
+		).toThrow(TypeError);
+		expect(() => createUncommittedDomainEvent("Tagged", Symbol("tag"))).toThrow(
+			TypeError,
+		);
+	});
+});
+
 describe("a RegExp is rejected at the mint", () => {
 	it("rejects a RegExp in the payload and in the metadata", () => {
 		expect(() => createDomainEvent("PatternChosen", { pattern: /a/g })).toThrow(

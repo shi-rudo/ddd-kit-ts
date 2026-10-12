@@ -872,6 +872,9 @@ function cloneOwnedEventData<T>(
 		);
 	}
 	if (value === null || typeof value !== "object") {
+		// A primitive needs no copy, but the walk still rejects a symbol,
+		// which the in-memory event store rejects too.
+		assertFreezableState(value, `${operation}: ${field}`);
 		return value;
 	}
 	// An own "__proto__" data key survives structuredClone and would

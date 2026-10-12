@@ -102,16 +102,15 @@ immutable. Run one kit version per process during a cutover.
   ids and the clock come from an immutable `createDomainEventFactory` value;
   the six module setters and scoped helpers are gone. See
   [The aggregate decides; the shell records](docs/guide/migrating-to-v3.md#the-aggregate-decides-the-shell-records).
-- Events are readonly and minted. A recording path accepts only an event
-  that a kit constructor minted and throws `UnmintedEventError` for a hand-built
-  object. `createDomainEvent` rejects binary buffers and a `RegExp`, because
-  a freeze cannot make them immutable. It checks its copy of
-  the payload and the metadata with the rule of the in-memory event store,
-  so it also rejects an `Error`, a host object such as a `File`, and shared
-  memory. A class instance or an accessor still becomes plain data in the
-  copy. `EventMetadata` fields
-  are readonly. `DomainEvent` loses `aggregateVersion`; the commit envelope
-  carries the position.
+- Events are readonly and minted. A recording path accepts only an event that
+  a kit constructor minted and throws `UnmintedEventError` for a hand-built
+  object. `createDomainEvent` rejects binary buffers and a `RegExp`, because a
+  freeze cannot make them immutable. It checks its copy of the payload and the
+  metadata with the rule of the in-memory event store, so it also rejects a
+  symbol, an `Error`, a host object such as a `File`, and shared memory. A
+  class instance or an accessor still becomes plain data in the copy.
+  `EventMetadata` fields are readonly. `DomainEvent` loses `aggregateVersion`;
+  the commit envelope carries the position.
 - `InMemoryEventStore.append` rejects an event that holds binary data, for
   example a `Uint8Array`, or a `RegExp`, with a `TypeError`, as the event
   constructors do. Before, it stored a copy. Encode binary data as a string,
