@@ -281,6 +281,21 @@ describe("detachState", () => {
 });
 
 describe("detachState and a graph that the walk cannot see", () => {
+	it("reads the buffer of a typed array without running an own accessor", () => {
+		let runs = 0;
+		const bytes = new Uint8Array(2);
+		Object.defineProperty(bytes, "buffer", {
+			get() {
+				runs += 1;
+				return new ArrayBuffer(2);
+			},
+		});
+
+		detachState({ bytes });
+
+		expect(runs).toBe(0);
+	});
+
 	it("rejects an Error in a Map whose prototype was replaced", () => {
 		const disguised = Object.setPrototypeOf(
 			new Map([["cause", new Error("lost")]]),

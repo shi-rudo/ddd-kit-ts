@@ -240,12 +240,33 @@ function assertOwnPropertiesDetachable(
 	}
 }
 
+// The built-in getters read the internal slot, so an own `buffer`
+// accessor of a view does not run.
+const typedArrayBuffer = Object.getOwnPropertyDescriptor(
+	Object.getPrototypeOf(Uint8Array.prototype),
+	"buffer",
+)?.get as (this: ArrayBufferView) => ArrayBufferLike;
+const dataViewBuffer = Object.getOwnPropertyDescriptor(
+	DataView.prototype,
+	"buffer",
+)?.get as (this: DataView) => ArrayBufferLike;
+
 function sharesMemory(object: object, tag: string): boolean {
 	if (tag === "[object SharedArrayBuffer]") return true;
+	if (tag === "[object TypedArray]") {
+		return isSharedArrayBuffer(
+			typedArrayBuffer.call(object as ArrayBufferView),
+		);
+	}
+	if (tag === "[object DataView]") {
+		return isSharedArrayBuffer(dataViewBuffer.call(object as DataView));
+	}
+	return false;
+}
+
+function isSharedArrayBuffer(buffer: ArrayBufferLike): boolean {
 	return (
-		ArrayBuffer.isView(object) &&
-		Object.prototype.toString.call(object.buffer) ===
-			"[object SharedArrayBuffer]"
+		builtInTagWithoutInvokingAccessors(buffer) === "[object SharedArrayBuffer]"
 	);
 }
 
