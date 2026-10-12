@@ -376,7 +376,7 @@ function buildDomainEventFactory(
 		const occurredAt = explicitOccurredAt ?? readEventClock(clock);
 		const metadata = ownedEventMetadata(
 			stampOptions.metadata,
-			"createStamp",
+			"DomainEventFactory.createStamp",
 			source,
 		);
 		const stamp: DomainEventStamp = {
@@ -849,17 +849,6 @@ function readEventClock(clock: ClockFactory): Date {
 }
 
 /**
- * Deep-clones caller-supplied event data (payload, metadata) before the
- * event is frozen, so `createDomainEvent` never freezes or aliases the
- * caller's own object graph. Primitives pass through unchanged.
- *
- * Uses `structuredClone`, which matches the documented plain-data event
- * contract: functions, Promise, and WeakMap/WeakSet values throw a
- * descriptive `TypeError` (they are not data); symbol-keyed properties
- * are not carried over; a class instance would silently lose its
- * prototype, which the plain-data contract already rules out.
- */
-/**
  * Copies the caller's metadata and checks the copy. Metadata is a plain
  * record or absent; a null from a JSON envelope would mint and then fail
  * every metadata read far from the producer. A factory origin fills
@@ -911,6 +900,13 @@ function isPlainRecordCopy(copy: unknown): boolean {
 	);
 }
 
+/**
+ * Deep-clones caller-supplied event data (payload, metadata) before the
+ * event is frozen, so a constructor never freezes or aliases the caller's
+ * own object graph, and checks the clone with {@link assertFreezableState}.
+ * A primitive needs no copy, but the check rejects a symbol. A class
+ * instance or an accessor becomes plain data in the clone.
+ */
 function cloneOwnedEventData<T>(
 	value: T,
 	field: "payload" | "metadata",
@@ -941,10 +937,7 @@ function cloneOwnedEventData<T>(
 	// re-arm prototype pollution in every [[Set]]-based consumer of the
 	// event; reject it at the root, the same contract as entity state. The
 	// check reads the clone, so a Proxy root runs no trap for it.
-	assertNoHostileOwnProtoKey(
-		clone as object,
-		field === "payload" ? "Event payload" : "Event metadata",
-	);
+	assertNoHostileOwnProtoKey(clone as object, `Event ${field} of ${operation}`);
 	// The check runs on the clone. It has no accessor, no own iterator, and
 	// no class prototype, so the check runs no caller code. The in-memory
 	// event store checks with the same walk, so an event that the mint
