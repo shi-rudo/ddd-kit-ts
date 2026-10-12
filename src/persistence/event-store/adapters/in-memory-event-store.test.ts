@@ -439,6 +439,25 @@ describe("InMemoryEventStore", () => {
 			});
 		});
 
+		it("rejects a SharedArrayBuffer whose prototype was replaced", async () => {
+			const store = new InMemoryEventStore<OrderEvent>();
+			const disguised = Object.setPrototypeOf(
+				new SharedArrayBuffer(4),
+				Object.prototype,
+			);
+			const withSharedMemory = {
+				...renamed("bad"),
+				payload: { name: "bad", memory: disguised },
+			} as unknown as OrderEvent;
+
+			await expect(
+				store.append(streamA, [withSharedMemory], { expectedVersion: 0 }),
+			).rejects.toBeInstanceOf(TypeError);
+			expect(await store.readStream(streamA, allEvents)).toMatchObject({
+				exists: false,
+			});
+		});
+
 		it("rejects an event getter without running it", async () => {
 			const store = new InMemoryEventStore<OrderEvent>();
 			let getterRuns = 0;

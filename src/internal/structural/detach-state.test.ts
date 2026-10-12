@@ -280,6 +280,33 @@ describe("detachState", () => {
 	});
 });
 
+describe("detachState and a graph that the walk cannot see", () => {
+	it("rejects an Error in a Map whose prototype was replaced", () => {
+		const disguised = Object.setPrototypeOf(
+			new Map([["cause", new Error("lost")]]),
+			Object.prototype,
+		);
+
+		expect(() => detachState({ disguised })).toThrow(TypeError);
+	});
+
+	it("rejects an Error that a Proxy trap swaps in during the walk", () => {
+		const state: Record<string, unknown> = { a: { ok: true } };
+		state.b = new Proxy(
+			{},
+			{
+				ownKeys(target) {
+					state.a = new Error("swapped in");
+					state.b = "plain";
+					return Reflect.ownKeys(target);
+				},
+			},
+		);
+
+		expect(() => detachState(state)).toThrow(TypeError);
+	});
+});
+
 describe("detachStateRejectingBinaryData", () => {
 	it.each([
 		["a typed array", () => new Uint8Array(4)],

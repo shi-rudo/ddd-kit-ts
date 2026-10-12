@@ -35,8 +35,8 @@ export interface InMemoryEventStoreOptions {
  * A copy of `event` that shares nothing with the caller. The walk rejects a
  * value that a copy would lose or change, for example a function, a class
  * instance, or an accessor, and binary data, as the event constructors do.
- * It runs no accessor. Its rejection names the event, and any other error
- * passes unchanged.
+ * It runs no accessor, but a Proxy runs its traps. Its rejection names the
+ * event, and any other error passes unchanged.
  */
 function copyForStorage<Evt>(
 	event: Evt,

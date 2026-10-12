@@ -13,12 +13,14 @@ import {
  * built-in are dropped. A function or a symbol value throws a raw
  * `DataCloneError`. An Error, a Promise, a WeakMap, or a WeakSet cannot be
  * detached at all. A SharedArrayBuffer and a view over one keep sharing
- * their memory. A Proxy is invisible to the walk and fails inside the
- * clone; that failure is rethrown as a `TypeError` with the cause.
+ * their memory. A Proxy fails inside the clone; that failure is rethrown
+ * as a `TypeError` with the cause.
  *
  * The walk reads the graph through property descriptors and walks a Map
  * or a Set with the built-in iteration, so no accessor and no own iterator
- * of the state runs. A Proxy still runs its traps. `subject` names the
+ * of the state runs. A Proxy runs its traps, also during the clone. A
+ * second walk checks the clone, so a built-in whose prototype was replaced
+ * and a value that a trap swapped in are rejected too. `subject` names the
  * state in the messages.
  *
  * Plain objects (from any realm), arrays, Dates, Maps, Sets, bigints, and
@@ -34,7 +36,7 @@ import {
  * first, in the entity or in the model.
  */
 export function detachState<T>(state: T, subject = "detachState: state"): T {
-	return detach(state, { seen: new WeakSet(), subject, binaryData: "copy" });
+	return detach(state, subject, "copy");
 }
 
 /**
@@ -47,7 +49,7 @@ export function detachStateRejectingBinaryData<T>(
 	state: T,
 	subject: string,
 ): T {
-	return detach(state, { seen: new WeakSet(), subject, binaryData: "reject" });
+	return detach(state, subject, "reject");
 }
 
 /**
@@ -66,16 +68,26 @@ export function assertDetachableStateRejectingBinaryData(
 	});
 }
 
-function detach<T>(state: T, walk: Walk): T {
-	assertDetachable(state, "", walk);
+function detach<T>(
+	state: T,
+	subject: string,
+	binaryData: Walk["binaryData"],
+): T {
+	assertDetachable(state, "", { seen: new WeakSet(), subject, binaryData });
+	let copy: T;
 	try {
-		return structuredClone(state);
+		copy = structuredClone(state);
 	} catch (cause) {
 		throw new TypeError(
-			`${walk.subject} holds a Proxy or a host object that cannot be cloned; map it to plain data`,
+			`${subject} holds a Proxy or a host object that cannot be cloned; map it to plain data`,
 			{ cause },
 		);
 	}
+	// The first walk trusts the prototype of an object, and a Proxy trap can
+	// change the graph after it. The copy has genuine prototypes and no
+	// Proxy, so this walk checks exactly what the caller gets.
+	assertDetachable(copy, "", { seen: new WeakSet(), subject, binaryData });
+	return copy;
 }
 
 const INDEX_KEY = /^(0|[1-9]\d*)$/;
