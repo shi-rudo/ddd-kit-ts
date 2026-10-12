@@ -414,6 +414,31 @@ describe("InMemoryEventStore", () => {
 			});
 		});
 
+		it.each([
+			["a typed array in the payload", { payload: new Uint8Array(4) }],
+			[
+				"an ArrayBuffer in the metadata",
+				{ metadata: { raw: new ArrayBuffer(8) } },
+			],
+			[
+				"a DataView in a nested array",
+				{ payload: { name: "bad", parts: [new DataView(new ArrayBuffer(2))] } },
+			],
+		])("rejects %s", async (_case, override) => {
+			const store = new InMemoryEventStore<OrderEvent>();
+			const withBinaryData = {
+				...renamed("bad"),
+				...override,
+			} as unknown as OrderEvent;
+
+			await expect(
+				store.append(streamA, [withBinaryData], { expectedVersion: 0 }),
+			).rejects.toBeInstanceOf(TypeError);
+			expect(await store.readStream(streamA, allEvents)).toMatchObject({
+				exists: false,
+			});
+		});
+
 		it("rejects an event getter without running it", async () => {
 			const store = new InMemoryEventStore<OrderEvent>();
 			let getterRuns = 0;

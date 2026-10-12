@@ -105,12 +105,16 @@ immutable. Run one kit version per process during a cutover.
 - Events are readonly and minted. A recording path accepts only an event
   that a kit constructor minted and throws `UnmintedEventError` for a hand-built
   object. `createDomainEvent` rejects binary buffers. It checks its copy of
-  the payload and the metadata with the walk of `detachState`, the rule of
-  the in-memory event store, so it also rejects an `Error`, a host object
-  such as a `File`, and shared memory. A class instance or an accessor still
-  becomes plain data in the copy. `EventMetadata` fields
+  the payload and the metadata with the rule of the in-memory event store,
+  so it also rejects an `Error`, a host object such as a `File`, and shared
+  memory. A class instance or an accessor still becomes plain data in the
+  copy. `EventMetadata` fields
   are readonly. `DomainEvent` loses `aggregateVersion`; the commit envelope
   carries the position.
+- `InMemoryEventStore.append` rejects an event that holds binary data, for
+  example a `Uint8Array`, with a `TypeError`, as the event constructors do.
+  Before, it stored a copy. Encode binary data as a string, for example
+  base64.
 - `Entity.state` is protected, and `IEntity<TId, TState>` is `IEntity<TId>`.
   A subclass no longer sees `_state` and `freezeState`. A reconstitution
   factory passes `trustInitialState: true` for a persisted state.

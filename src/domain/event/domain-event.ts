@@ -3,7 +3,7 @@ import {
 	hasCooperativeBrand,
 	stampCooperativeBrand,
 } from "../../internal/cooperative-brand";
-import { assertDetachableState } from "../../internal/structural/detach-state";
+import { assertDetachableStateRejectingBinaryData } from "../../internal/structural/detach-state";
 import { deepFreeze } from "../value-object/value-object";
 import { type ClockFactory, defaultClockFactory, readClock } from "./clock";
 import { DomainEventValidationError } from "./domain-event-errors";
@@ -892,73 +892,15 @@ function cloneOwnedEventData<T>(
 			{ cause },
 		);
 	}
-	// The checks run on the clone. It has no accessor, no own iterator, and
-	// no class prototype, so the checks run no caller code. A binary buffer
-	// stays mutable under freezing, which would break the mint guarantee
-	// "minted implies deeply frozen", and JSON does not keep it.
-	assertNoBinaryData(clone, field, operation);
-	// The in-memory event store copies events with the same walk, so an
-	// event that the mint accepts is one that the store accepts. The walk
-	// rejects what the clone keeps but plain data cannot hold, for example
-	// an Error or a host object such as a File.
-	assertDetachableState(clone, `${operation}: ${field}`);
+	// The check runs on the clone. It has no accessor, no own iterator, and
+	// no class prototype, so the check runs no caller code. The in-memory
+	// event store checks with the same walk, so an event that the mint
+	// accepts is one that the store accepts. The walk rejects what the clone
+	// keeps but plain data cannot hold: an Error, a host object such as a
+	// File, and binary data. Binary data stays mutable under freezing, which
+	// would break the mint guarantee "minted implies deeply frozen".
+	assertDetachableStateRejectingBinaryData(clone, `${operation}: ${field}`);
 	return clone;
-}
-
-function isBinaryData(value: object): boolean {
-	return (
-		ArrayBuffer.isView(value) ||
-		value instanceof ArrayBuffer ||
-		(typeof SharedArrayBuffer !== "undefined" &&
-			value instanceof SharedArrayBuffer)
-	);
-}
-
-/**
- * Walks the cloned event data and rejects binary buffers anywhere in the
- * graph (TypedArray, DataView, ArrayBuffer, SharedArrayBuffer). Runs on the
- * small plain-data graphs events are documented to carry.
- */
-function assertNoBinaryData(
-	value: unknown,
-	field: "payload" | "metadata",
-	operation: string,
-	visited = new WeakSet<object>(),
-): void {
-	if (value === null || typeof value !== "object") return;
-	if (isBinaryData(value)) {
-		throw new TypeError(
-			`${operation}: ${field} must not contain binary buffers ` +
-				`(TypedArray, DataView, ArrayBuffer, SharedArrayBuffer): they stay ` +
-				`mutable under freezing and do not survive JSON. Encode binary as ` +
-				`a string (base64/hex) or store it outside the event.`,
-		);
-	}
-	if (visited.has(value)) return;
-	visited.add(value);
-	if (value instanceof Map) {
-		for (const [k, v] of value) {
-			assertNoBinaryData(k, field, operation, visited);
-			assertNoBinaryData(v, field, operation, visited);
-		}
-		return;
-	}
-	if (value instanceof Set) {
-		for (const v of value) assertNoBinaryData(v, field, operation, visited);
-		return;
-	}
-	if (Array.isArray(value)) {
-		for (const v of value) assertNoBinaryData(v, field, operation, visited);
-		return;
-	}
-	for (const key of Object.keys(value)) {
-		assertNoBinaryData(
-			(value as Record<string, unknown>)[key],
-			field,
-			operation,
-			visited,
-		);
-	}
 }
 
 /**
