@@ -1,5 +1,5 @@
 // @ts-expect-error Node's fs module exists in the test runtime; the package stays Node-type-free.
-import { readdirSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { describe, expect, it } from "vite-plus/test";
 
 const sourceDirectory = new URL("../../src/", import.meta.url);
@@ -41,6 +41,37 @@ const files = entries
 	.map((entry: { name: string }) => entry.name)
 	.sort();
 
+/** The production modules under `directory`, at any depth. */
+function productionModules(directory: URL): URL[] {
+	return readdirSync(directory).flatMap((name: string) => {
+		const entry = new URL(name, directory);
+		if (statSync(entry).isDirectory()) {
+			return productionModules(new URL(`${name}/`, directory));
+		}
+		return name.endsWith(".ts") && !name.endsWith(".test.ts") ? [entry] : [];
+	});
+}
+
+/** The other areas that the production modules of `area` import from. */
+function importedAreas(area: string): string[] {
+	const imported = new Set<string>();
+	for (const module of productionModules(
+		new URL(`${area}/`, sourceDirectory),
+	)) {
+		const text: string = readFileSync(module, "utf8");
+		for (const [, specifier = ""] of text.matchAll(
+			/(?:from|import\()\s*"(\.{1,2}\/[^"]+)"/g,
+		)) {
+			const target = new URL(specifier, module).href.slice(
+				sourceDirectory.href.length,
+			);
+			const [targetArea = ""] = target.split("/");
+			if (targetArea !== area) imported.add(targetArea);
+		}
+	}
+	return [...imported].sort();
+}
+
 describe("source organization", () => {
 	it("keeps every top-level area on the allowed list", () => {
 		expect(directories).toEqual([...ALLOWED_AREAS]);
@@ -56,5 +87,17 @@ describe("source organization", () => {
 		// A root-level proxy is unnecessary: the exports map can name the
 		// owning module.
 		expect(files).toEqual(["index.ts"]);
+	});
+});
+
+describe("dependencies between areas", () => {
+	it("keeps errors free of imports from another area", () => {
+		expect(importedAreas("errors")).toEqual([]);
+	});
+
+	it("lets internal import from errors and from no other area", () => {
+		expect(
+			importedAreas("internal").filter((area) => area !== "errors"),
+		).toEqual([]);
 	});
 });
