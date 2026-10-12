@@ -1341,12 +1341,14 @@ Behavior that a use case or an adapter can notice:
   time option throws a `RangeError` in place of an `Error`.
 - A custom scope that retries calls `onAttemptStart` from the transactional
   options before each attempt, so `run()` labels a failure by its attempt.
-- `InMemoryEventStore.append` rejects an event that is not plain data with
-  a `TypeError`. Examples are a function, a class instance, an accessor, an
+- `InMemoryEventStore.append` rejects an event that is not plain data with a
+  `TypeError`. Examples are a function, a class instance, an accessor, an
   `Error`, and a hidden or symbol-keyed property anywhere in the event.
   Before, it stored a copy that lost these values. It also rejects binary
   data, for example a `Uint8Array`, and a `RegExp`, as the event constructors
-  do. Before, it stored a copy of them. Events from `createDomainEvent` pass unchanged.
+  do. Before, it stored a copy of them. A batch entry that is not an object,
+  for example `null`, throws a `TypeError` too; before, the store kept it.
+  Events from `createDomainEvent` pass unchanged.
 - `createDomainEvent`, `createEvent`, and the other event constructors
   reject an `Error`, a host object such as a `File`, and a `RegExp` in the
   payload or the metadata with a `TypeError`. In rc.10 they accepted

@@ -433,10 +433,11 @@ immutable. Run one kit version per process during a cutover.
   detachment of the kit. An event with a value that the copy would lose or
   change rejects with a `TypeError` that names the event index and the stream.
   Examples are a function, a class instance, an accessor, an `Error`, and a
-  hidden or symbol-keyed property. No accessor runs, but a Proxy runs its
-  traps. Before, the store dropped the prototype of a class instance, ran
-  accessors, and could keep part of a failed batch. It reads its arguments
-  once, so a getter on them cannot bypass the version check.
+  hidden or symbol-keyed property. A batch entry that is not an object, for
+  example `null`, rejects too. No accessor runs, but a Proxy runs its traps.
+  Before, the store dropped the prototype of a class instance, ran accessors,
+  and could keep part of a failed batch. It reads its arguments once, so a
+  getter on them cannot bypass the version check.
 - `detachState` walks a Map or a Set with the built-in iteration and reads
   class names through property descriptors, so no own iterator and no accessor
   of the state runs. A Proxy still runs its traps. Before, an own iterator

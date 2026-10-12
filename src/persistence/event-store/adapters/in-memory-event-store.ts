@@ -45,8 +45,8 @@ function copyForStorage<Evt>(
 	stream: AggregateIdentity,
 ): Evt {
 	const subject =
-		`InMemoryEventStore.append: the event at index ${index} of stream ` +
-		describeAggregateIdentity(stream);
+		`InMemoryEventStore.append (stream ${describeAggregateIdentity(stream)}): ` +
+		`events[${index}]`;
 	if (event === null || typeof event !== "object") {
 		throw new TypeError(`${subject} is not an event object`);
 	}
