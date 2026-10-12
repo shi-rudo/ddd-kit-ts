@@ -670,13 +670,14 @@ does not cover them, and JSON does not keep them. Encode binary data as a
 string, or store it outside the event. `createDomainEvent` also rejects a
 `RegExp`: a global or sticky match writes its `lastIndex`, so a freeze cannot
 make it immutable. Keep the source and the flags of a pattern as strings. The
-in-memory event store rejects binary data and a `RegExp` too. `createDomainEvent` checks its copy of the event data with
-the rule of the in-memory event store, so it also rejects an `Error`, a host
-object such as a `File` or a `CryptoKey`, and shared memory. Map such a
-value to plain data, for example an error to its message and code. The
-metadata must be a plain object or absent: `null`, a string, a number, an
-array, or a `Map` throws a `TypeError`. `EventMetadata` fields are readonly,
-and the metadata gains `traceparent` and `tracestate`.
+in-memory event store rejects binary data and a `RegExp` too.
+`createDomainEvent` checks its copy of the event data with the rule of the
+in-memory event store, so it also rejects an `Error` and a host object such as
+a `File` or a `CryptoKey`. Map such a value to plain data, for example an
+error to its message and code. The metadata must be a plain object or absent:
+`null`, a string, a number, an array, or a `Map` throws a `TypeError`.
+`EventMetadata` fields are readonly, and the metadata gains `traceparent` and
+`tracestate`.
 
 #### Entity state is protected, and its field is private
 
@@ -1347,9 +1348,13 @@ Behavior that a use case or an adapter can notice:
   data, for example a `Uint8Array`, and a `RegExp`, as the event constructors
   do. Before, it stored a copy of them. Events from `createDomainEvent` pass unchanged.
 - `createDomainEvent`, `createEvent`, and the other event constructors
-  reject an `Error`, a host object such as a `File`, shared memory, and a
-  `RegExp` in the payload or the metadata with a `TypeError`. In rc.10 they accepted
+  reject an `Error`, a host object such as a `File`, and a `RegExp` in the
+  payload or the metadata with a `TypeError`. In rc.10 they accepted
   these values, and the in-memory event store kept them.
+- The event constructors reject metadata that is not a plain object, for
+  example a string, an array, or a `Map`, with a `TypeError`. In rc.10 they
+  accepted it, and a factory with a `source` turned such metadata, also
+  `null`, into a record with the `source` and lost the rest.
 - `InMemoryOutbox.add` rejects a malformed candidate with
   `EVENT_HARVEST_FAILED`: a part that is not an object, an `eventId` or
   `type` that is not an own string data property of the event, a source

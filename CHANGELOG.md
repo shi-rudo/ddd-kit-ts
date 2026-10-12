@@ -107,12 +107,12 @@ immutable. Run one kit version per process during a cutover.
   object. `createDomainEvent` rejects binary buffers and a `RegExp`, because a
   freeze cannot make them immutable. It checks its copy of the payload and the
   metadata with the rule of the in-memory event store, so it also rejects a
-  symbol, an `Error`, a host object such as a `File`, and shared memory. A
-  class instance or an accessor still becomes plain data in the copy. The
-  metadata must be a plain object or absent; a string, a number, an array, or
-  a `Map` throws a `TypeError`, also with a factory `source`. `EventMetadata`
-  fields are readonly. `DomainEvent` loses `aggregateVersion`; the commit
-  envelope carries the position.
+  symbol, an `Error`, and a host object such as a `File`. A class instance or
+  an accessor still becomes plain data in the copy. The metadata must be a
+  plain object or absent; a string, a number, an array, or a `Map` throws a
+  `TypeError`, also with a factory `source`. `EventMetadata` fields are
+  readonly. `DomainEvent` loses `aggregateVersion`; the commit envelope
+  carries the position.
 - `InMemoryEventStore.append` rejects an event that holds binary data, for
   example a `Uint8Array`, or a `RegExp`, with a `TypeError`, as the event
   constructors do. Before, it stored a copy. Encode binary data as a string,
