@@ -949,6 +949,21 @@ describe("commit cursor boundary", () => {
 	});
 });
 
+describe("a RegExp is rejected at the mint", () => {
+	it("rejects a RegExp in the payload and in the metadata", () => {
+		expect(() => createDomainEvent("PatternChosen", { pattern: /a/g })).toThrow(
+			TypeError,
+		);
+		expect(() =>
+			createDomainEvent(
+				"PatternChosen",
+				{ ok: true },
+				{ metadata: { pattern: /a/ } },
+			),
+		).toThrow(TypeError);
+	});
+});
+
 describe("binary payloads are rejected at the mint", () => {
 	// Freezing cannot make buffers immutable (the spec forbids freezing
 	// a view with elements, and a frozen view still shares its mutable

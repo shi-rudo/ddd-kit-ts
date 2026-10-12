@@ -360,9 +360,9 @@ positions rather than silently folding a truncated stream.
 
 `InMemoryEventStore` is the reference implementation for finite-lifetime tests
 and demos. It is memory-only. It stores a detached copy of each event and
-rejects an event that is not plain data, for example one with a class instance
-or binary data in its payload. It rolls back only when you register it with an
-`InMemoryTransactionScope`; see
+rejects an event that is not plain data, for example one with a class
+instance, binary data, or a `RegExp` in its payload. It rolls back only when you
+register it with an `InMemoryTransactionScope`; see
 [In-memory transactions](./unit-of-work.md#in-memory-transactions). Without
 options, its streams and events are unbounded. A
 long-lived process must configure both `maxStreams` and `maxEvents`; crossing a

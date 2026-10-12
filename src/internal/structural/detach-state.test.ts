@@ -2,9 +2,9 @@
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vite-plus/test";
 import {
-	assertDetachableStateRejectingBinaryData,
+	assertFreezableState,
+	detachFreezableState,
 	detachState,
-	detachStateRejectingBinaryData,
 } from "./detach-state";
 
 class OwnerReview {
@@ -322,7 +322,7 @@ describe("detachState and a graph that the walk cannot see", () => {
 	});
 });
 
-describe("detachStateRejectingBinaryData", () => {
+describe("detachFreezableState", () => {
 	it.each([
 		["a typed array", () => new Uint8Array(4)],
 		["a DataView", () => new DataView(new ArrayBuffer(2))],
@@ -331,33 +331,34 @@ describe("detachStateRejectingBinaryData", () => {
 	])("rejects %s anywhere in the state", (_case, binaryData) => {
 		const state = { parts: [{ data: binaryData() }] };
 
-		expect(() => detachStateRejectingBinaryData(state, "state")).toThrow(
-			TypeError,
-		);
+		expect(() => detachFreezableState(state, "state")).toThrow(TypeError);
+	});
+
+	it("rejects a RegExp, which detachState accepts", () => {
+		const state = { pattern: /a/g };
+
+		expect(() => detachFreezableState(state, "state")).toThrow(TypeError);
+		expect(detachState(state).pattern.source).toBe("a");
 	});
 
 	it("copies plain data like detachState", () => {
 		const state = { at: new Date(0), tags: new Set(["a"]) };
 
-		const copy = detachStateRejectingBinaryData(state, "state");
+		const copy = detachFreezableState(state, "state");
 
 		expect(copy).toEqual(state);
 		expect(copy).not.toBe(state);
 	});
 });
 
-describe("assertDetachableStateRejectingBinaryData", () => {
+describe("assertFreezableState", () => {
 	it("rejects binary data in a Map key", () => {
 		const state = new Map([[new Uint8Array(1), "a"]]);
 
-		expect(() =>
-			assertDetachableStateRejectingBinaryData(state, "state"),
-		).toThrow(TypeError);
+		expect(() => assertFreezableState(state, "state")).toThrow(TypeError);
 	});
 
 	it("accepts plain data", () => {
-		expect(() =>
-			assertDetachableStateRejectingBinaryData({ a: [1, "b"] }, "state"),
-		).not.toThrow();
+		expect(() => assertFreezableState({ a: [1, "b"] }, "state")).not.toThrow();
 	});
 });

@@ -667,8 +667,10 @@ this.apply(this.createEvent("OrderConfirmed", payload));
 `createDomainEvent` rejects binary buffers in the payload and the metadata:
 `ArrayBuffer`, `SharedArrayBuffer`, a typed array, and a `DataView`. Freezing
 does not cover them, and JSON does not keep them. Encode binary data as a
-string, or store it outside the event. The in-memory event store rejects
-binary data too. `createDomainEvent` checks its copy of the event data with
+string, or store it outside the event. `createDomainEvent` also rejects a
+`RegExp`: a global or sticky match writes its `lastIndex`, so a freeze cannot
+make it immutable. Keep the source and the flags of a pattern as strings. The
+in-memory event store rejects binary data and a `RegExp` too. `createDomainEvent` checks its copy of the event data with
 the rule of the in-memory event store, so it also rejects an `Error`, a host
 object such as a `File` or a `CryptoKey`, and shared memory. Map such a
 value to plain data, for example an error to its message and code.
@@ -1341,11 +1343,11 @@ Behavior that a use case or an adapter can notice:
   a `TypeError`. Examples are a function, a class instance, an accessor, an
   `Error`, and a hidden or symbol-keyed property anywhere in the event.
   Before, it stored a copy that lost these values. It also rejects binary
-  data, for example a `Uint8Array`, as the event constructors do. Before, it
-  stored a copy of it. Events from `createDomainEvent` pass unchanged.
+  data, for example a `Uint8Array`, and a `RegExp`, as the event constructors
+  do. Before, it stored a copy of them. Events from `createDomainEvent` pass unchanged.
 - `createDomainEvent`, `createEvent`, and the other event constructors
-  reject an `Error`, a host object such as a `File`, and shared memory in
-  the payload or the metadata with a `TypeError`. In rc.10 they accepted
+  reject an `Error`, a host object such as a `File`, shared memory, and a
+  `RegExp` in the payload or the metadata with a `TypeError`. In rc.10 they accepted
   these values, and the in-memory event store kept them.
 - `InMemoryOutbox.add` rejects a malformed candidate with
   `EVENT_HARVEST_FAILED`: a part that is not an object, an `eventId` or

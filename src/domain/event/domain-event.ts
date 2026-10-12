@@ -3,7 +3,7 @@ import {
 	hasCooperativeBrand,
 	stampCooperativeBrand,
 } from "../../internal/cooperative-brand";
-import { assertDetachableStateRejectingBinaryData } from "../../internal/structural/detach-state";
+import { assertFreezableState } from "../../internal/structural/detach-state";
 import { deepFreeze } from "../value-object/value-object";
 import { type ClockFactory, defaultClockFactory, readClock } from "./clock";
 import { DomainEventValidationError } from "./domain-event-errors";
@@ -896,10 +896,11 @@ function cloneOwnedEventData<T>(
 	// no class prototype, so the check runs no caller code. The in-memory
 	// event store checks with the same walk, so an event that the mint
 	// accepts is one that the store accepts. The walk rejects what the clone
-	// keeps but plain data cannot hold: an Error, a host object such as a
-	// File, and binary data. Binary data stays mutable under freezing, which
-	// would break the mint guarantee "minted implies deeply frozen".
-	assertDetachableStateRejectingBinaryData(clone, `${operation}: ${field}`);
+	// keeps but plain data cannot hold, an Error or a host object such as a
+	// File, and what a freeze cannot make immutable, binary data and a
+	// RegExp. These would break the mint guarantee "minted implies deeply
+	// frozen".
+	assertFreezableState(clone, `${operation}: ${field}`);
 	return clone;
 }
 

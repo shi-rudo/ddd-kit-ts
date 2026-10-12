@@ -439,6 +439,18 @@ describe("InMemoryEventStore", () => {
 			});
 		});
 
+		it("rejects a RegExp in an event", async () => {
+			const store = new InMemoryEventStore<OrderEvent>();
+			const withPattern = {
+				...renamed("bad"),
+				payload: { name: "bad", pattern: /a/g },
+			} as unknown as OrderEvent;
+
+			await expect(
+				store.append(streamA, [withPattern], { expectedVersion: 0 }),
+			).rejects.toBeInstanceOf(TypeError);
+		});
+
 		it("rejects a SharedArrayBuffer whose prototype was replaced", async () => {
 			const store = new InMemoryEventStore<OrderEvent>();
 			const disguised = Object.setPrototypeOf(
