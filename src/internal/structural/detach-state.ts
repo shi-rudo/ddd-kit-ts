@@ -22,7 +22,10 @@ import {
  * change the graph, and an accessor that a trap adds runs during the
  * clone. A second walk checks the clone, so a value that a trap swapped in
  * and the content of a built-in whose prototype was replaced are rejected
- * too. `subject` names the state in the messages.
+ * too. The walks also count the data properties of records and arrays. A
+ * copy with another count throws, because a built-in whose prototype was
+ * replaced loses its own properties in the copy. `subject` names the state
+ * in the messages.
  *
  * Plain objects (from any realm), arrays, Dates, Maps, Sets, bigints, and
  * typed arrays pass. A RegExp passes: pattern and flags survive the clone,
@@ -56,11 +59,22 @@ export function detachFreezableState<T>(state: T, subject: string): T {
  * rule is the same. Kit modules only.
  */
 export function assertFreezableState(state: unknown, subject: string): void {
-	assertDetachable(state, "", { seen: new WeakSet(), subject, rule: "freeze" });
+	assertDetachable(state, "", {
+		seen: new WeakSet(),
+		subject,
+		rule: "freeze",
+		dataProperties: 0,
+	});
 }
 
 function detach<T>(state: T, subject: string, rule: Walk["rule"]): T {
-	assertDetachable(state, "", { seen: new WeakSet(), subject, rule });
+	const original: Walk = {
+		seen: new WeakSet(),
+		subject,
+		rule,
+		dataProperties: 0,
+	};
+	assertDetachable(state, "", original);
 	let copy: T;
 	try {
 		copy = structuredClone(state);
@@ -72,8 +86,22 @@ function detach<T>(state: T, subject: string, rule: Walk["rule"]): T {
 	}
 	// The first walk trusts the prototype of an object, and a Proxy trap can
 	// change the graph after it. The copy has genuine prototypes and no
-	// Proxy, so this walk checks exactly what the caller gets.
-	assertDetachable(copy, "", { seen: new WeakSet(), subject, rule });
+	// Proxy, so this walk checks exactly what the caller gets. A built-in
+	// whose prototype was replaced passes the first walk as a record, and
+	// the copy drops its own properties, so the walks also compare how many
+	// data properties they checked.
+	const copied: Walk = {
+		seen: new WeakSet(),
+		subject,
+		rule,
+		dataProperties: 0,
+	};
+	assertDetachable(copy, "", copied);
+	if (copied.dataProperties !== original.dataProperties) {
+		throw new TypeError(
+			`${subject} changed in the copy: the state has ${original.dataProperties} data properties and the copy has ${copied.dataProperties}; a built-in whose prototype was replaced loses its own properties in the copy, and a Proxy trap can change the graph; map it to plain data`,
+		);
+	}
 	return copy;
 }
 
@@ -97,6 +125,8 @@ interface Walk {
 	readonly seen: WeakSet<object>;
 	readonly subject: string;
 	readonly rule: "clone" | "freeze";
+	/** Data properties of records and arrays that the walk checked. */
+	dataProperties: number;
 }
 
 function assertDetachable(value: unknown, path: string, walk: Walk): void {
@@ -223,6 +253,7 @@ function assertOwnPropertiesDetachable(
 				`${walk.subject}${memberPath} is an expando on a ${constructorName(Object.getPrototypeOf(object)) ?? "built-in"} and the clone would drop it; map it to plain data`,
 			);
 		}
+		walk.dataProperties += 1;
 		assertDetachable(descriptor.value, memberPath, walk);
 	}
 }

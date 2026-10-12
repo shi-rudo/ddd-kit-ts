@@ -439,6 +439,23 @@ describe("InMemoryEventStore", () => {
 			});
 		});
 
+		it("rejects a Map whose prototype was replaced and that carries an own property", async () => {
+			const store = new InMemoryEventStore<OrderEvent>();
+			const disguised = Object.setPrototypeOf(
+				new Map([["k", 1]]),
+				Object.prototype,
+			);
+			disguised.note = "lost in the copy";
+			const withDisguisedMap = {
+				...renamed("bad"),
+				payload: { name: "bad", lines: disguised },
+			} as unknown as OrderEvent;
+
+			await expect(
+				store.append(streamA, [withDisguisedMap], { expectedVersion: 0 }),
+			).rejects.toBeInstanceOf(TypeError);
+		});
+
 		it("rejects a RegExp in an event", async () => {
 			const store = new InMemoryEventStore<OrderEvent>();
 			const withPattern = {

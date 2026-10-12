@@ -396,11 +396,13 @@ immutable. Run one kit version per process during a cutover.
 
 ### Fixed
 
-- `detachState` and `InMemoryEventStore.append` check the copy with a
-  second walk. Before, a `Map`, a `Set`, an `ArrayBuffer`, or a
-  `SharedArrayBuffer` whose prototype was replaced passed the walk as an
-  empty record, and the copy then kept an `Error`, a class instance, or
-  shared memory. A Proxy trap could also swap a value in after the walk.
+- `detachState` and `InMemoryEventStore.append` check the copy with a second
+  walk. Before, a `Map`, a `Set`, an `ArrayBuffer`, or a `SharedArrayBuffer`
+  whose prototype was replaced passed the walk as an empty record, and the
+  copy then kept an `Error`, a class instance, or shared memory. An own
+  property of such a built-in was lost in the copy without an error. A Proxy
+  trap could also swap a value in after the walk. The walks now also count the
+  data properties of records and arrays, and a copy with another count throws.
 - `InMemoryIdempotencyStore` reads its clock before its state, and `claim`
   asks the token factory before its final checks. A clock or a factory that
   changes the store can no longer push it past `maxEntries`, replace a live

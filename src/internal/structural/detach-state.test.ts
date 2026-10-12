@@ -305,6 +305,30 @@ describe("detachState and a graph that the walk cannot see", () => {
 		expect(() => detachState({ disguised })).toThrow(TypeError);
 	});
 
+	it.each([
+		["a Map", () => new Map([["k", 1]])],
+		["a Set", () => new Set([1])],
+		["an ArrayBuffer", () => new ArrayBuffer(4)],
+		["a boxed bigint", () => Object(1n)],
+	])(
+		"rejects %s whose prototype was replaced and that carries an own property",
+		(_case, make) => {
+			const disguised = Object.setPrototypeOf(make(), Object.prototype);
+			disguised.note = "lost in the copy";
+
+			expect(() => detachState({ disguised })).toThrow(TypeError);
+		},
+	);
+
+	it("copies a Map whose prototype was replaced and that carries no own property", () => {
+		const disguised = Object.setPrototypeOf(
+			new Map([["k", 1]]),
+			Object.prototype,
+		);
+
+		expect(detachState({ disguised }).disguised).toEqual(new Map([["k", 1]]));
+	});
+
 	it("rejects an Error that a Proxy trap swaps in during the walk", () => {
 		const state: Record<string, unknown> = { a: { ok: true } };
 		state.b = new Proxy(
