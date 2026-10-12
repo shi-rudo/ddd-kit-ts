@@ -10,7 +10,7 @@ import {
 	InMemoryCapacityExceededError,
 } from "../../../errors/kit-errors";
 import { abortReason } from "../../../internal/async/abort";
-import { detachState } from "../../../internal/structural/detach-state";
+import { detachStateRejectingBinaryData } from "../../../internal/structural/detach-state";
 import { assertPositiveSafeInteger } from "../../../internal/validate";
 import type {
 	InMemoryTransaction,
@@ -32,10 +32,11 @@ export interface InMemoryEventStoreOptions {
 }
 
 /**
- * A copy of `event` that shares nothing with the caller. `detachState`
- * rejects a value that a copy would lose or change, for example a function,
- * a class instance, or an accessor, and it runs no accessor. Its rejection
- * names the event, and any other error passes unchanged.
+ * A copy of `event` that shares nothing with the caller. The walk rejects a
+ * value that a copy would lose or change, for example a function, a class
+ * instance, or an accessor, and binary data, as the event constructors do.
+ * It runs no accessor. Its rejection names the event, and any other error
+ * passes unchanged.
  */
 function copyForStorage<Evt>(
 	event: Evt,
@@ -48,7 +49,7 @@ function copyForStorage<Evt>(
 	if (event === null || typeof event !== "object") {
 		throw new TypeError(`${subject} is not an event object`);
 	}
-	return detachState(event, subject);
+	return detachStateRejectingBinaryData(event, subject);
 }
 
 function assertStreamPosition(

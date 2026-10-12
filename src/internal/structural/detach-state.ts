@@ -34,38 +34,68 @@ import {
  * first, in the entity or in the model.
  */
 export function detachState<T>(state: T, subject = "detachState: state"): T {
-	assertDetachable(state, "", { seen: new WeakSet(), subject });
+	return detach(state, { seen: new WeakSet(), subject, binaryData: "copy" });
+}
+
+/**
+ * {@link detachState} that also rejects binary data: a typed array, a
+ * DataView, an ArrayBuffer, or a SharedArrayBuffer. Binary data stays
+ * mutable under freezing, and JSON does not keep it. The walk rejects it at
+ * its tag, before it reads the indices. Kit modules only.
+ */
+export function detachStateRejectingBinaryData<T>(
+	state: T,
+	subject: string,
+): T {
+	return detach(state, { seen: new WeakSet(), subject, binaryData: "reject" });
+}
+
+/**
+ * Throws the `TypeError` of {@link detachStateRejectingBinaryData} and
+ * copies nothing. A caller that has a clone already checks it with this,
+ * so the rule is the same. Kit modules only.
+ */
+export function assertDetachableStateRejectingBinaryData(
+	state: unknown,
+	subject: string,
+): void {
+	assertDetachable(state, "", {
+		seen: new WeakSet(),
+		subject,
+		binaryData: "reject",
+	});
+}
+
+function detach<T>(state: T, walk: Walk): T {
+	assertDetachable(state, "", walk);
 	try {
 		return structuredClone(state);
 	} catch (cause) {
 		throw new TypeError(
-			`${subject} holds a Proxy or a host object that cannot be cloned; map it to plain data`,
+			`${walk.subject} holds a Proxy or a host object that cannot be cloned; map it to plain data`,
 			{ cause },
 		);
 	}
 }
 
-/**
- * Throws the `TypeError` of {@link detachState} when `state` holds a value
- * that a structured clone would lose or change, and copies nothing. A
- * caller that has a clone already checks it with this, so the rule is the
- * same as for {@link detachState}.
- */
-export function assertDetachableState(
-	state: unknown,
-	subject = "detachState: state",
-): void {
-	assertDetachable(state, "", { seen: new WeakSet(), subject });
-}
-
 const INDEX_KEY = /^(0|[1-9]\d*)$/;
+const BINARY_DATA_TAGS: ReadonlySet<string> = new Set([
+	"[object TypedArray]",
+	"[object DataView]",
+	"[object ArrayBuffer]",
+	"[object SharedArrayBuffer]",
+]);
 const mapEntries = Map.prototype.entries;
 const setValues = Set.prototype.values;
 
-/** The objects that the walk has seen, and the subject that its messages name. */
+/**
+ * The objects that the walk has seen, the subject that its messages name,
+ * and what it does with binary data.
+ */
 interface Walk {
 	readonly seen: WeakSet<object>;
 	readonly subject: string;
+	readonly binaryData: "copy" | "reject";
 }
 
 function assertDetachable(value: unknown, path: string, walk: Walk): void {
@@ -98,6 +128,11 @@ function assertDetachable(value: unknown, path: string, walk: Walk): void {
 	if (tag !== undefined) {
 		if (!hasIntrinsicPrototypeChain(object)) {
 			throwClassInstance(object, path, walk.subject);
+		}
+		if (walk.binaryData === "reject" && BINARY_DATA_TAGS.has(tag)) {
+			throw new TypeError(
+				`${walk.subject}${path} is binary data; binary buffers (a typed array, a DataView, an ArrayBuffer, or a SharedArrayBuffer) stay mutable under freezing and JSON does not keep them; encode the data as a string, for example base64`,
+			);
 		}
 		if (tag === "[object Map]") {
 			let index = 0;
