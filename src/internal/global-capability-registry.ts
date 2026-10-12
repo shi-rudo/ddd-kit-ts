@@ -1,8 +1,8 @@
 import {
 	CapabilityRegistryConflictError,
 	UnmanagedInstanceError,
-} from "../../../errors/kit-errors";
-import { isWeakMap } from "../../../internal/structural/is-built-in";
+} from "../errors/kit-errors";
+import { isWeakMap } from "./structural/is-built-in";
 
 /**
  * A capability registry with the outcome of its bootstrap and the one

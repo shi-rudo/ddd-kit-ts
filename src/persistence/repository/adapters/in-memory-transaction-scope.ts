@@ -1,8 +1,8 @@
-import { createGlobalCapabilityRegistry } from "../../../domain/aggregate/internal/global-capability-registry";
 import {
 	abortReason,
 	waitRejectingOnAbort,
 } from "../../../internal/async/abort";
+import { createGlobalCapabilityRegistry } from "../../../internal/global-capability-registry";
 import type {
 	InMemoryTransaction,
 	InMemoryTransactionParticipant,
