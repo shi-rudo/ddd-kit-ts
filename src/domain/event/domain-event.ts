@@ -4,6 +4,7 @@ import {
 	stampCooperativeBrand,
 } from "../../internal/cooperative-brand";
 import { assertFreezableState } from "../../internal/structural/detach-state";
+import { isIntrinsicConstructorPrototype } from "../../internal/structural/is-built-in";
 import { deepFreeze } from "../value-object/value-object";
 import { type ClockFactory, defaultClockFactory, readClock } from "./clock";
 import { DomainEventValidationError } from "./domain-event-errors";
@@ -875,11 +876,7 @@ function ownedEventMetadata(
 		return factorySource === undefined ? undefined : { source: factorySource };
 	}
 	const owned: unknown = cloneOwnedEventData(metadata, "metadata", operation);
-	if (
-		typeof owned !== "object" ||
-		owned === null ||
-		Object.getPrototypeOf(owned) !== Object.prototype
-	) {
+	if (!isPlainRecordCopy(owned)) {
 		// The copy is the kit's own, so its tag runs no caller code.
 		const received =
 			typeof owned === "object"
@@ -896,6 +893,22 @@ function ownedEventMetadata(
 		return record;
 	}
 	return { ...record, source: factorySource };
+}
+
+/**
+ * True for a structured-clone copy of a plain record. A runtime such as
+ * Vercel Edge returns the copy with the `Object.prototype` of another realm,
+ * so the check compares the source text of the constructor, not the
+ * prototype object.
+ */
+function isPlainRecordCopy(copy: unknown): boolean {
+	if (typeof copy !== "object" || copy === null) return false;
+	const prototype = Object.getPrototypeOf(copy);
+	return (
+		prototype !== null &&
+		isIntrinsicConstructorPrototype(prototype, "Object") &&
+		Object.getPrototypeOf(prototype) === null
+	);
 }
 
 function cloneOwnedEventData<T>(
