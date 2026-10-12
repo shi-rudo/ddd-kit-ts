@@ -36,7 +36,7 @@ export interface InMemoryEventStoreOptions {
  * value that a copy would lose or change, for example a function, a class
  * instance, or an accessor, and what a freeze cannot make immutable (binary
  * data and a RegExp), as the event constructors do.
- * It runs no accessor, but a Proxy runs its traps. Its rejection names the
+ * It runs no accessor unless a Proxy trap adds one. Its rejection names the
  * event, and any other error passes unchanged.
  */
 function copyForStorage<Evt>(

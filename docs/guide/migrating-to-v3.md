@@ -668,7 +668,8 @@ this.apply(this.createEvent("OrderConfirmed", payload));
 `ArrayBuffer`, `SharedArrayBuffer`, a typed array, and a `DataView`. Freezing
 does not cover them, and JSON does not keep them. Encode binary data as a
 string, or store it outside the event. `createDomainEvent` also rejects a
-`RegExp`: a global or sticky match writes its `lastIndex`, so a freeze cannot
+`RegExp`: `compile()` changes the pattern of a frozen RegExp before it throws,
+and a frozen global or sticky pattern throws on a match, so a freeze cannot
 make it immutable. Keep the source and the flags of a pattern as strings. The
 in-memory event store rejects binary data and a `RegExp` too.
 `createDomainEvent` checks its copy of the event data with the rule of the
@@ -1349,14 +1350,15 @@ Behavior that a use case or an adapter can notice:
   do. Before, it stored a copy of them. A batch entry that is not an object,
   for example `null`, throws a `TypeError` too; before, the store kept it.
   Events from `createDomainEvent` pass unchanged.
-- `createDomainEvent`, `createEvent`, and the other event constructors
-  reject an `Error`, a host object such as a `File`, and a `RegExp` in the
-  payload or the metadata with a `TypeError`. In rc.10 they accepted
-  these values, and the in-memory event store kept them.
+- `createDomainEvent`, `createEvent`, and the other event constructors reject
+  a symbol, an `Error`, a host object such as a `File`, and a `RegExp` in the
+  payload or the metadata with a `TypeError`. In rc.10 they accepted these
+  values, and the in-memory event store kept all of them but the symbol.
 - The event constructors reject metadata that is not a plain object, for
   example a string, an array, or a `Map`, with a `TypeError`. In rc.10 they
-  accepted it, and a factory with a `source` turned such metadata, also
-  `null`, into a record with the `source` and lost the rest.
+  accepted it. A factory with a `source` spread it into a record with the
+  `source`: a string or an array became index keys, and a number, a `Map`, or
+  `null` lost its content.
 - `InMemoryOutbox.add` rejects a malformed candidate with
   `EVENT_HARVEST_FAILED`: a part that is not an object, an `eventId` or
   `type` that is not an own string data property of the event, a source

@@ -114,7 +114,7 @@ const result2 = deepOmit(obj, {
 
 Returns a copy of `state` that shares no object with the original. The copy is a `structuredClone`, taken after a walk that rejects every value the clone would lose or silently degrade. A class instance keeps its data properties in a clone and loses the methods on its prototype; the walk throws a `TypeError` that names the path and the class instead. The optional `subject` replaces `detachState: state` at the start of every message.
 
-The walk reads the graph through property descriptors and walks a `Map` or a `Set` with the built-in iteration. No accessor and no own iterator of the state runs. A `Proxy` runs its traps, also during the clone. A second walk checks the clone, so a built-in whose prototype was replaced and a value that a trap swapped in are rejected too.
+The walk reads the graph through property descriptors and walks a `Map` or a `Set` with the built-in iteration. No accessor and no own iterator of the state runs. A `Proxy` runs its traps during the walk. A trap can change the graph, and an accessor that a trap adds runs during the clone. A second walk checks the clone, so a value that a trap swapped in and the content of a built-in whose prototype was replaced are rejected too.
 
 #### Rejected values
 
@@ -126,7 +126,7 @@ The walk reads the graph through property descriptors and walks a `Map` or a `Se
 - An expando on a built-in such as a `Map` or a `Date` (the clone drops it)
 - An `Error`, a `Promise`, a `WeakMap`, or a `WeakSet`
 - A `SharedArrayBuffer` or a view over one (the copy would share its memory)
-- A `Proxy`: the clone fails, and `detachState` rethrows the failure as a `TypeError` that keeps the cause
+- A `Proxy`: the walk or the clone fails; `detachState` rethrows a failure of the clone as a `TypeError` that keeps the cause
 
 Plain objects from any realm, arrays, `Date`, `Map`, `Set`, `RegExp`, bigints, and typed arrays pass. Circular references are preserved.
 

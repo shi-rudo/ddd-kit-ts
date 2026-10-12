@@ -109,9 +109,9 @@ immutable. Run one kit version per process during a cutover.
   metadata with the rule of the in-memory event store, so it also rejects a
   symbol, an `Error`, and a host object such as a `File`. A class instance or
   an accessor still becomes plain data in the copy. The metadata must be a
-  plain object or absent; a string, a number, an array, or a `Map` throws a
-  `TypeError`, also with a factory `source`. `EventMetadata` fields are
-  readonly. `DomainEvent` loses `aggregateVersion`; the commit envelope
+  plain object or absent; `null`, a string, a number, an array, or a `Map`
+  throws a `TypeError`, also with a factory `source`. `EventMetadata` fields
+  are readonly. `DomainEvent` loses `aggregateVersion`; the commit envelope
   carries the position.
 - `InMemoryEventStore.append` rejects an event that holds binary data, for
   example a `Uint8Array`, or a `RegExp`, with a `TypeError`, as the event
@@ -434,16 +434,16 @@ immutable. Run one kit version per process during a cutover.
   change rejects with a `TypeError` that names the event index and the stream.
   Examples are a function, a class instance, an accessor, an `Error`, and a
   hidden or symbol-keyed property. A batch entry that is not an object, for
-  example `null`, rejects too. No accessor runs, but a Proxy runs its traps.
+  example `null`, rejects too. No accessor runs unless a Proxy trap adds one.
   Before, the store dropped the prototype of a class instance, ran accessors,
   and could keep part of a failed batch. It reads its arguments once, so a
   getter on them cannot bypass the version check.
 - `detachState` walks a Map or a Set with the built-in iteration and reads
   class names through property descriptors, so no own iterator and no accessor
-  of the state runs. A Proxy still runs its traps. Before, an own iterator
-  could hide a class instance from the check. This also covers the read DTO of
-  an entity and the snapshot model. An optional second argument names the
-  state in the messages.
+  of the state runs. A Proxy still runs its traps, and an accessor that a trap
+  adds can run. Before, an own iterator could hide a class instance from the
+  check. This also covers the read DTO of an entity and the snapshot model. An
+  optional second argument names the state in the messages.
 - `UnitOfWork.run` reports a failed rollback as `RollbackError` also when a
   step after the work failed inside the transaction, for example the outbox
   write. Before, it reported a `CommitError` whose cause was the rollback

@@ -13,15 +13,16 @@ import {
  * built-in are dropped. A function or a symbol value throws a raw
  * `DataCloneError`. An Error, a Promise, a WeakMap, or a WeakSet cannot be
  * detached at all. A SharedArrayBuffer and a view over one keep sharing
- * their memory. A Proxy fails inside the clone; that failure is rethrown
- * as a `TypeError` with the cause.
+ * their memory. A Proxy fails in the walk or in the clone; a failure in
+ * the clone is rethrown as a `TypeError` with the cause.
  *
  * The walk reads the graph through property descriptors and walks a Map
  * or a Set with the built-in iteration, so no accessor and no own iterator
- * of the state runs. A Proxy runs its traps, also during the clone. A
- * second walk checks the clone, so a built-in whose prototype was replaced
- * and a value that a trap swapped in are rejected too. `subject` names the
- * state in the messages.
+ * of the state runs. A Proxy runs its traps during the walk. A trap can
+ * change the graph, and an accessor that a trap adds runs during the
+ * clone. A second walk checks the clone, so a value that a trap swapped in
+ * and the content of a built-in whose prototype was replaced are rejected
+ * too. `subject` names the state in the messages.
  *
  * Plain objects (from any realm), arrays, Dates, Maps, Sets, bigints, and
  * typed arrays pass. A RegExp passes: pattern and flags survive the clone,
@@ -264,7 +265,7 @@ function assertFreezable(tag: string, path: string, subject: string): void {
 	}
 	if (tag === REGEXP_TAG) {
 		throw new TypeError(
-			`${subject}${path} is a RegExp; a freeze cannot make it immutable, because a global or sticky match writes its lastIndex; keep its source and flags as strings`,
+			`${subject}${path} is a RegExp; a freeze cannot make it immutable, because compile() changes the pattern of a frozen RegExp before it throws, and a frozen global or sticky pattern throws on a match; keep its source and flags as strings`,
 		);
 	}
 }
