@@ -10,7 +10,7 @@ import {
 	InMemoryCapacityExceededError,
 } from "../../../errors/kit-errors";
 import { abortReason } from "../../../internal/async/abort";
-import { detachStateRejectingBinaryData } from "../../../internal/structural/detach-state";
+import { detachFreezableState } from "../../../internal/structural/detach-state";
 import { assertPositiveSafeInteger } from "../../../internal/validate";
 import type {
 	InMemoryTransaction,
@@ -34,9 +34,10 @@ export interface InMemoryEventStoreOptions {
 /**
  * A copy of `event` that shares nothing with the caller. The walk rejects a
  * value that a copy would lose or change, for example a function, a class
- * instance, or an accessor, and binary data, as the event constructors do.
- * It runs no accessor. Its rejection names the event, and any other error
- * passes unchanged.
+ * instance, or an accessor, and what a freeze cannot make immutable (binary
+ * data and a RegExp), as the event constructors do.
+ * It runs no accessor unless a Proxy trap adds one. Its rejection names the
+ * event, and any other error passes unchanged.
  */
 function copyForStorage<Evt>(
 	event: Evt,
@@ -44,12 +45,12 @@ function copyForStorage<Evt>(
 	stream: AggregateIdentity,
 ): Evt {
 	const subject =
-		`InMemoryEventStore.append: the event at index ${index} of stream ` +
-		describeAggregateIdentity(stream);
+		`InMemoryEventStore.append (stream ${describeAggregateIdentity(stream)}): ` +
+		`events[${index}]`;
 	if (event === null || typeof event !== "object") {
 		throw new TypeError(`${subject} is not an event object`);
 	}
-	return detachStateRejectingBinaryData(event, subject);
+	return detachFreezableState(event, subject);
 }
 
 function assertStreamPosition(

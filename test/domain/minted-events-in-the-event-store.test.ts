@@ -19,7 +19,6 @@ describe("events that createDomainEvent mints", () => {
 				tags: new Set(["a"]),
 				lines: new Map([["sku", 2]]),
 				total: new Money(100),
-				pattern: /a/g,
 			},
 			stream,
 		);

@@ -1,5 +1,6 @@
 import {
 	CommandBus,
+	createDomainEvent,
 	createDomainEventFactory,
 	detachState,
 	InMemoryEventStore,
@@ -74,6 +75,24 @@ export async function runEdgeRuntimeSmoke(runtime) {
 	await events.append(stream, [orderView.pendingEvent], { expectedVersion: 0 });
 	const history = await events.readStream(stream, { limit: 10 });
 	assert(history.lastVersion === 1, "event store did not keep the event");
+
+	// The metadata check must accept a copy from another realm too.
+	const traced = createDomainEventFactory({ source: "edge-smoke" }).create(
+		"EdgeOrderTraced",
+		{ orderId: order.id },
+		{ metadata: { correlationId: "corr-1" } },
+	);
+	assert(
+		traced.metadata?.source === "edge-smoke" &&
+			traced.metadata?.correlationId === "corr-1",
+		"the factory lost the metadata or its source",
+	);
+	const correlated = createDomainEvent(
+		"EdgeOrderCorrelated",
+		{ orderId: order.id },
+		{ metadata: { correlationId: "corr-2" } },
+	);
+	await events.append(stream, [traced, correlated], { expectedVersion: 1 });
 
 	const bus = new CommandBus();
 	bus.register("ReadOrder", async () => ok(orderView));

@@ -949,6 +949,53 @@ describe("commit cursor boundary", () => {
 	});
 });
 
+describe("a Proxy payload at the mint", () => {
+	it("is rejected without running a trap for the __proto__ check", () => {
+		let descriptorReads = 0;
+		const payload = new Proxy(
+			{},
+			{
+				getOwnPropertyDescriptor(target, key) {
+					descriptorReads += 1;
+					return Reflect.getOwnPropertyDescriptor(target, key);
+				},
+			},
+		);
+
+		expect(() => createDomainEvent("Proxied", payload)).toThrow(TypeError);
+		expect(descriptorReads).toBe(0);
+	});
+});
+
+describe("a symbol is rejected at the mint", () => {
+	it("rejects a symbol as the payload or the metadata", () => {
+		expect(() => createDomainEvent("Tagged", Symbol("tag"))).toThrow(TypeError);
+		expect(() =>
+			createDomainEvent("Tagged", undefined, {
+				metadata: Symbol("tag") as unknown as EventMetadata,
+			}),
+		).toThrow(TypeError);
+		expect(() => createUncommittedDomainEvent("Tagged", Symbol("tag"))).toThrow(
+			TypeError,
+		);
+	});
+});
+
+describe("a RegExp is rejected at the mint", () => {
+	it("rejects a RegExp in the payload and in the metadata", () => {
+		expect(() => createDomainEvent("PatternChosen", { pattern: /a/g })).toThrow(
+			TypeError,
+		);
+		expect(() =>
+			createDomainEvent(
+				"PatternChosen",
+				{ ok: true },
+				{ metadata: { pattern: /a/ } },
+			),
+		).toThrow(TypeError);
+	});
+});
+
 describe("binary payloads are rejected at the mint", () => {
 	// Freezing cannot make buffers immutable (the spec forbids freezing
 	// a view with elements, and a frozen view still shares its mutable
@@ -1048,6 +1095,24 @@ describe("factory source strategy", () => {
 		expect(event.metadata?.source).toBe("checkout");
 	});
 
+	it.each([
+		["binary data", () => new Uint8Array([7, 8])],
+		["an Error", () => new Error("not metadata")],
+		["a Map", () => new Map([["k", 1]])],
+		["null", () => null],
+	])(
+		"checks metadata that is %s before it adds its origin",
+		(_case, metadata) => {
+			const factory = createDomainEventFactory({ source: "checkout" });
+			const options = { metadata: metadata() as unknown as EventMetadata };
+
+			expect(() => factory.create("OrderPlaced", {}, options)).toThrow(
+				TypeError,
+			);
+			expect(() => factory.createStamp(options)).toThrow(TypeError);
+		},
+	);
+
 	it("adds no metadata when the factory names no origin", () => {
 		const factory = createDomainEventFactory();
 
@@ -1058,6 +1123,19 @@ describe("factory source strategy", () => {
 });
 
 describe("metadata option", () => {
+	it.each([
+		["a string", () => "abc"],
+		["a number", () => 42],
+		["an array", () => [1, 2]],
+		["a Map", () => new Map([["k", 1]])],
+	])("rejects metadata that is %s", (_case, metadata) => {
+		const options = { metadata: metadata() as unknown as EventMetadata };
+
+		expect(() => createDomainEvent("OrderPlaced", {}, options)).toThrow(
+			TypeError,
+		);
+	});
+
 	it("stores the metadata the call site names, standard and custom fields alike", () => {
 		const metadata: EventMetadata = {
 			correlationId: "corr-123",

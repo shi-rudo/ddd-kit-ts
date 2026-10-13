@@ -102,19 +102,21 @@ immutable. Run one kit version per process during a cutover.
   ids and the clock come from an immutable `createDomainEventFactory` value;
   the six module setters and scoped helpers are gone. See
   [The aggregate decides; the shell records](docs/guide/migrating-to-v3.md#the-aggregate-decides-the-shell-records).
-- Events are readonly and minted. A recording path accepts only an event
-  that a kit constructor minted and throws `UnmintedEventError` for a hand-built
-  object. `createDomainEvent` rejects binary buffers. It checks its copy of
-  the payload and the metadata with the rule of the in-memory event store,
-  so it also rejects an `Error`, a host object such as a `File`, and shared
-  memory. A class instance or an accessor still becomes plain data in the
-  copy. `EventMetadata` fields
+- Events are readonly and minted. A recording path accepts only an event that
+  a kit constructor minted and throws `UnmintedEventError` for a hand-built
+  object. `createDomainEvent` rejects binary buffers and a `RegExp`, because a
+  freeze cannot make them immutable. It checks its copy of the payload and the
+  metadata with the rule of the in-memory event store, so it also rejects a
+  symbol, an `Error`, and a host object such as a `File`. A class instance or
+  an accessor still becomes plain data in the copy. The metadata must be a
+  plain object or absent; `null`, a string, a number, an array, or a `Map`
+  throws a `TypeError`, also with a factory `source`. `EventMetadata` fields
   are readonly. `DomainEvent` loses `aggregateVersion`; the commit envelope
   carries the position.
 - `InMemoryEventStore.append` rejects an event that holds binary data, for
-  example a `Uint8Array`, with a `TypeError`, as the event constructors do.
-  Before, it stored a copy. Encode binary data as a string, for example
-  base64.
+  example a `Uint8Array`, or a `RegExp`, with a `TypeError`, as the event
+  constructors do. Before, it stored a copy. Encode binary data as a string,
+  for example base64, and keep a pattern as its source and flags.
 - `Entity.state` is protected, and `IEntity<TId, TState>` is `IEntity<TId>`.
   A subclass no longer sees `_state` and `freezeState`. A reconstitution
   factory passes `trustInitialState: true` for a persisted state.
@@ -394,6 +396,13 @@ immutable. Run one kit version per process during a cutover.
 
 ### Fixed
 
+- `detachState` and `InMemoryEventStore.append` check the copy with a second
+  walk. Before, a `Map`, a `Set`, an `ArrayBuffer`, or a `SharedArrayBuffer`
+  whose prototype was replaced passed the walk as an empty record, and the
+  copy then kept an `Error`, a class instance, or shared memory. An own
+  property of such a built-in was lost in the copy without an error. A Proxy
+  trap could also swap a value in after the walk. The walks now also count the
+  data properties of records and arrays, and a copy with another count throws.
 - `InMemoryIdempotencyStore` reads its clock before its state, and `claim`
   asks the token factory before its final checks. A clock or a factory that
   changes the store can no longer push it past `maxEntries`, replace a live
@@ -424,18 +433,19 @@ immutable. Run one kit version per process during a cutover.
 - `InMemoryEventStore.append` writes all of a batch or nothing, and it stores
   only plain data. It copies each event with `detachState`, the state
   detachment of the kit. An event with a value that the copy would lose or
-  change rejects with a `TypeError` that names the event index and the
-  stream. Examples are a function, a class instance, an accessor, an `Error`,
-  and a hidden or symbol-keyed property. No accessor runs. Before, the store
-  dropped the prototype of a class instance, ran accessors, and could keep
-  part of a failed batch. It reads its arguments once, so a getter on them
-  cannot bypass the version check.
+  change rejects with a `TypeError` that names the event index and the stream.
+  Examples are a function, a class instance, an accessor, an `Error`, and a
+  hidden or symbol-keyed property. A batch entry that is not an object, for
+  example `null`, rejects too. No accessor runs unless a Proxy trap adds one.
+  Before, the store dropped the prototype of a class instance, ran accessors,
+  and could keep part of a failed batch. It reads its arguments once, so a
+  getter on them cannot bypass the version check.
 - `detachState` walks a Map or a Set with the built-in iteration and reads
-  class names through property descriptors, so no own iterator and no
-  accessor of the state runs. Before, an own iterator could hide a class
-  instance from the check. This also covers the read DTO of an entity and
-  the snapshot model. An optional second argument names the state in the
-  messages.
+  class names through property descriptors, so no own iterator and no accessor
+  of the state runs. A Proxy still runs its traps, and an accessor that a trap
+  adds can run. Before, an own iterator could hide a class instance from the
+  check. This also covers the read DTO of an entity and the snapshot model. An
+  optional second argument names the state in the messages.
 - `UnitOfWork.run` reports a failed rollback as `RollbackError` also when a
   step after the work failed inside the transaction, for example the outbox
   write. Before, it reported a `CommitError` whose cause was the rollback

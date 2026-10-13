@@ -105,7 +105,7 @@ dual CJS/ESM load). The brand catches accidents, not adversaries: code in the
 same process can fake it. The gate is not a security boundary; validate
 untrusted input at the application edge.
 
-Events should be plain structured-cloneable data. Functions, promises, `WeakMap`, and `WeakSet` do not belong in event payloads. A class instance may lose its prototype through structured cloning, so model event payloads as plain records. The event constructors check their copy of the event data with the rule of the in-memory event store: they reject an `Error`, a host object such as a `File`, binary buffers, and shared memory. Map an `Error` to plain data, for example its message and code.
+Events should be plain structured-cloneable data. Functions, promises, `WeakMap`, and `WeakSet` do not belong in event payloads. A class instance may lose its prototype through structured cloning, so model event payloads as plain records. The event constructors check their copy of the event data with the rule of the in-memory event store: they reject an `Error`, a host object such as a `File`, binary buffers, shared memory, and a `RegExp`. Map an `Error` to plain data, for example its message and code.
 
 `createDomainEvent` reads the platform clock and Web Crypto when `occurredAt`
 or `eventId` is omitted. If the caller must provide every nondeterministic
@@ -315,6 +315,11 @@ without changing the event.
 Use metadata for message relationships and operational context, not for core
 domain state. If a value is required to understand the event as a domain fact,
 put it in the payload.
+
+The event constructors require the metadata to be a plain object or absent.
+`null`, a string, a number, an array, or a `Map` as metadata throws a
+`TypeError`. A factory that names a `source` adds it after this check, unless
+the metadata names its own `source`.
 
 The application shell attaches the actor on the stamp. `userId` says who caused
 the fact and `correlationId` says in which operation. That is the audit record.

@@ -13,13 +13,19 @@ import {
  * built-in are dropped. A function or a symbol value throws a raw
  * `DataCloneError`. An Error, a Promise, a WeakMap, or a WeakSet cannot be
  * detached at all. A SharedArrayBuffer and a view over one keep sharing
- * their memory. A Proxy is invisible to the walk and fails inside the
- * clone; that failure is rethrown as a `TypeError` with the cause.
+ * their memory. A Proxy fails in the walk or in the clone; a failure in
+ * the clone is rethrown as a `TypeError` with the cause.
  *
  * The walk reads the graph through property descriptors and walks a Map
  * or a Set with the built-in iteration, so no accessor and no own iterator
- * of the state runs. A Proxy still runs its traps. `subject` names the
- * state in the messages.
+ * of the state runs. A Proxy runs its traps during the walk. A trap can
+ * change the graph, and an accessor that a trap adds runs during the
+ * clone. A second walk checks the clone, so a value that a trap swapped in
+ * and the content of a built-in whose prototype was replaced are rejected
+ * too. The walks also count the data properties of records and arrays. A
+ * copy with another count throws, because a built-in whose prototype was
+ * replaced loses its own properties in the copy. `subject` names the state
+ * in the messages.
  *
  * Plain objects (from any realm), arrays, Dates, Maps, Sets, bigints, and
  * typed arrays pass. A RegExp passes: pattern and flags survive the clone,
@@ -34,48 +40,69 @@ import {
  * first, in the entity or in the model.
  */
 export function detachState<T>(state: T, subject = "detachState: state"): T {
-	return detach(state, { seen: new WeakSet(), subject, binaryData: "copy" });
+	return detach(state, subject, "clone");
 }
 
 /**
- * {@link detachState} that also rejects binary data: a typed array, a
- * DataView, an ArrayBuffer, or a SharedArrayBuffer. Binary data stays
- * mutable under freezing, and JSON does not keep it. The walk rejects it at
- * its tag, before it reads the indices. Kit modules only.
+ * {@link detachState} that also rejects what `deepFreeze` cannot make
+ * immutable: binary data (a typed array, a DataView, an ArrayBuffer, or a
+ * SharedArrayBuffer) and a RegExp. The walk rejects such a value at its
+ * tag, before it reads the indices of a typed array. Kit modules only.
  */
-export function detachStateRejectingBinaryData<T>(
-	state: T,
-	subject: string,
-): T {
-	return detach(state, { seen: new WeakSet(), subject, binaryData: "reject" });
+export function detachFreezableState<T>(state: T, subject: string): T {
+	return detach(state, subject, "freeze");
 }
 
 /**
- * Throws the `TypeError` of {@link detachStateRejectingBinaryData} and
- * copies nothing. A caller that has a clone already checks it with this,
- * so the rule is the same. Kit modules only.
+ * Throws the `TypeError` of {@link detachFreezableState} and copies
+ * nothing. A caller that has a clone already checks it with this, so the
+ * rule is the same. Kit modules only.
  */
-export function assertDetachableStateRejectingBinaryData(
-	state: unknown,
-	subject: string,
-): void {
+export function assertFreezableState(state: unknown, subject: string): void {
 	assertDetachable(state, "", {
 		seen: new WeakSet(),
 		subject,
-		binaryData: "reject",
+		rule: "freeze",
+		dataProperties: 0,
 	});
 }
 
-function detach<T>(state: T, walk: Walk): T {
-	assertDetachable(state, "", walk);
+function detach<T>(state: T, subject: string, rule: Walk["rule"]): T {
+	const original: Walk = {
+		seen: new WeakSet(),
+		subject,
+		rule,
+		dataProperties: 0,
+	};
+	assertDetachable(state, "", original);
+	let copy: T;
 	try {
-		return structuredClone(state);
+		copy = structuredClone(state);
 	} catch (cause) {
 		throw new TypeError(
-			`${walk.subject} holds a Proxy or a host object that cannot be cloned; map it to plain data`,
+			`${subject} holds a Proxy or a host object that cannot be cloned; map it to plain data`,
 			{ cause },
 		);
 	}
+	// The first walk trusts the prototype of an object, and a Proxy trap can
+	// change the graph after it. The copy has genuine prototypes and no
+	// Proxy, so this walk checks exactly what the caller gets. A built-in
+	// whose prototype was replaced passes the first walk as a record, and
+	// the copy drops its own properties, so the walks also compare how many
+	// data properties they checked.
+	const copied: Walk = {
+		seen: new WeakSet(),
+		subject,
+		rule,
+		dataProperties: 0,
+	};
+	assertDetachable(copy, "", copied);
+	if (copied.dataProperties !== original.dataProperties) {
+		throw new TypeError(
+			`${subject} changed in the copy: the state has ${original.dataProperties} data properties and the copy has ${copied.dataProperties}; a built-in whose prototype was replaced loses its own properties in the copy, and a Proxy trap can change the graph; map it to plain data`,
+		);
+	}
+	return copy;
 }
 
 const INDEX_KEY = /^(0|[1-9]\d*)$/;
@@ -85,17 +112,21 @@ const BINARY_DATA_TAGS: ReadonlySet<string> = new Set([
 	"[object ArrayBuffer]",
 	"[object SharedArrayBuffer]",
 ]);
+const REGEXP_TAG = "[object RegExp]";
 const mapEntries = Map.prototype.entries;
 const setValues = Set.prototype.values;
 
 /**
  * The objects that the walk has seen, the subject that its messages name,
- * and what it does with binary data.
+ * and its rule. `"clone"` accepts what a structured clone keeps. `"freeze"`
+ * also rejects what `deepFreeze` cannot make immutable.
  */
 interface Walk {
 	readonly seen: WeakSet<object>;
 	readonly subject: string;
-	readonly binaryData: "copy" | "reject";
+	readonly rule: "clone" | "freeze";
+	/** Data properties of records and arrays that the walk checked. */
+	dataProperties: number;
 }
 
 function assertDetachable(value: unknown, path: string, walk: Walk): void {
@@ -126,13 +157,11 @@ function assertDetachable(value: unknown, path: string, walk: Walk): void {
 
 	const tag = builtInTagWithoutInvokingAccessors(object);
 	if (tag !== undefined) {
+		// The tag comes from the internal slot, so a subclass gets the same
+		// message as its built-in.
+		if (walk.rule === "freeze") assertFreezable(tag, path, walk.subject);
 		if (!hasIntrinsicPrototypeChain(object)) {
 			throwClassInstance(object, path, walk.subject);
-		}
-		if (walk.binaryData === "reject" && BINARY_DATA_TAGS.has(tag)) {
-			throw new TypeError(
-				`${walk.subject}${path} is binary data; binary buffers (a typed array, a DataView, an ArrayBuffer, or a SharedArrayBuffer) stay mutable under freezing and JSON does not keep them; encode the data as a string, for example base64`,
-			);
 		}
 		if (tag === "[object Map]") {
 			let index = 0;
@@ -224,17 +253,52 @@ function assertOwnPropertiesDetachable(
 				`${walk.subject}${memberPath} is an expando on a ${constructorName(Object.getPrototypeOf(object)) ?? "built-in"} and the clone would drop it; map it to plain data`,
 			);
 		}
+		walk.dataProperties += 1;
 		assertDetachable(descriptor.value, memberPath, walk);
 	}
 }
 
+// The built-in getters read the internal slot, so an own `buffer`
+// accessor of a view does not run.
+const typedArrayBuffer = Object.getOwnPropertyDescriptor(
+	Object.getPrototypeOf(Uint8Array.prototype),
+	"buffer",
+)?.get as (this: ArrayBufferView) => ArrayBufferLike;
+const dataViewBuffer = Object.getOwnPropertyDescriptor(
+	DataView.prototype,
+	"buffer",
+)?.get as (this: DataView) => ArrayBufferLike;
+
 function sharesMemory(object: object, tag: string): boolean {
 	if (tag === "[object SharedArrayBuffer]") return true;
+	if (tag === "[object TypedArray]") {
+		return isSharedArrayBuffer(
+			typedArrayBuffer.call(object as ArrayBufferView),
+		);
+	}
+	if (tag === "[object DataView]") {
+		return isSharedArrayBuffer(dataViewBuffer.call(object as DataView));
+	}
+	return false;
+}
+
+function isSharedArrayBuffer(buffer: ArrayBufferLike): boolean {
 	return (
-		ArrayBuffer.isView(object) &&
-		Object.prototype.toString.call(object.buffer) ===
-			"[object SharedArrayBuffer]"
+		builtInTagWithoutInvokingAccessors(buffer) === "[object SharedArrayBuffer]"
 	);
+}
+
+function assertFreezable(tag: string, path: string, subject: string): void {
+	if (BINARY_DATA_TAGS.has(tag)) {
+		throw new TypeError(
+			`${subject}${path} is binary data; binary buffers (a typed array, a DataView, an ArrayBuffer, or a SharedArrayBuffer) stay mutable under freezing and JSON does not keep them; encode the data as a string, for example base64`,
+		);
+	}
+	if (tag === REGEXP_TAG) {
+		throw new TypeError(
+			`${subject}${path} is a RegExp; a freeze cannot make it immutable, because compile() changes the pattern of a frozen RegExp before it throws, and a frozen global or sticky pattern throws on a match; keep its source and flags as strings`,
+		);
+	}
 }
 
 function throwClassInstance(

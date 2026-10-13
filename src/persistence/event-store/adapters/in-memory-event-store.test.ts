@@ -439,6 +439,54 @@ describe("InMemoryEventStore", () => {
 			});
 		});
 
+		it("rejects a Map whose prototype was replaced and that carries an own property", async () => {
+			const store = new InMemoryEventStore<OrderEvent>();
+			const disguised = Object.setPrototypeOf(
+				new Map([["k", 1]]),
+				Object.prototype,
+			);
+			disguised.note = "lost in the copy";
+			const withDisguisedMap = {
+				...renamed("bad"),
+				payload: { name: "bad", lines: disguised },
+			} as unknown as OrderEvent;
+
+			await expect(
+				store.append(streamA, [withDisguisedMap], { expectedVersion: 0 }),
+			).rejects.toBeInstanceOf(TypeError);
+		});
+
+		it("rejects a RegExp in an event", async () => {
+			const store = new InMemoryEventStore<OrderEvent>();
+			const withPattern = {
+				...renamed("bad"),
+				payload: { name: "bad", pattern: /a/g },
+			} as unknown as OrderEvent;
+
+			await expect(
+				store.append(streamA, [withPattern], { expectedVersion: 0 }),
+			).rejects.toBeInstanceOf(TypeError);
+		});
+
+		it("rejects a SharedArrayBuffer whose prototype was replaced", async () => {
+			const store = new InMemoryEventStore<OrderEvent>();
+			const disguised = Object.setPrototypeOf(
+				new SharedArrayBuffer(4),
+				Object.prototype,
+			);
+			const withSharedMemory = {
+				...renamed("bad"),
+				payload: { name: "bad", memory: disguised },
+			} as unknown as OrderEvent;
+
+			await expect(
+				store.append(streamA, [withSharedMemory], { expectedVersion: 0 }),
+			).rejects.toBeInstanceOf(TypeError);
+			expect(await store.readStream(streamA, allEvents)).toMatchObject({
+				exists: false,
+			});
+		});
+
 		it("rejects an event getter without running it", async () => {
 			const store = new InMemoryEventStore<OrderEvent>();
 			let getterRuns = 0;

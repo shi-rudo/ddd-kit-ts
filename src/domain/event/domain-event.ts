@@ -3,7 +3,8 @@ import {
 	hasCooperativeBrand,
 	stampCooperativeBrand,
 } from "../../internal/cooperative-brand";
-import { assertDetachableStateRejectingBinaryData } from "../../internal/structural/detach-state";
+import { assertFreezableState } from "../../internal/structural/detach-state";
+import { isIntrinsicConstructorPrototype } from "../../internal/structural/is-built-in";
 import { deepFreeze } from "../value-object/value-object";
 import { type ClockFactory, defaultClockFactory, readClock } from "./clock";
 import { DomainEventValidationError } from "./domain-event-errors";
@@ -328,25 +329,16 @@ export interface DomainEventFactory {
  * recordPendingEvents(order, domainEvents);
  * ```
  */
-/**
- * Fills the origin of a factory into options that name none.
- *
- * A call site that states its own source keeps it: an explicit fact about one
- * event outranks the default of the factory that mints it.
- */
-function withFactorySource<T extends { readonly metadata?: EventMetadata }>(
-	options: T | undefined,
-	source: string | undefined,
-): T {
-	const given = (options ?? {}) as T;
-	if (source === undefined || given.metadata?.source !== undefined) {
-		return given;
-	}
-	return { ...given, metadata: { ...given.metadata, source } };
-}
-
 export function createDomainEventFactory(
 	options: DomainEventFactoryOptions = {},
+): DomainEventFactory {
+	return buildDomainEventFactory(options, "DomainEventFactory.create");
+}
+
+/** `createOperation` is the name that the errors of `create` give. */
+function buildDomainEventFactory(
+	options: DomainEventFactoryOptions,
+	createOperation: string,
 ): DomainEventFactory {
 	const eventIdFactory = options.eventIdFactory ?? defaultEventIdFactory;
 	const clock = options.clock ?? defaultClockFactory;
@@ -359,10 +351,11 @@ export function createDomainEventFactory(
 		mintDomainEvent(
 			type,
 			payload,
-			withFactorySource(createOptions, source),
+			createOptions,
 			eventIdFactory,
 			clock,
-			"createDomainEvent",
+			createOperation,
+			source,
 		)) as DomainEventFactory["create"];
 	const createStamp = (
 		stampOptions: CreateDomainEventStampOptions = {},
@@ -381,10 +374,10 @@ export function createDomainEventFactory(
 		const eventId = stampOptions.eventId ?? eventIdFactory();
 		assertNonBlankEventField(eventId, "eventId", "EVENT_ID_INVALID");
 		const occurredAt = explicitOccurredAt ?? readEventClock(clock);
-		const metadata = cloneOwnedEventData(
-			withFactorySource(stampOptions, source).metadata,
-			"metadata",
-			"createStamp",
+		const metadata = ownedEventMetadata(
+			stampOptions.metadata,
+			"DomainEventFactory.createStamp",
+			source,
 		);
 		const stamp: DomainEventStamp = {
 			eventId,
@@ -409,7 +402,7 @@ export function createDomainEventFactory(
  * with {@link createDomainEventFactory} for custom policy.
  */
 export const defaultDomainEventFactory: DomainEventFactory =
-	createDomainEventFactory();
+	buildDomainEventFactory({}, "createDomainEvent");
 
 /**
  * Creates a domain event with default values.
@@ -532,16 +525,31 @@ export function createUncommittedDomainEvent<T extends string, P>(
 	payload?: P,
 	options?: CreateUncommittedDomainEventOptions,
 ): UncommittedDomainEvent<T, P> {
+	return mintUncommittedDomainEvent(
+		type,
+		payload,
+		options,
+		"createUncommittedDomainEvent",
+	);
+}
+
+/**
+ * {@link createUncommittedDomainEvent} whose errors name `operation`, the
+ * function that the caller called. Module-internal export; not part of the
+ * package entries.
+ */
+export function mintUncommittedDomainEvent<T extends string, P>(
+	type: T,
+	payload: P | undefined,
+	options: CreateUncommittedDomainEventOptions | undefined,
+	operation: string,
+): UncommittedDomainEvent<T, P> {
 	assertProducerOwnedEventFields(type, options);
 	const event: UncommittedDomainEvent<T, P> = {
 		type,
 		aggregateId: options?.aggregateId,
 		aggregateType: options?.aggregateType,
-		payload: cloneOwnedEventData(
-			payload as P,
-			"payload",
-			"createUncommittedDomainEvent",
-		),
+		payload: cloneOwnedEventData(payload as P, "payload", operation),
 		schemaVersion: options?.schemaVersion ?? 1,
 	};
 	stampUncommittedBrand(event);
@@ -589,11 +597,7 @@ export function recordDomainEvent<T extends string, P>(
 	// the stamp fields before they enter the immutable event.
 	assertNonBlankEventField(stamp.eventId, "eventId", "EVENT_ID_INVALID");
 	const occurredAt = deepFreeze(copyValidEventDate(stamp.occurredAt)) as Date;
-	const metadata = cloneOwnedEventData(
-		stamp.metadata,
-		"metadata",
-		"recordDomainEvent",
-	);
+	const metadata = ownedEventMetadata(stamp.metadata, "recordDomainEvent");
 	return mintRecordedEvent(
 		event,
 		stamp.eventId,
@@ -737,6 +741,7 @@ function mintDomainEvent<T extends string, P>(
 	eventIdFactory: EventIdFactory,
 	clock: ClockFactory,
 	operation: string,
+	factorySource?: string,
 ): DomainEvent<T, P> {
 	assertProducerOwnedEventFields(type, options);
 	const eventId = options?.eventId ?? eventIdFactory();
@@ -762,7 +767,7 @@ function mintDomainEvent<T extends string, P>(
 		// before the event is frozen, so neither aliases caller-owned state.
 		occurredAt,
 		schemaVersion,
-		metadata: cloneOwnedEventData(options?.metadata, "metadata", operation),
+		metadata: ownedEventMetadata(options?.metadata, operation, factorySource),
 	};
 	// Deep-freeze so a mutating subscriber cannot poison subsequent
 	// handlers: events are facts of the past and must be immutable
@@ -844,15 +849,63 @@ function readEventClock(clock: ClockFactory): Date {
 }
 
 /**
+ * Copies the caller's metadata and checks the copy. Metadata is a plain
+ * record or absent; a null from a JSON envelope would mint and then fail
+ * every metadata read far from the producer. A factory origin fills
+ * `source` only after the check, and a call site that names its own source
+ * keeps it: an explicit fact about one event outranks the default of the
+ * factory that mints it.
+ */
+function ownedEventMetadata(
+	metadata: EventMetadata | undefined,
+	operation: string,
+	factorySource?: string,
+): EventMetadata | undefined {
+	if (metadata === undefined) {
+		return factorySource === undefined ? undefined : { source: factorySource };
+	}
+	const owned: unknown = cloneOwnedEventData(metadata, "metadata", operation);
+	if (!isPlainRecordCopy(owned)) {
+		// The copy is the kit's own, so its tag runs no caller code.
+		const received =
+			typeof owned === "object"
+				? owned === null
+					? "null"
+					: Object.prototype.toString.call(owned)
+				: `a ${typeof owned}`;
+		throw new TypeError(
+			`${operation}: metadata must be an object or undefined, and a plain record; received ${received}`,
+		);
+	}
+	const record = owned as EventMetadata;
+	if (factorySource === undefined || record.source !== undefined) {
+		return record;
+	}
+	return { ...record, source: factorySource };
+}
+
+/**
+ * True for a structured-clone copy of a plain record. A runtime such as
+ * Vercel Edge returns the copy with the `Object.prototype` of another realm,
+ * so the check compares the source text of the constructor, not the
+ * prototype object.
+ */
+function isPlainRecordCopy(copy: unknown): boolean {
+	if (typeof copy !== "object" || copy === null) return false;
+	const prototype = Object.getPrototypeOf(copy);
+	return (
+		prototype !== null &&
+		isIntrinsicConstructorPrototype(prototype, "Object") &&
+		Object.getPrototypeOf(prototype) === null
+	);
+}
+
+/**
  * Deep-clones caller-supplied event data (payload, metadata) before the
- * event is frozen, so `createDomainEvent` never freezes or aliases the
- * caller's own object graph. Primitives pass through unchanged.
- *
- * Uses `structuredClone`, which matches the documented plain-data event
- * contract: functions, Promise, and WeakMap/WeakSet values throw a
- * descriptive `TypeError` (they are not data); symbol-keyed properties
- * are not carried over; a class instance would silently lose its
- * prototype, which the plain-data contract already rules out.
+ * event is frozen, so a constructor never freezes or aliases the caller's
+ * own object graph, and checks the clone with {@link assertFreezableState}.
+ * A primitive needs no copy, but the check rejects a symbol. A class
+ * instance or an accessor becomes plain data in the clone.
  */
 function cloneOwnedEventData<T>(
 	value: T,
@@ -864,42 +917,36 @@ function cloneOwnedEventData<T>(
 			`${operation}: ${field} must not be a function: domain events are plain data`,
 		);
 	}
-	// Metadata is an object or absent; a null from a JSON envelope would
-	// mint and then fail every metadata read far from the producer.
-	if (value === null && field === "metadata") {
-		throw new TypeError(
-			`${operation}: metadata must be an object or undefined; received null`,
-		);
-	}
 	if (value === null || typeof value !== "object") {
+		// A primitive needs no copy, but the walk still rejects a symbol,
+		// which the in-memory event store rejects too.
+		assertFreezableState(value, `${operation}: ${field}`);
 		return value;
 	}
-	// An own "__proto__" data key survives structuredClone and would
-	// re-arm prototype pollution in every [[Set]]-based consumer of the
-	// event; reject it at the root, the same contract as entity state.
-	assertNoHostileOwnProtoKey(
-		value,
-		field === "payload" ? "Event payload" : "Event metadata",
-	);
 	let clone: T;
 	try {
 		clone = structuredClone(value);
 	} catch (cause) {
 		throw new TypeError(
-			`${operation}: ${field} must be plain, structured-cloneable data ` +
-				`(no functions, Promises, or WeakMap/WeakSet values): domain events ` +
-				`are plain data`,
+			`${operation}: ${field} cannot be copied, because structuredClone ` +
+				"failed (the cause names the value); domain events are plain data",
 			{ cause },
 		);
 	}
+	// An own "__proto__" data key survives structuredClone and would
+	// re-arm prototype pollution in every [[Set]]-based consumer of the
+	// event; reject it at the root, the same contract as entity state. The
+	// check reads the clone, so a Proxy root runs no trap for it.
+	assertNoHostileOwnProtoKey(clone as object, `Event ${field} of ${operation}`);
 	// The check runs on the clone. It has no accessor, no own iterator, and
 	// no class prototype, so the check runs no caller code. The in-memory
 	// event store checks with the same walk, so an event that the mint
 	// accepts is one that the store accepts. The walk rejects what the clone
-	// keeps but plain data cannot hold: an Error, a host object such as a
-	// File, and binary data. Binary data stays mutable under freezing, which
-	// would break the mint guarantee "minted implies deeply frozen".
-	assertDetachableStateRejectingBinaryData(clone, `${operation}: ${field}`);
+	// keeps but plain data cannot hold, an Error or a host object such as a
+	// File, and what a freeze cannot make immutable, binary data and a
+	// RegExp. These would break the mint guarantee "minted implies deeply
+	// frozen".
+	assertFreezableState(clone, `${operation}: ${field}`);
 	return clone;
 }
 

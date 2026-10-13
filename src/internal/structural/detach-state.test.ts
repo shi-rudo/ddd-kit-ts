@@ -2,9 +2,9 @@
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vite-plus/test";
 import {
-	assertDetachableStateRejectingBinaryData,
+	assertFreezableState,
+	detachFreezableState,
 	detachState,
-	detachStateRejectingBinaryData,
 } from "./detach-state";
 
 class OwnerReview {
@@ -280,7 +280,73 @@ describe("detachState", () => {
 	});
 });
 
-describe("detachStateRejectingBinaryData", () => {
+describe("detachState and a graph that the walk cannot see", () => {
+	it("reads the buffer of a typed array without running an own accessor", () => {
+		let runs = 0;
+		const bytes = new Uint8Array(2);
+		Object.defineProperty(bytes, "buffer", {
+			get() {
+				runs += 1;
+				return new ArrayBuffer(2);
+			},
+		});
+
+		detachState({ bytes });
+
+		expect(runs).toBe(0);
+	});
+
+	it("rejects an Error in a Map whose prototype was replaced", () => {
+		const disguised = Object.setPrototypeOf(
+			new Map([["cause", new Error("lost")]]),
+			Object.prototype,
+		);
+
+		expect(() => detachState({ disguised })).toThrow(TypeError);
+	});
+
+	it.each([
+		["a Map", () => new Map([["k", 1]])],
+		["a Set", () => new Set([1])],
+		["an ArrayBuffer", () => new ArrayBuffer(4)],
+		["a boxed bigint", () => Object(1n)],
+	])(
+		"rejects %s whose prototype was replaced and that carries an own property",
+		(_case, make) => {
+			const disguised = Object.setPrototypeOf(make(), Object.prototype);
+			disguised.note = "lost in the copy";
+
+			expect(() => detachState({ disguised })).toThrow(TypeError);
+		},
+	);
+
+	it("copies a Map whose prototype was replaced and that carries no own property", () => {
+		const disguised = Object.setPrototypeOf(
+			new Map([["k", 1]]),
+			Object.prototype,
+		);
+
+		expect(detachState({ disguised }).disguised).toEqual(new Map([["k", 1]]));
+	});
+
+	it("rejects an Error that a Proxy trap swaps in during the walk", () => {
+		const state: Record<string, unknown> = { a: { ok: true } };
+		state.b = new Proxy(
+			{},
+			{
+				ownKeys(target) {
+					state.a = new Error("swapped in");
+					state.b = "plain";
+					return Reflect.ownKeys(target);
+				},
+			},
+		);
+
+		expect(() => detachState(state)).toThrow(TypeError);
+	});
+});
+
+describe("detachFreezableState", () => {
 	it.each([
 		["a typed array", () => new Uint8Array(4)],
 		["a DataView", () => new DataView(new ArrayBuffer(2))],
@@ -289,33 +355,34 @@ describe("detachStateRejectingBinaryData", () => {
 	])("rejects %s anywhere in the state", (_case, binaryData) => {
 		const state = { parts: [{ data: binaryData() }] };
 
-		expect(() => detachStateRejectingBinaryData(state, "state")).toThrow(
-			TypeError,
-		);
+		expect(() => detachFreezableState(state, "state")).toThrow(TypeError);
+	});
+
+	it("rejects a RegExp, which detachState accepts", () => {
+		const state = { pattern: /a/g };
+
+		expect(() => detachFreezableState(state, "state")).toThrow(TypeError);
+		expect(detachState(state).pattern.source).toBe("a");
 	});
 
 	it("copies plain data like detachState", () => {
 		const state = { at: new Date(0), tags: new Set(["a"]) };
 
-		const copy = detachStateRejectingBinaryData(state, "state");
+		const copy = detachFreezableState(state, "state");
 
 		expect(copy).toEqual(state);
 		expect(copy).not.toBe(state);
 	});
 });
 
-describe("assertDetachableStateRejectingBinaryData", () => {
+describe("assertFreezableState", () => {
 	it("rejects binary data in a Map key", () => {
 		const state = new Map([[new Uint8Array(1), "a"]]);
 
-		expect(() =>
-			assertDetachableStateRejectingBinaryData(state, "state"),
-		).toThrow(TypeError);
+		expect(() => assertFreezableState(state, "state")).toThrow(TypeError);
 	});
 
 	it("accepts plain data", () => {
-		expect(() =>
-			assertDetachableStateRejectingBinaryData({ a: [1, "b"] }, "state"),
-		).not.toThrow();
+		expect(() => assertFreezableState({ a: [1, "b"] }, "state")).not.toThrow();
 	});
 });
