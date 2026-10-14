@@ -4,6 +4,7 @@ import {
 	type DomainEvent,
 } from "../../domain/event/domain-event";
 import type { ExecutionContext } from "../../internal/async/execution";
+import { recordingOutbox } from "../../testing/recording-outbox";
 import type { CommittedDomainEvent } from "../committed-event";
 import { EventBusImpl } from "../event-bus/event-bus";
 import { InMemoryOutbox } from "./outbox";
@@ -95,13 +96,12 @@ function interceptOutbox(
 	inner: InMemoryOutbox<TestEvent>,
 	overrides: Partial<Outbox<TestEvent>>,
 ): Outbox<TestEvent> {
-	return {
+	return recordingOutbox<TestEvent>({
 		add: (events) => inner.add(events),
-		endEventSources: async () => {},
 		getPending: (limit) => inner.getPending(limit),
 		markDispatched: (ids) => inner.markDispatched(ids),
 		...overrides,
-	};
+	});
 }
 
 describe("OutboxDispatcher", () => {
@@ -774,14 +774,9 @@ describe("OutboxDispatcher", () => {
 		const helperCalls: unknown[] = [];
 		// Structurally an Outbox, plus a markFailed that is NOT the tracking
 		// protocol (no deadLetters); the dispatcher must never call it.
-		const outbox: Outbox<TestEvent> & {
-			markFailed: (reason: string) => Promise<void>;
-		} = {
-			add: (events) => inner.add(events),
-			endEventSources: async () => {},
-			getPending: (limit) => inner.getPending(limit),
-			markDispatched: (ids) => inner.markDispatched(ids),
-			markFailed: async (reason) => {
+		const outbox = {
+			...interceptOutbox(inner, {}),
+			markFailed: async (reason: string) => {
 				helperCalls.push(reason);
 			},
 		};
@@ -964,14 +959,12 @@ describe("OutboxDispatcher", () => {
 		});
 
 		it("never rejects on a poll failure", async () => {
-			const outbox: Outbox<TestEvent> = {
+			const outbox = recordingOutbox<TestEvent>({
 				add: async () => {},
-				endEventSources: async () => {},
 				getPending: async () => {
 					throw new Error("storage down");
 				},
-				markDispatched: async () => {},
-			};
+			});
 			const sink: OutboxSink<TestEvent> = { publish: async () => {} };
 			const pollErrors: unknown[] = [];
 
