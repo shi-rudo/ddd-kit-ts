@@ -10,6 +10,7 @@ import {
 	type CommandOutboxContractHarness,
 	createCommandOutboxContractTests,
 } from "./command-outbox-contract";
+import { recordingCommandOutbox } from "./recording-command-outbox";
 
 type TestCommand = PublishedCommand<
 	"DoWork",
@@ -227,12 +228,11 @@ describe("command outbox contract suite", () => {
 			...createInMemoryHarness(),
 			createEnvironment: async () => {
 				const rows: Array<CommandOutboxCommitCandidate<TestCommand>> = [];
-				const outbox: CommandOutboxWriter<TestCommand> = {
+				const outbox = recordingCommandOutbox<TestCommand>({
 					add: async (commits) => {
 						rows.push(...commits.map(clone));
 					},
-					endEventSources: async () => {},
-				};
+				});
 				return {
 					outbox,
 					addCommitted: (
@@ -262,7 +262,7 @@ describe("command outbox contract suite", () => {
 					string,
 					CommandOutboxCommitCandidate<TestCommand>
 				>();
-				const outbox: CommandOutboxWriter<TestCommand> = {
+				const outbox = recordingCommandOutbox<TestCommand>({
 					add: async (commits) => {
 						for (const commit of commits) {
 							const prior = rows.get(commit.origin.eventId);
@@ -279,8 +279,7 @@ describe("command outbox contract suite", () => {
 							if (!prior) rows.set(commit.origin.eventId, clone(commit));
 						}
 					},
-					endEventSources: async () => {},
-				};
+				});
 				return {
 					outbox,
 					addCommitted: (commits) => outbox.add(commits),
@@ -315,7 +314,7 @@ describe("command outbox contract suite", () => {
 			...createInMemoryHarness(),
 			createEnvironment: async () => {
 				const rows: Array<CommandOutboxCommitCandidate<TestCommand>> = [];
-				const outbox: CommandOutboxWriter<TestCommand> = {
+				const outbox = recordingCommandOutbox<TestCommand>({
 					add: async (commits) => {
 						rows.push(
 							...commits.map((commit) =>
@@ -333,8 +332,7 @@ describe("command outbox contract suite", () => {
 							),
 						);
 					},
-					endEventSources: async () => {},
-				};
+				});
 				return {
 					outbox,
 					addCommitted: (commits) => outbox.add(commits),
