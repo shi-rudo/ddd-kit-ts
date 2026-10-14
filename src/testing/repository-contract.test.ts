@@ -24,6 +24,7 @@ import type {
 import type { Outbox } from "../messaging/outbox/ports";
 import type { PersistenceModel } from "../persistence/repository/persistence-model";
 import type { TransactionScope } from "../persistence/repository/scope";
+import { recordingOutbox } from "./recording-outbox";
 import {
 	type ContractRepository,
 	createRepositoryContractTests,
@@ -317,7 +318,7 @@ function createRunInfrastructure(
 			}
 		},
 	};
-	const outbox: Outbox<OrderEvent> = {
+	const outbox = recordingOutbox<OrderEvent>({
 		add: async (events) => {
 			if (!activeTransaction) {
 				throw new Error("outbox write outside transaction");
@@ -327,10 +328,7 @@ function createRunInfrastructure(
 			if (failure) throw failure;
 			db.addToOutbox(events);
 		},
-		endEventSources: async () => {},
-		getPending: async () => [],
-		markDispatched: async () => {},
-	};
+	});
 	return { scope, outbox };
 }
 

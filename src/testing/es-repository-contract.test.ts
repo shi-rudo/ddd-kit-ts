@@ -26,7 +26,6 @@ import type {
 	CommittedDomainEvent,
 	EventCommitCandidate,
 } from "../messaging/committed-event";
-import type { Outbox } from "../messaging/outbox/ports";
 import { reconstituteAggregateFromStreamPages } from "../persistence/event-store/reconstitute-from-stream-pages";
 import type { PersistenceModel } from "../persistence/repository/persistence-model";
 import type { TransactionScope } from "../persistence/repository/scope";
@@ -36,6 +35,7 @@ import {
 	type EsRepositoryContractEnvironment,
 	type EsRepositoryContractHarness,
 } from "./es-repository-contract";
+import { recordingOutbox } from "./recording-outbox";
 import { createReplayableStreamPages } from "./replayable-stream-pages";
 import { serializedCalls } from "./serialized-calls";
 
@@ -373,7 +373,7 @@ function createInMemoryEsHarness(
 							}
 						},
 					};
-					const outbox: Outbox<EsOrderEvent> = {
+					const outbox = recordingOutbox<EsOrderEvent>({
 						add: async (events) => {
 							if (!activeTransaction) {
 								throw new Error("outbox write outside transaction");
@@ -386,10 +386,7 @@ function createInMemoryEsHarness(
 							}
 							db.addToOutbox(events);
 						},
-						endEventSources: async () => {},
-						getPending: async () => [],
-						markDispatched: async () => {},
-					};
+					});
 					return new UnitOfWork({
 						scope,
 						outbox,
