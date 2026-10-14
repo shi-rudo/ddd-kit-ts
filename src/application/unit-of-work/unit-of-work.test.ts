@@ -24,6 +24,7 @@ import type { AggregateClass } from "../../persistence/repository/identity-map";
 import type { PersistenceModel } from "../../persistence/repository/persistence-model";
 import { RetryingTransactionScope } from "../../persistence/repository/retrying-scope";
 import type { TransactionScope } from "../../persistence/repository/scope";
+import { recordingOutbox } from "../../testing/recording-outbox";
 import { unstampedAggregate } from "../../testing/unstamped-aggregate";
 import {
 	AggregateTrackingError,
@@ -106,21 +107,6 @@ function testEvent(orderId: string): TestEvent {
 function createMockScope(): TransactionScope<undefined> {
 	return {
 		transactional: <T>(fn: (_ctx: undefined) => Promise<T>) => fn(undefined),
-	};
-}
-
-function createMockOutbox(): Outbox<TestEvent> & {
-	added: EventCommitCandidate<TestEvent>[][];
-} {
-	const added: EventCommitCandidate<TestEvent>[][] = [];
-	return {
-		added,
-		add: async (events) => {
-			added.push([...events]);
-		},
-		endEventSources: async () => {},
-		getPending: async () => [],
-		markDispatched: async () => {},
 	};
 }
 
@@ -274,7 +260,7 @@ function createUow(overrides?: {
 	bus?: EventBus<TestEvent>;
 	onTracking?: (tracking: RepositoryTracking<MockAggregate>) => void;
 }) {
-	const outbox = overrides?.outbox ?? createMockOutbox();
+	const outbox = overrides?.outbox ?? recordingOutbox<TestEvent>();
 	const bus = overrides?.bus ?? createMockBus();
 	const scope = overrides?.scope ?? createMockScope();
 	const uow = new UnitOfWork({
@@ -398,7 +384,7 @@ describe("UnitOfWork", () => {
 				{ orderId: "event" },
 				{ aggregateId: "event", aggregateType: "ProjectedAggregate" },
 			);
-			const outbox = createMockOutbox();
+			const outbox = recordingOutbox<TestEvent>();
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
 				outbox,
@@ -468,7 +454,7 @@ describe("UnitOfWork", () => {
 			const flushed: string[] = [];
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				repositories: {
 					orders: defineTestRepository({
 						aggregate: MockAggregate,
@@ -496,7 +482,7 @@ describe("UnitOfWork", () => {
 
 		it("rolls back when an aggregate changes while its flush is in flight", async () => {
 			const aggregate = createMockAggregate("order-1");
-			const outbox = createMockOutbox();
+			const outbox = recordingOutbox<TestEvent>();
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
 				outbox,
@@ -557,7 +543,7 @@ describe("UnitOfWork", () => {
 			async (operation) => {
 				const uow = new UnitOfWork({
 					scope: createMockScope(),
-					outbox: createMockOutbox(),
+					outbox: recordingOutbox<TestEvent>(),
 					repositories: {
 						orders: defineTestRepository({
 							aggregate: MockAggregate,
@@ -594,7 +580,7 @@ describe("UnitOfWork", () => {
 			}
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				repositories: {
 					orders: defineTestRepository({
 						aggregate: MockAggregate,
@@ -614,7 +600,7 @@ describe("UnitOfWork", () => {
 		it("installs no remove without physical removal", async () => {
 			const event = testEvent("o-1");
 			const aggregate = createMockAggregate("o-1", [event]);
-			const outbox = createMockOutbox();
+			const outbox = recordingOutbox<TestEvent>();
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
 				outbox,
@@ -643,7 +629,7 @@ describe("UnitOfWork", () => {
 		it("installs no update for an append-only definition", async () => {
 			const event = testEvent("o-1");
 			const aggregate = createMockAggregate("o-1", [event]);
-			const outbox = createMockOutbox();
+			const outbox = recordingOutbox<TestEvent>();
 			const flushedIntents: string[] = [];
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
@@ -680,7 +666,7 @@ describe("UnitOfWork", () => {
 			function createAppendOnlyUow() {
 				return new UnitOfWork({
 					scope: createMockScope(),
-					outbox: createMockOutbox(),
+					outbox: recordingOutbox<TestEvent>(),
 					repositories: {
 						receipts: defineExplicitRepository<{
 							trackLoaded(aggregate: MockAggregate): MockAggregate;
@@ -745,7 +731,7 @@ describe("UnitOfWork", () => {
 			let flushCalls = 0;
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				repositories: {
 					orders: defineTestRepository({
 						aggregate: MockAggregate,
@@ -845,7 +831,7 @@ describe("UnitOfWork", () => {
 				});
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				repositories: {
 					primary: definition(),
 					secondary: definition(),
@@ -876,7 +862,7 @@ describe("UnitOfWork", () => {
 				});
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				repositories: {
 					primary: definition(),
 					secondary: definition(),
@@ -909,7 +895,7 @@ describe("UnitOfWork", () => {
 			let tracking!: RepositoryTracking<MockAggregate>;
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				repositories: {
 					orders: defineTestRepository({
 						aggregate: MockAggregate,
@@ -1007,7 +993,7 @@ describe("UnitOfWork", () => {
 				});
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				repositories: {
 					primary: definition(),
 					secondary: definition(),
@@ -1079,7 +1065,7 @@ describe("UnitOfWork", () => {
 			let flushCalls = 0;
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				repositories: {
 					orders: defineTestRepository({
 						aggregate: MockAggregate,
@@ -1113,7 +1099,8 @@ describe("UnitOfWork", () => {
 		});
 
 		it("rejects domain mutation after write intent was registered", async () => {
-			const { uow, outbox } = createUow();
+			const outbox = recordingOutbox<TestEvent>();
+			const { uow } = createUow({ outbox });
 			const aggregate = createMockAggregate("o-1");
 
 			await expectTrackingFailure(
@@ -1126,13 +1113,7 @@ describe("UnitOfWork", () => {
 				}),
 				"mutated_after_registration",
 			);
-			expect(
-				(
-					outbox as Outbox<TestEvent> & {
-						added: EventCommitCandidate<TestEvent>[][];
-					}
-				).added,
-			).toHaveLength(0);
+			expect(outbox.added).toHaveLength(0);
 		});
 
 		it("also seals a newly added aggregate against later mutation", async () => {
@@ -1223,7 +1204,7 @@ describe("UnitOfWork", () => {
 
 			const aggregate = new PlainAggregate("plain-1" as TestId);
 			aggregate.rename("after");
-			const outbox = createMockOutbox();
+			const outbox = recordingOutbox<TestEvent>();
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
 				outbox,
@@ -1322,7 +1303,7 @@ describe("UnitOfWork", () => {
 			async (factoryResult, receivedType) => {
 				const uow = new UnitOfWork({
 					scope: createMockScope(),
-					outbox: createMockOutbox(),
+					outbox: recordingOutbox<TestEvent>(),
 					repositories: {
 						orders: defineTestRepository({
 							aggregate: MockAggregate,
@@ -1354,7 +1335,7 @@ describe("UnitOfWork", () => {
 			const seen: FakeTx[] = [];
 			const uow = new UnitOfWork({
 				scope,
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				repositories: {
 					a: defineTestRepository({
 						aggregate: MockAggregate,
@@ -1390,7 +1371,7 @@ describe("UnitOfWork", () => {
 			let constructed = 0;
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				repositories: {
 					orders: defineTestRepository({
 						aggregate: MockAggregate,
@@ -1413,7 +1394,7 @@ describe("UnitOfWork", () => {
 		function createReflectiveUow() {
 			return new UnitOfWork({
 				scope: createMockScope(),
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				repositories: {
 					orders: defineTestRepository({
 						aggregate: MockAggregate,
@@ -1502,7 +1483,7 @@ describe("UnitOfWork", () => {
 			// must key on the current function identity, not the name alone.
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				repositories: {
 					orders: defineTestRepository({
 						aggregate: MockAggregate,
@@ -1535,7 +1516,7 @@ describe("UnitOfWork", () => {
 			}
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				repositories: {
 					orders: defineTestRepository({
 						aggregate: MockAggregate,
@@ -1576,7 +1557,7 @@ describe("UnitOfWork", () => {
 			});
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				repositories: {
 					orders: defineTestRepository({
 						aggregate: MockAggregate,
@@ -1612,7 +1593,7 @@ describe("UnitOfWork", () => {
 				const flushed: string[] = [];
 				const uow = new UnitOfWork({
 					scope: createMockScope(),
-					outbox: createMockOutbox(),
+					outbox: recordingOutbox<TestEvent>(),
 					repositories: {
 						orders: defineTestRepository({
 							aggregate: MockAggregate,
@@ -1649,7 +1630,7 @@ describe("UnitOfWork", () => {
 				});
 				const uow = new UnitOfWork({
 					scope: createMockScope(),
-					outbox: createMockOutbox(),
+					outbox: recordingOutbox<TestEvent>(),
 					repositories: {
 						orders: defineTestRepository({
 							aggregate: MockAggregate,
@@ -1730,18 +1711,12 @@ describe("UnitOfWork", () => {
 					return result;
 				},
 			};
-			const outbox: Outbox<TestEvent> & {
-				added: EventCommitCandidate<TestEvent>[][];
-			} = {
-				added: [],
+			const outbox = recordingOutbox<TestEvent>({
 				add: async (events) => {
 					callOrder.push("outbox.add");
 					outbox.added.push([...events]);
 				},
-				endEventSources: async () => {},
-				getPending: async () => [],
-				markDispatched: async () => {},
-			};
+			});
 			const bus: EventBus<TestEvent> = {
 				publish: async () => {
 					callOrder.push("bus.publish");
@@ -1799,7 +1774,7 @@ describe("UnitOfWork", () => {
 			const reported: Array<{ error: unknown; aggregate: unknown }> = [];
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				bus: createMockBus(),
 				onPersisted: () => {
 					throw persistError;
@@ -1841,7 +1816,7 @@ describe("UnitOfWork", () => {
 			});
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				postCommitTimeoutMs: 5,
 				onPersisted: (_aggregate, _version, context) => {
 					signal = context.signal;
@@ -1923,7 +1898,7 @@ describe("UnitOfWork", () => {
 			let flushCalls = 0;
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				repositories: {
 					orders: defineTestRepository({
 						aggregate: MockAggregate,
@@ -2020,12 +1995,9 @@ describe("UnitOfWork", () => {
 			]);
 			let leakedTracking!: RepositoryTracking<MockAggregate>;
 			let lateEnrollError: unknown;
-			const outbox: Outbox<TestEvent> = {
+			const outbox = recordingOutbox<TestEvent>({
 				add: async () => {},
-				endEventSources: async () => {},
-				getPending: async () => [],
-				markDispatched: async () => {},
-			};
+			});
 			const scope: TransactionScope<undefined> = {
 				transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
 					const result = await fn(undefined);
@@ -2070,7 +2042,7 @@ describe("UnitOfWork", () => {
 					}
 				},
 			};
-			const outbox = createMockOutbox();
+			const outbox = recordingOutbox<TestEvent>();
 			const { uow } = createUow({ scope, outbox });
 			const event1 = testEvent("a-1");
 			const event2 = testEvent("a-2");
@@ -2099,7 +2071,7 @@ describe("UnitOfWork", () => {
 		});
 
 		it("reuses the same immutable event identity when the transaction retries after flush", async () => {
-			const outbox = createMockOutbox();
+			const outbox = recordingOutbox<TestEvent>();
 			let transactionAttempt = 0;
 			const scope: TransactionScope<undefined> = {
 				transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
@@ -2244,7 +2216,7 @@ describe("UnitOfWork", () => {
 			}
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				repositories: {
 					orders: defineTestRepository({
 						aggregate: MockAggregate,
@@ -2366,7 +2338,7 @@ describe("UnitOfWork", () => {
 		}
 
 		function createCachingUow(rows: Map<string, TestEvent[]>) {
-			const outbox = createMockOutbox();
+			const outbox = recordingOutbox<TestEvent>();
 			const repos: CachingOrderRepository[] = [];
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
@@ -2446,7 +2418,7 @@ describe("UnitOfWork", () => {
 				});
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				repositories: { orders: definition(), archive: definition() },
 			});
 
@@ -2473,7 +2445,7 @@ describe("UnitOfWork", () => {
 			const event = testEvent("o-1");
 			const rows = new Map([["o-1", [event]]]);
 			let captureFails = true;
-			const outbox = createMockOutbox();
+			const outbox = recordingOutbox<TestEvent>();
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
 				outbox,
@@ -2560,15 +2532,14 @@ describe("UnitOfWork", () => {
 			const seenDuringCommit: unknown[] = [];
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
-				outbox: {
+				outbox: recordingOutbox<TestEvent>({
 					add: async () => {
 						seenDuringCommit.push(
 							leakedMap.get(OrderAggregate, "o-1" as TestId),
 							leakedMap.has(OrderAggregate, "o-1" as TestId),
 						);
 					},
-					endEventSources: async () => {},
-				},
+				}),
 				repositories: {
 					orders: defineTestRepository({
 						aggregate: OrderAggregate,
@@ -2662,14 +2633,11 @@ describe("UnitOfWork", () => {
 	describe("commit/rollback error labeling", () => {
 		it("an outbox failure after the callback completed surfaces as CommitError with the cause attached", async () => {
 			const outboxError = new Error("outbox write failed");
-			const outbox: Outbox<TestEvent> = {
+			const outbox = recordingOutbox<TestEvent>({
 				add: async () => {
 					throw outboxError;
 				},
-				endEventSources: async () => {},
-				getPending: async () => [],
-				markDispatched: async () => {},
-			};
+			});
 			const { uow } = createUow({ outbox });
 			const agg = createMockAggregate("o-1", [testEvent("o-1")]);
 
@@ -2877,14 +2845,11 @@ describe("UnitOfWork", () => {
 					}
 				},
 			};
-			const outbox: Outbox<TestEvent> = {
+			const outbox = recordingOutbox<TestEvent>({
 				add: async () => {
 					throw outboxError;
 				},
-				endEventSources: async () => {},
-				getPending: async () => [],
-				markDispatched: async () => {},
-			};
+			});
 			const { uow } = createUow({ scope, outbox });
 			const agg = createMockAggregate("o-1", [testEvent("o-1")]);
 
@@ -2915,14 +2880,11 @@ describe("UnitOfWork", () => {
 				},
 			};
 			const agg = createMockAggregate("o-1", [testEvent("o-1")]);
-			const outbox: Outbox<TestEvent> = {
+			const outbox = recordingOutbox<TestEvent>({
 				add: async () => {
 					agg.change(testEvent("o-1"));
 				},
-				endEventSources: async () => {},
-				getPending: async () => [],
-				markDispatched: async () => {},
-			};
+			});
 			const { uow } = createUow({ scope, outbox });
 
 			const rejection = await uow
@@ -2953,14 +2915,11 @@ describe("UnitOfWork", () => {
 					}
 				},
 			};
-			const outbox: Outbox<TestEvent> = {
+			const outbox = recordingOutbox<TestEvent>({
 				add: async () => {
 					throw outboxError;
 				},
-				endEventSources: async () => {},
-				getPending: async () => [],
-				markDispatched: async () => {},
-			};
+			});
 			const { uow } = createUow({ scope, outbox });
 			const agg = createMockAggregate("o-1", [testEvent("o-1")]);
 
@@ -3019,7 +2978,7 @@ describe("UnitOfWork", () => {
 			};
 			const uow = new UnitOfWork({
 				scope,
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				repositories: {
 					orders: defineTestRepository({
 						aggregate: MockAggregate,
@@ -3172,7 +3131,7 @@ describe("UnitOfWork", () => {
 			});
 			const uow = new UnitOfWork({
 				scope,
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				repositories: {
 					orders: defineTestRepository({
 						aggregate: MockAggregate,
@@ -3217,15 +3176,12 @@ describe("UnitOfWork", () => {
 				},
 			});
 			let outboxCalls = 0;
-			const outbox: Outbox<TestEvent> = {
+			const outbox = recordingOutbox<TestEvent>({
 				add: async () => {
 					outboxCalls += 1;
 					if (outboxCalls === 1) throw outboxFailure;
 				},
-				endEventSources: async () => {},
-				getPending: async () => [],
-				markDispatched: async () => {},
-			};
+			});
 			const { uow } = createUow({ scope, outbox });
 
 			await uow.run(async ({ repositories }) => {
@@ -3247,7 +3203,7 @@ describe("UnitOfWork", () => {
 				releaseOutbox = resolve;
 			});
 			let outboxCalls = 0;
-			const outbox: Outbox<TestEvent> = {
+			const outbox = recordingOutbox<TestEvent>({
 				add: async () => {
 					outboxCalls += 1;
 					if (outboxCalls === 1) {
@@ -3255,10 +3211,7 @@ describe("UnitOfWork", () => {
 						await outboxReleased;
 					}
 				},
-				endEventSources: async () => {},
-				getPending: async () => [],
-				markDispatched: async () => {},
-			};
+			});
 			// Breaks the scope contract on purpose: it starts a second attempt
 			// and then still commits the first one.
 			const scope: TransactionScope<undefined> = {
@@ -3303,7 +3256,7 @@ describe("UnitOfWork", () => {
 				releaseOutbox = resolve;
 			});
 			let outboxCalls = 0;
-			const outbox: Outbox<TestEvent> = {
+			const outbox = recordingOutbox<TestEvent>({
 				add: async () => {
 					outboxCalls += 1;
 					if (outboxCalls === 1) {
@@ -3311,10 +3264,7 @@ describe("UnitOfWork", () => {
 						await outboxReleased;
 					}
 				},
-				endEventSources: async () => {},
-				getPending: async () => [],
-				markDispatched: async () => {},
-			};
+			});
 			let attempt = 0;
 			let leakedOrders!: { add(order: MockAggregate): void };
 			let lateCall: unknown = "not attempted";
@@ -3380,7 +3330,7 @@ describe("UnitOfWork", () => {
 			};
 			const uow = new UnitOfWork({
 				scope,
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				repositories: {
 					orders: defineTestRepository({
 						aggregate: MockAggregate,
@@ -3468,7 +3418,7 @@ describe("UnitOfWork", () => {
 			};
 			const uow = new UnitOfWork({
 				scope,
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				repositories: {
 					orders: defineTestRepository({
 						aggregate: MockAggregate,
@@ -3574,7 +3524,7 @@ describe("UnitOfWork", () => {
 		});
 
 		it("a cooperative abort mid-work rolls back: error passes through, no acknowledgement", async () => {
-			const outbox = createMockOutbox();
+			const outbox = recordingOutbox<TestEvent>();
 			const { uow } = createUow({ outbox });
 			const agg = createMockAggregate("order-1", [testEvent("order-1")]);
 			const ac = new AbortController();
@@ -3635,7 +3585,7 @@ describe("UnitOfWork", () => {
 			type Loadable = ReturnType<typeof loadable>;
 			return new UnitOfWork({
 				scope: createMockScope(),
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				repositories: {
 					orders: defineTestRepository({
 						aggregate: aggregate.constructor as AggregateClass<Loadable>,
@@ -3869,7 +3819,7 @@ describe("UnitOfWork", () => {
 				releaseFlush = resolve;
 			});
 			const flushed: string[] = [];
-			const outbox = createMockOutbox();
+			const outbox = recordingOutbox<TestEvent>();
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
 				outbox,
@@ -3942,13 +3892,12 @@ describe("UnitOfWork", () => {
 				let registerLate: () => void = () => {};
 				const uow = new UnitOfWork({
 					scope: createMockScope(),
-					outbox: {
+					outbox: recordingOutbox<TestEvent>({
 						add: async () => {
 							registerLate();
 							await new Promise((resolve) => setTimeout(resolve, 0));
 						},
-						endEventSources: async () => {},
-					},
+					}),
 					repositories: {
 						orders: defineTestRepository({
 							aggregate: MockAggregate,
@@ -4025,7 +3974,7 @@ describe("UnitOfWork", () => {
 			const order = createMockAggregate("order-1", [testEvent("order-1")]);
 			let leakedOrders!: { add(order: MockAggregate): void };
 			let repeatedCall: unknown = "not attempted";
-			const outbox = createMockOutbox();
+			const outbox = recordingOutbox<TestEvent>();
 			const add = outbox.add;
 			outbox.add = async (candidates) => {
 				try {
@@ -4106,13 +4055,12 @@ describe("UnitOfWork", () => {
 		function uowWhoseOutboxWriteYields(onOutboxWrite: () => void) {
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
-				outbox: {
+				outbox: recordingOutbox<TestEvent>({
 					add: async () => {
 						onOutboxWrite();
 						await new Promise((resolve) => setTimeout(resolve, 0));
 					},
-					endEventSources: async () => {},
-				},
+				}),
 				repositories: {
 					orders: defineTestRepository({
 						aggregate: NotedOrder,
@@ -4227,7 +4175,7 @@ describe("UnitOfWork", () => {
 		) {
 			return new UnitOfWork({
 				scope: createMockScope(),
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				repositories: {
 					orders: defineTestRepository({
 						aggregate: MockAggregate,
@@ -4285,7 +4233,7 @@ describe("UnitOfWork", () => {
 			const uniqueViolation = new Error("duplicate key value");
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				repositories: {
 					orders: defineTestRepository({
 						aggregate: MockAggregate,
@@ -4531,7 +4479,7 @@ describe("UnitOfWork", () => {
 			let mapperCalls = 0;
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				repositories: {
 					orders: defineTestRepository({
 						aggregate: MockAggregate,
@@ -4580,7 +4528,7 @@ describe("UnitOfWork", () => {
 			let mapperCalls = 0;
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				repositories: {
 					orders: defineTestRepository({
 						aggregate: MockAggregate,
@@ -4627,7 +4575,7 @@ describe("UnitOfWork", () => {
 			const foreign = new ForeignWiringError("foreign copy wiring defect");
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				repositories: {
 					orders: defineTestRepository({
 						aggregate: MockAggregate,
@@ -4673,7 +4621,7 @@ describe("UnitOfWork", () => {
 			const foreign = new ForeignConflictError("foreign copy conflict");
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				repositories: {
 					orders: defineTestRepository({
 						aggregate: MockAggregate,
@@ -4743,7 +4691,7 @@ describe("UnitOfWork", () => {
 			);
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				repositories: { orders: earlierContract } as never,
 			});
 
@@ -4782,7 +4730,7 @@ describe("UnitOfWork", () => {
 			const flushed: unknown[] = [];
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
-				outbox: createMockOutbox(),
+				outbox: recordingOutbox<TestEvent>(),
 				repositories: {
 					orders: defineTestRepository({
 						aggregate: MockAggregate,
