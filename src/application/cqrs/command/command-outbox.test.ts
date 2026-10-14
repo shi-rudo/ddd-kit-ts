@@ -2,12 +2,9 @@ import { describe, expect, it } from "vite-plus/test";
 import { createDomainEvent } from "../../../domain/event/domain-event";
 import { InvalidCommandMessageError } from "../../../errors/kit-errors";
 import type { EventCommitCandidate } from "../../../messaging/committed-event";
+import { recordingCommandOutbox } from "../../../testing/recording-command-outbox";
 import type { PublishedCommand } from "./command";
-import {
-	type CommandOutboxCommitCandidate,
-	type CommandOutboxWriter,
-	routeEventsToCommandOutbox,
-} from "./command-outbox";
+import { routeEventsToCommandOutbox } from "./command-outbox";
 
 type CheckoutAdvancedToShipping = ReturnType<
 	typeof createDomainEvent<
@@ -57,15 +54,7 @@ function processEventCandidate(): EventCommitCandidate<CheckoutAdvancedToShippin
 
 describe("routeEventsToCommandOutbox", () => {
 	it("persists an addressed command without exposing the private process event", async () => {
-		const writes: Array<
-			ReadonlyArray<CommandOutboxCommitCandidate<RequestShipping>>
-		> = [];
-		const commandOutbox: CommandOutboxWriter<RequestShipping> = {
-			add: async (commits) => {
-				writes.push(commits);
-			},
-			endEventSources: async () => {},
-		};
+		const commandOutbox = recordingCommandOutbox<RequestShipping>();
 		const writer = routeEventsToCommandOutbox(
 			commandOutbox,
 			(event: CheckoutAdvancedToShipping) => {
@@ -92,7 +81,7 @@ describe("routeEventsToCommandOutbox", () => {
 
 		await writer.add([processEventCandidate()]);
 
-		expect(writes).toEqual([
+		expect(commandOutbox.added).toEqual([
 			[
 				{
 					origin: {
@@ -131,24 +120,16 @@ describe("routeEventsToCommandOutbox", () => {
 				},
 			],
 		]);
-		expect(writes[0]?.[0]?.origin).not.toHaveProperty("event");
+		expect(commandOutbox.added[0]?.[0]?.origin).not.toHaveProperty("event");
 	});
 
 	it("retains an empty commit receipt when a private fact requests no command", async () => {
-		let received:
-			| ReadonlyArray<CommandOutboxCommitCandidate<PublishedCommand>>
-			| undefined;
-		const commandOutbox: CommandOutboxWriter<PublishedCommand> = {
-			add: async (commits) => {
-				received = commits;
-			},
-			endEventSources: async () => {},
-		};
+		const commandOutbox = recordingCommandOutbox<PublishedCommand>();
 		const writer = routeEventsToCommandOutbox(commandOutbox, () => []);
 
 		await writer.add([processEventCandidate()]);
 
-		expect(received).toEqual([
+		expect(commandOutbox.added[0]).toEqual([
 			{
 				origin: {
 					eventId: "process-event-1",
@@ -168,15 +149,7 @@ describe("routeEventsToCommandOutbox", () => {
 	});
 
 	it("keeps compensation commands in mapper order with distinct stable ids", async () => {
-		const writes: Array<
-			ReadonlyArray<CommandOutboxCommitCandidate<PublishedCommand>>
-		> = [];
-		const commandOutbox: CommandOutboxWriter<PublishedCommand> = {
-			add: async (commits) => {
-				writes.push(commits);
-			},
-			endEventSources: async () => {},
-		};
+		const commandOutbox = recordingCommandOutbox<PublishedCommand>();
 		const writer = routeEventsToCommandOutbox(commandOutbox, () => [
 			{
 				destination: "payments.commands",
@@ -192,12 +165,15 @@ describe("routeEventsToCommandOutbox", () => {
 
 		await writer.add([processEventCandidate()]);
 
-		expect(
-			writes[0]?.[0]?.messages.map((message) => message.command.type),
-		).toEqual(["RefundPayment", "CancelOrder"]);
-		expect(
-			writes[0]?.[0]?.messages.map((message) => message.messageId),
-		).toEqual(["process-event-1:command:0", "process-event-1:command:1"]);
+		const [commit] = commandOutbox.added[0] ?? [];
+		expect(commit?.messages.map((message) => message.command.type)).toEqual([
+			"RefundPayment",
+			"CancelOrder",
+		]);
+		expect(commit?.messages.map((message) => message.messageId)).toEqual([
+			"process-event-1:command:0",
+			"process-event-1:command:1",
+		]);
 	});
 
 	it("owns and freezes mapper output before passing it to an adapter", async () => {
@@ -209,14 +185,9 @@ describe("routeEventsToCommandOutbox", () => {
 				shipmentId: "shipment-1",
 			},
 		};
-		let recorded: CommandOutboxCommitCandidate<RequestShipping> | undefined;
+		const commandOutbox = recordingCommandOutbox<RequestShipping>();
 		const writer = routeEventsToCommandOutbox<RequestShipping>(
-			{
-				add: async (commits) => {
-					recorded = commits[0];
-				},
-				endEventSources: async () => {},
-			},
+			commandOutbox,
 			() => [
 				{
 					destination: "shipping.commands",
@@ -228,6 +199,7 @@ describe("routeEventsToCommandOutbox", () => {
 		await writer.add([processEventCandidate()]);
 		(mutableCommand.payload as { shipmentId: string }).shipmentId = "changed";
 
+		const recorded = commandOutbox.added[0]?.[0];
 		expect(recorded?.messages[0]?.command.payload).toMatchObject({
 			shipmentId: "shipment-1",
 		});
@@ -236,252 +208,178 @@ describe("routeEventsToCommandOutbox", () => {
 	});
 
 	it("rejects the whole mapped batch before calling the adapter", async () => {
-		let addCalls = 0;
-		const writer = routeEventsToCommandOutbox(
+		const commandOutbox = recordingCommandOutbox<PublishedCommand>();
+		const writer = routeEventsToCommandOutbox(commandOutbox, () => [
 			{
-				add: async () => {
-					addCalls += 1;
+				destination: " ",
+				command: {
+					type: "RequestShipping",
+					version: 1,
+					payload: {},
 				},
-				endEventSources: async () => {},
 			},
-			() => [
-				{
-					destination: " ",
-					command: {
-						type: "RequestShipping",
-						version: 1,
-						payload: {},
-					},
-				},
-			],
-		);
+		]);
 
 		await expect(writer.add([processEventCandidate()])).rejects.toThrow(
 			/destination/,
 		);
-		expect(addCalls).toBe(0);
+		expect(commandOutbox.added).toEqual([]);
 	});
 
 	it("rejects sparse mapper output instead of persisting a missing sequence", async () => {
-		let addCalls = 0;
+		const commandOutbox = recordingCommandOutbox<PublishedCommand>();
 		const sparse = new Array(1) as Array<{
 			destination: string;
 			command: PublishedCommand;
 		}>;
-		const writer = routeEventsToCommandOutbox(
-			{
-				add: async () => {
-					addCalls += 1;
-				},
-				endEventSources: async () => {},
-			},
-			() => sparse,
-		);
+		const writer = routeEventsToCommandOutbox(commandOutbox, () => sparse);
 
 		await expect(writer.add([processEventCandidate()])).rejects.toThrow(
 			/entry must be an object/,
 		);
-		expect(addCalls).toBe(0);
+		expect(commandOutbox.added).toEqual([]);
 	});
 
 	it("rejects negative zero instead of silently storing it as 0", async () => {
-		let addCalls = 0;
-		const writer = routeEventsToCommandOutbox(
+		const commandOutbox = recordingCommandOutbox<PublishedCommand>();
+		const writer = routeEventsToCommandOutbox(commandOutbox, () => [
 			{
-				add: async () => {
-					addCalls += 1;
+				destination: "shipping.commands",
+				command: {
+					type: "AdjustBalance",
+					version: 1,
+					// JSON.stringify(-0) produces "0"; the exactness contract
+					// must reject the payload instead of mutating it.
+					payload: { delta: -0 },
 				},
-				endEventSources: async () => {},
 			},
-			() => [
-				{
-					destination: "shipping.commands",
-					command: {
-						type: "AdjustBalance",
-						version: 1,
-						// JSON.stringify(-0) produces "0"; the exactness contract
-						// must reject the payload instead of mutating it.
-						payload: { delta: -0 },
-					},
-				},
-			],
-		);
+		]);
 
 		await expect(writer.add([processEventCandidate()])).rejects.toThrow(
 			/negative zero/,
 		);
-		expect(addCalls).toBe(0);
+		expect(commandOutbox.added).toEqual([]);
 	});
 
 	it("rejects a command without an explicit positive schema version", async () => {
-		let addCalls = 0;
-		const writer = routeEventsToCommandOutbox(
+		const commandOutbox = recordingCommandOutbox<PublishedCommand>();
+		const writer = routeEventsToCommandOutbox(commandOutbox, () => [
 			{
-				add: async () => {
-					addCalls += 1;
-				},
-				endEventSources: async () => {},
+				destination: "shipping.commands",
+				command: {
+					type: "RequestShipping",
+					payload: { shipmentId: "shipment-1" },
+				} as unknown as PublishedCommand,
 			},
-			() => [
-				{
-					destination: "shipping.commands",
-					command: {
-						type: "RequestShipping",
-						payload: { shipmentId: "shipment-1" },
-					} as unknown as PublishedCommand,
-				},
-			],
-		);
+		]);
 
 		await expect(writer.add([processEventCandidate()])).rejects.toThrow(
 			InvalidCommandMessageError,
 		);
-		expect(addCalls).toBe(0);
+		expect(commandOutbox.added).toEqual([]);
 	});
 
 	it("rejects non-JSON-safe command payloads before calling the adapter", async () => {
-		let addCalls = 0;
-		const writer = routeEventsToCommandOutbox(
+		const commandOutbox = recordingCommandOutbox<PublishedCommand>();
+		const writer = routeEventsToCommandOutbox(commandOutbox, () => [
 			{
-				add: async () => {
-					addCalls += 1;
-				},
-				endEventSources: async () => {},
+				destination: "payments.commands",
+				command: {
+					type: "RequestPayment",
+					version: 1,
+					payload: { amountMinor: 4_200n },
+				} as unknown as PublishedCommand,
 			},
-			() => [
-				{
-					destination: "payments.commands",
-					command: {
-						type: "RequestPayment",
-						version: 1,
-						payload: { amountMinor: 4_200n },
-					} as unknown as PublishedCommand,
-				},
-			],
-		);
+		]);
 
 		await expect(writer.add([processEventCandidate()])).rejects.toThrow(
 			InvalidCommandMessageError,
 		);
-		expect(addCalls).toBe(0);
+		expect(commandOutbox.added).toEqual([]);
 	});
 
 	it("rejects malformed W3C trace context before calling the adapter", async () => {
-		let addCalls = 0;
-		const writer = routeEventsToCommandOutbox(
+		const commandOutbox = recordingCommandOutbox<PublishedCommand>();
+		const writer = routeEventsToCommandOutbox(commandOutbox, () => [
 			{
-				add: async () => {
-					addCalls += 1;
+				destination: "shipping.commands",
+				command: {
+					type: "RequestShipping",
+					version: 1,
+					payload: {},
 				},
-				endEventSources: async () => {},
+				traceparent: "not-a-traceparent",
 			},
-			() => [
-				{
-					destination: "shipping.commands",
-					command: {
-						type: "RequestShipping",
-						version: 1,
-						payload: {},
-					},
-					traceparent: "not-a-traceparent",
-				},
-			],
-		);
+		]);
 
 		await expect(writer.add([processEventCandidate()])).rejects.toThrow(
 			InvalidCommandMessageError,
 		);
-		expect(addCalls).toBe(0);
+		expect(commandOutbox.added).toEqual([]);
 	});
 
 	it("preserves a structurally valid future traceparent version", async () => {
-		let received:
-			| ReadonlyArray<CommandOutboxCommitCandidate<PublishedCommand>>
-			| undefined;
+		const commandOutbox = recordingCommandOutbox<PublishedCommand>();
 		const traceparent =
 			"01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-future";
-		const writer = routeEventsToCommandOutbox(
+		const writer = routeEventsToCommandOutbox(commandOutbox, () => [
 			{
-				add: async (commits) => {
-					received = commits;
+				destination: "shipping.commands",
+				command: {
+					type: "RequestShipping",
+					version: 1,
+					payload: {},
 				},
-				endEventSources: async () => {},
+				traceparent,
 			},
-			() => [
-				{
-					destination: "shipping.commands",
-					command: {
-						type: "RequestShipping",
-						version: 1,
-						payload: {},
-					},
-					traceparent,
-				},
-			],
-		);
+		]);
 
 		await writer.add([processEventCandidate()]);
 
-		expect(received?.[0]?.messages[0]?.traceparent).toBe(traceparent);
+		expect(commandOutbox.added[0]?.[0]?.messages[0]?.traceparent).toBe(
+			traceparent,
+		);
 	});
 
 	it("tolerates spec-legal empty tracestate list-members", async () => {
-		let received: unknown;
-		const writer = routeEventsToCommandOutbox(
+		const commandOutbox = recordingCommandOutbox<PublishedCommand>();
+		const writer = routeEventsToCommandOutbox(commandOutbox, () => [
 			{
-				add: async (commits: unknown) => {
-					received = commits;
+				destination: "shipping.commands",
+				command: {
+					type: "RequestShipping",
+					version: 1,
+					payload: {},
 				},
-				endEventSources: async () => {},
+				traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+				// W3C Trace Context: receivers must tolerate empty
+				// list-members forwarded by upstream tracers.
+				tracestate: "vendor1=abc,,vendor2=def",
 			},
-			() => [
-				{
-					destination: "shipping.commands",
-					command: {
-						type: "RequestShipping",
-						version: 1,
-						payload: {},
-					},
-					traceparent:
-						"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
-					// W3C Trace Context: receivers must tolerate empty
-					// list-members forwarded by upstream tracers.
-					tracestate: "vendor1=abc,,vendor2=def",
-				},
-			],
-		);
+		]);
 
 		await expect(writer.add([processEventCandidate()])).resolves.not.toThrow();
-		expect(received).toBeDefined();
+		expect(commandOutbox.added).toHaveLength(1);
 	});
 
 	it("rejects duplicate tracestate keys before calling the adapter", async () => {
-		let addCalls = 0;
-		const writer = routeEventsToCommandOutbox(
+		const commandOutbox = recordingCommandOutbox<PublishedCommand>();
+		const writer = routeEventsToCommandOutbox(commandOutbox, () => [
 			{
-				add: async () => {
-					addCalls += 1;
+				destination: "shipping.commands",
+				command: {
+					type: "RequestShipping",
+					version: 1,
+					payload: {},
 				},
-				endEventSources: async () => {},
+				traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+				tracestate: "vendor=first,vendor=second",
 			},
-			() => [
-				{
-					destination: "shipping.commands",
-					command: {
-						type: "RequestShipping",
-						version: 1,
-						payload: {},
-					},
-					traceparent:
-						"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
-					tracestate: "vendor=first,vendor=second",
-				},
-			],
-		);
+		]);
 
 		await expect(writer.add([processEventCandidate()])).rejects.toThrow(
 			InvalidCommandMessageError,
 		);
-		expect(addCalls).toBe(0);
+		expect(commandOutbox.added).toEqual([]);
 	});
 });
