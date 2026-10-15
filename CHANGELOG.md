@@ -114,10 +114,11 @@ immutable. Run one kit version per process during a cutover.
   with a private field no longer becomes an empty record without an error. Map
   a value object to plain data first. `toJSON()` of a kit `ValueObject` is
   shallow, so map a nested value object too. No getter of the data runs. The
-  metadata must be a plain object or absent; `null`, a string, a number, an
-  array, or a `Map` throws a `TypeError`, also with a factory `source`.
-  `EventMetadata` fields are readonly. `DomainEvent` loses `aggregateVersion`;
-  the commit envelope carries the position.
+  checks catch accidents, not a hostile `Proxy`. The metadata must be a plain
+  object or absent; `null`, a string, a number, an array, or a `Map` throws a
+  `TypeError`, also with a factory `source`. `EventMetadata` fields are
+  readonly. `DomainEvent` loses `aggregateVersion`; the commit envelope
+  carries the position.
 - `InMemoryEventStore.append` rejects an event that holds binary data, for
   example a `Uint8Array`, or a `RegExp`, with a `TypeError`, as the event
   constructors do. Before, it stored a copy. Encode binary data as a string,
