@@ -4,9 +4,9 @@ import { StateStoredAggregate } from "../../domain/aggregate/state-stored-aggreg
 import type { DomainEvent } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
 import { InfrastructureError } from "../../errors/kit-errors";
-import type { Outbox } from "../../messaging/outbox/ports";
 import type { PersistenceModel } from "../../persistence/repository/persistence-model";
 import type { TransactionScope } from "../../persistence/repository/scope";
+import { recordingOutbox } from "../../testing/recording-outbox";
 import { RepositoryErrorMappingFailedError } from "./errors";
 import type { RepositoryTracking } from "./persistence-contract";
 import {
@@ -75,15 +75,6 @@ const scope: TransactionScope<undefined> = {
 	transactional: (work) => work(undefined),
 };
 
-function outbox(): Outbox<OrderEvent> {
-	return {
-		add: async () => {},
-		endEventSources: async () => {},
-		getPending: async () => [],
-		markDispatched: async () => {},
-	};
-}
-
 class OrderStoreUnavailableError extends InfrastructureError<"ORDER_STORE_UNAVAILABLE"> {
 	constructor(cause: unknown) {
 		super({
@@ -120,7 +111,7 @@ function createFailingUnitOfWork(mapError: OrderErrorMapper) {
 		driverError,
 		unitOfWork: new UnitOfWork({
 			scope,
-			outbox: outbox(),
+			outbox: recordingOutbox<OrderEvent>(),
 			repositories: { orders },
 		}),
 	};
@@ -138,7 +129,7 @@ describe("UnitOfWork repository definition", () => {
 		});
 		const unitOfWork = new UnitOfWork({
 			scope,
-			outbox: outbox(),
+			outbox: recordingOutbox<OrderEvent>(),
 			repositories: { orders },
 		});
 		const applicationPortMustRemainNarrow = (): void => {
@@ -165,7 +156,7 @@ describe("UnitOfWork repository definition", () => {
 		const rawDefinitionsMustFailToCompile = (): void => {
 			new UnitOfWork({
 				scope,
-				outbox: outbox(),
+				outbox: recordingOutbox<OrderEvent>(),
 				repositories: {
 					// @ts-expect-error the repository must be a definition from defineRepository
 					orders: rawDefinition,
@@ -187,7 +178,7 @@ describe("UnitOfWork repository definition", () => {
 		};
 		const unitOfWork = new UnitOfWork({
 			scope,
-			outbox: outbox(),
+			outbox: recordingOutbox<OrderEvent>(),
 			repositories: { orders: rawDefinition } as never,
 		});
 
@@ -210,7 +201,7 @@ describe("UnitOfWork repository definition", () => {
 		const inheritedDefinition = Object.create(definition) as typeof definition;
 		const unitOfWork = new UnitOfWork({
 			scope,
-			outbox: outbox(),
+			outbox: recordingOutbox<OrderEvent>(),
 			repositories: { orders: inheritedDefinition },
 		});
 
@@ -304,7 +295,7 @@ describe("UnitOfWork repository definition", () => {
 		const incompatibleDefinitionsMustFailToCompile = (): void => {
 			new UnitOfWork({
 				scope,
-				outbox: outbox(),
+				outbox: recordingOutbox<OrderEvent>(),
 				repositories: {
 					// @ts-expect-error the definition's transaction context must accept the scope's context
 					orders: connectionOrders,
@@ -312,7 +303,7 @@ describe("UnitOfWork repository definition", () => {
 			});
 			new UnitOfWork({
 				scope,
-				outbox: outbox(),
+				outbox: recordingOutbox<OrderEvent>(),
 				repositories: {
 					// @ts-expect-error the outbox must accept the definition's aggregate events
 					payments,
