@@ -63,15 +63,6 @@ export function detachFreezableState<T>(state: T, subject: string): T {
 	return detach(state, subject, "freeze");
 }
 
-/**
- * Throws the `TypeError` of {@link detachFreezableState} and copies
- * nothing. A caller that has a clone already checks it with this, so the
- * rule is the same. Kit modules only.
- */
-export function assertFreezableState(state: unknown, subject: string): void {
-	assertDetachable(state, "", newWalk(subject, "freeze", new StepRecording()));
-}
-
 function detach<T>(state: T, subject: string, rule: Walk["rule"]): T {
 	const recording = new StepRecording();
 	assertDetachable(state, "", newWalk(subject, rule, recording));

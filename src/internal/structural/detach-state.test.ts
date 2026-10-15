@@ -1,11 +1,7 @@
 // @ts-expect-error Node's VM exists in the test runtime; the package stays Node-type-free.
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vite-plus/test";
-import {
-	assertFreezableState,
-	detachFreezableState,
-	detachState,
-} from "./detach-state";
+import { detachFreezableState, detachState } from "./detach-state";
 
 class OwnerReview {
 	constructor(readonly requested: boolean) {}
@@ -439,6 +435,12 @@ describe("detachState and a graph that the walk cannot see", () => {
 });
 
 describe("detachFreezableState", () => {
+	it("rejects binary data in a Map key", () => {
+		const state = new Map([[new Uint8Array(1), "a"]]);
+
+		expect(() => detachFreezableState(state, "state")).toThrow(TypeError);
+	});
+
 	it.each([
 		["a typed array", () => new Uint8Array(4)],
 		["a DataView", () => new DataView(new ArrayBuffer(2))],
@@ -464,17 +466,5 @@ describe("detachFreezableState", () => {
 
 		expect(copy).toEqual(state);
 		expect(copy).not.toBe(state);
-	});
-});
-
-describe("assertFreezableState", () => {
-	it("rejects binary data in a Map key", () => {
-		const state = new Map([[new Uint8Array(1), "a"]]);
-
-		expect(() => assertFreezableState(state, "state")).toThrow(TypeError);
-	});
-
-	it("accepts plain data", () => {
-		expect(() => assertFreezableState({ a: [1, "b"] }, "state")).not.toThrow();
 	});
 });

@@ -765,6 +765,18 @@ describe("DomainEvent", () => {
 			expect(({} as Record<string, unknown>).isAdmin).toBeUndefined();
 		});
 
+		it("rejects an own __proto__ key at the root before any other defect of the payload", () => {
+			const payload = hostilePayload();
+			Object.defineProperty(payload, "total", {
+				enumerable: true,
+				get: () => 1,
+			});
+
+			expect(() => createDomainEvent("OrderPlaced", payload)).toThrow(
+				HostileStateKeyError,
+			);
+		});
+
 		it("checks the payload root only: a nested own __proto__ key is cloned as data", () => {
 			const event = createDomainEvent("OrderPlaced", {
 				line: JSON.parse('{"__proto__":{"isAdmin":true}}') as Record<
@@ -950,20 +962,34 @@ describe("commit cursor boundary", () => {
 });
 
 describe("a Proxy payload at the mint", () => {
-	it("is rejected without running a trap for the __proto__ check", () => {
-		let descriptorReads = 0;
-		const payload = new Proxy(
-			{},
-			{
-				getOwnPropertyDescriptor(target, key) {
-					descriptorReads += 1;
-					return Reflect.getOwnPropertyDescriptor(target, key);
-				},
-			},
-		);
+	it("is rejected with a TypeError", () => {
+		const payload = new Proxy({ orderId: "o-1" }, {});
 
 		expect(() => createDomainEvent("Proxied", payload)).toThrow(TypeError);
-		expect(descriptorReads).toBe(0);
+	});
+
+	it("passes an error of a Proxy trap through unchanged", () => {
+		class LazyLoadError extends Error {}
+		const failure = new LazyLoadError("the session is closed");
+		const payload = {
+			order: new Proxy(
+				{ id: "o-1" },
+				{
+					getOwnPropertyDescriptor() {
+						throw failure;
+					},
+				},
+			),
+		};
+
+		let caught: unknown;
+		try {
+			createDomainEvent("Proxied", payload);
+		} catch (error) {
+			caught = error;
+		}
+
+		expect(caught).toBe(failure);
 	});
 });
 
@@ -1239,7 +1265,7 @@ describe("mergeMetadata", () => {
 	});
 });
 
-describe("event data follows the rule of the in-memory event store", () => {
+describe("event data that a copy or a freeze would change is rejected", () => {
 	it("rejects an Error anywhere in the payload or the metadata", () => {
 		const failure = new RangeError("card declined");
 
@@ -1286,15 +1312,84 @@ describe("event data follows the rule of the in-memory event store", () => {
 		).toThrow(TypeError);
 	});
 
+	class Price {
+		readonly #amountMinor: number;
+
+		constructor(amountMinor: number) {
+			this.#amountMinor = amountMinor;
+		}
+
+		get amountMinor(): number {
+			return this.#amountMinor;
+		}
+	}
+
+	it.each([
+		["a class instance with a private field", () => new Price(500)],
+		[
+			"a Map with a named expando",
+			() => Object.assign(new Map([["k", 1]]), { note: "x" }),
+		],
+		["a Map with an index expando", () => Object.assign(new Map(), { 0: "x" })],
+		[
+			"a record with a non-enumerable property",
+			() => Object.defineProperty({ a: 1 }, "b", { value: 2 }),
+		],
+		[
+			"a record with an enumerable symbol key",
+			() => ({ [Symbol("tag")]: 1, a: 1 }),
+		],
+		[
+			"a record with a getter",
+			() =>
+				Object.defineProperty({}, "total", { get: () => 7, enumerable: true }),
+		],
+	])("rejects %s in the payload and the metadata", (_case, make) => {
+		expect(() => createDomainEvent("Priced", { value: make() })).toThrow(
+			TypeError,
+		);
+		expect(() =>
+			createUncommittedDomainEvent("Priced", { value: make() }),
+		).toThrow(TypeError);
+		expect(() =>
+			createDomainEvent(
+				"Priced",
+				{ orderId: "o-1" },
+				{ metadata: { custom: { value: make() } } },
+			),
+		).toThrow(TypeError);
+	});
+
+	it("rejects a getter without running it, so a getter cannot hide a class instance", () => {
+		let getterRuns = 0;
+		const payload: Record<string, unknown> = { price: new Price(500) };
+		Object.defineProperty(payload, "z", {
+			enumerable: true,
+			configurable: true,
+			get() {
+				getterRuns += 1;
+				payload.price = {};
+				return 1;
+			},
+		});
+
+		expect(() => createDomainEvent("Priced", payload)).toThrow(TypeError);
+		expect(getterRuns).toBe(0);
+	});
+
 	it("accepts a plain record that only claims an Error tag", () => {
-		const record = { [Symbol.toStringTag]: "Error", code: "CARD_DECLINED" };
+		const record = Object.defineProperty(
+			{ code: "CARD_DECLINED" },
+			Symbol.toStringTag,
+			{ value: "Error" },
+		);
 
 		const event = createDomainEvent("PaymentFailed", { failure: record });
 
 		expect(event.payload).toEqual({ failure: { code: "CARD_DECLINED" } });
 	});
 
-	it("flattens a class instance without running its tag getter", () => {
+	it("rejects a class instance with public fields without running its tag getter", () => {
 		let tagReads = 0;
 		class Amount {
 			readonly value = 5;
@@ -1304,9 +1399,9 @@ describe("event data follows the rule of the in-memory event store", () => {
 			}
 		}
 
-		const event = createDomainEvent("Paid", { amount: new Amount() });
-
-		expect(event.payload).toEqual({ amount: { value: 5 } });
+		expect(() => createDomainEvent("Paid", { amount: new Amount() })).toThrow(
+			TypeError,
+		);
 		expect(tagReads).toBe(0);
 	});
 });

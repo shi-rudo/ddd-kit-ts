@@ -3,7 +3,7 @@ import {
 	hasCooperativeBrand,
 	stampCooperativeBrand,
 } from "../../internal/cooperative-brand";
-import { assertFreezableState } from "../../internal/structural/detach-state";
+import { detachFreezableState } from "../../internal/structural/detach-state";
 import { isIntrinsicConstructorPrototype } from "../../internal/structural/is-built-in";
 import { deepFreeze } from "../value-object/value-object";
 import { type ClockFactory, defaultClockFactory, readClock } from "./clock";
@@ -404,48 +404,6 @@ function buildDomainEventFactory(
 export const defaultDomainEventFactory: DomainEventFactory =
 	buildDomainEventFactory({}, "createDomainEvent");
 
-/**
- * Creates a domain event with default values.
- * Sets occurredAt to current date and schemaVersion to 1 if not provided.
- *
- * **Input ownership.** The event is deeply frozen, and `payload` and
- * `metadata` are deep-cloned first, so the caller's own objects are never
- * frozen in place and later mutation of them does not bleed into the
- * event (same contract as `vo()`). The clone follows the plain-data event
- * contract via `structuredClone`: functions, Promise, and WeakMap/WeakSet
- * values throw a `TypeError`; symbol-keyed properties are not carried
- * over. The clone is then checked with the rule of the in-memory event
- * store: an `Error`, a host object such as a `File`, a binary buffer, and
- * shared memory throw a `TypeError`. A class instance or an accessor becomes
- * plain data in the clone.
- *
- * **For aggregate-internal events, prefer `this.createEvent(...)` on
- * `StateStoredAggregate` / `EventSourcedAggregate`.** That helper auto-injects
- * `aggregateId` (from `this.id`) and `aggregateType` (from the
- * aggregate's declared `aggregateType` property), which downstream
- * consumers (outbox dispatchers, projection handlers, audit logs)
- * route by. The commit boundary validates that both fields are present
- * and throws if they are missing, so a direct `createDomainEvent(...)`
- * call inside an aggregate that forgets the options is caught at
- * runtime. Record pending decisions in the application
- * shell before repository persistence or outbox harvest.
- *
- * Use `createDomainEvent(...)` directly for events that don't belong to
- * an aggregate: system events, integration events, configuration events,
- * test fixtures. For those, set `aggregateId` / `aggregateType` in
- * `options` if downstream consumers expect routing metadata.
- *
- * @param type - The event type
- * @param payload - The event payload
- * @param options - Optional event configuration (including `aggregateId`
- *   and `aggregateType` for routing)
- * @returns A domain event
- *
- * @example
- * ```typescript
- * const event = createDomainEvent("OrderCreated", { orderId: "123" });
- * ```
- */
 // Every recorded event a kit constructor returns is registered here: the
 // module-private tier of the recorded-event marker (nothing outside this
 // module can add to the set), so the aggregate recording paths can check
@@ -510,6 +468,11 @@ export function isUncommittedDomainEvent(
 	);
 }
 
+/**
+ * Creates an uncommitted domain event: the event that an aggregate method
+ * returns before the application shell records it. The payload and the
+ * metadata follow the input ownership rule of {@link createDomainEvent}.
+ */
 export function createUncommittedDomainEvent<T extends string>(
 	type: T,
 	payload?: undefined,
@@ -655,6 +618,56 @@ export function adoptRecordedDomainEvent<T extends object>(copy: T): T {
 	return copy;
 }
 
+/**
+ * Creates a domain event with default values.
+ * Sets occurredAt to current date and schemaVersion to 1 if not provided.
+ *
+ * **Input ownership.** The event is deeply frozen, and `payload` and
+ * `metadata` are deep-cloned first, so the caller's own objects are never
+ * frozen in place and later mutation of them does not bleed into the event
+ * (same contract as `vo()`). The event data rule checks the data before the
+ * copy and the copy after it. So the copy loses no data without an error,
+ * and no getter of the data runs. The in-memory event store applies the
+ * same rule on append. The checks catch accidents, not a hostile `Proxy`: a
+ * trap that changes the data during the check can hide a loss. An error
+ * that a `Proxy` trap throws passes unchanged, so a coded error of the
+ * caller keeps its code. These values throw a `TypeError`: a function, a
+ * Promise, a WeakMap or a WeakSet, an `Error`, a host object such as a
+ * `File`, a binary buffer, a `RegExp`, and shared memory. The same holds
+ * for what the copy would lose or change: a class instance, an accessor, an
+ * enumerable symbol-keyed property, a non-enumerable data property, and an
+ * expando on a built-in. A non-enumerable symbol key is metadata by
+ * convention, and the event does not get it. Map a value object to plain
+ * data before it goes into an event. `toJSON()` of a `ValueObject` is
+ * shallow, so map a nested value object too.
+ *
+ * **For aggregate-internal events, prefer `this.createEvent(...)` on
+ * `StateStoredAggregate` / `EventSourcedAggregate`.** That helper auto-injects
+ * `aggregateId` (from `this.id`) and `aggregateType` (from the
+ * aggregate's declared `aggregateType` property), which downstream
+ * consumers (outbox dispatchers, projection handlers, audit logs)
+ * route by. The commit boundary validates that both fields are present
+ * and throws if they are missing, so a direct `createDomainEvent(...)`
+ * call inside an aggregate that forgets the options is caught at
+ * runtime. Record pending decisions in the application
+ * shell before repository persistence or outbox harvest.
+ *
+ * Use `createDomainEvent(...)` directly for events that don't belong to
+ * an aggregate: system events, integration events, configuration events,
+ * test fixtures. For those, set `aggregateId` / `aggregateType` in
+ * `options` if downstream consumers expect routing metadata.
+ *
+ * @param type - The event type
+ * @param payload - The event payload
+ * @param options - Optional event configuration (including `aggregateId`
+ *   and `aggregateType` for routing)
+ * @returns A domain event
+ *
+ * @example
+ * ```typescript
+ * const event = createDomainEvent("OrderCreated", { orderId: "123" });
+ * ```
+ */
 export function createDomainEvent<T extends string>(
 	type: T,
 	payload?: undefined,
@@ -903,51 +916,25 @@ function isPlainRecordCopy(copy: unknown): boolean {
 /**
  * Deep-clones caller-supplied event data (payload, metadata) before the
  * event is frozen, so a constructor never freezes or aliases the caller's
- * own object graph, and checks the clone with {@link assertFreezableState}.
- * A primitive needs no copy, but the check rejects a symbol. A class
- * instance or an accessor becomes plain data in the clone.
+ * own object graph. {@link detachFreezableState} checks the data and the
+ * clone; its JSDoc states the rule and its limits.
  */
 function cloneOwnedEventData<T>(
 	value: T,
 	field: "payload" | "metadata",
 	operation: string,
 ): T {
-	if (typeof value === "function") {
-		throw new TypeError(
-			`${operation}: ${field} must not be a function: domain events are plain data`,
-		);
-	}
-	if (value === null || typeof value !== "object") {
-		// A primitive needs no copy, but the walk still rejects a symbol,
-		// which the in-memory event store rejects too.
-		assertFreezableState(value, `${operation}: ${field}`);
-		return value;
-	}
-	let clone: T;
-	try {
-		clone = structuredClone(value);
-	} catch (cause) {
-		throw new TypeError(
-			`${operation}: ${field} cannot be copied, because structuredClone ` +
-				"failed (the cause names the value); domain events are plain data",
-			{ cause },
-		);
-	}
 	// An own "__proto__" data key survives structuredClone and would
 	// re-arm prototype pollution in every [[Set]]-based consumer of the
 	// event; reject it at the root, the same contract as entity state. The
-	// check reads the clone, so a Proxy root runs no trap for it.
-	assertNoHostileOwnProtoKey(clone as object, `Event ${field} of ${operation}`);
-	// The check runs on the clone. It has no accessor, no own iterator, and
-	// no class prototype, so the check runs no caller code. The in-memory
-	// event store checks with the same walk, so an event that the mint
-	// accepts is one that the store accepts. The walk rejects what the clone
-	// keeps but plain data cannot hold, an Error or a host object such as a
-	// File, and what a freeze cannot make immutable, binary data and a
-	// RegExp. These would break the mint guarantee "minted implies deeply
+	// check runs first, so this key throws its own error whatever else is
+	// wrong with the data.
+	if (value !== null && typeof value === "object") {
+		assertNoHostileOwnProtoKey(value, `Event ${field} of ${operation}`);
+	}
+	// The freeze rule keeps the mint guarantee "minted implies deeply
 	// frozen".
-	assertFreezableState(clone, `${operation}: ${field}`);
-	return clone;
+	return detachFreezableState(value, `${operation}: ${field}`);
 }
 
 /**
