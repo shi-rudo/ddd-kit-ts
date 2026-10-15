@@ -672,11 +672,16 @@ string, or store it outside the event. `createDomainEvent` also rejects a
 and a frozen global or sticky pattern throws on a match, so a freeze cannot
 make it immutable. Keep the source and the flags of a pattern as strings. The
 in-memory event store rejects binary data and a `RegExp` too.
-`createDomainEvent` checks its copy of the event data with the rule of the
-in-memory event store, so it also rejects an `Error` and a host object such as
-a `File` or a `CryptoKey`. Map such a value to plain data, for example an
-error to its message and code. The metadata must be a plain object or absent:
-`null`, a string, a number, an array, or a `Map` throws a `TypeError`.
+`createDomainEvent` checks the payload and the metadata before and after it
+copies them. It rejects an `Error` and a host object such as a `File` or a
+`CryptoKey`. It also rejects every value that the copy would lose or change: a
+class instance, an accessor, an enumerable symbol-keyed property, a
+non-enumerable data property, and an expando on a built-in. In 2.2.0 the copy
+dropped or changed these without an error: a class instance lost its prototype
+and its private fields. Map such a value to plain data first, for example an
+error to its message and code. `toJSON()` of a kit `ValueObject` is shallow,
+so map a nested value object too. The metadata must be a plain object or
+absent: `null`, a string, a number, an array, or a `Map` throws a `TypeError`.
 `EventMetadata` fields are readonly, and the metadata gains `traceparent` and
 `tracestate`.
 
