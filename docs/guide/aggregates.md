@@ -365,11 +365,12 @@ get stateDto(): OrderStateDto {
 A subclass of a built-in (`class Tags extends Set`) is a class instance too.
 `detachState` also rejects a function, a symbol, an enumerable symbol-keyed
 property, a non-enumerable property on a record or an array, an accessor
-property, an expando on a built-in, an `Error`, a `Promise`, a `WeakMap`, a
-`WeakSet`, a `SharedArrayBuffer`, and a view over one. A `Proxy` fails inside
-the clone; `detachState` rethrows that failure as a `TypeError` that keeps the
-cause. Plain objects, arrays, `Date`, `Map`, `Set`, `RegExp`, bigints, and
-typed arrays pass.
+property, an expando on a built-in (also a non-enumerable one), an `Error`, a
+`Promise`, a `WeakMap`, a `WeakSet`, a `SharedArrayBuffer`, and a view over
+one. A `Proxy` fails in the walk or in the clone; `detachState` rethrows a
+failure of the clone as a `TypeError` that keeps the cause. The checks catch
+accidents, not a hostile `Proxy`. Plain objects, arrays, `Date`, `Map`, `Set`,
+`RegExp`, bigints, and typed arrays pass.
 
 A `Money` value is a frozen plain object and passes. Its `amountMinor` is a
 `bigint`, and JSON cannot carry a `bigint`. A JSON-backed row or snapshot

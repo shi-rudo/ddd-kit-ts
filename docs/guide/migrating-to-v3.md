@@ -1283,9 +1283,9 @@ typed `boolean`, and a union of port types.
 - A serialized kit error carries the fields it declares, for example
   `reason` and `expectedVersion`.
 
-**3.0.0.**
+**rc.11.**
 
-| rc.10 | 3.0.0 |
+| rc.10 | rc.11 |
 | --- | --- |
 | `AggregateAddress` | `AggregateIdentity` |
 | `AggregateAddressMismatchOptions` | `AggregateIdentityMismatchOptions` |
@@ -1379,3 +1379,18 @@ Behavior that a use case or an adapter can notice:
   and `routeEventsToCommandOutbox` implement it. A contract harness supplies
   `endEventSourcesCommitted`, and `endEventSourcesRolledBack` with
   `providesRolledBackEnds`.
+
+**3.0.0.**
+
+- `detachState` rejects an index key and a non-enumerable data property or
+  accessor on a built-in, for example `0` on a `Map` or a key after the last
+  character of a boxed `String`. Before, the copy dropped such a key without
+  an error. The `lastIndex` of a `RegExp`, the `length` of a boxed `String`,
+  and the mutator shadows of a frozen `Date`, `Map`, or `Set` still pass.
+  Entity read views, the snapshot model, and `InMemoryEventStore.append` use
+  the same check.
+- `detachState` rejects a built-in whose prototype was replaced, for example
+  a `Map` with `Object.prototype` as its prototype, also when it has no own
+  property: the copy is a `Map` again. In rc.11 such a value passed when it
+  had no own property, and also when the records in it had as many keys as
+  it lost. Convert such a value to a plain record or to a genuine `Map`.

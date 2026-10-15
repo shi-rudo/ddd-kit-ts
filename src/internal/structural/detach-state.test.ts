@@ -185,6 +185,86 @@ describe("detachState", () => {
 		);
 	});
 
+	it.each([
+		["a Map", () => Object.assign(new Map(), { 0: "lost" })],
+		["a Set", () => Object.assign(new Set(), { 0: "lost" })],
+		["a Date", () => Object.assign(new Date(0), { 0: "lost" })],
+		["a boxed number", () => Object.assign(Object(1), { 0: "lost" })],
+		["an ArrayBuffer", () => Object.assign(new ArrayBuffer(2), { 0: "lost" })],
+		[
+			"a boxed String after its last character",
+			() => Object.assign(new String("ab"), { 5: "lost" }),
+		],
+	])(
+		"rejects an index expando that the clone would drop on %s",
+		(_case, make) => {
+			expect(() => detachState({ value: make() })).toThrow(TypeError);
+		},
+	);
+
+	it("rejects an index accessor on a built-in", () => {
+		const byId = Object.defineProperty(new Map(), "0", {
+			get: () => "computed",
+			enumerable: true,
+		});
+
+		expect(() => detachState({ byId })).toThrow(TypeError);
+	});
+
+	it.each([
+		[
+			"a Map",
+			() =>
+				Object.defineProperty(new Map([["a", 1]]), "note", {
+					value: "keep me",
+				}),
+		],
+		[
+			"a Set, at an index key",
+			() => Object.defineProperty(new Set([1]), "0", { value: "x" }),
+		],
+		[
+			"a Date, as an accessor",
+			() => Object.defineProperty(new Date(0), "label", { get: () => "x" }),
+		],
+		[
+			"a Date, as a function that is not a frozen mutator",
+			() =>
+				Object.defineProperty(new Date(0), "toJSON", {
+					value: () => "1970-Q1",
+				}),
+		],
+		[
+			"a Map, as an own function under a mutator name",
+			() =>
+				Object.defineProperty(new Map(), "set", {
+					value: function set() {},
+				}),
+		],
+		[
+			"a Map, as a function that is not a frozen mutator",
+			() =>
+				Object.defineProperty(new Map(), "meta", {
+					value: () => ({ source: "import" }),
+				}),
+		],
+	])(
+		"rejects a non-enumerable property that the clone would drop on %s",
+		(_case, make) => {
+			expect(() => detachState({ value: make() })).toThrow(TypeError);
+		},
+	);
+
+	it("keeps the elements of a typed array and the characters of a boxed String", () => {
+		const copy = detachState({
+			bytes: new Uint8Array([1, 2]),
+			label: new String("ab"),
+		});
+
+		expect([...copy.bytes]).toEqual([1, 2]);
+		expect(String(copy.label)).toBe("ab");
+	});
+
 	it("walks an array expando as a member and rejects a hidden key on an array", () => {
 		const line = Object.assign([1, 2], { owner: new OwnerReview(true) });
 		const hidden = Object.defineProperty([1], "hidden", {
@@ -281,7 +361,7 @@ describe("detachState", () => {
 });
 
 describe("detachState and a graph that the walk cannot see", () => {
-	it("reads the buffer of a typed array without running an own accessor", () => {
+	it("reads the buffer of a typed array without running an own accessor, and rejects the accessor", () => {
 		let runs = 0;
 		const bytes = new Uint8Array(2);
 		Object.defineProperty(bytes, "buffer", {
@@ -291,8 +371,7 @@ describe("detachState and a graph that the walk cannot see", () => {
 			},
 		});
 
-		detachState({ bytes });
-
+		expect(() => detachState({ bytes })).toThrow(TypeError);
 		expect(runs).toBe(0);
 	});
 
@@ -320,13 +399,26 @@ describe("detachState and a graph that the walk cannot see", () => {
 		},
 	);
 
-	it("copies a Map whose prototype was replaced and that carries no own property", () => {
+	it.each([
+		["a Map", () => new Map([["k", { a: 1 }]])],
+		["a Set", () => new Set([{ id: 1 }])],
+	])(
+		"rejects %s whose prototype was replaced and that has an own property, also when it holds a record",
+		(_case, make) => {
+			const disguised = Object.setPrototypeOf(make(), Object.prototype);
+			disguised.note = "lost in the copy";
+
+			expect(() => detachState({ disguised })).toThrow(TypeError);
+		},
+	);
+
+	it("rejects a Map whose prototype was replaced and that carries no own property, because the copy is a Map", () => {
 		const disguised = Object.setPrototypeOf(
 			new Map([["k", 1]]),
 			Object.prototype,
 		);
 
-		expect(detachState({ disguised }).disguised).toEqual(new Map([["k", 1]]));
+		expect(() => detachState({ disguised })).toThrow(TypeError);
 	});
 
 	it("rejects an Error that a Proxy trap swaps in during the walk", () => {

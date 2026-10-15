@@ -114,16 +114,16 @@ const result2 = deepOmit(obj, {
 
 Returns a copy of `state` that shares no object with the original. The copy is a `structuredClone`, taken after a walk that rejects every value the clone would lose or silently degrade. A class instance keeps its data properties in a clone and loses the methods on its prototype; the walk throws a `TypeError` that names the path and the class instead. The optional `subject` replaces `detachState: state` at the start of every message.
 
-The walk reads the graph through property descriptors and walks a `Map` or a `Set` with the built-in iteration. No accessor and no own iterator of the state runs. A `Proxy` runs its traps during the walk. A trap can change the graph, and an accessor that a trap adds runs during the clone. A second walk checks the clone, so a value that a trap swapped in and the content of a built-in whose prototype was replaced are rejected too. The walks also count the data properties of records and arrays, and a clone with another count throws: a built-in whose prototype was replaced loses its own properties in the clone.
+The walk reads the graph through property descriptors and walks a `Map` or a `Set` with the built-in iteration. No accessor and no own iterator of the state runs. A `Proxy` runs its traps during the walk. A trap can change the graph, and an accessor that a trap adds runs during the clone. A second walk checks the clone, so a value that a trap swapped in and the content of a built-in whose prototype was replaced are rejected too. The second walk also follows the steps of the first walk: the kind of each object and the key of each data property, in walk order. A clone that differs throws, with the path: a built-in whose prototype was replaced is a built-in again in the clone and loses its own properties.
 
 #### Rejected values
 
 - A class instance, including a subclass of a built-in (`class Tags extends Set`)
 - A function or a symbol value
 - An enumerable symbol-keyed property anywhere (a hidden symbol key passes as metadata)
-- A non-enumerable string-keyed property on a record or an array (the clone drops it)
+- A non-enumerable string-keyed property (the clone drops it). On a built-in, the mutator shadows of a deep freeze, the `lastIndex` of a `RegExp`, and the `length` of a boxed `String` pass: they are machinery, not data
 - An accessor property (the walk does not invoke it)
-- An expando on a built-in such as a `Map` or a `Date` (the clone drops it)
+- An expando on a built-in such as a `Map` or a `Date`, also at an index key (the clone drops it)
 - An `Error`, a `Promise`, a `WeakMap`, or a `WeakSet`
 - A `SharedArrayBuffer` or a view over one (the copy would share its memory)
 - A `Proxy`: the walk or the clone fails; `detachState` rethrows a failure of the clone as a `TypeError` that keeps the cause
