@@ -625,17 +625,18 @@ export function adoptRecordedDomainEvent<T extends object>(copy: T): T {
  * **Input ownership.** The event is deeply frozen, and `payload` and
  * `metadata` are deep-cloned first, so the caller's own objects are never
  * frozen in place and later mutation of them does not bleed into the event
- * (same contract as `vo()`). The rule of the in-memory event store checks
- * the data before the clone and the clone after it. So the clone loses no
- * data without an error, and no getter of the data runs. The checks catch
- * accidents, not a hostile `Proxy`: a trap that changes the data during the
- * check can hide a loss. An error that a `Proxy` trap throws passes
- * unchanged, so a coded error of the caller keeps its code. These values throw a `TypeError`: a function, a
+ * (same contract as `vo()`). The event data rule checks the data before the
+ * copy and the copy after it. So the copy loses no data without an error,
+ * and no getter of the data runs. The in-memory event store applies the
+ * same rule on append. The checks catch accidents, not a hostile `Proxy`: a
+ * trap that changes the data during the check can hide a loss. An error
+ * that a `Proxy` trap throws passes unchanged, so a coded error of the
+ * caller keeps its code. These values throw a `TypeError`: a function, a
  * Promise, a WeakMap or a WeakSet, an `Error`, a host object such as a
  * `File`, a binary buffer, a `RegExp`, and shared memory. The same holds
- * for what the clone would lose or change: a class instance, an accessor,
- * an enumerable symbol-keyed property, a non-enumerable data property, and
- * an expando on a built-in. A non-enumerable symbol key is metadata by
+ * for what the copy would lose or change: a class instance, an accessor, an
+ * enumerable symbol-keyed property, a non-enumerable data property, and an
+ * expando on a built-in. A non-enumerable symbol key is metadata by
  * convention, and the event does not get it. Map a value object to plain
  * data before it goes into an event. `toJSON()` of a `ValueObject` is
  * shallow, so map a nested value object too.
@@ -923,11 +924,6 @@ function cloneOwnedEventData<T>(
 	field: "payload" | "metadata",
 	operation: string,
 ): T {
-	if (typeof value === "function") {
-		throw new TypeError(
-			`${operation}: ${field} must not be a function: domain events are plain data`,
-		);
-	}
 	// An own "__proto__" data key survives structuredClone and would
 	// re-arm prototype pollution in every [[Set]]-based consumer of the
 	// event; reject it at the root, the same contract as entity state. The
@@ -937,8 +933,7 @@ function cloneOwnedEventData<T>(
 		assertNoHostileOwnProtoKey(value, `Event ${field} of ${operation}`);
 	}
 	// The freeze rule keeps the mint guarantee "minted implies deeply
-	// frozen". The in-memory event store checks with the same rule, so an
-	// event that the mint accepts is one that the store accepts.
+	// frozen".
 	return detachFreezableState(value, `${operation}: ${field}`);
 }
 

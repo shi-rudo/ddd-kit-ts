@@ -1265,7 +1265,7 @@ describe("mergeMetadata", () => {
 	});
 });
 
-describe("event data follows the rule of the in-memory event store", () => {
+describe("event data that a copy or a freeze would change is rejected", () => {
 	it("rejects an Error anywhere in the payload or the metadata", () => {
 		const failure = new RangeError("card declined");
 
