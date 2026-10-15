@@ -414,14 +414,18 @@ export const defaultDomainEventFactory: DomainEventFactory =
  * **Input ownership.** The event is deeply frozen, and `payload` and
  * `metadata` are deep-cloned first, so the caller's own objects are never
  * frozen in place and later mutation of them does not bleed into the
- * event (same contract as `vo()`). The data and the clone are then checked
- * with the rule of the in-memory event store, so the event holds all the
- * data that the caller passed. These values throw a `TypeError`: a
- * function, a Promise, a WeakMap or a WeakSet, an `Error`, a host object
- * such as a `File`, a binary buffer, a `RegExp`, shared memory, a class
- * instance, an accessor, an enumerable symbol-keyed property, a
- * non-enumerable property of a record or an array, and an expando on a
- * built-in. Map a value object to plain data before it goes into an event.
+ * event (same contract as `vo()`). The rule of the in-memory event store
+ * checks the data before the clone and the clone after it. So the clone
+ * loses no data without an error, and no getter of the data runs. These
+ * values throw a `TypeError`: a function, a Promise, a WeakMap or a
+ * WeakSet, an `Error`, a host object such as a `File`, a binary buffer, a
+ * `RegExp`, and shared memory. The same holds for what the clone would
+ * lose or change: a class instance, an accessor, an enumerable
+ * symbol-keyed property, a non-enumerable data property, and an expando on
+ * a built-in. A non-enumerable symbol key is metadata by convention, and
+ * the event does not get it. Map a value object to plain data before it
+ * goes into an event. `toJSON()` of a `ValueObject` is shallow, so map a
+ * nested value object too.
  *
  * **For aggregate-internal events, prefer `this.createEvent(...)` on
  * `StateStoredAggregate` / `EventSourcedAggregate`.** That helper auto-injects

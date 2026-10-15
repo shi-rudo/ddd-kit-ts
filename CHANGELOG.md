@@ -106,17 +106,18 @@ immutable. Run one kit version per process during a cutover.
   a kit constructor minted and throws `UnmintedEventError` for a hand-built
   object. `createDomainEvent` rejects binary buffers and a `RegExp`, because a
   freeze cannot make them immutable. It checks the payload and the metadata
-  that it receives, and its copy of them, with the rule of the in-memory
-  event store. So it also rejects a symbol, an `Error`, a host object such as
-  a `File`, and every value that the copy would lose or change: a class
-  instance, an accessor, an enumerable symbol-keyed property, a
-  non-enumerable property of a record or an array, and an expando on a
-  built-in. A value object with a private field no longer becomes an empty
-  record without an error. Map a value object to plain data first, for
-  example with `toJSON()`. The metadata must be a plain object or absent; `null`, a string, a number, an array, or a `Map`
-  throws a `TypeError`, also with a factory `source`. `EventMetadata` fields
-  are readonly. `DomainEvent` loses `aggregateVersion`; the commit envelope
-  carries the position.
+  with the rule of the in-memory event store, before and after it copies them.
+  So it rejects a symbol, an `Error`, and a host object such as a `File`. It
+  also rejects every value that the copy would lose or change. These are a
+  class instance, an accessor, an enumerable symbol-keyed property, a
+  non-enumerable data property, and an expando on a built-in. A value object
+  with a private field no longer becomes an empty record without an error. Map
+  a value object to plain data first. `toJSON()` of a kit `ValueObject` is
+  shallow, so map a nested value object too. No getter of the data runs. The
+  metadata must be a plain object or absent; `null`, a string, a number, an
+  array, or a `Map` throws a `TypeError`, also with a factory `source`.
+  `EventMetadata` fields are readonly. `DomainEvent` loses `aggregateVersion`;
+  the commit envelope carries the position.
 - `InMemoryEventStore.append` rejects an event that holds binary data, for
   example a `Uint8Array`, or a `RegExp`, with a `TypeError`, as the event
   constructors do. Before, it stored a copy. Encode binary data as a string,

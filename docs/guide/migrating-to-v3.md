@@ -1394,11 +1394,12 @@ Behavior that a use case or an adapter can notice:
   property: the copy is a `Map` again. In rc.11 such a value passed when it
   had no own property, and also when the records in it had as many keys as
   it lost. Convert such a value to a plain record or to a genuine `Map`.
-- The event constructors check the payload and the metadata that they
-  receive, not only their copy. A class instance, an accessor, an
-  enumerable symbol-keyed property, a non-enumerable property of a record or
-  an array, and an expando on a built-in throw a `TypeError` that names the
-  path. In rc.11 the copy dropped these without an error: a class instance
-  lost its prototype and its private fields, so a value object with a
-  private field became `{}`. Map such a value to plain data before it goes
-  into an event, for example with `toJSON()` on a kit `ValueObject`.
+- The event constructors check the payload and the metadata before they
+  copy them. These values now throw a `TypeError` that names the path: a
+  class instance, an accessor, an enumerable symbol-keyed property, a
+  non-enumerable data property, and an expando on a built-in. In rc.11 the
+  copy dropped them without an error. A value object with a private field
+  became `{}`. Map such a value to plain data before it goes into an event.
+  `toJSON()` of a kit `ValueObject` is shallow, so map a nested value object
+  too. A `Proxy` in the data now runs its traps before the constructor
+  rejects it. Creating an event costs about 40 percent more.
