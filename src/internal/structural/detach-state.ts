@@ -1,5 +1,7 @@
 import {
+	type BuiltInTag,
 	builtInTagWithoutInvokingAccessors,
+	builtInTypeName,
 	hasIntrinsicPrototypeChain,
 	isIntrinsicConstructorPrototype,
 } from "./is-built-in";
@@ -67,12 +69,12 @@ export function detachFreezableState<T>(state: T, subject: string): T {
  * rule is the same. Kit modules only.
  */
 export function assertFreezableState(state: unknown, subject: string): void {
-	assertDetachable(state, "", newWalk(subject, "freeze"));
+	assertDetachable(state, "", newWalk(subject, "freeze", new StepRecording()));
 }
 
 function detach<T>(state: T, subject: string, rule: Walk["rule"]): T {
-	const original = newWalk(subject, rule);
-	assertDetachable(state, "", original);
+	const recording = new StepRecording();
+	assertDetachable(state, "", newWalk(subject, rule, recording));
 	let copy: T;
 	try {
 		copy = structuredClone(state);
@@ -89,22 +91,21 @@ function detach<T>(state: T, subject: string, rule: Walk["rule"]): T {
 	// the copy drops its own properties. A count of the properties can
 	// balance out with the content of the built-in, so this walk compares
 	// each of its steps with the step of the first walk.
-	const copied = newWalk(subject, rule, original);
-	assertDetachable(copy, "", copied);
-	if (copied.position !== original.steps.length) {
-		throwChangedInCopy(subject, "");
-	}
+	const comparison = new StepComparison(recording, subject);
+	assertDetachable(copy, "", newWalk(subject, rule, comparison));
+	comparison.assertComplete();
 	return copy;
 }
 
 const INDEX_KEY = /^(0|[1-9]\d*)$/;
-const BINARY_DATA_TAGS: ReadonlySet<string> = new Set([
+const BINARY_DATA_TAGS: ReadonlySet<BuiltInTag> = new Set<BuiltInTag>([
 	"[object TypedArray]",
 	"[object DataView]",
 	"[object ArrayBuffer]",
 	"[object SharedArrayBuffer]",
 ]);
-const REGEXP_TAG = "[object RegExp]";
+const REGEXP_TAG: BuiltInTag = "[object RegExp]";
+const STRING_TAG: BuiltInTag = "[object String]";
 const mapEntries = Map.prototype.entries;
 const setValues = Set.prototype.values;
 
@@ -117,9 +118,9 @@ type Step = string | symbol;
 
 const RECORD_STEP = Symbol("record");
 const ARRAY_STEP = Symbol("array");
-const builtInSteps = new Map<string, symbol>();
+const builtInSteps = new Map<BuiltInTag, symbol>();
 
-function builtInStep(tag: string): symbol {
+function builtInStep(tag: BuiltInTag): symbol {
 	let kind = builtInSteps.get(tag);
 	if (kind === undefined) {
 		kind = Symbol(tag);
@@ -129,60 +130,94 @@ function builtInStep(tag: string): symbol {
 }
 
 /**
+ * The steps of the walk over the original, in walk order.
+ */
+class StepRecording {
+	readonly steps: Step[] = [];
+
+	take(next: Step): void {
+		this.steps.push(next);
+	}
+}
+
+/**
+ * The walk over the copy compares each of its steps with the step of the
+ * walk over the original at the same position. Structured clone keeps the
+ * order of the keys, of Map entries, and of Set members, and it keeps
+ * shared references, so the walk over an unchanged copy takes the same
+ * steps. A step that differs, or a step that is missing, means that the
+ * copy changed.
+ */
+class StepComparison {
+	#position = 0;
+
+	constructor(
+		private readonly recording: StepRecording,
+		private readonly subject: string,
+	) {}
+
+	take(next: Step, path: string): void {
+		const expected = this.recording.steps[this.#position];
+		if (expected !== next) {
+			throwChangedInCopy(this.subject, path, expected, next);
+		}
+		this.#position += 1;
+	}
+
+	assertComplete(): void {
+		if (this.#position < this.recording.steps.length) {
+			throwChangedInCopy(
+				this.subject,
+				"",
+				this.recording.steps[this.#position],
+				undefined,
+			);
+		}
+	}
+}
+
+/**
  * The objects that the walk has seen, the subject that its messages name,
- * and its rule. `"clone"` accepts what a structured clone keeps. `"freeze"`
- * also rejects what `deepFreeze` cannot make immutable.
+ * its rule, and its steps. `"clone"` accepts what a structured clone
+ * keeps. `"freeze"` also rejects what `deepFreeze` cannot make immutable.
  */
 interface Walk {
 	readonly seen: WeakSet<object>;
 	readonly subject: string;
 	readonly rule: "clone" | "freeze";
-	/**
-	 * The steps of the walk over the original, in walk order. The walk over
-	 * the original records them; the walk over the copy compares with them.
-	 */
-	readonly steps: Step[];
-	/** Whether this walk compares with `steps` instead of recording them. */
-	readonly compares: boolean;
-	/** The position of the next step to compare in `steps`. */
-	position: number;
+	readonly trace: StepRecording | StepComparison;
 }
 
-/**
- * A walk that records its steps, or, with `original`, a walk over the
- * copy that compares with the steps of `original`.
- */
-function newWalk(subject: string, rule: Walk["rule"], original?: Walk): Walk {
-	return {
-		seen: new WeakSet(),
-		subject,
-		rule,
-		steps: original?.steps ?? [],
-		compares: original !== undefined,
-		position: 0,
-	};
+function newWalk(
+	subject: string,
+	rule: Walk["rule"],
+	trace: Walk["trace"],
+): Walk {
+	return { seen: new WeakSet(), subject, rule, trace };
 }
 
-/**
- * Structured clone keeps the order of the keys, of Map entries, and of Set
- * members, and it keeps shared references. So the walk over an unchanged
- * copy takes the same steps as the walk over the original.
- */
 function step(walk: Walk, next: Step, path: string): void {
-	if (!walk.compares) {
-		walk.steps.push(next);
-		return;
-	}
-	if (walk.steps[walk.position] !== next) {
-		throwChangedInCopy(walk.subject, path);
-	}
-	walk.position += 1;
+	walk.trace.take(next, path);
 }
 
-function throwChangedInCopy(subject: string, path: string): never {
+function throwChangedInCopy(
+	subject: string,
+	path: string,
+	expected: Step | undefined,
+	found: Step | undefined,
+): never {
 	throw new TypeError(
-		`${subject}${path} changed in the copy; a built-in whose prototype was replaced loses its own properties in the copy, and a Proxy trap can change the graph; map it to plain data`,
+		`${subject}${path} changed in the copy: the state has ${describeStep(expected)} there, and the copy has ${describeStep(found)}; a built-in whose prototype was replaced is a built-in again in the copy and loses its own properties, and a Proxy trap can change the graph; map it to plain data`,
 	);
+}
+
+function describeStep(step: Step | undefined): string {
+	if (step === undefined) return "nothing";
+	if (typeof step === "string") return `the key "${step}"`;
+	if (step === RECORD_STEP) return "a record";
+	if (step === ARRAY_STEP) return "an array";
+	const name = builtInTypeName(step.description as BuiltInTag);
+	return /^[AEIOU]/.test(name) ? `an ${name}` : `a ${name}`;
 }
 
 function assertDetachable(value: unknown, path: string, walk: Walk): void {
@@ -242,7 +277,7 @@ function assertDetachable(value: unknown, path: string, walk: Walk): void {
 			tag === "[object WeakSet]"
 		) {
 			throw new TypeError(
-				`${walk.subject}${path} is a ${tag.slice(8, -1)} and cannot be detached`,
+				`${walk.subject}${path} is a ${builtInTypeName(tag)} and cannot be detached`,
 			);
 		} else if (tag === "[object Error]") {
 			throw new TypeError(
@@ -253,7 +288,7 @@ function assertDetachable(value: unknown, path: string, walk: Walk): void {
 				`${walk.subject}${path} is backed by a SharedArrayBuffer and the copy would share its memory; map it to plain data`,
 			);
 		}
-		assertOwnPropertiesDetachable(object, path, walk, "built-in", tag);
+		assertOwnPropertiesDetachable(object, path, walk, tag);
 		return;
 	}
 
@@ -276,16 +311,17 @@ function assertDetachable(value: unknown, path: string, walk: Walk): void {
  * its own machinery, not data, and so are the keys that
  * {@link isBuiltInMachinery} names. The index keys of a built-in below its
  * content length are its content and pass as such. Another index key of a
- * built-in is an expando. `tag` is the tag of a built-in.
+ * built-in is an expando. `owner` is the kind of `object`: an array, a
+ * record, or the tag of a built-in.
  */
 function assertOwnPropertiesDetachable(
 	object: object,
 	path: string,
 	walk: Walk,
-	kind: "array" | "built-in" | "record",
-	tag = "",
+	owner: "array" | "record" | BuiltInTag,
 ): void {
-	const contentLength = kind === "built-in" ? contentLengthOf(object, tag) : 0;
+	const tag = owner === "array" || owner === "record" ? undefined : owner;
+	const contentLength = tag === undefined ? 0 : contentLengthOf(object, tag);
 	for (const key of Reflect.ownKeys(object)) {
 		const descriptor = Object.getOwnPropertyDescriptor(object, key);
 		if (descriptor === undefined) continue;
@@ -295,18 +331,18 @@ function assertOwnPropertiesDetachable(
 				`${walk.subject}${path} has a symbol-keyed property; map it to plain data`,
 			);
 		}
-		if (kind === "array" && key === "length") continue;
+		if (owner === "array" && key === "length") continue;
 		const isIndex = INDEX_KEY.test(key);
 		const memberPath = isIndex ? `${path}[${key}]` : `${path}.${key}`;
 		if (!descriptor.enumerable) {
-			if (kind === "built-in" && isBuiltInMachinery(tag, key, descriptor)) {
+			if (tag !== undefined && isBuiltInMachinery(tag, key, descriptor)) {
 				continue;
 			}
 			throw new TypeError(
 				`${walk.subject}${memberPath} is not enumerable and the clone would drop it; map it to plain data`,
 			);
 		}
-		if (kind === "built-in" && isIndex && Number(key) < contentLength) {
+		if (tag !== undefined && isIndex && Number(key) < contentLength) {
 			continue;
 		}
 		if (!("value" in descriptor)) {
@@ -314,7 +350,7 @@ function assertOwnPropertiesDetachable(
 				`${walk.subject}${memberPath} is an accessor property; map it to plain data`,
 			);
 		}
-		if (kind === "built-in") {
+		if (tag !== undefined) {
 			throw new TypeError(
 				`${walk.subject}${memberPath} is an expando on a ${constructorName(Object.getPrototypeOf(object)) ?? "built-in"} and the clone would drop it; map it to plain data`,
 			);
@@ -332,14 +368,14 @@ function assertOwnPropertiesDetachable(
  * slots.
  */
 function isBuiltInMachinery(
-	tag: string,
+	tag: BuiltInTag,
 	key: string,
 	descriptor: PropertyDescriptor,
 ): boolean {
 	return (
 		isMutatorShadow(tag, key, descriptor) ||
 		(tag === REGEXP_TAG && key === "lastIndex") ||
-		(tag === "[object String]" && key === "length")
+		(tag === STRING_TAG && key === "length")
 	);
 }
 
@@ -347,11 +383,11 @@ function isBuiltInMachinery(
  * The number of index keys that hold the content of a built-in: the
  * elements of a typed array and the characters of a boxed String.
  */
-function contentLengthOf(object: object, tag: string): number {
+function contentLengthOf(object: object, tag: BuiltInTag): number {
 	if (tag === "[object TypedArray]") {
 		return typedArrayLength.call(object as ArrayBufferView);
 	}
-	if (tag === "[object String]") return stringValueOf.call(object).length;
+	if (tag === STRING_TAG) return stringValueOf.call(object).length;
 	return 0;
 }
 
@@ -371,7 +407,7 @@ const dataViewBuffer = Object.getOwnPropertyDescriptor(
 	"buffer",
 )?.get as (this: DataView) => ArrayBufferLike;
 
-function sharesMemory(object: object, tag: string): boolean {
+function sharesMemory(object: object, tag: BuiltInTag): boolean {
 	if (tag === "[object SharedArrayBuffer]") return true;
 	if (tag === "[object TypedArray]") {
 		return isSharedArrayBuffer(
@@ -390,7 +426,7 @@ function isSharedArrayBuffer(buffer: ArrayBufferLike): boolean {
 	);
 }
 
-function assertFreezable(tag: string, path: string, subject: string): void {
+function assertFreezable(tag: BuiltInTag, path: string, subject: string): void {
 	if (BINARY_DATA_TAGS.has(tag)) {
 		throw new TypeError(
 			`${subject}${path} is binary data; binary buffers (a typed array, a DataView, an ArrayBuffer, or a SharedArrayBuffer) stay mutable under freezing and JSON does not keep them; encode the data as a string, for example base64`,

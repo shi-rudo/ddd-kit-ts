@@ -2,6 +2,7 @@ import {
 	hasCooperativeBrand,
 	stampCooperativeBrand,
 } from "../cooperative-brand";
+import { type BuiltInTag, builtInTypeName } from "./is-built-in";
 
 /**
  * `Object.freeze` does not protect internal slots: a frozen Date still
@@ -11,7 +12,10 @@ import {
  * spread, and `structuredClone` drops them. A walk that checks a copy
  * accepts them as machinery, not data.
  */
-const mutatorsByTag: ReadonlyMap<string, readonly string[]> = new Map([
+const mutatorsByTag: ReadonlyMap<BuiltInTag, readonly string[]> = new Map<
+	BuiltInTag,
+	readonly string[]
+>([
 	[
 		"[object Date]",
 		[
@@ -77,10 +81,13 @@ const shadowDescriptor = {
  * `tag`. Returns whether it installed them: a built-in of another kind has
  * no mutator shadows, and a non-extensible one cannot take them.
  */
-export function installMutatorShadows(object: object, tag: string): boolean {
+export function installMutatorShadows(
+	object: object,
+	tag: BuiltInTag,
+): boolean {
 	const mutators = mutatorsByTag.get(tag);
 	if (mutators === undefined || !Object.isExtensible(object)) return false;
-	const typeName = tag.slice(8, -1);
+	const typeName = builtInTypeName(tag);
 	for (const method of mutators) {
 		shadowDescriptor.value = shadowOf(typeName, method);
 		Object.defineProperty(object, method, shadowDescriptor);
@@ -95,7 +102,7 @@ export function installMutatorShadows(object: object, tag: string): boolean {
  * catches accidents, not a forgery.
  */
 export function isMutatorShadow(
-	tag: string,
+	tag: BuiltInTag,
 	key: string,
 	descriptor: PropertyDescriptor,
 ): boolean {

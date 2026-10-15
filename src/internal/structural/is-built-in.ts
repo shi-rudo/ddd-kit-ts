@@ -293,7 +293,7 @@ export function findPropertyDescriptor(
 
 export function builtInTagWithoutInvokingAccessors(
 	value: object,
-): string | undefined {
+): BuiltInTag | undefined {
 	if (ArrayBuffer.isView(value)) {
 		return hasBrand(value, "[object DataView]")
 			? "[object DataView]"
@@ -307,12 +307,39 @@ export function builtInTagWithoutInvokingAccessors(
 
 	const tag = Object.prototype.toString.call(value);
 	if (BUILT_IN_TAGS.has(tag) && hasBrand(value, tag)) {
-		return tag;
+		return tag as BuiltInTag;
 	}
 	return descriptor === undefined ? undefined : builtInTagFromBrand(value);
 }
 
-function builtInTagFromBrand(value: object): string | undefined {
+/**
+ * The tag that {@link builtInTagWithoutInvokingAccessors} reports for a
+ * genuine built-in. Every typed array reports `"[object TypedArray]"`.
+ */
+export type BuiltInTag =
+	| "[object Date]"
+	| "[object RegExp]"
+	| "[object Map]"
+	| "[object Set]"
+	| "[object WeakMap]"
+	| "[object WeakSet]"
+	| "[object Promise]"
+	| "[object Error]"
+	| "[object Boolean]"
+	| "[object Number]"
+	| "[object String]"
+	| "[object BigInt]"
+	| "[object ArrayBuffer]"
+	| "[object SharedArrayBuffer]"
+	| "[object DataView]"
+	| "[object TypedArray]";
+
+/** The type name in a tag: `"Map"` for `"[object Map]"`. */
+export function builtInTypeName(tag: BuiltInTag): string {
+	return tag.slice(8, -1);
+}
+
+function builtInTagFromBrand(value: object): BuiltInTag | undefined {
 	if (hasBrand(value, "[object Date]")) return "[object Date]";
 	if (hasBrand(value, "[object RegExp]")) return "[object RegExp]";
 	if (hasBrand(value, "[object Map]")) return "[object Map]";
