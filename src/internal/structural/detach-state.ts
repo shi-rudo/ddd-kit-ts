@@ -15,7 +15,9 @@ import { isShadowedMutator } from "./shadowed-mutators";
  * `DataCloneError`. An Error, a Promise, a WeakMap, or a WeakSet cannot be
  * detached at all. A SharedArrayBuffer and a view over one keep sharing
  * their memory. A Proxy fails in the walk or in the clone; a failure in
- * the clone is rethrown as a `TypeError` with the cause.
+ * the clone is rethrown as a `TypeError` with the cause. An error that a
+ * Proxy trap throws in the walk passes unchanged, so a coded error of the
+ * caller keeps its code.
  *
  * The walk reads the graph through property descriptors and walks a Map
  * or a Set with the built-in iteration, so no accessor and no own iterator
