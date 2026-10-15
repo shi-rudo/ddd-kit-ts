@@ -950,20 +950,10 @@ describe("commit cursor boundary", () => {
 });
 
 describe("a Proxy payload at the mint", () => {
-	it("is rejected without running a trap for the __proto__ check", () => {
-		let descriptorReads = 0;
-		const payload = new Proxy(
-			{},
-			{
-				getOwnPropertyDescriptor(target, key) {
-					descriptorReads += 1;
-					return Reflect.getOwnPropertyDescriptor(target, key);
-				},
-			},
-		);
+	it("is rejected with a TypeError", () => {
+		const payload = new Proxy({ orderId: "o-1" }, {});
 
 		expect(() => createDomainEvent("Proxied", payload)).toThrow(TypeError);
-		expect(descriptorReads).toBe(0);
 	});
 });
 
@@ -1332,6 +1322,23 @@ describe("event data follows the rule of the in-memory event store", () => {
 				{ metadata: { custom: { value: make() } } },
 			),
 		).toThrow(TypeError);
+	});
+
+	it("rejects a getter without running it, so a getter cannot hide a class instance", () => {
+		let getterRuns = 0;
+		const payload: Record<string, unknown> = { price: new Price(500) };
+		Object.defineProperty(payload, "z", {
+			enumerable: true,
+			configurable: true,
+			get() {
+				getterRuns += 1;
+				payload.price = {};
+				return 1;
+			},
+		});
+
+		expect(() => createDomainEvent("Priced", payload)).toThrow(TypeError);
+		expect(getterRuns).toBe(0);
 	});
 
 	it("accepts a plain record that only claims an Error tag", () => {
