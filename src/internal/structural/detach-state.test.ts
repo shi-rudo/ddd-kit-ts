@@ -185,6 +185,42 @@ describe("detachState", () => {
 		);
 	});
 
+	it.each([
+		["a Map", () => Object.assign(new Map(), { 0: "lost" })],
+		["a Set", () => Object.assign(new Set(), { 0: "lost" })],
+		["a Date", () => Object.assign(new Date(0), { 0: "lost" })],
+		["a boxed number", () => Object.assign(Object(1), { 0: "lost" })],
+		["an ArrayBuffer", () => Object.assign(new ArrayBuffer(2), { 0: "lost" })],
+		[
+			"a boxed String after its last character",
+			() => Object.assign(new String("ab"), { 5: "lost" }),
+		],
+	])(
+		"rejects an index expando that the clone would drop on %s",
+		(_case, make) => {
+			expect(() => detachState({ value: make() })).toThrow(TypeError);
+		},
+	);
+
+	it("rejects an index accessor on a built-in", () => {
+		const byId = Object.defineProperty(new Map(), "0", {
+			get: () => "computed",
+			enumerable: true,
+		});
+
+		expect(() => detachState({ byId })).toThrow(TypeError);
+	});
+
+	it("keeps the elements of a typed array and the characters of a boxed String", () => {
+		const copy = detachState({
+			bytes: new Uint8Array([1, 2]),
+			label: new String("ab"),
+		});
+
+		expect([...copy.bytes]).toEqual([1, 2]);
+		expect(String(copy.label)).toBe("ab");
+	});
+
 	it("walks an array expando as a member and rejects a hidden key on an array", () => {
 		const line = Object.assign([1, 2], { owner: new OwnerReview(true) });
 		const hidden = Object.defineProperty([1], "hidden", {

@@ -195,7 +195,13 @@ function assertDetachable(value: unknown, path: string, walk: Walk): void {
 				`${walk.subject}${path} is backed by a SharedArrayBuffer and the copy would share its memory; map it to plain data`,
 			);
 		}
-		assertOwnPropertiesDetachable(object, path, walk, "built-in");
+		assertOwnPropertiesDetachable(
+			object,
+			path,
+			walk,
+			"built-in",
+			contentLengthOf(object, tag),
+		);
 		return;
 	}
 
@@ -215,14 +221,16 @@ function assertDetachable(value: unknown, path: string, walk: Walk): void {
  * the enumerable own keys of a record and of an array, expandos included,
  * and drops every own key of another built-in. `length` on an array and
  * the non-enumerable keys of a built-in (`lastIndex`) are its own
- * machinery, not data. Index keys of a typed array or a boxed String are
- * its content and pass as such.
+ * machinery, not data. The first `contentLength` index keys of a built-in
+ * are its content and pass as such. Another index key of a built-in is an
+ * expando.
  */
 function assertOwnPropertiesDetachable(
 	object: object,
 	path: string,
 	walk: Walk,
 	kind: "array" | "built-in" | "record",
+	contentLength = 0,
 ): void {
 	for (const key of Reflect.ownKeys(object)) {
 		const descriptor = Object.getOwnPropertyDescriptor(object, key);
@@ -241,7 +249,9 @@ function assertOwnPropertiesDetachable(
 				`${walk.subject}${path}.${key} is not enumerable and the clone would drop it; map it to plain data`,
 			);
 		}
-		if (kind === "built-in" && isIndex) continue;
+		if (kind === "built-in" && isIndex && Number(key) < contentLength) {
+			continue;
+		}
 		const memberPath = isIndex ? `${path}[${key}]` : `${path}.${key}`;
 		if (!("value" in descriptor)) {
 			throw new TypeError(
@@ -258,8 +268,25 @@ function assertOwnPropertiesDetachable(
 	}
 }
 
-// The built-in getters read the internal slot, so an own `buffer`
-// accessor of a view does not run.
+/**
+ * The number of index keys that hold the content of a built-in: the
+ * elements of a typed array and the characters of a boxed String.
+ */
+function contentLengthOf(object: object, tag: string): number {
+	if (tag === "[object TypedArray]") {
+		return typedArrayLength.call(object as ArrayBufferView);
+	}
+	if (tag === "[object String]") return stringValueOf.call(object).length;
+	return 0;
+}
+
+// The built-in readers read the internal slot, so an own `buffer` or
+// `length` accessor of the state does not run.
+const typedArrayLength = Object.getOwnPropertyDescriptor(
+	Object.getPrototypeOf(Uint8Array.prototype),
+	"length",
+)?.get as (this: ArrayBufferView) => number;
+const stringValueOf = String.prototype.valueOf;
 const typedArrayBuffer = Object.getOwnPropertyDescriptor(
 	Object.getPrototypeOf(Uint8Array.prototype),
 	"buffer",

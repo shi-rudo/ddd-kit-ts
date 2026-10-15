@@ -403,6 +403,11 @@ immutable. Run one kit version per process during a cutover.
   property of such a built-in was lost in the copy without an error. A Proxy
   trap could also swap a value in after the walk. The walks now also count the
   data properties of records and arrays, and a copy with another count throws.
+- `detachState` and `InMemoryEventStore.append` reject an index key on a
+  built-in that the copy would drop. Before, a key such as `0` on a `Map`, a
+  `Set`, a `Date`, or an `ArrayBuffer`, and a key after the last character of
+  a boxed `String`, was lost in the copy without an error. The elements of a
+  typed array and the characters of a boxed `String` still pass.
 - `InMemoryIdempotencyStore` reads its clock before its state, and `claim`
   asks the token factory before its final checks. A clock or a factory that
   changes the store can no longer push it past `maxEntries`, replace a live

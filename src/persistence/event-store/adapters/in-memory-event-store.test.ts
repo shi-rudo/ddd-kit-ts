@@ -456,6 +456,21 @@ describe("InMemoryEventStore", () => {
 			).rejects.toBeInstanceOf(TypeError);
 		});
 
+		it("rejects an index key on a Map instead of dropping it", async () => {
+			const store = new InMemoryEventStore<OrderEvent>();
+			const withIndexKey = {
+				...renamed("bad"),
+				payload: { name: "bad", lines: Object.assign(new Map(), { 0: "x" }) },
+			} as unknown as OrderEvent;
+
+			await expect(
+				store.append(streamA, [withIndexKey], { expectedVersion: 0 }),
+			).rejects.toBeInstanceOf(TypeError);
+			expect(await store.readStream(streamA, allEvents)).toMatchObject({
+				exists: false,
+			});
+		});
+
 		it("rejects a RegExp in an event", async () => {
 			const store = new InMemoryEventStore<OrderEvent>();
 			const withPattern = {
