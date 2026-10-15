@@ -105,7 +105,7 @@ dual CJS/ESM load). The brand catches accidents, not adversaries: code in the
 same process can fake it. The gate is not a security boundary; validate
 untrusted input at the application edge.
 
-Events should be plain structured-cloneable data. Functions, promises, `WeakMap`, and `WeakSet` do not belong in event payloads. A class instance may lose its prototype through structured cloning, so model event payloads as plain records. The event constructors check their copy of the event data with the rule of the in-memory event store: they reject an `Error`, a host object such as a `File`, binary buffers, shared memory, and a `RegExp`. Map an `Error` to plain data, for example its message and code.
+Events are plain structured-cloneable data. The event constructors check the payload and the metadata that they receive, and their copy of them, with the rule of the in-memory event store. A value that the copy would lose or change throws a `TypeError` that names the path: a class instance, an accessor, an enumerable symbol-keyed property, a non-enumerable property of a record or an array, and an expando on a built-in such as a `Map`. Map a value object to plain data first, for example with `toJSON()` on a kit `ValueObject`. The constructors also reject a function, a promise, a `WeakMap`, a `WeakSet`, an `Error`, a host object such as a `File`, binary buffers, shared memory, and a `RegExp`. Map an `Error` to plain data, for example its message and code.
 
 `createDomainEvent` reads the platform clock and Web Crypto when `occurredAt`
 or `eventId` is omitted. If the caller must provide every nondeterministic

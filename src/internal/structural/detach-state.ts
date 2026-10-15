@@ -64,12 +64,29 @@ export function detachFreezableState<T>(state: T, subject: string): T {
 }
 
 /**
- * Throws the `TypeError` of {@link detachFreezableState} and copies
- * nothing. A caller that has a clone already checks it with this, so the
- * rule is the same. Kit modules only.
+ * Throws the `TypeError` of {@link detachFreezableState} for `state` and
+ * copies nothing. It does not see what a clone of `state` drops: a caller
+ * that clones checks with {@link assertFreezableCopy}. Kit modules only.
  */
 export function assertFreezableState(state: unknown, subject: string): void {
 	assertDetachable(state, "", newWalk(subject, "freeze", new StepRecording()));
+}
+
+/**
+ * Checks `copy`, a structured clone of `state` that the caller made, with
+ * the two walks of {@link detachFreezableState}. The walk over `state`
+ * rejects what the clone dropped, and the walk over `copy` follows its
+ * steps. A caller that clones before the walks lets a Proxy fail in the
+ * clone before a trap runs. Kit modules only.
+ */
+export function assertFreezableCopy(
+	state: unknown,
+	copy: unknown,
+	subject: string,
+): void {
+	const recording = new StepRecording();
+	assertDetachable(state, "", newWalk(subject, "freeze", recording));
+	assertCopyFollows(copy, recording, subject, "freeze");
 }
 
 function detach<T>(state: T, subject: string, rule: Walk["rule"]): T {
@@ -91,10 +108,19 @@ function detach<T>(state: T, subject: string, rule: Walk["rule"]): T {
 	// the copy drops its own properties. A count of the properties can
 	// balance out with the content of the built-in, so this walk compares
 	// each of its steps with the step of the first walk.
+	assertCopyFollows(copy, recording, subject, rule);
+	return copy;
+}
+
+function assertCopyFollows(
+	copy: unknown,
+	recording: StepRecording,
+	subject: string,
+	rule: Walk["rule"],
+): void {
 	const comparison = new StepComparison(recording, subject);
 	assertDetachable(copy, "", newWalk(subject, rule, comparison));
 	comparison.assertComplete();
-	return copy;
 }
 
 const INDEX_KEY = /^(0|[1-9]\d*)$/;

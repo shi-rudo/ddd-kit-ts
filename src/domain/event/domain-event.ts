@@ -3,7 +3,10 @@ import {
 	hasCooperativeBrand,
 	stampCooperativeBrand,
 } from "../../internal/cooperative-brand";
-import { assertFreezableState } from "../../internal/structural/detach-state";
+import {
+	assertFreezableCopy,
+	assertFreezableState,
+} from "../../internal/structural/detach-state";
 import { isIntrinsicConstructorPrototype } from "../../internal/structural/is-built-in";
 import { deepFreeze } from "../value-object/value-object";
 import { type ClockFactory, defaultClockFactory, readClock } from "./clock";
@@ -411,13 +414,14 @@ export const defaultDomainEventFactory: DomainEventFactory =
  * **Input ownership.** The event is deeply frozen, and `payload` and
  * `metadata` are deep-cloned first, so the caller's own objects are never
  * frozen in place and later mutation of them does not bleed into the
- * event (same contract as `vo()`). The clone follows the plain-data event
- * contract via `structuredClone`: functions, Promise, and WeakMap/WeakSet
- * values throw a `TypeError`; symbol-keyed properties are not carried
- * over. The clone is then checked with the rule of the in-memory event
- * store: an `Error`, a host object such as a `File`, a binary buffer, and
- * shared memory throw a `TypeError`. A class instance or an accessor becomes
- * plain data in the clone.
+ * event (same contract as `vo()`). The data and the clone are then checked
+ * with the rule of the in-memory event store, so the event holds all the
+ * data that the caller passed. These values throw a `TypeError`: a
+ * function, a Promise, a WeakMap or a WeakSet, an `Error`, a host object
+ * such as a `File`, a binary buffer, a `RegExp`, shared memory, a class
+ * instance, an accessor, an enumerable symbol-keyed property, a
+ * non-enumerable property of a record or an array, and an expando on a
+ * built-in. Map a value object to plain data before it goes into an event.
  *
  * **For aggregate-internal events, prefer `this.createEvent(...)` on
  * `StateStoredAggregate` / `EventSourcedAggregate`.** That helper auto-injects
@@ -903,9 +907,9 @@ function isPlainRecordCopy(copy: unknown): boolean {
 /**
  * Deep-clones caller-supplied event data (payload, metadata) before the
  * event is frozen, so a constructor never freezes or aliases the caller's
- * own object graph, and checks the clone with {@link assertFreezableState}.
- * A primitive needs no copy, but the check rejects a symbol. A class
- * instance or an accessor becomes plain data in the clone.
+ * own object graph, and checks the data and the clone with
+ * {@link assertFreezableCopy}. A primitive needs no copy, but the check
+ * rejects a symbol.
  */
 function cloneOwnedEventData<T>(
 	value: T,
@@ -938,15 +942,19 @@ function cloneOwnedEventData<T>(
 	// event; reject it at the root, the same contract as entity state. The
 	// check reads the clone, so a Proxy root runs no trap for it.
 	assertNoHostileOwnProtoKey(clone as object, `Event ${field} of ${operation}`);
-	// The check runs on the clone. It has no accessor, no own iterator, and
-	// no class prototype, so the check runs no caller code. The in-memory
-	// event store checks with the same walk, so an event that the mint
-	// accepts is one that the store accepts. The walk rejects what the clone
-	// keeps but plain data cannot hold, an Error or a host object such as a
-	// File, and what a freeze cannot make immutable, binary data and a
-	// RegExp. These would break the mint guarantee "minted implies deeply
-	// frozen".
-	assertFreezableState(clone, `${operation}: ${field}`);
+	// The clone runs first, so a Proxy in the data fails there before a
+	// trap runs. The walk over the data reads property descriptors and the
+	// built-in iteration, so it runs no accessor and no own iterator. It
+	// rejects what the clone drops or changes: a class instance, an
+	// accessor, an enumerable symbol-keyed property, a non-enumerable
+	// property, and an expando on a built-in. A value object with a private
+	// field would otherwise become an empty record without an error. The
+	// in-memory event store checks with the same walks, so an event that
+	// the mint accepts is one that the store accepts. The walks also reject
+	// what plain data cannot hold, an Error or a host object such as a File,
+	// and what a freeze cannot make immutable, binary data and a RegExp.
+	// These would break the mint guarantee "minted implies deeply frozen".
+	assertFreezableCopy(value, clone, `${operation}: ${field}`);
 	return clone;
 }
 

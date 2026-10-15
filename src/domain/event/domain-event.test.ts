@@ -1286,15 +1286,67 @@ describe("event data follows the rule of the in-memory event store", () => {
 		).toThrow(TypeError);
 	});
 
+	class Price {
+		readonly #amountMinor: number;
+
+		constructor(amountMinor: number) {
+			this.#amountMinor = amountMinor;
+		}
+
+		get amountMinor(): number {
+			return this.#amountMinor;
+		}
+	}
+
+	it.each([
+		["a class instance with a private field", () => new Price(500)],
+		[
+			"a Map with a named expando",
+			() => Object.assign(new Map([["k", 1]]), { note: "x" }),
+		],
+		["a Map with an index expando", () => Object.assign(new Map(), { 0: "x" })],
+		[
+			"a record with a non-enumerable property",
+			() => Object.defineProperty({ a: 1 }, "b", { value: 2 }),
+		],
+		[
+			"a record with an enumerable symbol key",
+			() => ({ [Symbol("tag")]: 1, a: 1 }),
+		],
+		[
+			"a record with a getter",
+			() =>
+				Object.defineProperty({}, "total", { get: () => 7, enumerable: true }),
+		],
+	])("rejects %s in the payload and the metadata", (_case, make) => {
+		expect(() => createDomainEvent("Priced", { value: make() })).toThrow(
+			TypeError,
+		);
+		expect(() =>
+			createUncommittedDomainEvent("Priced", { value: make() }),
+		).toThrow(TypeError);
+		expect(() =>
+			createDomainEvent(
+				"Priced",
+				{ orderId: "o-1" },
+				{ metadata: { custom: { value: make() } } },
+			),
+		).toThrow(TypeError);
+	});
+
 	it("accepts a plain record that only claims an Error tag", () => {
-		const record = { [Symbol.toStringTag]: "Error", code: "CARD_DECLINED" };
+		const record = Object.defineProperty(
+			{ code: "CARD_DECLINED" },
+			Symbol.toStringTag,
+			{ value: "Error" },
+		);
 
 		const event = createDomainEvent("PaymentFailed", { failure: record });
 
 		expect(event.payload).toEqual({ failure: { code: "CARD_DECLINED" } });
 	});
 
-	it("flattens a class instance without running its tag getter", () => {
+	it("rejects a class instance with public fields without running its tag getter", () => {
 		let tagReads = 0;
 		class Amount {
 			readonly value = 5;
@@ -1304,9 +1356,9 @@ describe("event data follows the rule of the in-memory event store", () => {
 			}
 		}
 
-		const event = createDomainEvent("Paid", { amount: new Amount() });
-
-		expect(event.payload).toEqual({ amount: { value: 5 } });
+		expect(() => createDomainEvent("Paid", { amount: new Amount() })).toThrow(
+			TypeError,
+		);
 		expect(tagReads).toBe(0);
 	});
 });

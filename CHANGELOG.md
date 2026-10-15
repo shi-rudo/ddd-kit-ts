@@ -105,11 +105,15 @@ immutable. Run one kit version per process during a cutover.
 - Events are readonly and minted. A recording path accepts only an event that
   a kit constructor minted and throws `UnmintedEventError` for a hand-built
   object. `createDomainEvent` rejects binary buffers and a `RegExp`, because a
-  freeze cannot make them immutable. It checks its copy of the payload and the
-  metadata with the rule of the in-memory event store, so it also rejects a
-  symbol, an `Error`, and a host object such as a `File`. A class instance or
-  an accessor still becomes plain data in the copy. The metadata must be a
-  plain object or absent; `null`, a string, a number, an array, or a `Map`
+  freeze cannot make them immutable. It checks the payload and the metadata
+  that it receives, and its copy of them, with the rule of the in-memory
+  event store. So it also rejects a symbol, an `Error`, a host object such as
+  a `File`, and every value that the copy would lose or change: a class
+  instance, an accessor, an enumerable symbol-keyed property, a
+  non-enumerable property of a record or an array, and an expando on a
+  built-in. A value object with a private field no longer becomes an empty
+  record without an error. Map a value object to plain data first, for
+  example with `toJSON()`. The metadata must be a plain object or absent; `null`, a string, a number, an array, or a `Map`
   throws a `TypeError`, also with a factory `source`. `EventMetadata` fields
   are readonly. `DomainEvent` loses `aggregateVersion`; the commit envelope
   carries the position.
