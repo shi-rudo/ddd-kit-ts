@@ -967,6 +967,30 @@ describe("a Proxy payload at the mint", () => {
 
 		expect(() => createDomainEvent("Proxied", payload)).toThrow(TypeError);
 	});
+
+	it("passes an error of a Proxy trap through unchanged", () => {
+		class LazyLoadError extends Error {}
+		const failure = new LazyLoadError("the session is closed");
+		const payload = {
+			order: new Proxy(
+				{ id: "o-1" },
+				{
+					getOwnPropertyDescriptor() {
+						throw failure;
+					},
+				},
+			),
+		};
+
+		let caught: unknown;
+		try {
+			createDomainEvent("Proxied", payload);
+		} catch (error) {
+			caught = error;
+		}
+
+		expect(caught).toBe(failure);
+	});
 });
 
 describe("a symbol is rejected at the mint", () => {

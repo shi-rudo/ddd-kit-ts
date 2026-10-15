@@ -415,7 +415,8 @@ export const defaultDomainEventFactory: DomainEventFactory =
  * the data before the clone and the clone after it. So the clone loses no
  * data without an error, and no getter of the data runs. The checks catch
  * accidents, not a hostile `Proxy`: a trap that changes the data during the
- * check can hide a loss. These values throw a `TypeError`: a function, a
+ * check can hide a loss. An error that a `Proxy` trap throws passes
+ * unchanged, so a coded error of the caller keeps its code. These values throw a `TypeError`: a function, a
  * Promise, a WeakMap or a WeakSet, an `Error`, a host object such as a
  * `File`, a binary buffer, a `RegExp`, and shared memory. The same holds
  * for what the clone would lose or change: a class instance, an accessor,

@@ -1401,5 +1401,7 @@ Behavior that a use case or an adapter can notice:
   without an error. A value object with a private field became `{}`. Map such
   a value to plain data before it goes into an event. `toJSON()` of a kit
   `ValueObject` is shallow, so map a nested value object too. A `Proxy` in the
-  data now runs its traps in the check. The checks catch accidents, not a
-  hostile `Proxy`. Creating an event costs about 40 percent more.
+  data now runs its traps in the check. An error that a trap throws reaches
+  the caller unchanged; in rc.11 the clone failed first with a `TypeError`.
+  The checks catch accidents, not a hostile `Proxy`. Creating an event costs
+  about 40 percent more.
