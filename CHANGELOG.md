@@ -397,14 +397,18 @@ immutable. Run one kit version per process during a cutover.
 ### Fixed
 
 - `detachState` and `InMemoryEventStore.append` check the copy with a second
-  walk. Before, a `Map`, a `Set`, an `ArrayBuffer`, or a `SharedArrayBuffer`
-  whose prototype was replaced passed the walk as an empty record, and the
-  copy then kept an `Error`, a class instance, or shared memory. An own
-  property of such a built-in was lost in the copy without an error. A Proxy
-  trap could also swap a value in after the walk. The walks now also count the
-  data properties of records and arrays, and a copy with another count throws.
-- `detachState` and `InMemoryEventStore.append` reject an index key on a
-  built-in that the copy would drop. Before, a key such as `0` on a `Map`, a
+  walk. Before, a `Map`, a `Set`, an `ArrayBuffer`, a `SharedArrayBuffer`, or
+  a boxed bigint whose prototype was replaced passed the walk as a record,
+  and the walk did not see its content. The copy then kept an `Error`, a
+  class instance, or shared memory, and it lost the own properties of the
+  built-in without an error. A Proxy trap could also swap a value in after
+  the walk. The second walk now also follows the steps of the first walk: the
+  kind of each object and the key of each data property, in walk order. A
+  copy that differs throws, with the path. In rc.11, the walks compared only
+  the number of data properties, and the content of the built-in could
+  balance that number.
+- `detachState` and `InMemoryEventStore.append` reject an enumerable index
+  key on a built-in that the copy would drop. Before, a key such as `0` on a `Map`, a
   `Set`, a `Date`, or an `ArrayBuffer`, and a key after the last character of
   a boxed `String`, was lost in the copy without an error. The elements of a
   typed array and the characters of a boxed `String` still pass.

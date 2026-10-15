@@ -22,10 +22,11 @@ import {
  * change the graph, and an accessor that a trap adds runs during the
  * clone. A second walk checks the clone, so a value that a trap swapped in
  * and the content of a built-in whose prototype was replaced are rejected
- * too. The walks also count the data properties of records and arrays. A
- * copy with another count throws, because a built-in whose prototype was
- * replaced loses its own properties in the copy. `subject` names the state
- * in the messages.
+ * too. The second walk also follows the steps of the first walk: the kind
+ * of each object and the key of each data property, in walk order. A copy
+ * that differs throws, because a built-in whose prototype was replaced is
+ * a built-in again in the copy and loses its own properties. `subject`
+ * names the state in the messages.
  *
  * Plain objects (from any realm), arrays, Dates, Maps, Sets, bigints, and
  * typed arrays pass. A RegExp passes: pattern and flags survive the clone,
@@ -59,21 +60,11 @@ export function detachFreezableState<T>(state: T, subject: string): T {
  * rule is the same. Kit modules only.
  */
 export function assertFreezableState(state: unknown, subject: string): void {
-	assertDetachable(state, "", {
-		seen: new WeakSet(),
-		subject,
-		rule: "freeze",
-		dataProperties: 0,
-	});
+	assertDetachable(state, "", newWalk(subject, "freeze"));
 }
 
 function detach<T>(state: T, subject: string, rule: Walk["rule"]): T {
-	const original: Walk = {
-		seen: new WeakSet(),
-		subject,
-		rule,
-		dataProperties: 0,
-	};
+	const original = newWalk(subject, rule);
 	assertDetachable(state, "", original);
 	let copy: T;
 	try {
@@ -88,19 +79,13 @@ function detach<T>(state: T, subject: string, rule: Walk["rule"]): T {
 	// change the graph after it. The copy has genuine prototypes and no
 	// Proxy, so this walk checks exactly what the caller gets. A built-in
 	// whose prototype was replaced passes the first walk as a record, and
-	// the copy drops its own properties, so the walks also compare how many
-	// data properties they checked.
-	const copied: Walk = {
-		seen: new WeakSet(),
-		subject,
-		rule,
-		dataProperties: 0,
-	};
+	// the copy drops its own properties. A count of the properties can
+	// balance out with the content of the built-in, so this walk compares
+	// each of its steps with the step of the first walk.
+	const copied = newWalk(subject, rule, original.steps);
 	assertDetachable(copy, "", copied);
-	if (copied.dataProperties !== original.dataProperties) {
-		throw new TypeError(
-			`${subject} changed in the copy: the state has ${original.dataProperties} data properties and the copy has ${copied.dataProperties}; a built-in whose prototype was replaced loses its own properties in the copy, and a Proxy trap can change the graph; map it to plain data`,
-		);
+	if (copied.steps.length !== original.steps.length) {
+		throwChangedInCopy(subject, "");
 	}
 	return copy;
 }
@@ -117,6 +102,26 @@ const mapEntries = Map.prototype.entries;
 const setValues = Set.prototype.values;
 
 /**
+ * A step of a walk: the kind of an object that the walk enters, or the key
+ * of a data property of a record or an array that it checks. A kind is a
+ * symbol, so no key can be equal to it.
+ */
+type Step = string | symbol;
+
+const RECORD_STEP = Symbol("record");
+const ARRAY_STEP = Symbol("array");
+const builtInSteps = new Map<string, symbol>();
+
+function builtInStep(tag: string): symbol {
+	let kind = builtInSteps.get(tag);
+	if (kind === undefined) {
+		kind = Symbol(tag);
+		builtInSteps.set(tag, kind);
+	}
+	return kind;
+}
+
+/**
  * The objects that the walk has seen, the subject that its messages name,
  * and its rule. `"clone"` accepts what a structured clone keeps. `"freeze"`
  * also rejects what `deepFreeze` cannot make immutable.
@@ -125,8 +130,42 @@ interface Walk {
 	readonly seen: WeakSet<object>;
 	readonly subject: string;
 	readonly rule: "clone" | "freeze";
-	/** Data properties of records and arrays that the walk checked. */
-	dataProperties: number;
+	/** The steps of this walk, in walk order. */
+	readonly steps: Step[];
+	/**
+	 * The steps of the walk over the original. A walk over the copy
+	 * compares each of its steps with the step at the same position.
+	 */
+	readonly original: readonly Step[] | undefined;
+}
+
+function newWalk(
+	subject: string,
+	rule: Walk["rule"],
+	original?: readonly Step[],
+): Walk {
+	return { seen: new WeakSet(), subject, rule, steps: [], original };
+}
+
+/**
+ * Structured clone keeps the order of the keys, of Map entries, and of Set
+ * members, and it keeps shared references. So the walk over an unchanged
+ * copy takes the same steps as the walk over the original.
+ */
+function step(walk: Walk, next: Step, path: string): void {
+	if (
+		walk.original !== undefined &&
+		walk.original[walk.steps.length] !== next
+	) {
+		throwChangedInCopy(walk.subject, path);
+	}
+	walk.steps.push(next);
+}
+
+function throwChangedInCopy(subject: string, path: string): never {
+	throw new TypeError(
+		`${subject}${path} changed in the copy; a built-in whose prototype was replaced loses its own properties in the copy, and a Proxy trap can change the graph; map it to plain data`,
+	);
 }
 
 function assertDetachable(value: unknown, path: string, walk: Walk): void {
@@ -151,6 +190,7 @@ function assertDetachable(value: unknown, path: string, walk: Walk): void {
 		if (!hasIntrinsicPrototypeChain(object, "Array")) {
 			throwClassInstance(object, path, walk.subject);
 		}
+		step(walk, ARRAY_STEP, path);
 		assertOwnPropertiesDetachable(object, path, walk, "array");
 		return;
 	}
@@ -163,6 +203,7 @@ function assertDetachable(value: unknown, path: string, walk: Walk): void {
 		if (!hasIntrinsicPrototypeChain(object)) {
 			throwClassInstance(object, path, walk.subject);
 		}
+		step(walk, builtInStep(tag), path);
 		if (tag === "[object Map]") {
 			let index = 0;
 			for (const [key, entry] of mapEntries.call(
@@ -213,6 +254,7 @@ function assertDetachable(value: unknown, path: string, walk: Walk): void {
 	if (!isPlainRecord) {
 		throwClassInstance(object, path, walk.subject);
 	}
+	step(walk, RECORD_STEP, path);
 	assertOwnPropertiesDetachable(object, path, walk, "record");
 }
 
@@ -263,7 +305,7 @@ function assertOwnPropertiesDetachable(
 				`${walk.subject}${memberPath} is an expando on a ${constructorName(Object.getPrototypeOf(object)) ?? "built-in"} and the clone would drop it; map it to plain data`,
 			);
 		}
-		walk.dataProperties += 1;
+		step(walk, key, memberPath);
 		assertDetachable(descriptor.value, memberPath, walk);
 	}
 }
