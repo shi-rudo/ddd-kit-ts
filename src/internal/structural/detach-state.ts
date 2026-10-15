@@ -22,7 +22,9 @@ import {
  * change the graph, and an accessor that a trap adds runs during the
  * clone. A second walk checks the clone, so a value that a trap swapped in
  * and the content of a built-in whose prototype was replaced are rejected
- * too. The second walk also follows the steps of the first walk: the kind
+ * too. A trap that changes the graph after the first walk can still hide a
+ * value that the copy drops: the walks catch accidents, not a hostile
+ * Proxy. The second walk also follows the steps of the first walk: the kind
  * of each object and the key of each data property, in walk order. A copy
  * that differs throws, because a built-in whose prototype was replaced is
  * a built-in again in the copy and loses its own properties. `subject`
