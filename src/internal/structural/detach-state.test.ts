@@ -227,6 +227,20 @@ describe("detachState", () => {
 			"a Date, as an accessor",
 			() => Object.defineProperty(new Date(0), "label", { get: () => "x" }),
 		],
+		[
+			"a Date, as a function that is not a frozen mutator",
+			() =>
+				Object.defineProperty(new Date(0), "toJSON", {
+					value: () => "1970-Q1",
+				}),
+		],
+		[
+			"a Map, as a function that is not a frozen mutator",
+			() =>
+				Object.defineProperty(new Map(), "meta", {
+					value: () => ({ source: "import" }),
+				}),
+		],
 	])(
 		"rejects a non-enumerable property that the clone would drop on %s",
 		(_case, make) => {

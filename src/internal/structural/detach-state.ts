@@ -3,6 +3,7 @@ import {
 	hasIntrinsicPrototypeChain,
 	isIntrinsicConstructorPrototype,
 } from "./is-built-in";
+import { isShadowedMutator } from "./shadowed-mutators";
 
 /**
  * Returns a copy of `state` that shares no object with the original.
@@ -33,9 +34,9 @@ import {
  * Plain objects (from any realm), arrays, Dates, Maps, Sets, bigints, and
  * typed arrays pass. A RegExp passes: pattern and flags survive the clone,
  * and `lastIndex` restores as 0. The scan state of a global or sticky
- * pattern is not domain data. On a built-in, a non-enumerable function,
- * the `lastIndex` of a RegExp, and the `length` of a boxed String pass:
- * they are machinery, not data. Every other non-enumerable property
+ * pattern is not domain data. On a built-in, the mutator shadows of a deep
+ * freeze, the `lastIndex` of a RegExp, and the `length` of a boxed String
+ * pass: they are machinery, not data. Every other non-enumerable property
  * throws. A non-enumerable symbol key passes anywhere: it is metadata by
  * convention.
  *
@@ -313,10 +314,10 @@ function assertOwnPropertiesDetachable(
 
 /**
  * Whether an own non-enumerable property of a built-in is machinery, not
- * data: a function, for example a mutator shadow that `deepFreeze`
- * installs, the scan position of a RegExp, or the length of a boxed
- * String. The clone drops a function and rebuilds the other two from the
- * internal slots.
+ * data: a function that shadows a mutator of a frozen Date, Map, or Set,
+ * the scan position of a RegExp, or the length of a boxed String. The
+ * clone drops the shadow and rebuilds the other two from the internal
+ * slots.
  */
 function isBuiltInMachinery(
 	tag: string,
@@ -324,7 +325,7 @@ function isBuiltInMachinery(
 	descriptor: PropertyDescriptor,
 ): boolean {
 	return (
-		typeof descriptor.value === "function" ||
+		(typeof descriptor.value === "function" && isShadowedMutator(tag, key)) ||
 		(tag === REGEXP_TAG && key === "lastIndex") ||
 		(tag === "[object String]" && key === "length")
 	);

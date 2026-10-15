@@ -413,8 +413,8 @@ immutable. Run one kit version per process during a cutover.
   without an error, for example `0` on a `Map` or a key after the last
   character of a boxed `String`. The elements of a typed array and the
   characters of a boxed `String` still pass. So do the `lastIndex` of a
-  `RegExp` and a non-enumerable function, for example a mutator shadow on a
-  frozen `Date`.
+  `RegExp` and the mutator shadows that a deep freeze puts on a `Date`, a
+  `Map`, or a `Set`.
 - `InMemoryIdempotencyStore` reads its clock before its state, and `claim`
   asks the token factory before its final checks. A clock or a factory that
   changes the store can no longer push it past `maxEntries`, replace a live

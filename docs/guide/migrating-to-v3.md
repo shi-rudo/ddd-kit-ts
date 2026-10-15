@@ -1385,8 +1385,10 @@ Behavior that a use case or an adapter can notice:
 - `detachState` rejects an index key and a non-enumerable data property or
   accessor on a built-in, for example `0` on a `Map` or a key after the last
   character of a boxed `String`. Before, the copy dropped such a key without
-  an error. Entity read views, the snapshot model, and
-  `InMemoryEventStore.append` use the same check.
+  an error. The `lastIndex` of a `RegExp`, the `length` of a boxed `String`,
+  and the mutator shadows of a frozen `Date`, `Map`, or `Set` still pass.
+  Entity read views, the snapshot model, and `InMemoryEventStore.append` use
+  the same check.
 - `detachState` rejects a built-in whose prototype was replaced, for example
   a `Map` with `Object.prototype` as its prototype, also when it has no own
   property: the copy is a `Map` again. In rc.11 such a value passed when it

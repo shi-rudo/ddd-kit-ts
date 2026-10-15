@@ -9,40 +9,17 @@ import {
 	hasIntrinsicPrototypeChain,
 	isIntrinsicConstructorPrototype,
 } from "../../internal/structural/is-built-in";
+import {
+	DATE_MUTATORS,
+	MAP_MUTATORS,
+	SET_MUTATORS,
+} from "../../internal/structural/shadowed-mutators";
 
 // ============================================================================
 // Functional Value Object API
 // ============================================================================
 
 export type VO<T> = Readonly<T>;
-
-/**
- * `Object.freeze` does not protect internal slots: a frozen Date still
- * accepts `setTime`, a frozen Map still accepts `set`. To make the
- * "deeply immutable" guarantee real, the mutator methods are shadowed
- * with own throwing functions BEFORE the freeze. The shadows are
- * non-enumerable, so they are invisible to `Object.keys`/spread (deep
- * equality is unaffected) and `structuredClone` drops them (a `vo()`
- * round-trip never sees them).
- */
-const DATE_MUTATORS: readonly string[] = [
-	"setTime",
-	"setMilliseconds",
-	"setUTCMilliseconds",
-	"setSeconds",
-	"setUTCSeconds",
-	"setMinutes",
-	"setUTCMinutes",
-	"setHours",
-	"setUTCHours",
-	"setDate",
-	"setUTCDate",
-	"setMonth",
-	"setUTCMonth",
-	"setFullYear",
-	"setUTCFullYear",
-	"setYear",
-];
 
 // One thrower function per (typeName, method) for the lifetime of the
 // module: createDomainEvent deep-freezes a Date per event, so fresh
@@ -74,7 +51,13 @@ const shadowDescriptor = {
 	configurable: false,
 };
 
-/** Returns whether the shadows were installed. */
+/**
+ * Shadows the mutators of a Date, a Map, or a Set with own throwing
+ * functions before the freeze. The shadows are non-enumerable, so they are
+ * invisible to `Object.keys` and spread (deep equality is unaffected), and
+ * `structuredClone` drops them (a `vo()` round-trip never sees them).
+ * Returns whether the shadows were installed.
+ */
 function shadowMutators(
 	obj: object,
 	typeName: string,
@@ -311,14 +294,12 @@ function freezeDeep(obj: unknown, walk: FreezeWalk): boolean {
 				if (!freezeDeep(key, walk)) sealed = false;
 				if (!freezeDeep(value, walk)) sealed = false;
 			}
-			shadowed =
-				shadowMutators(obj, "Map", ["set", "delete", "clear"]) || shadowed;
+			shadowed = shadowMutators(obj, "Map", MAP_MUTATORS) || shadowed;
 		} else if (builtInTag === "[object Set]") {
 			for (const member of obj as Set<unknown>) {
 				if (!freezeDeep(member, walk)) sealed = false;
 			}
-			shadowed =
-				shadowMutators(obj, "Set", ["add", "delete", "clear"]) || shadowed;
+			shadowed = shadowMutators(obj, "Set", SET_MUTATORS) || shadowed;
 		}
 		if (shadowed) KIT_SHADOWED.add(obj);
 		else sealed = false;
