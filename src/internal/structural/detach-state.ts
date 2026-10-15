@@ -71,7 +71,7 @@ function detach<T>(state: T, subject: string, rule: Walk["rule"]): T {
 		copy = structuredClone(state);
 	} catch (cause) {
 		throw new TypeError(
-			`${subject} holds a Proxy or a host object that cannot be cloned; map it to plain data`,
+			`${subject} holds a Proxy or a host object that cannot be cloned, or a view over a detached or shrunk buffer; the cause names the value; map it to plain data`,
 			{ cause },
 		);
 	}
