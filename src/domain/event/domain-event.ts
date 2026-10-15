@@ -404,55 +404,6 @@ function buildDomainEventFactory(
 export const defaultDomainEventFactory: DomainEventFactory =
 	buildDomainEventFactory({}, "createDomainEvent");
 
-/**
- * Creates a domain event with default values.
- * Sets occurredAt to current date and schemaVersion to 1 if not provided.
- *
- * **Input ownership.** The event is deeply frozen, and `payload` and
- * `metadata` are deep-cloned first, so the caller's own objects are never
- * frozen in place and later mutation of them does not bleed into the event
- * (same contract as `vo()`). The rule of the in-memory event store checks
- * the data before the clone and the clone after it. So the clone loses no
- * data without an error, and no getter of the data runs. The checks catch
- * accidents, not a hostile `Proxy`: a trap that changes the data during the
- * check can hide a loss. An error that a `Proxy` trap throws passes
- * unchanged, so a coded error of the caller keeps its code. These values throw a `TypeError`: a function, a
- * Promise, a WeakMap or a WeakSet, an `Error`, a host object such as a
- * `File`, a binary buffer, a `RegExp`, and shared memory. The same holds
- * for what the clone would lose or change: a class instance, an accessor,
- * an enumerable symbol-keyed property, a non-enumerable data property, and
- * an expando on a built-in. A non-enumerable symbol key is metadata by
- * convention, and the event does not get it. Map a value object to plain
- * data before it goes into an event. `toJSON()` of a `ValueObject` is
- * shallow, so map a nested value object too.
- *
- * **For aggregate-internal events, prefer `this.createEvent(...)` on
- * `StateStoredAggregate` / `EventSourcedAggregate`.** That helper auto-injects
- * `aggregateId` (from `this.id`) and `aggregateType` (from the
- * aggregate's declared `aggregateType` property), which downstream
- * consumers (outbox dispatchers, projection handlers, audit logs)
- * route by. The commit boundary validates that both fields are present
- * and throws if they are missing, so a direct `createDomainEvent(...)`
- * call inside an aggregate that forgets the options is caught at
- * runtime. Record pending decisions in the application
- * shell before repository persistence or outbox harvest.
- *
- * Use `createDomainEvent(...)` directly for events that don't belong to
- * an aggregate: system events, integration events, configuration events,
- * test fixtures. For those, set `aggregateId` / `aggregateType` in
- * `options` if downstream consumers expect routing metadata.
- *
- * @param type - The event type
- * @param payload - The event payload
- * @param options - Optional event configuration (including `aggregateId`
- *   and `aggregateType` for routing)
- * @returns A domain event
- *
- * @example
- * ```typescript
- * const event = createDomainEvent("OrderCreated", { orderId: "123" });
- * ```
- */
 // Every recorded event a kit constructor returns is registered here: the
 // module-private tier of the recorded-event marker (nothing outside this
 // module can add to the set), so the aggregate recording paths can check
@@ -517,6 +468,11 @@ export function isUncommittedDomainEvent(
 	);
 }
 
+/**
+ * Creates an uncommitted domain event: the event that an aggregate method
+ * returns before the application shell records it. The payload and the
+ * metadata follow the input ownership rule of {@link createDomainEvent}.
+ */
 export function createUncommittedDomainEvent<T extends string>(
 	type: T,
 	payload?: undefined,
@@ -662,6 +618,55 @@ export function adoptRecordedDomainEvent<T extends object>(copy: T): T {
 	return copy;
 }
 
+/**
+ * Creates a domain event with default values.
+ * Sets occurredAt to current date and schemaVersion to 1 if not provided.
+ *
+ * **Input ownership.** The event is deeply frozen, and `payload` and
+ * `metadata` are deep-cloned first, so the caller's own objects are never
+ * frozen in place and later mutation of them does not bleed into the event
+ * (same contract as `vo()`). The rule of the in-memory event store checks
+ * the data before the clone and the clone after it. So the clone loses no
+ * data without an error, and no getter of the data runs. The checks catch
+ * accidents, not a hostile `Proxy`: a trap that changes the data during the
+ * check can hide a loss. An error that a `Proxy` trap throws passes
+ * unchanged, so a coded error of the caller keeps its code. These values throw a `TypeError`: a function, a
+ * Promise, a WeakMap or a WeakSet, an `Error`, a host object such as a
+ * `File`, a binary buffer, a `RegExp`, and shared memory. The same holds
+ * for what the clone would lose or change: a class instance, an accessor,
+ * an enumerable symbol-keyed property, a non-enumerable data property, and
+ * an expando on a built-in. A non-enumerable symbol key is metadata by
+ * convention, and the event does not get it. Map a value object to plain
+ * data before it goes into an event. `toJSON()` of a `ValueObject` is
+ * shallow, so map a nested value object too.
+ *
+ * **For aggregate-internal events, prefer `this.createEvent(...)` on
+ * `StateStoredAggregate` / `EventSourcedAggregate`.** That helper auto-injects
+ * `aggregateId` (from `this.id`) and `aggregateType` (from the
+ * aggregate's declared `aggregateType` property), which downstream
+ * consumers (outbox dispatchers, projection handlers, audit logs)
+ * route by. The commit boundary validates that both fields are present
+ * and throws if they are missing, so a direct `createDomainEvent(...)`
+ * call inside an aggregate that forgets the options is caught at
+ * runtime. Record pending decisions in the application
+ * shell before repository persistence or outbox harvest.
+ *
+ * Use `createDomainEvent(...)` directly for events that don't belong to
+ * an aggregate: system events, integration events, configuration events,
+ * test fixtures. For those, set `aggregateId` / `aggregateType` in
+ * `options` if downstream consumers expect routing metadata.
+ *
+ * @param type - The event type
+ * @param payload - The event payload
+ * @param options - Optional event configuration (including `aggregateId`
+ *   and `aggregateType` for routing)
+ * @returns A domain event
+ *
+ * @example
+ * ```typescript
+ * const event = createDomainEvent("OrderCreated", { orderId: "123" });
+ * ```
+ */
 export function createDomainEvent<T extends string>(
 	type: T,
 	payload?: undefined,
