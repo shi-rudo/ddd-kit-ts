@@ -31,9 +31,11 @@ import {
  * Plain objects (from any realm), arrays, Dates, Maps, Sets, bigints, and
  * typed arrays pass. A RegExp passes: pattern and flags survive the clone,
  * and `lastIndex` restores as 0. The scan state of a global or sticky
- * pattern is not domain data. A non-enumerable property on a built-in
- * passes: it is the built-in's own machinery (`lastIndex`), not data. A
- * non-enumerable symbol key passes anywhere: it is metadata by convention.
+ * pattern is not domain data. On a built-in, a non-enumerable function,
+ * the `lastIndex` of a RegExp, and the `length` of a boxed String pass:
+ * they are machinery, not data. Every other non-enumerable property
+ * throws. A non-enumerable symbol key passes anywhere: it is metadata by
+ * convention.
  *
  * The concrete entity uses it for a detached read DTO of a plain-data
  * state. The snapshot model uses it for the captured DTO and the restored
@@ -236,13 +238,7 @@ function assertDetachable(value: unknown, path: string, walk: Walk): void {
 				`${walk.subject}${path} is backed by a SharedArrayBuffer and the copy would share its memory; map it to plain data`,
 			);
 		}
-		assertOwnPropertiesDetachable(
-			object,
-			path,
-			walk,
-			"built-in",
-			contentLengthOf(object, tag),
-		);
+		assertOwnPropertiesDetachable(object, path, walk, "built-in", tag);
 		return;
 	}
 
@@ -261,19 +257,20 @@ function assertDetachable(value: unknown, path: string, walk: Walk): void {
 /**
  * Audits the own properties the clone would copy or drop. The clone keeps
  * the enumerable own keys of a record and of an array, expandos included,
- * and drops every own key of another built-in. `length` on an array and
- * the non-enumerable keys of a built-in (`lastIndex`) are its own
- * machinery, not data. The first `contentLength` index keys of a built-in
- * are its content and pass as such. Another index key of a built-in is an
- * expando.
+ * and drops every own key of another built-in. `length` on an array is
+ * its own machinery, not data, and so are the keys that
+ * {@link isBuiltInMachinery} names. The index keys of a built-in below its
+ * content length are its content and pass as such. Another index key of a
+ * built-in is an expando. `tag` is the tag of a built-in.
  */
 function assertOwnPropertiesDetachable(
 	object: object,
 	path: string,
 	walk: Walk,
 	kind: "array" | "built-in" | "record",
-	contentLength = 0,
+	tag = "",
 ): void {
+	const contentLength = kind === "built-in" ? contentLengthOf(object, tag) : 0;
 	for (const key of Reflect.ownKeys(object)) {
 		const descriptor = Object.getOwnPropertyDescriptor(object, key);
 		if (descriptor === undefined) continue;
@@ -286,7 +283,9 @@ function assertOwnPropertiesDetachable(
 		if (kind === "array" && key === "length") continue;
 		const isIndex = INDEX_KEY.test(key);
 		if (!descriptor.enumerable) {
-			if (kind === "built-in") continue;
+			if (kind === "built-in" && isBuiltInMachinery(tag, key, descriptor)) {
+				continue;
+			}
 			throw new TypeError(
 				`${walk.subject}${path}.${key} is not enumerable and the clone would drop it; map it to plain data`,
 			);
@@ -308,6 +307,25 @@ function assertOwnPropertiesDetachable(
 		step(walk, key, memberPath);
 		assertDetachable(descriptor.value, memberPath, walk);
 	}
+}
+
+/**
+ * Whether an own non-enumerable property of a built-in is machinery, not
+ * data: a function, for example a mutator shadow that `deepFreeze`
+ * installs, the scan position of a RegExp, or the length of a boxed
+ * String. The clone drops a function and rebuilds the other two from the
+ * internal slots.
+ */
+function isBuiltInMachinery(
+	tag: string,
+	key: string,
+	descriptor: PropertyDescriptor,
+): boolean {
+	return (
+		typeof descriptor.value === "function" ||
+		(tag === REGEXP_TAG && key === "lastIndex") ||
+		(tag === "[object String]" && key === "length")
+	);
 }
 
 /**

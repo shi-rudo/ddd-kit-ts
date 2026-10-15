@@ -121,9 +121,9 @@ The walk reads the graph through property descriptors and walks a `Map` or a `Se
 - A class instance, including a subclass of a built-in (`class Tags extends Set`)
 - A function or a symbol value
 - An enumerable symbol-keyed property anywhere (a hidden symbol key passes as metadata)
-- A non-enumerable string-keyed property on a record or an array (the clone drops it)
+- A non-enumerable string-keyed property (the clone drops it). On a built-in, a function, the `lastIndex` of a `RegExp`, and the `length` of a boxed `String` pass: they are machinery, not data
 - An accessor property (the walk does not invoke it)
-- An expando on a built-in such as a `Map` or a `Date` (the clone drops it)
+- An expando on a built-in such as a `Map` or a `Date`, also at an index key (the clone drops it)
 - An `Error`, a `Promise`, a `WeakMap`, or a `WeakSet`
 - A `SharedArrayBuffer` or a view over one (the copy would share its memory)
 - A `Proxy`: the walk or the clone fails; `detachState` rethrows a failure of the clone as a `TypeError` that keeps the cause

@@ -407,11 +407,14 @@ immutable. Run one kit version per process during a cutover.
   copy that differs throws, with the path. In rc.11, the walks compared only
   the number of data properties, and the content of the built-in could
   balance that number.
-- `detachState` and `InMemoryEventStore.append` reject an enumerable index
-  key on a built-in that the copy would drop. Before, a key such as `0` on a `Map`, a
-  `Set`, a `Date`, or an `ArrayBuffer`, and a key after the last character of
-  a boxed `String`, was lost in the copy without an error. The elements of a
-  typed array and the characters of a boxed `String` still pass.
+- `detachState` and `InMemoryEventStore.append` reject every expando on a
+  built-in that the copy would drop. This includes an index key and a
+  non-enumerable data property or accessor. Before, the copy lost such a key
+  without an error, for example `0` on a `Map` or a key after the last
+  character of a boxed `String`. The elements of a typed array and the
+  characters of a boxed `String` still pass. So do the `lastIndex` of a
+  `RegExp` and a non-enumerable function, for example a mutator shadow on a
+  frozen `Date`.
 - `InMemoryIdempotencyStore` reads its clock before its state, and `claim`
   asks the token factory before its final checks. A clock or a factory that
   changes the store can no longer push it past `maxEntries`, replace a live

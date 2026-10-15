@@ -211,6 +211,29 @@ describe("detachState", () => {
 		expect(() => detachState({ byId })).toThrow(TypeError);
 	});
 
+	it.each([
+		[
+			"a Map",
+			() =>
+				Object.defineProperty(new Map([["a", 1]]), "note", {
+					value: "keep me",
+				}),
+		],
+		[
+			"a Set, at an index key",
+			() => Object.defineProperty(new Set([1]), "0", { value: "x" }),
+		],
+		[
+			"a Date, as an accessor",
+			() => Object.defineProperty(new Date(0), "label", { get: () => "x" }),
+		],
+	])(
+		"rejects a non-enumerable property that the clone would drop on %s",
+		(_case, make) => {
+			expect(() => detachState({ value: make() })).toThrow(TypeError);
+		},
+	);
+
 	it("keeps the elements of a typed array and the characters of a boxed String", () => {
 		const copy = detachState({
 			bytes: new Uint8Array([1, 2]),
@@ -317,7 +340,7 @@ describe("detachState", () => {
 });
 
 describe("detachState and a graph that the walk cannot see", () => {
-	it("reads the buffer of a typed array without running an own accessor", () => {
+	it("reads the buffer of a typed array without running an own accessor, and rejects the accessor", () => {
 		let runs = 0;
 		const bytes = new Uint8Array(2);
 		Object.defineProperty(bytes, "buffer", {
@@ -327,8 +350,7 @@ describe("detachState and a graph that the walk cannot see", () => {
 			},
 		});
 
-		detachState({ bytes });
-
+		expect(() => detachState({ bytes })).toThrow(TypeError);
 		expect(runs).toBe(0);
 	});
 
