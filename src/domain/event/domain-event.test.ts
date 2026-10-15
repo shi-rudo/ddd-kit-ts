@@ -765,6 +765,18 @@ describe("DomainEvent", () => {
 			expect(({} as Record<string, unknown>).isAdmin).toBeUndefined();
 		});
 
+		it("rejects an own __proto__ key at the root before any other defect of the payload", () => {
+			const payload = hostilePayload();
+			Object.defineProperty(payload, "total", {
+				enumerable: true,
+				get: () => 1,
+			});
+
+			expect(() => createDomainEvent("OrderPlaced", payload)).toThrow(
+				HostileStateKeyError,
+			);
+		});
+
 		it("checks the payload root only: a nested own __proto__ key is cloned as data", () => {
 			const event = createDomainEvent("OrderPlaced", {
 				line: JSON.parse('{"__proto__":{"isAdmin":true}}') as Record<

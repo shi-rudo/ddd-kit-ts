@@ -931,25 +931,28 @@ function cloneOwnedEventData<T>(
 		assertFreezableState(value, `${operation}: ${field}`);
 		return value;
 	}
-	// The walk reads property descriptors and the built-in iteration, so it
-	// rejects an accessor before the clone can run it. A Proxy runs its
-	// traps in the walk and then fails. The walks reject what the clone
-	// would drop or change: a class instance, an accessor, an enumerable
-	// symbol-keyed property, a non-enumerable data property, and an expando
-	// on a built-in. A value object with a private field would otherwise
-	// become an empty record without an error. The in-memory event store
-	// checks with the same walks, so an event that the mint accepts is one
-	// that the store accepts. The walks also reject what plain data cannot
-	// hold, an Error or a host object such as a File, and what a freeze
-	// cannot make immutable, binary data and a RegExp. These would break the
-	// mint guarantee "minted implies deeply frozen".
-	const clone = detachFreezableState(value, `${operation}: ${field}`);
 	// An own "__proto__" data key survives structuredClone and would
 	// re-arm prototype pollution in every [[Set]]-based consumer of the
 	// event; reject it at the root, the same contract as entity state. The
-	// check reads the clone, which is what the event holds.
-	assertNoHostileOwnProtoKey(clone as object, `Event ${field} of ${operation}`);
-	return clone;
+	// check runs first, so this key throws its own error whatever else is
+	// wrong with the data. The walks below make sure that the clone has the
+	// same root keys.
+	assertNoHostileOwnProtoKey(value as object, `Event ${field} of ${operation}`);
+	// The walk reads property descriptors and the built-in iteration, so it
+	// rejects an accessor before the clone can run it. A Proxy runs its
+	// traps in the walk. The walks reject what the clone would drop or
+	// change: a class instance, an accessor, an enumerable symbol-keyed
+	// property, a non-enumerable data property, and an expando on a
+	// built-in. A value object with a private field would otherwise become
+	// an empty record without an error. The checks catch accidents, not a
+	// hostile Proxy: a trap that changes the data during the walk can hide
+	// a loss. The in-memory event store checks with the same walks, so an
+	// event that the mint accepts is one that the store accepts. The walks
+	// also reject what plain data cannot hold, an Error or a host object
+	// such as a File, and what a freeze cannot make immutable, binary data
+	// and a RegExp. These would break the mint guarantee "minted implies
+	// deeply frozen".
+	return detachFreezableState(value, `${operation}: ${field}`);
 }
 
 /**
