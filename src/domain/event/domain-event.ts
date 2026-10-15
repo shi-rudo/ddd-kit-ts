@@ -3,10 +3,7 @@ import {
 	hasCooperativeBrand,
 	stampCooperativeBrand,
 } from "../../internal/cooperative-brand";
-import {
-	assertFreezableState,
-	detachFreezableState,
-} from "../../internal/structural/detach-state";
+import { detachFreezableState } from "../../internal/structural/detach-state";
 import { isIntrinsicConstructorPrototype } from "../../internal/structural/is-built-in";
 import { deepFreeze } from "../value-object/value-object";
 import { type ClockFactory, defaultClockFactory, readClock } from "./clock";
@@ -912,9 +909,8 @@ function isPlainRecordCopy(copy: unknown): boolean {
 /**
  * Deep-clones caller-supplied event data (payload, metadata) before the
  * event is frozen, so a constructor never freezes or aliases the caller's
- * own object graph. {@link detachFreezableState} checks the data before
- * the clone and the clone after it. A primitive needs no copy, but the
- * check rejects a symbol.
+ * own object graph. {@link detachFreezableState} checks the data and the
+ * clone; its JSDoc states the rule and its limits.
  */
 function cloneOwnedEventData<T>(
 	value: T,
@@ -926,33 +922,17 @@ function cloneOwnedEventData<T>(
 			`${operation}: ${field} must not be a function: domain events are plain data`,
 		);
 	}
-	if (value === null || typeof value !== "object") {
-		// A primitive needs no copy, but the walk still rejects a symbol,
-		// which the in-memory event store rejects too.
-		assertFreezableState(value, `${operation}: ${field}`);
-		return value;
-	}
 	// An own "__proto__" data key survives structuredClone and would
 	// re-arm prototype pollution in every [[Set]]-based consumer of the
 	// event; reject it at the root, the same contract as entity state. The
 	// check runs first, so this key throws its own error whatever else is
-	// wrong with the data. The walks below make sure that the clone has the
-	// same root keys.
-	assertNoHostileOwnProtoKey(value as object, `Event ${field} of ${operation}`);
-	// The walk reads property descriptors and the built-in iteration, so it
-	// rejects an accessor before the clone can run it. A Proxy runs its
-	// traps in the walk. The walks reject what the clone would drop or
-	// change: a class instance, an accessor, an enumerable symbol-keyed
-	// property, a non-enumerable data property, and an expando on a
-	// built-in. A value object with a private field would otherwise become
-	// an empty record without an error. The checks catch accidents, not a
-	// hostile Proxy: a trap that changes the data during the walk can hide
-	// a loss. The in-memory event store checks with the same walks, so an
-	// event that the mint accepts is one that the store accepts. The walks
-	// also reject what plain data cannot hold, an Error or a host object
-	// such as a File, and what a freeze cannot make immutable, binary data
-	// and a RegExp. These would break the mint guarantee "minted implies
-	// deeply frozen".
+	// wrong with the data.
+	if (value !== null && typeof value === "object") {
+		assertNoHostileOwnProtoKey(value, `Event ${field} of ${operation}`);
+	}
+	// The freeze rule keeps the mint guarantee "minted implies deeply
+	// frozen". The in-memory event store checks with the same rule, so an
+	// event that the mint accepts is one that the store accepts.
 	return detachFreezableState(value, `${operation}: ${field}`);
 }
 

@@ -63,15 +63,6 @@ export function detachFreezableState<T>(state: T, subject: string): T {
 	return detach(state, subject, "freeze");
 }
 
-/**
- * Throws the `TypeError` of {@link detachFreezableState} for `state` and
- * copies nothing. It does not see what a clone of `state` drops: a caller
- * that needs a copy uses {@link detachFreezableState}. Kit modules only.
- */
-export function assertFreezableState(state: unknown, subject: string): void {
-	assertDetachable(state, "", newWalk(subject, "freeze", new StepRecording()));
-}
-
 function detach<T>(state: T, subject: string, rule: Walk["rule"]): T {
 	const recording = new StepRecording();
 	assertDetachable(state, "", newWalk(subject, rule, recording));
