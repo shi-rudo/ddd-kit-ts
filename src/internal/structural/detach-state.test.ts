@@ -235,6 +235,13 @@ describe("detachState", () => {
 				}),
 		],
 		[
+			"a Map, as an own function under a mutator name",
+			() =>
+				Object.defineProperty(new Map(), "set", {
+					value: function set() {},
+				}),
+		],
+		[
 			"a Map, as a function that is not a frozen mutator",
 			() =>
 				Object.defineProperty(new Map(), "meta", {

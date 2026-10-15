@@ -9,11 +9,7 @@ import {
 	hasIntrinsicPrototypeChain,
 	isIntrinsicConstructorPrototype,
 } from "../../internal/structural/is-built-in";
-import {
-	DATE_MUTATORS,
-	MAP_MUTATORS,
-	SET_MUTATORS,
-} from "../../internal/structural/shadowed-mutators";
+import { installMutatorShadows } from "../../internal/structural/shadowed-mutators";
 
 // ============================================================================
 // Functional Value Object API
@@ -21,58 +17,8 @@ import {
 
 export type VO<T> = Readonly<T>;
 
-// One thrower function per (typeName, method) for the lifetime of the
-// module: createDomainEvent deep-freezes a Date per event, so fresh
-// per-instance closures would be pure allocation churn on a hot path.
-const mutationThrowers = new Map<string, () => never>();
 const mapEntries = Map.prototype.entries;
 const setValues = Set.prototype.values;
-
-function mutationThrower(typeName: string, method: string): () => never {
-	const key = `${typeName}.${method}`;
-	let thrower = mutationThrowers.get(key);
-	if (!thrower) {
-		thrower = function throwFrozenMutation(): never {
-			throw new TypeError(
-				`Cannot call ${method}() on a ${typeName} inside a deeply frozen value`,
-			);
-		};
-		mutationThrowers.set(key, thrower);
-	}
-	return thrower;
-}
-
-// Reused descriptor: Object.defineProperty reads it synchronously, so a
-// single mutable module-level object avoids one allocation per method.
-const shadowDescriptor = {
-	value: undefined as unknown,
-	writable: false,
-	enumerable: false,
-	configurable: false,
-};
-
-/**
- * Shadows the mutators of a Date, a Map, or a Set with own throwing
- * functions before the freeze. The shadows are non-enumerable, so they are
- * invisible to `Object.keys` and spread (deep equality is unaffected), and
- * `structuredClone` drops them (a `vo()` round-trip never sees them).
- * Returns whether the shadows were installed.
- */
-function shadowMutators(
-	obj: object,
-	typeName: string,
-	methods: readonly string[],
-): boolean {
-	// A non-extensible built-in (frozen, sealed, or preventExtensions'd)
-	// cannot receive shadow properties, so skip it (best effort; the caller
-	// chose to lock it themselves).
-	if (!Object.isExtensible(obj)) return false;
-	for (const method of methods) {
-		shadowDescriptor.value = mutationThrower(typeName, method);
-		Object.defineProperty(obj, method, shadowDescriptor);
-	}
-	return true;
-}
 
 // Every ValueObject constructor records the class of the instance under
 // this key, as an own, non-enumerable, locked data property. The record
@@ -206,7 +152,7 @@ function rejectValueObjectAsInput(input: unknown, entry: string): void {
 // frozen Date still answers setTime), so the objects that hold it are
 // walked again; their sealed siblings are not. A walk that meets a cycle
 // memoizes nothing, because a subtree's seal then depends on an ancestor
-// still in progress. The shadows are cooperative (see shadowMutators): a
+// still in progress. The shadows are cooperative (see installMutatorShadows): a
 // member added through a prototype call that bypasses them is not seen by
 // a later walk either.
 const DEEP_FROZEN = new WeakSet<object>();
@@ -286,21 +232,18 @@ function freezeDeep(obj: unknown, walk: FreezeWalk): boolean {
 		builtInTag === "[object Map]" ||
 		builtInTag === "[object Set]"
 	) {
-		let shadowed = KIT_SHADOWED.has(obj);
-		if (builtInTag === "[object Date]") {
-			shadowed = shadowMutators(obj, "Date", DATE_MUTATORS) || shadowed;
-		} else if (builtInTag === "[object Map]") {
+		if (builtInTag === "[object Map]") {
 			for (const [key, value] of obj as Map<unknown, unknown>) {
 				if (!freezeDeep(key, walk)) sealed = false;
 				if (!freezeDeep(value, walk)) sealed = false;
 			}
-			shadowed = shadowMutators(obj, "Map", MAP_MUTATORS) || shadowed;
 		} else if (builtInTag === "[object Set]") {
 			for (const member of obj as Set<unknown>) {
 				if (!freezeDeep(member, walk)) sealed = false;
 			}
-			shadowed = shadowMutators(obj, "Set", SET_MUTATORS) || shadowed;
 		}
+		const shadowed =
+			installMutatorShadows(obj, builtInTag) || KIT_SHADOWED.has(obj);
 		if (shadowed) KIT_SHADOWED.add(obj);
 		else sealed = false;
 	}

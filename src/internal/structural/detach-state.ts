@@ -3,7 +3,7 @@ import {
 	hasIntrinsicPrototypeChain,
 	isIntrinsicConstructorPrototype,
 } from "./is-built-in";
-import { isShadowedMutator } from "./shadowed-mutators";
+import { isMutatorShadow } from "./shadowed-mutators";
 
 /**
  * Returns a copy of `state` that shares no object with the original.
@@ -327,7 +327,7 @@ function isBuiltInMachinery(
 	descriptor: PropertyDescriptor,
 ): boolean {
 	return (
-		(typeof descriptor.value === "function" && isShadowedMutator(tag, key)) ||
+		isMutatorShadow(tag, key, descriptor) ||
 		(tag === REGEXP_TAG && key === "lastIndex") ||
 		(tag === "[object String]" && key === "length")
 	);
