@@ -403,7 +403,7 @@ describe("detachState and a graph that the walk cannot see", () => {
 		["a Map", () => new Map([["k", { a: 1 }]])],
 		["a Set", () => new Set([{ id: 1 }])],
 	])(
-		"rejects %s whose prototype was replaced when the record in it balances the lost property in a count",
+		"rejects %s whose prototype was replaced and that has an own property, also when it holds a record",
 		(_case, make) => {
 			const disguised = Object.setPrototypeOf(make(), Object.prototype);
 			disguised.note = "lost in the copy";

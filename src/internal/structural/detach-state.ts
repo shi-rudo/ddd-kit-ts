@@ -89,9 +89,9 @@ function detach<T>(state: T, subject: string, rule: Walk["rule"]): T {
 	// the copy drops its own properties. A count of the properties can
 	// balance out with the content of the built-in, so this walk compares
 	// each of its steps with the step of the first walk.
-	const copied = newWalk(subject, rule, original.steps);
+	const copied = newWalk(subject, rule, original);
 	assertDetachable(copy, "", copied);
-	if (copied.steps.length !== original.steps.length) {
+	if (copied.position !== original.steps.length) {
 		throwChangedInCopy(subject, "");
 	}
 	return copy;
@@ -137,21 +137,30 @@ interface Walk {
 	readonly seen: WeakSet<object>;
 	readonly subject: string;
 	readonly rule: "clone" | "freeze";
-	/** The steps of this walk, in walk order. */
-	readonly steps: Step[];
 	/**
-	 * The steps of the walk over the original. A walk over the copy
-	 * compares each of its steps with the step at the same position.
+	 * The steps of the walk over the original, in walk order. The walk over
+	 * the original records them; the walk over the copy compares with them.
 	 */
-	readonly original: readonly Step[] | undefined;
+	readonly steps: Step[];
+	/** Whether this walk compares with `steps` instead of recording them. */
+	readonly compares: boolean;
+	/** The position of the next step to compare in `steps`. */
+	position: number;
 }
 
-function newWalk(
-	subject: string,
-	rule: Walk["rule"],
-	original?: readonly Step[],
-): Walk {
-	return { seen: new WeakSet(), subject, rule, steps: [], original };
+/**
+ * A walk that records its steps, or, with `original`, a walk over the
+ * copy that compares with the steps of `original`.
+ */
+function newWalk(subject: string, rule: Walk["rule"], original?: Walk): Walk {
+	return {
+		seen: new WeakSet(),
+		subject,
+		rule,
+		steps: original?.steps ?? [],
+		compares: original !== undefined,
+		position: 0,
+	};
 }
 
 /**
@@ -160,13 +169,14 @@ function newWalk(
  * copy takes the same steps as the walk over the original.
  */
 function step(walk: Walk, next: Step, path: string): void {
-	if (
-		walk.original !== undefined &&
-		walk.original[walk.steps.length] !== next
-	) {
+	if (!walk.compares) {
+		walk.steps.push(next);
+		return;
+	}
+	if (walk.steps[walk.position] !== next) {
 		throwChangedInCopy(walk.subject, path);
 	}
-	walk.steps.push(next);
+	walk.position += 1;
 }
 
 function throwChangedInCopy(subject: string, path: string): never {
@@ -287,18 +297,18 @@ function assertOwnPropertiesDetachable(
 		}
 		if (kind === "array" && key === "length") continue;
 		const isIndex = INDEX_KEY.test(key);
+		const memberPath = isIndex ? `${path}[${key}]` : `${path}.${key}`;
 		if (!descriptor.enumerable) {
 			if (kind === "built-in" && isBuiltInMachinery(tag, key, descriptor)) {
 				continue;
 			}
 			throw new TypeError(
-				`${walk.subject}${path}.${key} is not enumerable and the clone would drop it; map it to plain data`,
+				`${walk.subject}${memberPath} is not enumerable and the clone would drop it; map it to plain data`,
 			);
 		}
 		if (kind === "built-in" && isIndex && Number(key) < contentLength) {
 			continue;
 		}
-		const memberPath = isIndex ? `${path}[${key}]` : `${path}.${key}`;
 		if (!("value" in descriptor)) {
 			throw new TypeError(
 				`${walk.subject}${memberPath} is an accessor property; map it to plain data`,
