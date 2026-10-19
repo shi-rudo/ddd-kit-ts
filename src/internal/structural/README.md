@@ -5,7 +5,7 @@ Functions that compare, reshape, and copy a value structure in depth: equality, 
 ## Installation
 
 ```ts
-import { deepEqual, deepOmit, deepEqualExcept, copyPlainState } from '@shirudo/ddd-kit';
+import { deepEqual, deepOmit, copyPlainState } from '@shirudo/ddd-kit';
 ```
 
 ## Functions
@@ -153,16 +153,17 @@ copyPlainState({ review: new OwnerReview() });
 
 ---
 
-### `deepEqualExcept(a, b, options)`
+### Equality with exclusions
 
-Performs a deep equality comparison between two values after omitting specified keys.
-
-This function first removes the specified keys from both values using `deepOmit`, then performs a deep equality check using `deepEqual`.
+Compares two values after omitting specified keys: `deepOmit` removes the keys from both values, then `deepEqual` compares the results. The kit implements this as the kit-internal `deepEqualExcept`; the public entry exports `valueObjectEqualsExcept` for value objects and `deepEqual` and `deepOmit` for everything else. Each example below defines the composition as `equalExcept`.
 
 #### Example
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit';
+import { deepEqual, deepOmit, type DeepOmitOptions } from '@shirudo/ddd-kit';
+
+const equalExcept = (a: unknown, b: unknown, options: DeepOmitOptions) =>
+  deepEqual(deepOmit(a, options), deepOmit(b, options));
 
 const obj1 = {
   id: 1,
@@ -177,12 +178,12 @@ const obj2 = {
 };
 
 // Compare ignoring 'id' and 'updatedAt'
-deepEqualExcept(obj1, obj2, {
+equalExcept(obj1, obj2, {
   ignoreKeys: ["id", "updatedAt"]
 }); // true (only 'name' is compared)
 
 // Use predicate for conditional ignoring
-deepEqualExcept(obj1, obj2, {
+equalExcept(obj1, obj2, {
   ignoreKeyPredicate: (key, path) => {
     // Ignore timestamps in nested objects
     return key === 'updatedAt' || key === 'createdAt';
@@ -248,7 +249,10 @@ deepEqual(address1, address2); // true
 When comparing entities or aggregates, you often want to ignore infrastructure fields like IDs, versions, timestamps, and metadata:
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit';
+import { deepEqual, deepOmit, type DeepOmitOptions } from '@shirudo/ddd-kit';
+
+const equalExcept = (a: unknown, b: unknown, options: DeepOmitOptions) =>
+  deepEqual(deepOmit(a, options), deepOmit(b, options));
 
 // Compare entities ignoring ID and version
 const entity1 = {
@@ -274,7 +278,7 @@ const entity2 = {
 };
 
 // Compare domain attributes only
-deepEqualExcept(entity1, entity2, {
+equalExcept(entity1, entity2, {
   ignoreKeys: ["id", "version", "createdAt", "updatedAt"]
 }); // true (domain attributes match)
 ```
@@ -284,7 +288,10 @@ deepEqualExcept(entity1, entity2, {
 Aggregates contain entities and value objects. Compare them while ignoring infrastructure concerns:
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit';
+import { deepEqual, deepOmit, type DeepOmitOptions } from '@shirudo/ddd-kit';
+
+const equalExcept = (a: unknown, b: unknown, options: DeepOmitOptions) =>
+  deepEqual(deepOmit(a, options), deepOmit(b, options));
 
 type OrderState = {
   id: OrderId;
@@ -324,7 +331,7 @@ const order2: OrderState = {
 };
 
 // Compare domain state, ignoring infrastructure fields
-deepEqualExcept(order1, order2, {
+equalExcept(order1, order2, {
   ignoreKeys: ["id", "version", "createdAt", "updatedAt"],
   ignoreKeyPredicate: (key, path) => {
     // Ignore IDs in nested entities (items)
@@ -338,7 +345,10 @@ deepEqualExcept(order1, order2, {
 When testing domain logic, compare expected vs actual results while ignoring non-deterministic fields:
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit';
+import { deepEqual, deepOmit, type DeepOmitOptions } from '@shirudo/ddd-kit';
+
+const equalExcept = (a: unknown, b: unknown, options: DeepOmitOptions) =>
+  deepEqual(deepOmit(a, options), deepOmit(b, options));
 import { describe, it, expect } from 'vitest';
 
 describe("Order aggregate", () => {
@@ -356,7 +366,7 @@ describe("Order aggregate", () => {
     
     // Compare domain state, ignoring IDs and timestamps
     expect(
-      deepEqualExcept(actualState, expectedState, {
+      equalExcept(actualState, expectedState, {
         ignoreKeys: ["id", "version", "createdAt", "updatedAt"],
         ignoreKeyPredicate: (key, path) => {
           return key === "id" && path.includes("items");
@@ -372,7 +382,10 @@ describe("Order aggregate", () => {
 Domain events often have metadata that should be ignored when comparing:
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit';
+import { deepEqual, deepOmit, type DeepOmitOptions } from '@shirudo/ddd-kit';
+
+const equalExcept = (a: unknown, b: unknown, options: DeepOmitOptions) =>
+  deepEqual(deepOmit(a, options), deepOmit(b, options));
 
 type OrderCreatedEvent = {
   type: "OrderCreated";
@@ -412,7 +425,7 @@ const event2: OrderCreatedEvent = {
 };
 
 // Compare event payloads, ignoring metadata and timestamps
-deepEqualExcept(event1, event2, {
+equalExcept(event1, event2, {
   ignoreKeys: ["timestamp"],
   ignoreKeyPredicate: (key, path) => {
     return path.includes("metadata");
@@ -426,7 +439,10 @@ When testing an adapter capture, compare its domain data while ignoring
 adapter-owned metadata:
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit';
+import { deepEqual, deepOmit, type DeepOmitOptions } from '@shirudo/ddd-kit';
+
+const equalExcept = (a: unknown, b: unknown, options: DeepOmitOptions) =>
+  deepEqual(deepOmit(a, options), deepOmit(b, options));
 
 describe("orderPersistence", () => {
   it("projects and reconstitutes domain state", async () => {
@@ -438,7 +454,7 @@ describe("orderPersistence", () => {
 
     // Compare domain state, ignoring adapter metadata
     expect(
-      deepEqualExcept(order.getState(), loaded.getState(), {
+      equalExcept(order.getState(), loaded.getState(), {
         ignoreKeys: ["version", "updatedAt"]
       })
     ).toBe(true);
@@ -451,7 +467,10 @@ describe("orderPersistence", () => {
 When comparing aggregate snapshots, ignore snapshot-specific metadata:
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit';
+import { deepEqual, deepOmit, type DeepOmitOptions } from '@shirudo/ddd-kit';
+
+const equalExcept = (a: unknown, b: unknown, options: DeepOmitOptions) =>
+  deepEqual(deepOmit(a, options), deepOmit(b, options));
 
 type AggregateSnapshot = {
   aggregateId: string;
@@ -478,7 +497,7 @@ const snapshot2: AggregateSnapshot = {
 };
 
 // Compare aggregate state, ignoring snapshot metadata
-deepEqualExcept(snapshot1, snapshot2, {
+equalExcept(snapshot1, snapshot2, {
   ignoreKeys: ["snapshotVersion", "createdAt"]
 }); // true if state matches
 ```
@@ -488,7 +507,10 @@ deepEqualExcept(snapshot1, snapshot2, {
 When testing specifications, compare query results while ignoring order or metadata:
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit';
+import { deepEqual, deepOmit, type DeepOmitOptions } from '@shirudo/ddd-kit';
+
+const equalExcept = (a: unknown, b: unknown, options: DeepOmitOptions) =>
+  deepEqual(deepOmit(a, options), deepOmit(b, options));
 
 describe("ActiveOrdersSpecification", () => {
   it("should return only active orders", async () => {
@@ -503,7 +525,7 @@ describe("ActiveOrdersSpecification", () => {
     // Compare results, ignoring IDs and order
     results.forEach((result, index) => {
       expect(
-        deepEqualExcept(result.getState(), expected[index], {
+        equalExcept(result.getState(), expected[index], {
           ignoreKeys: ["id", "version", "createdAt", "updatedAt"]
         })
       ).toBe(true);
