@@ -8,7 +8,7 @@ import { BaseAggregate } from "./base-aggregate";
  * The aggregate owns identity, valid domain state, behavior, its current
  * domain version, and pending domain events. It deliberately does not own a
  * database baseline or dirty-key bookkeeping. A repository adapter defines
- * its own persistence projection; the application shell retains that opaque
+ * its own persistence capture; the application shell retains that opaque
  * baseline and derives the adapter's change set at flush.
  */
 export abstract class StateStoredAggregate<

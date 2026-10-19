@@ -298,7 +298,7 @@ The structural sharing gives the aggregate a cheap way to decide.
 `Entity.state` is `protected`. A generic public getter cannot safely return a
 live graph. A generic copy destroys the prototypes of class-based child
 entities, so the kit offers no generic reader. Concrete models expose domain
-queries or read DTOs. `copyPlainState` builds the DTO for a plain-data
+queries or a plain state. `copyPlainState` builds it from a plain-data
 state and refuses a class instance with its field path; see
 [Aggregates -> Reading State from Outside](./aggregates.md#reading-state-from-outside).
 Persistence adapters define state and snapshot projections outside the
@@ -311,7 +311,7 @@ The contract is:
 
 - Replace state through `setState`, `setState`, or event-sourced `apply`.
 - Do not widen the protected `state` accessor in a concrete entity.
-- Expose domain queries or immutable read DTOs to consumers.
+- Expose domain queries or an immutable plain state to consumers.
 - Model deeply immutable data with `valueObject()` or `ValueObject`.
 - If state is deeply nested, use an immutable-update library in the application.
 

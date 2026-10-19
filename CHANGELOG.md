@@ -462,7 +462,7 @@ immutable. Run one kit version per process during a cutover.
   class names through property descriptors, so no own iterator and no accessor
   of the state runs. A Proxy still runs its traps, and an accessor that a trap
   adds can run. Before, an own iterator could hide a class instance from the
-  check. This also covers the read DTO of an entity and the snapshot model. An
+  check. This also covers the plain state of an entity and the snapshot model. An
   optional second argument names the state in the messages.
 - `UnitOfWork.run` reports a failed rollback as `RollbackError` also when a
   step after the work failed inside the transaction, for example the outbox

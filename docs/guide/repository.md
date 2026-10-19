@@ -185,14 +185,14 @@ internally. The use case and the aggregate cannot inspect it. At write registrat
 and seals the exact change set.
 
 A full-row model can be small. It reads the aggregate through its
-read DTO; see
+plain state; see
 [Aggregates -> Reading State from Outside](./aggregates.md#reading-state-from-outside).
 The row holds a JSON-safe encoding of that DTO: `encodeOrderState` maps each
 `Money` field to a `MoneyDto`, and `decodeOrderState` maps it back on load.
 
 ```ts
 type OrderRow = {
-  readonly state: OrderStateDto;
+  readonly state: PlainOrderState;
   readonly version: number;
 };
 
@@ -202,12 +202,12 @@ const orderPersistence: PersistenceModel<
   OrderRow | undefined
 > = {
   capture: (order) => ({
-    state: encodeOrderState(order.stateDto),
+    state: encodeOrderState(order.plainState),
     version: order.version,
   }),
   changes: (baseline, order, lifecycle) => {
     const current = {
-      state: encodeOrderState(order.stateDto),
+      state: encodeOrderState(order.plainState),
       version: order.version,
     };
 
@@ -251,7 +251,7 @@ skipped. The reverse also holds: an empty change set with a bumped
 must still persist the new version. Skipping the write desyncs the stored
 version and produces false concurrency conflicts on later updates.
 
-Projection functions must use meaningful aggregate queries and return
+Capture functions must use meaningful aggregate queries and return
 copied persistence DTOs. Both `capture` and `changes` must avoid mutable
 references into the aggregate. The Unit of Work cannot safely clone or freeze
 an arbitrary adapter-native type. A baseline that aliases aggregate state can

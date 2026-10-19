@@ -101,7 +101,7 @@ export interface RepositoryDefinitionOptions<
 	 * reach; the static factories stay the only door.
 	 */
 	readonly aggregate: AggregateClass<TAggregate>;
-	/** Adapter-owned projection, baseline, and change-set policy. */
+	/** Adapter-owned capture, baseline, and change-set policy. */
 	readonly persistence: PersistenceModel<TAggregate, TBaseline, TChangeSet>;
 	/**
 	 * Creates the transaction-bound adapter for the port's non-lifecycle

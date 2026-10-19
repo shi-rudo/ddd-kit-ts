@@ -484,7 +484,7 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 
 			// Without the opt-in this push would silently mutate aggregate
 			// internals, bypass validateState, the version bump AND the
-			// adapter projection and Unit-of-Work mutation guards.
+			// adapter capture and Unit-of-Work mutation guards.
 			expect(() => {
 				(aggregate.state.items as Array<unknown>).push({
 					sku: "hacked",

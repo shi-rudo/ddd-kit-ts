@@ -24,7 +24,7 @@ import {
 	insertPersistenceBaseline,
 	type PersistenceBaseline,
 	type PersistenceChanges,
-	persistenceProjectionDrifted,
+	persistenceCaptureDrifted,
 	recapturePersistenceBaseline,
 } from "../../persistence/repository/persistence-model";
 import type { AggregateCommitToken, CommitRegistration } from "../cqrs/handler";
@@ -436,7 +436,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		// PersistenceModel contract permits full-replacement change sets that
 		// are never empty, so a non-empty change set proves nothing about
 		// mutation after registration.
-		const persistenceChanged = persistenceProjectionDrifted(
+		const persistenceChanged = persistenceCaptureDrifted(
 			registration.baseline,
 			entry.aggregate,
 		);
@@ -534,7 +534,7 @@ export class Session<Evt extends AnyDomainEvent> {
 			if (
 				entry.lifecycle === "loaded" &&
 				(entry.aggregate.version !== entry.expectedVersion ||
-					persistenceProjectionDrifted(entry.baseline, entry.aggregate))
+					persistenceCaptureDrifted(entry.baseline, entry.aggregate))
 			) {
 				throw new UnregisteredChangesError({
 					identity: entry.aggregate.aggregateIdentity,

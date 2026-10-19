@@ -137,7 +137,7 @@ import { deepFreeze, copyPlainState } from '@shirudo/ddd-kit';
 
 class Order extends StateStoredAggregate<OrderState, OrderId> {
   /** An immutable copy of the state. Never the live graph. */
-  get stateDto(): Readonly<OrderState> {
+  get plainState(): Readonly<OrderState> {
     return deepFreeze(copyPlainState(this.state));
   }
 }
@@ -422,7 +422,7 @@ deepEqualExcept(event1, event2, {
 
 ### Persistence Projection Tests
 
-When testing an adapter projection, compare its domain data while ignoring
+When testing an adapter capture, compare its domain data while ignoring
 adapter-owned metadata:
 
 ```ts

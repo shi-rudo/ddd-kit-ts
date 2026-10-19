@@ -477,7 +477,7 @@ function createCommitTokenScope<
  *
  * Registration captures an exact version and event batch. Re-registering the same
  * aggregate after it changes rejects. `UnitOfWork` additionally seals the
- * adapter persistence projection and rejects later mutation before flush. For
+ * adapter persistence capture and rejects later mutation before flush. For
  * direct `withCommit` use, make domain decisions first, write, and register last.
  *
  * **Duplicate registration is idempotent by reference.** Registering the same

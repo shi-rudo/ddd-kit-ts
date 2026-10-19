@@ -120,11 +120,11 @@ shows.
 
 `Entity.state` is `protected` in v3. Every `order.state.x` read outside the
 aggregate no longer compiles. Replace application reads with domain queries
-(`order.status`). Give the persistence adapter one read DTO:
+(`order.status`). Give the persistence adapter one plain state:
 
 ```ts
 class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
-  get stateDto(): Readonly<OrderState> {
+  get plainState(): Readonly<OrderState> {
     return deepFreeze(copyPlainState(this.state));
   }
 }
@@ -255,7 +255,7 @@ methods are not the durable write path.
 
 ### 5. Define the adapter's baseline and change set
 
-Move persistence projection and dirty detection into a `PersistenceModel`:
+Move the persistence capture and dirty detection into a `PersistenceModel`:
 
 ```ts
 const orderPersistence: PersistenceModel<
@@ -263,9 +263,9 @@ const orderPersistence: PersistenceModel<
   OrderRow,
   OrderRow | undefined
 > = {
-  capture: (order) => ({ state: order.stateDto, version: order.version }),
+  capture: (order) => ({ state: order.plainState, version: order.version }),
   changes: (baseline, order, lifecycle) => {
-    const current = { state: order.stateDto, version: order.version };
+    const current = { state: order.plainState, version: order.version };
     return lifecycle === "loaded" && deepEqual(baseline, current)
       ? undefined
       : current;
@@ -689,7 +689,7 @@ absent: `null`, a string, a number, an array, or a `Map` throws a `TypeError`.
 
 `Entity.state` is `protected`, and `IEntity<TId, TState>` is `IEntity<TId>`.
 A public live state let a caller change nested state past every rule. Step 1
-shows the domain queries and the read DTO that replace it.
+shows the domain queries and the plain state that replace it.
 
 A subclass no longer sees `_state` and `freezeState`. Every write goes
 through `setState`, which validates and freezes.

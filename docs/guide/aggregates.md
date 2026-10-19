@@ -309,7 +309,7 @@ Changing aggregate state should normally move the version. If you deliberately n
 surfaces that the aggregate declares:
 
 - Domain queries such as `order.status`. Application code reads these.
-- One read DTO: an immutable copy of the state that shares nothing
+- A plain state: an immutable copy of the state that shares nothing
   with the live graph. A persistence adapter captures the aggregate through
   it.
 
@@ -321,7 +321,7 @@ class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
     return this.state.status;
   }
 
-  get stateDto(): Readonly<OrderState> {
+  get plainState(): Readonly<OrderState> {
     return deepFreeze(copyPlainState(this.state));
   }
 }
@@ -349,7 +349,7 @@ plain data in place of the clone:
 
 ```ts
 // items hold OrderItem entities: map them, do not clone them
-get stateDto(): OrderStateDto {
+get plainState(): PlainOrderState {
   return deepFreeze({
     customerId: this.state.customerId,
     status: this.state.status,
@@ -380,7 +380,7 @@ store needs a mapper from the DTO to JSON-safe data, with `moneyToDto` or
 
 The persistence examples in this guide, in
 [Repository](./repository.md#adapter-owned-persistence-models), and in
-[Unit of Work](./unit-of-work.md) read `order.stateDto`.
+[Unit of Work](./unit-of-work.md) read `order.plainState`.
 
 ## Where Invariants Live
 
@@ -598,7 +598,7 @@ import {
 const orderSnapshots = defineSnapshotModel({
   aggregateType: "Order",
   schemaVersion: 2,
-  capture: (order: Order) => order.stateDto,
+  capture: (order: Order) => order.plainState,
   reconstitute: (id: OrderId, state: OrderState, version: Version) =>
     Order.reconstitute(id, state, version),
   migrate: (stored, storedSchemaVersion) =>
@@ -641,7 +641,7 @@ restore then throws `SnapshotVersionNotRestoredError` (code
 `SNAPSHOT_VERSION_NOT_RESTORED`).
 
 Live aggregate state remains `protected`. The model captures the aggregate
-through its read DTO (`order.stateDto`) or through domain queries,
+through its plain state (`order.plainState`) or through domain queries,
 never through a public state getter. See
 [Reading State from Outside](#reading-state-from-outside). For
 event-sourced aggregates, restore the

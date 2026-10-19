@@ -44,7 +44,7 @@ import { isMutatorShadow } from "./shadowed-mutators";
  * throws. A non-enumerable symbol key passes anywhere: it is metadata by
  * convention.
  *
- * The concrete entity uses it for a read DTO of a plain-data
+ * The concrete entity uses it for the plain state of a plain-data
  * state. The snapshot model uses it for the captured DTO and the restored
  * state. A state that carries a class-based child is mapped to plain data
  * first, in the entity or in the model.

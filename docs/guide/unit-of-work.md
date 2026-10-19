@@ -49,7 +49,7 @@ A repository definition has six parts:
 - The application supplies a repository port to `defineRepository`.
 - The aggregate class is the identity-map key.
 - The adapter owns a `PersistenceModel`. It reads the aggregate through its
-  read DTO, `order.stateDto`; see
+  plain state, `order.plainState`; see
   [Aggregates -> Reading State from Outside](./aggregates.md#reading-state-from-outside).
 - `create` builds the transaction-bound read adapter.
 - `flush` performs the registered write.
@@ -83,12 +83,12 @@ const orderPersistence: PersistenceModel<
   OrderChange
 > = {
   capture: (order) => ({
-    state: order.stateDto,
+    state: order.plainState,
     version: order.version,
   }),
   changes: (baseline, order, lifecycle) => {
     const current = {
-      state: order.stateDto,
+      state: order.plainState,
       version: order.version,
     };
 
@@ -194,7 +194,7 @@ The adapter and aggregate do not infer it from `version`.
 
 Call the registration method last. After a successful `add`, `update`, or
 `remove`, the aggregate is sealed for that run. A later version change, event
-change, or adapter-projection change throws `AggregateTrackingError` and rolls
+change, or adapter-capture change throws `AggregateTrackingError` and rolls
 the transaction back. The guard runs before the flush, after the flush, and
 after the outbox write, because an asynchronous adapter can yield to other
 work while the transaction is still open. The last run also covers a loaded
