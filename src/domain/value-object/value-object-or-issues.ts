@@ -6,7 +6,7 @@ import { type ValueObjectOf, valueObject } from "./value-object";
  * Builds an immutable value object while collecting **all** validation
  * violations into a single {@link ValidationError}, instead of failing on the
  * first one. This is the Result-first, multi-error counterpart to
- * `valueObjectWithValidation` (which returns a single string message).
+ * `valueObjectOrError` (which returns a single string message).
  *
  * The `validate` callback receives a fresh `ValidationError` to push field
  * issues onto (via `addIssue` / `addIssues`) and the raw input. When no issue
@@ -20,7 +20,7 @@ import { type ValueObjectOf, valueObject } from "./value-object";
  *
  * @example
  * ```ts
- * const result = valueObjectValidated(
+ * const result = valueObjectOrIssues(
  *   { email, age },
  *   (issues, m) => {
  *     if (!isEmail(m.email))
@@ -33,7 +33,7 @@ import { type ValueObjectOf, valueObject } from "./value-object";
  * // result.isErr() → result.error.publicIssues() has both violations
  * ```
  */
-export function valueObjectValidated<T>(
+export function valueObjectOrIssues<T>(
 	t: T,
 	validate: (issues: ValidationError, value: T) => void,
 	message = "Validation failed",

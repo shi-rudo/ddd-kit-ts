@@ -153,7 +153,7 @@ only the parser's documented domain rejections become `Err`
 wrapped in `Err` is a bug silently counted as a bad input row. That
 includes the options: a broken scale resolver crashes the import
 instead of quietly marking ten thousand rows bad. Same contract as
-`valueObjectValidated`, same `Result` from `@shirudo/result`.
+`valueObjectOrIssues`, same `Result` from `@shirudo/result`.
 
 ## Currency Scales
 

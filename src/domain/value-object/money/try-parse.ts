@@ -16,7 +16,7 @@ import { moneyFromSnapshot } from "./snapshot";
  * reads badly and, hand-rolled, usually catches too much; these
  * wrappers apply the `result-vs-throw` guide's discipline instead.
  *
- * The contract, mirroring `valueObjectValidated`: only the parser's DOCUMENTED
+ * The contract, mirroring `valueObjectOrIssues`: only the parser's DOCUMENTED
  * rejections of the INPUT become `Err`. Anything else, an assertion
  * firing, a typo-ed helper, a genuine bug, keeps propagating as a
  * throw, because a bug wrapped in `Err` is a bug silently counted as

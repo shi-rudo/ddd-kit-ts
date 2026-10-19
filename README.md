@@ -137,7 +137,7 @@ aggregate as persisted after the transaction commits.
   runtimes
 - a clear error split: domain code throws, command/query boundaries return
   `Result`
-- `valueObjectValidated` for collecting field-level validation issues
+- `valueObjectOrIssues` for collecting field-level validation issues
 - optional HTTP/RFC 9457 presentation helpers
 
 **Persistence and delivery**

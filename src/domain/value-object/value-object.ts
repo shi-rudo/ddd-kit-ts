@@ -621,7 +621,7 @@ function keepValueObjectClass(
  *
  * @example
  * ```typescript
- * const result = valueObjectWithValidation(
+ * const result = valueObjectOrError(
  *   { amount: 100, currency: "USD" },
  *   (m) => m.amount >= 0 && m.currency.length === 3,
  *   "Invalid money: amount must be non-negative and currency must be 3 characters"
@@ -634,7 +634,7 @@ function keepValueObjectClass(
  * }
  * ```
  */
-export function valueObjectWithValidation<T>(
+export function valueObjectOrError<T>(
 	t: T,
 	validate: (value: T) => boolean,
 	errorMessage?: string,

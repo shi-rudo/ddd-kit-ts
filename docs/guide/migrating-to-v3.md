@@ -1074,7 +1074,7 @@ reads the API as they expect. Each 2.2.0 name below changes:
 | 2.2.0 | 3.0.0 |
 | --- | --- |
 | `vo`, `voEquals`, `voEqualsExcept` | `valueObject`, `valueObjectEquals`, `valueObjectEqualsExcept` |
-| `voValidated`, `voWithValidation` | `valueObjectValidated`, `valueObjectWithValidation` |
+| `voValidated`, `voWithValidation` | `valueObjectOrIssues`, `valueObjectOrError` |
 | type `VO<T>` | `ValueObjectOf<T>` |
 | `EventBusImpl` | `InProcessEventBus` |
 | `EventHarvestError` | `EventCollectionError`, code `EVENT_COLLECTION_FAILED` |
@@ -1425,7 +1425,7 @@ slimmer. Replace the rc.12 names:
 | `UnmintedEventError` (code `UNMINTED_EVENT`) | `HandBuiltEventError` (code `HAND_BUILT_EVENT`) |
 | `HostileStateKeyError` (code `HOSTILE_STATE_KEY`) | `PrototypePollutionError` (code `PROTOTYPE_POLLUTION`) |
 | `EventBusImpl` | `InProcessEventBus` |
-| `vo`, `voEquals`, `voEqualsExcept`, `voValidated`, `voWithValidation`, type `VO<T>` | `valueObject`, `valueObjectEquals`, `valueObjectEqualsExcept`, `valueObjectValidated`, `valueObjectWithValidation`, `ValueObjectOf<T>` |
+| `vo`, `voEquals`, `voEqualsExcept`, `voValidated`, `voWithValidation`, type `VO<T>` | `valueObject`, `valueObjectEquals`, `valueObjectEqualsExcept`, `valueObjectOrIssues`, `valueObjectOrError`, `ValueObjectOf<T>` |
 | the state machine from `@shirudo/ddd-kit` | from `@shirudo/ddd-kit/state-machine` |
 
 The root entry no longer exports `capturePersistenceBaseline`,

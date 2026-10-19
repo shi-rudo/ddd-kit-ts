@@ -8,7 +8,7 @@ import {
 	valueObject,
 	valueObjectEquals,
 	valueObjectEqualsExcept,
-	valueObjectWithValidation,
+	valueObjectOrError,
 } from "./value-object";
 
 describe("value object functions", () => {
@@ -362,9 +362,9 @@ describe("value object functions", () => {
 		});
 	});
 
-	describe("valueObjectWithValidation()", () => {
+	describe("valueObjectOrError()", () => {
 		it("should return ok result when validation passes", () => {
-			const result = valueObjectWithValidation(
+			const result = valueObjectOrError(
 				{ amount: 100, currency: "USD" },
 				(m) => m.amount >= 0 && m.currency.length === 3,
 			);
@@ -377,7 +377,7 @@ describe("value object functions", () => {
 		});
 
 		it("should return error result when validation fails", () => {
-			const result = valueObjectWithValidation(
+			const result = valueObjectOrError(
 				{ amount: -100, currency: "USD" },
 				(m) => m.amount >= 0 && m.currency.length === 3,
 			);
@@ -391,7 +391,7 @@ describe("value object functions", () => {
 		it("should use custom error message when validation fails", () => {
 			const customMessage = "Amount must be non-negative";
 
-			const result = valueObjectWithValidation(
+			const result = valueObjectOrError(
 				{ amount: -100, currency: "USD" },
 				(m) => m.amount >= 0 && m.currency.length === 3,
 				customMessage,
@@ -404,7 +404,7 @@ describe("value object functions", () => {
 		});
 
 		it("should use default error message when no custom message provided", () => {
-			const result = valueObjectWithValidation(
+			const result = valueObjectOrError(
 				{ amount: -100, currency: "USD" },
 				(m) => m.amount >= 0 && m.currency.length === 3,
 			);
@@ -416,7 +416,7 @@ describe("value object functions", () => {
 		});
 
 		it("should validate nested structures", () => {
-			const result = valueObjectWithValidation(
+			const result = valueObjectOrError(
 				{
 					street: "Main St",
 					city: "Berlin",
@@ -439,7 +439,7 @@ describe("value object functions", () => {
 		});
 
 		it("should reject invalid nested structures", () => {
-			const result = valueObjectWithValidation(
+			const result = valueObjectOrError(
 				{
 					street: "Main St",
 					city: "Berlin",
@@ -458,7 +458,7 @@ describe("value object functions", () => {
 		});
 
 		it("should create deeply frozen value object after validation", () => {
-			const result = valueObjectWithValidation(
+			const result = valueObjectOrError(
 				{ amount: 100, currency: "USD" },
 				(m) => m.amount >= 0 && m.currency.length === 3,
 			);
@@ -472,7 +472,7 @@ describe("value object functions", () => {
 		});
 
 		it("should validate arrays", () => {
-			const result = valueObjectWithValidation(
+			const result = valueObjectOrError(
 				{ items: [1, 2, 3] },
 				(l) => l.items.length > 0 && l.items.every((i) => i > 0),
 			);
@@ -484,7 +484,7 @@ describe("value object functions", () => {
 		});
 
 		it("should reject invalid arrays", () => {
-			const result = valueObjectWithValidation(
+			const result = valueObjectOrError(
 				{ items: [-1, 2, 3] }, // Contains negative number
 				(l) => l.items.length > 0 && l.items.every((i) => i > 0),
 			);
@@ -494,7 +494,7 @@ describe("value object functions", () => {
 
 		it("should handle complex validation logic", () => {
 			type EmailData = { value: string };
-			const result = valueObjectWithValidation(
+			const result = valueObjectOrError(
 				{ value: "user@example.com" },
 				(e: EmailData) => {
 					const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -680,7 +680,7 @@ describe("value object functions", () => {
 
 		it("rejects unsupported values before validation can produce a mutable value object", () => {
 			expect(() =>
-				valueObjectWithValidation(
+				valueObjectOrError(
 					{ data: new Uint8Array([9]) },
 					(value) => value.data.length > 0,
 				),
@@ -1236,14 +1236,14 @@ describe("value object functions", () => {
 	});
 });
 
-describe("valueObjectWithValidation – error path never throws", () => {
+describe("valueObjectOrError – error path never throws", () => {
 	it("returns err for cyclic input when no custom message is given", () => {
 		const cyclic: { name: string; self?: unknown } = { name: "a" };
 		cyclic.self = cyclic;
 
 		// The default error message used JSON.stringify, which throws on
 		// circular structures; the Result contract must hold instead.
-		const result = valueObjectWithValidation(cyclic, () => false);
+		const result = valueObjectOrError(cyclic, () => false);
 
 		expect(result.isErr()).toBe(true);
 		if (result.isErr()) {
@@ -1252,7 +1252,7 @@ describe("valueObjectWithValidation – error path never throws", () => {
 	});
 
 	it("returns err for BigInt-bearing input when no custom message is given", () => {
-		const result = valueObjectWithValidation({ big: 1n }, () => false);
+		const result = valueObjectOrError({ big: 1n }, () => false);
 
 		expect(result.isErr()).toBe(true);
 	});

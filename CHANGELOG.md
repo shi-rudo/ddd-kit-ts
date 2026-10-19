@@ -239,10 +239,11 @@ immutable. Run one kit version per process during a cutover.
 
 - The kit uses the vocabulary of the established DDD and event-sourcing
   libraries. See [Names](docs/guide/migrating-to-v3.md#names).
-- `vo`, `voEquals`, `voEqualsExcept`, `voValidated`, `voWithValidation`, and
-  the type `VO<T>` are `valueObject`, `valueObjectEquals`,
-  `valueObjectEqualsExcept`, `valueObjectValidated`,
-  `valueObjectWithValidation`, and `ValueObjectOf<T>`.
+- `vo`, `voEquals`, `voEqualsExcept`, and the type `VO<T>` are `valueObject`,
+  `valueObjectEquals`, `valueObjectEqualsExcept`, and `ValueObjectOf<T>`.
+- `voWithValidation` is `valueObjectOrError`, and `voValidated` is
+  `valueObjectOrIssues`. The names say what a failure returns: one error
+  message, or all issues in a `ValidationError`.
 - `EventBusImpl` is `InProcessEventBus`.
 - `EventHarvestError` is `EventCollectionError` with the code
   `EVENT_COLLECTION_FAILED`, and `UnenrolledChangesError` is

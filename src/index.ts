@@ -233,9 +233,9 @@ export {
 	valueObject,
 	valueObjectEquals,
 	valueObjectEqualsExcept,
-	valueObjectWithValidation,
+	valueObjectOrError,
 } from "./domain/value-object/value-object";
-export { valueObjectValidated } from "./domain/value-object/value-object-validated";
+export { valueObjectOrIssues } from "./domain/value-object/value-object-or-issues";
 // Errors
 export {
 	AggregateDeletedError,

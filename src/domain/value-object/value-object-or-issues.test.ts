@@ -1,6 +1,6 @@
 import { ValidationError } from "@shirudo/base-error";
 import { describe, expect, it } from "vite-plus/test";
-import { valueObjectValidated } from "./value-object-validated";
+import { valueObjectOrIssues } from "./value-object-or-issues";
 
 interface RegistrationProps {
 	email: string;
@@ -19,9 +19,9 @@ const checkRegistration = (
 		issues.addIssue({ message: "must not be negative", path: ["age"] });
 };
 
-describe("valueObjectValidated()", () => {
+describe("valueObjectOrIssues()", () => {
 	it("returns Ok with a deeply frozen value object when all rules pass", () => {
-		const result = valueObjectValidated<RegistrationProps>(
+		const result = valueObjectOrIssues<RegistrationProps>(
 			{ email: "a@b.com", age: 30 },
 			checkRegistration,
 		);
@@ -36,7 +36,7 @@ describe("valueObjectValidated()", () => {
 	});
 
 	it("collects ALL field violations into a single ValidationError", () => {
-		const result = valueObjectValidated<RegistrationProps>(
+		const result = valueObjectOrIssues<RegistrationProps>(
 			{ email: "nope", age: -1 },
 			checkRegistration,
 		);
@@ -54,7 +54,7 @@ describe("valueObjectValidated()", () => {
 	});
 
 	it("uses a custom aggregate message and defaults otherwise", () => {
-		const custom = valueObjectValidated(
+		const custom = valueObjectOrIssues(
 			{ email: "nope" },
 			(issues) => issues.addIssue({ message: "bad", path: ["email"] }),
 			"Registration is invalid",
@@ -63,7 +63,7 @@ describe("valueObjectValidated()", () => {
 			"Registration is invalid",
 		);
 
-		const fallback = valueObjectValidated({ email: "nope" }, (issues) =>
+		const fallback = valueObjectOrIssues({ email: "nope" }, (issues) =>
 			issues.addIssue({ message: "bad", path: ["email"] }),
 		);
 		expect(fallback.isErr() && fallback.error.message).toBe(
@@ -73,7 +73,7 @@ describe("valueObjectValidated()", () => {
 
 	it("does not freeze the caller's input on success", () => {
 		const input = { email: "a@b.com", nested: { x: 1 } };
-		const result = valueObjectValidated(input, () => {});
+		const result = valueObjectOrIssues(input, () => {});
 
 		expect(result.isOk()).toBe(true);
 		input.nested.x = 2;

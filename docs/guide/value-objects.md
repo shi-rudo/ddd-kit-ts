@@ -14,8 +14,8 @@ instead of inventing another casual two-field shape.
 | Need | Use |
 | --- | --- |
 | A deeply immutable plain-data value | `valueObject()` |
-| One fail-fast validation error at the application edge | `valueObjectWithValidation()` |
-| All validation issues at once | `valueObjectValidated()` |
+| One fail-fast validation error at the application edge | `valueObjectOrError()` |
+| All validation issues at once | `valueObjectOrIssues()` |
 | Domain behavior or throwing invariants | `ValueObject<T>` |
 | Equality while ignoring selected metadata | `valueObjectEqualsExcept()` |
 
@@ -67,10 +67,10 @@ methods, make the value object a class instead of smuggling behavior through
 Use these helpers after you have converted untrusted input into an ordinary DTO.
 They are good for HTTP bodies, queue messages, forms, and file imports.
 
-`valueObjectWithValidation()` is fail-fast and returns `Result<ValueObjectOf<T>, string>`:
+`valueObjectOrError()` is fail-fast and returns `Result<ValueObjectOf<T>, string>`:
 
 ```ts
-import { valueObjectWithValidation } from "@shirudo/ddd-kit";
+import { valueObjectOrError } from "@shirudo/ddd-kit";
 
 type ShippingAddressInput = {
   street: string;
@@ -84,7 +84,7 @@ const dto: ShippingAddressInput = {
   postalCode: String(body.postalCode ?? ""),
 };
 
-const parsed = valueObjectWithValidation(
+const parsed = valueObjectOrError(
   dto,
   (address) =>
     address.street.trim() !== "" &&
@@ -100,12 +100,12 @@ if (parsed.isErr()) {
 const address = parsed.value;
 ```
 
-`valueObjectValidated()` collects every issue into one `ValidationError`:
+`valueObjectOrIssues()` collects every issue into one `ValidationError`:
 
 ```ts
-import { valueObjectValidated } from "@shirudo/ddd-kit";
+import { valueObjectOrIssues } from "@shirudo/ddd-kit";
 
-const parsed = valueObjectValidated(
+const parsed = valueObjectOrIssues(
   dto,
   (issues, address) => {
     if (address.street.trim() === "") {
@@ -323,7 +323,7 @@ Do not hide invalid states behind optional fields. If a date range always needs
 both dates, model both dates and reject invalid ranges at construction. A value
 object should make invalid combinations hard to express.
 
-Do not use `valueObjectWithValidation()` for domain invariants that must never be
+Do not use `valueObjectOrError()` for domain invariants that must never be
 ignored. The helper is useful at boundaries where callers expect `Result`.
 Inside the domain, prefer a constructor or factory that cannot produce an
 invalid value.
