@@ -34,7 +34,7 @@ export type AggregateClass<TAgg> =
  * `AggregatePersistence` implementations: two `findById(id)` calls in the same
  * unit of work MUST return the same instance, because commit-token
  * write registration dedupes by JavaScript object identity. Two instances for
- * one logical aggregate can otherwise produce two tokens, two harvests,
+ * one logical aggregate can otherwise produce two tokens, two collects,
  * and two post-commit lifecycle calls.
  *
  * Storage is two-level (per-type stores created lazily), so
@@ -114,7 +114,7 @@ export class IdentityMap {
 	 * - Registering a DIFFERENT instance for an occupied type+id throws:
 	 *   that is precisely the identity-map violation this class exists
 	 *   to prevent (the repository hydrated twice instead of checking
-	 *   {@link get} first), and letting it pass would double-harvest
+	 *   {@link get} first), and letting it pass would double-collect
 	 *   events downstream.
 	 * - Registering a type+id that was {@link delete}d in this unit of
 	 *   work throws `AggregateDeletedError`: deletion is final within
@@ -142,7 +142,7 @@ export class IdentityMap {
 					`${describeAggregateIdentity(aggregate.aggregateIdentity)}. Check get() ` +
 					"before hydrating: two live instances of one aggregate break the " +
 					"one-instance-per-unit-of-work contract that exactly-once event " +
-					"harvest relies on.",
+					"collect relies on.",
 			);
 		}
 		store.set(id, aggregate);

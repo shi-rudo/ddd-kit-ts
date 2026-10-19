@@ -258,7 +258,7 @@ export {
 	type DuplicateHandlerRegistrationErrorOptions,
 	ErrorMapperFailedError,
 	type ErrorMapperFailedErrorOptions,
-	EventHarvestError,
+	EventCollectionError,
 	type EventStreamPageReason,
 	FoldReturnedNoStateError,
 	ForeignEventError,

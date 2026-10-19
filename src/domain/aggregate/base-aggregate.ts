@@ -448,7 +448,7 @@ export abstract class BaseAggregate<
 	 * present-but-foreign `aggregateId` / `aggregateType` is a wiring bug and
 	 * throws {@link MisattributedEventError}; missing fields are filled in
 	 * from the aggregate, so a recorded event always carries its full
-	 * aggregate identity and can never fail the harvest or the replay guard
+	 * aggregate identity and can never fail the collection or the replay guard
 	 * later. The mint gate
 	 * runs first, so an unminted event fails before anything else. The
 	 * stamped copy is frozen like the original (payload and metadata are
@@ -543,7 +543,7 @@ export abstract class BaseAggregate<
  * `EventSourcedAggregate.replayHistory`: a target carrying unflushed
  * `pendingEvents` throws {@link UnreplayableAggregateError} BEFORE anything
  * moves. A restore advances the aggregate's current version, so unflushed
- * events recorded against the old version would later be harvested claiming
+ * events recorded against the old version would later be collected claiming
  * a version baseline they were never part of. When the discard is
  * deliberate, discard this dirty instance and reconstitute a fresh aggregate
  * instead of mutating persistence lifecycle state publicly.
@@ -551,8 +551,8 @@ export abstract class BaseAggregate<
  * Deliberately a module-level function, not a class method: it MUST not be
  * overridable by consumer subclasses (a no-op override would silently
  * disable the guard at every call site). The callers pass the count of
- * the private list; the commit harvest reads the public `pendingEvents`
- * getter, so a subclass that overrides the getter changes the harvest,
+ * the private list; the commit collect reads the public `pendingEvents`
+ * getter, so a subclass that overrides the getter changes the collection,
  * not this guard.
  *
  * @internal Shared by the aggregate flavours in this package; not part of

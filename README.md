@@ -145,7 +145,7 @@ aggregate as persisted after the transaction commits.
 - repository interfaces for id-based and filtered access
 - a per-operation Identity Map contract
 - optimistic concurrency errors and duplicate-insert errors
-- `withCommit` for transaction, outbox, event harvest, and post-commit cleanup
+- `withCommit` for transaction, outbox, event collection, and post-commit cleanup
 - `UnitOfWork` for repository registration and registration
 - outbox dispatcher, projection, event-store, and snapshot ports
 - contract tests for repository and outbox adapters
@@ -186,7 +186,7 @@ first adapter or aggregate.
 | Repository contracts and Identity Map | [Repository](./docs/guide/repository.md) |
 | Transaction-scoped repositories | [Unit of Work](./docs/guide/unit-of-work.md) |
 | Duplicate-safe commands and inbox handling | [Command Idempotency](./docs/guide/idempotency.md) |
-| Reliable event harvest and delivery | [Outbox & Transactions](./docs/guide/outbox.md) |
+| Reliable event collection and delivery | [Outbox & Transactions](./docs/guide/outbox.md) |
 | Read models and projectors | [Projections](./docs/guide/projections.md) |
 | Event schema changes | [Event Upcasting](./docs/guide/event-upcasting.md) |
 | Optimistic concurrency | [Concurrency](./docs/guide/concurrency.md) |

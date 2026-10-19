@@ -647,7 +647,7 @@ export function adoptStampedDomainEvent<T extends object>(copy: T): T {
  * and throws if they are missing, so a direct `createDomainEvent(...)`
  * call inside an aggregate that forgets the options is caught at
  * runtime. Record pending decisions in the application
- * shell before repository persistence or outbox harvest.
+ * shell before repository persistence or outbox collection.
  *
  * Use `createDomainEvent(...)` directly for events that don't belong to
  * an aggregate: system events, integration events, configuration events,

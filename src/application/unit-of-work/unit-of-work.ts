@@ -620,7 +620,7 @@ export interface UnitOfWorkDeps<
  * transaction and either persist completely or not at all.
  *
  * Built ON TOP of `withCommit` - the commit orchestration (event
- * harvest into the outbox inside the transaction, internal acknowledgement
+ * collect into the outbox inside the transaction, internal acknowledgement
  * after the commit, best-effort in-process publish last) is inherited,
  * not reimplemented. What this layer adds:
  *
@@ -767,7 +767,7 @@ export class UnitOfWork<
 						// register a write, fails the run here.
 						s.assertReadyToCommit();
 						current.workCompleted = true;
-						// The tokens below are what gets harvested; after close, any
+						// The tokens below are what gets collected; after close, any
 						// use of the session throws TransactionClosedError.
 						const commits = s.commitTokens;
 						s.close();
@@ -892,7 +892,7 @@ function startAttempt(): RunAttempt {
  *   {@link RollbackError}.
  * - `workCompleted`: the callback finished; the failure is post-completion.
  *   The checks run in this order. First, a wiring error in the rejection (a
- *   harvest-guard violation, or an aggregate that changed after its
+ *   collection-guard violation, or an aggregate that changed after its
  *   registration) is a deterministic programming bug and passes through; it
  *   does NOT extend `InfrastructureError`, so a retry-on-Infrastructure
  *   handler skips it. It is thrown inside `scope.transactional()`, so a

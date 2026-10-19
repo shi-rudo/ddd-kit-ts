@@ -110,7 +110,7 @@ export class Session<Evt extends AnyDomainEvent> {
 	/**
 	 * True from the start of the flush until the last check before the
 	 * commit ran or the run ended. A write registered in that window would
-	 * be committed and harvested without its flush, so it is rejected, and
+	 * be committed and collected without its flush, so it is rejected, and
 	 * the first rejection also fails the attempt, even when the caller
 	 * swallows it. After the window, a registration reports a closed unit of
 	 * work: nothing can fail the attempt any more.
@@ -264,7 +264,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		}
 	}
 
-	/** Two live instances of one identity would each flush and harvest. */
+	/** Two live instances of one identity would each flush and collect. */
 	private assertIdentityNotTaken(
 		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
@@ -502,9 +502,9 @@ export class Session<Evt extends AnyDomainEvent> {
 		// removed state itself derives from the entry's registration.
 		// Assumption (documented on IdentityMap): repositories key the
 		// map with the same concrete class their factories produce.
-		// Deleted aggregates stay in the harvest set: their recorded
+		// Deleted aggregates stay in the collection set: their recorded
 		// deletion events must reach the outbox (repository.md, hard-
-		// delete with event harvest). withCommit receives them in the
+		// delete with event collection). withCommit receives them in the
 		// deleted token disposition, so the saved-only application observer
 		// never fires for a deletion.
 		this._identityMap.delete(definition.aggregate, aggregate.id);
@@ -545,7 +545,7 @@ export class Session<Evt extends AnyDomainEvent> {
 
 		for (const instance of this._identityMap.instancesWithNewPendingEvents()) {
 			// Any registration (add, update, or remove) means the instance is
-			// registered and its batch will be harvested.
+			// registered and its batch will be collected.
 			if (
 				instance !== null &&
 				typeof instance === "object" &&

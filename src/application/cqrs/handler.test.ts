@@ -9,7 +9,7 @@ import {
 } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
 import {
-	EventHarvestError,
+	EventCollectionError,
 	InfrastructureError,
 	UnmanagedInstanceError,
 } from "../../errors/kit-errors";
@@ -92,7 +92,7 @@ function createMockBus(): EventBus<TestEvent> & { published: TestEvent[][] } {
 	};
 }
 
-/** Expected persistence envelope for one harvested event. */
+/** Expected persistence envelope for one collected event. */
 function stamped(
 	event: TestEvent,
 	aggregateVersion = 1,
@@ -165,7 +165,7 @@ describe("withCommit", () => {
 		expect(result).toBe("order-123");
 	});
 
-	it("harvests pendingEvents only from registered commit tokens", async () => {
+	it("collects pendingEvents only from registered commit tokens", async () => {
 		const outbox = recordingOutbox<TestEvent>();
 		const event = createDomainEvent(
 			"OrderCreated",
@@ -297,7 +297,7 @@ describe("withCommit", () => {
 				async (_ctx, registration) =>
 					registeredResult(registration, "ok", [aggregate]),
 			),
-		).rejects.toBeInstanceOf(EventHarvestError);
+		).rejects.toBeInstanceOf(EventCollectionError);
 
 		expect(outbox.added).toHaveLength(0);
 		expect(aggregate.pendingEvents).toHaveLength(1);
@@ -335,10 +335,10 @@ describe("withCommit", () => {
 		expect(outbox.added).toEqual([]);
 	});
 
-	it("records createEvent decisions in the shell and harvests them with their stamps", async () => {
+	it("stamps createEvent decisions in the shell and collects them with their stamps", async () => {
 		// The documented producer path end to end: the aggregate mints an
 		// unstamped decision, the shell stamps it inside the transaction,
-		// withCommit harvests the stamped event and acknowledges it.
+		// withCommit collects the stamped event and acknowledges it.
 		class ProducingAggregate extends StateStoredAggregate<
 			Readonly<Record<string, never>>,
 			TestId,
@@ -371,20 +371,20 @@ describe("withCommit", () => {
 			},
 		);
 
-		const harvested = outbox.added[0]?.[0];
-		expect(harvested?.event.eventId).toBe("evt-1");
-		expect(harvested?.event.occurredAt.toISOString()).toBe(
+		const collected = outbox.added[0]?.[0];
+		expect(collected?.event.eventId).toBe("evt-1");
+		expect(collected?.event.occurredAt.toISOString()).toBe(
 			"2027-01-01T00:00:00.000Z",
 		);
-		expect(harvested?.source).toEqual({
+		expect(collected?.source).toEqual({
 			aggregateId: "agg-1",
 			aggregateType: "MockOrder",
 		});
-		expect(harvested?.position.aggregateVersion).toBe(1);
+		expect(collected?.position.aggregateVersion).toBe(1);
 		expect(aggregate.pendingEvents).toHaveLength(0);
 	});
 
-	it("rejects a harvested event of another aggregate than the registered one", async () => {
+	it("rejects a collected event of another aggregate than the registered one", async () => {
 		// The aggregate base classes stamp and check the aggregate identity
 		// themselves; this backstop covers an instance whose recording path
 		// did not.
@@ -408,7 +408,7 @@ describe("withCommit", () => {
 		expect(outbox.added).toEqual([]);
 	});
 
-	it("rejects a harvested event of another aggregate type than the registered one", async () => {
+	it("rejects a collected event of another aggregate type than the registered one", async () => {
 		const stray = unstampedOrder([
 			createDomainEvent(
 				"OrderCreated",
@@ -449,13 +449,13 @@ describe("withCommit", () => {
 						aggregates: [aggregate],
 					}) as unknown as WithCommitWorkResult<TestEvent, string>,
 			),
-		).rejects.toBeInstanceOf(EventHarvestError);
+		).rejects.toBeInstanceOf(EventCollectionError);
 		expect(outbox.added).toEqual([]);
 		expect(aggregate.pendingEvents).toEqual([event]);
 		expect(persistedVersionOf(aggregate)).not.toBe(aggregate.version);
 	});
 
-	it("rejects a forged commit token before harvesting", async () => {
+	it("rejects a forged commit token before collecting", async () => {
 		const outbox = recordingOutbox<TestEvent>();
 		const event = createDomainEvent(
 			"OrderCreated",
@@ -470,7 +470,7 @@ describe("withCommit", () => {
 				result: "must not commit",
 				commits: [forged],
 			})),
-		).rejects.toBeInstanceOf(EventHarvestError);
+		).rejects.toBeInstanceOf(EventCollectionError);
 		expect(outbox.added).toEqual([]);
 		expect(aggregate.pendingEvents).toEqual([event]);
 		expect(persistedVersionOf(aggregate)).not.toBe(aggregate.version);
@@ -493,7 +493,7 @@ describe("withCommit", () => {
 				result: "must not commit",
 				commits: [staleToken as AggregateCommitToken<TestEvent>],
 			})),
-		).rejects.toBeInstanceOf(EventHarvestError);
+		).rejects.toBeInstanceOf(EventCollectionError);
 		expect(outbox.added).toEqual([]);
 	});
 
@@ -514,7 +514,7 @@ describe("withCommit", () => {
 					return { result: undefined, commits: [] };
 				},
 			),
-		).rejects.toBeInstanceOf(EventHarvestError);
+		).rejects.toBeInstanceOf(EventCollectionError);
 
 		expect(outbox.added).toEqual([]);
 		expect(aggregate.pendingEvents).toEqual([event]);
@@ -555,7 +555,7 @@ describe("withCommit", () => {
 		await outboxStarted;
 
 		expect(() => leaked?.registerSaved(createMockAggregate([]))).toThrow(
-			EventHarvestError,
+			EventCollectionError,
 		);
 		releaseOutbox();
 		await expect(execution).resolves.toBe("ok");
@@ -611,7 +611,7 @@ describe("withCommit", () => {
 		).toBe(false);
 	});
 
-	it("publishes harvested events to the bus when provided", async () => {
+	it("publishes collected events to the bus when provided", async () => {
 		const outbox = recordingOutbox<TestEvent>();
 		const bus = createMockBus();
 		const event = createDomainEvent(
@@ -986,7 +986,7 @@ describe("withCommit", () => {
 		});
 	});
 
-	it("deleted aggregates: events are harvested and discarded without saved acknowledgement or observation", async () => {
+	it("deleted aggregates: events are collected and discarded without saved acknowledgement or observation", async () => {
 		// Deletion events must reach the outbox atomically with the row
 		// removal, but the saved-aggregate lifecycle is a semantic lie for a
 		// deleted row: an application observer doing cache-fill would
@@ -1016,7 +1016,7 @@ describe("withCommit", () => {
 				),
 		);
 
-		// Both aggregates' events were harvested, in array order.
+		// Both aggregates' events were collected, in array order.
 		expect(outbox.added).toEqual([
 			[stamped(savedEvent), stamped(deletionEvent)],
 		]);
@@ -1028,7 +1028,7 @@ describe("withCommit", () => {
 		expect(deletedAgg.pendingEvents).toHaveLength(0);
 	});
 
-	it("preserves harvest order: aggregates-array order, then each aggregate's emission order", async () => {
+	it("preserves collection order: aggregates-array order, then each aggregate's emission order", async () => {
 		// Subscribers will come to rely on this. Concatenation is:
 		//   aggregates[0].pendingEvents... aggregates[1].pendingEvents... etc.
 		const e1 = createDomainEvent(
@@ -1076,10 +1076,10 @@ describe("withCommit", () => {
 		expect(bus.published).toEqual([[e1, e2, e3, e4]]);
 	});
 
-	it("dedupes aggregates by reference: same instance twice harvests events once and markPersists once", async () => {
+	it("dedupes aggregates by reference: same instance twice collects events once and markPersists once", async () => {
 		// A use case that touches the same aggregate via two repository
 		// references (same identity-map entry) would otherwise double-
-		// harvest its events through the outbox and acknowledge
+		// collect its events through the outbox and acknowledge
 		// twice. Dedupe is by JavaScript object identity; distinct
 		// instances with the same logical id are NOT detected here.
 		const event = createDomainEvent(
@@ -1098,16 +1098,16 @@ describe("withCommit", () => {
 				registeredResult(registration, "ok", [agg, agg, agg]),
 		);
 
-		// Event harvested exactly once.
+		// Event collected exactly once.
 		expect(outbox.added).toEqual([[stamped(event)]]);
 		expect(bus.published).toEqual([[event]]);
 		// Acknowledgement runs exactly once on the deduped aggregate.
 		expect(persistedVersionOf(agg)).toBe(agg.version);
 	});
 
-	it("throws if a harvested event is missing aggregateId (harvest guard)", async () => {
+	it("throws if a collected event is missing aggregateId (collection guard)", async () => {
 		// The aggregate base classes stamp a missing aggregate identity; an instance
-		// from another package copy may not. The harvest guard catches the
+		// from another package copy may not. The collection guard catches the
 		// gap with a diagnostic message naming the event type and the
 		// missing field, because downstream routing relies on the source.
 		const badEvent = createDomainEvent(
@@ -1129,7 +1129,7 @@ describe("withCommit", () => {
 		).rejects.toThrow(/aggregateId/);
 	});
 
-	it("the harvest guard throws EventHarvestError, not a retryable InfrastructureError", async () => {
+	it("the collection guard throws EventCollectionError, not a retryable InfrastructureError", async () => {
 		const badEvent = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "x" },
@@ -1144,11 +1144,11 @@ describe("withCommit", () => {
 			async (_ctx, registration) => registeredResult(registration, "ok", [agg]),
 		).catch((e) => e);
 
-		expect(rejection).toBeInstanceOf(EventHarvestError);
+		expect(rejection).toBeInstanceOf(EventCollectionError);
 		expect(rejection).not.toBeInstanceOf(InfrastructureError);
 	});
 
-	it("throws if a harvested event is missing aggregateType (harvest guard)", async () => {
+	it("throws if a collected event is missing aggregateType (collection guard)", async () => {
 		const badEvent = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "x" },
@@ -1982,7 +1982,7 @@ describe("commit registration lifecycle", () => {
 			/changed after its commit batch was registered.*register last/s,
 		);
 
-		// Rolled back: nothing harvested, nothing acknowledged; the late
+		// Rolled back: nothing collected, nothing acknowledged; the late
 		// event was never part of the attested write.
 		expect(outbox.added).toHaveLength(0);
 		expect(aggregate.pendingEvents).toEqual([first, later]);
@@ -2142,7 +2142,7 @@ describe("commit registration lifecycle", () => {
 					return { result: "r", commits: [] };
 				},
 			),
-		).rejects.toBeInstanceOf(EventHarvestError);
+		).rejects.toBeInstanceOf(EventCollectionError);
 
 		expect(outbox.added).toHaveLength(0);
 		expect(aggregate.pendingEvents).toHaveLength(1);

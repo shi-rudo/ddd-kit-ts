@@ -1,6 +1,6 @@
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import {
-	EventHarvestError,
+	EventCollectionError,
 	IdempotencyReconciliationRequiredError,
 } from "../../errors/kit-errors";
 import { reportToObserver } from "../../internal/observer";
@@ -328,7 +328,7 @@ function scopeWorkRegistration<Evt extends AnyDomainEvent>(
 	let open = true;
 	const assertOpen = (): void => {
 		if (!open) {
-			throw new EventHarvestError(
+			throw new EventCollectionError(
 				"withIdempotentCommit: commit registration was used after the " +
 					"user work callback settled. Await every repository write before " +
 					"returning from the callback.",
@@ -377,7 +377,7 @@ function scopeWorkRegistration<Evt extends AnyDomainEvent>(
  *  3. `store.complete(ctx, claim, fn's result)` stages or completes the outcome
  *     in the same transaction as aggregate writes and outbox. The registration
  *     capability is sealed and its token array copied before `complete` can
- *     yield, so leaked callback state cannot change the harvest receipt.
+ *     yield, so leaked callback state cannot change the collection receipt.
  *  4. After commit, `store.confirm(claim)` finalizes a leased store's staged
  *     outcome; it is a no-op for transactional stores. A failure cannot reject
  *     an already committed write, so it is sent to `onIdempotencyError` and the
@@ -418,7 +418,7 @@ export async function withIdempotentCommit<Evt extends AnyDomainEvent, R, TCtx>(
 	// Decorator around the caller's scope: releases the current
 	// attempt's claim before an error leaves the transactional region.
 	// This is the only place that sees EVERY failure point of one
-	// attempt (the work, withCommit's harvest guards, the outbox write),
+	// attempt (the work, withCommit's collection guards, the outbox write),
 	// including the ones outside this module's own callback, and it runs
 	// INSIDE a retrying scope's loop, so the next attempt starts clean.
 	const scope: TransactionScope<TCtx> = {
@@ -582,7 +582,7 @@ export async function withIdempotentCommit<Evt extends AnyDomainEvent, R, TCtx>(
 		// authoritative reconciliation decision.
 		const committedClaim = attempt.claim as IdempotencyClaimHandle | undefined;
 		if (!committedClaim) {
-			throw new EventHarvestError(
+			throw new EventCollectionError(
 				"withIdempotentCommit: a fresh result committed without its claim receipt.",
 			);
 		}

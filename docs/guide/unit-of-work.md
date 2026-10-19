@@ -155,7 +155,7 @@ Property '"UnitOfWork: the outbox must accept the definition's aggregate events"
 ```
 
 This is deliberate. A write method cannot accidentally issue SQL before the
-rest of the operation is ready, forget event harvesting, or use a different
+rest of the operation is ready, forget event collection, or use a different
 transaction.
 
 `mapError` runs only when `flush` fails. It must preserve a deliberate kit
@@ -500,7 +500,7 @@ describe("DrizzleOrderRepository", () => {
 
 The state-stored suite checks add/update routing, duplicate add, stale update
 and removal, identity mapping, no-op behavior, nested state, exact outbox
-harvest, and rollback. The event-sourced suite checks exact append batches,
+collection, and rollback. The event-sourced suite checks exact append batches,
 replay, OCC, identity mapping, and atomic stream-plus-outbox rollback.
 
 Optional capabilities produce visible skipped tests. A skip is an unproven

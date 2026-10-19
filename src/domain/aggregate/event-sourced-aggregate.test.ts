@@ -968,7 +968,7 @@ describe("replay trusts history", () => {
 
 	it("apply() attributes events to the aggregate, so every event carries their full aggregate identity", () => {
 		// Without the stamp, an event without an aggregate identity mutates
-		// state and then fails far away: at harvest (withCommit) or on the
+		// state and then fails far away: at collect (withCommit) or on the
 		// next load (replay guard).
 		const agg = new RuleTighteningAggregate("test-1" as TestId, {
 			value: 10,

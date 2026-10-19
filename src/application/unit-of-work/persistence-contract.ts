@@ -51,7 +51,7 @@ export type UnitOfWorkIdentityMap = Pick<
  * restored aggregate.
  * Write methods exposed to application code are replaced by Unit-of-Work-owned
  * `add`, `update`, and `remove` registrations, so an adapter implementation of
- * those methods cannot perform durable I/O early or skip event harvesting.
+ * those methods cannot perform durable I/O early or skip event collection.
  *
  * Contract for repository implementations:
  * - `findById(id)` checks `identityMap.get` BEFORE hydrating, treats

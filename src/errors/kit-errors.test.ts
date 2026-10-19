@@ -11,7 +11,7 @@ import {
 	ConcurrencyConflictError,
 	DomainError,
 	DuplicateAggregateError,
-	EventHarvestError,
+	EventCollectionError,
 	ForeignEventError,
 	InfrastructureError,
 	InvalidEventStreamPageError,
@@ -555,12 +555,12 @@ describe("ConcurrencyConflictError", () => {
 	});
 });
 
-describe("EventHarvestError", () => {
+describe("EventCollectionError", () => {
 	it("is a BaseError but NOT an InfrastructureError (deterministic, not retryable)", () => {
-		const e = new EventHarvestError("bad event");
+		const e = new EventCollectionError("bad event");
 		expect(isBaseError(e)).toBe(true);
 		expect(e).not.toBeInstanceOf(InfrastructureError);
-		expect(e.name).toBe("EVENT_HARVEST_FAILED");
+		expect(e.name).toBe("EVENT_COLLECTION_FAILED");
 	});
 });
 

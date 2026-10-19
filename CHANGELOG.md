@@ -431,7 +431,7 @@ immutable. Run one kit version per process during a cutover.
   getter in a payload, a checkpoint, an outcome, or a candidate can no
   longer run between a check and a write. It therefore cannot push a store
   past its capacity or revive an abandoned claim.
-- `InMemoryOutbox.add` rejects a malformed candidate with `EventHarvestError`:
+- `InMemoryOutbox.add` rejects a malformed candidate with `EventCollectionError`:
   a part that is not an object, an `eventId` or `type` that is not an own
   string data property of the event, a source field that is not a string, or
   a position that is not a valid commit position. The message names the

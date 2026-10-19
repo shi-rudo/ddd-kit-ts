@@ -1379,9 +1379,9 @@ export class ReplayRejectedError extends InfrastructureError<"REPLAY_REJECTED"> 
 }
 
 /**
- * Thrown when an event harvested from an aggregate cannot be safely composed
+ * Thrown when an event collected from an aggregate cannot be safely composed
  * into a commit envelope, or when an outbox can prove that accepting a
- * candidate would violate its event identity/source chain. Harvest failures
+ * candidate would violate its event identity/source chain. Collect failures
  * include missing `aggregateId` / `aggregateType` (downstream routing would
  * break), or an
  * eventful persisted aggregate did not advance its version (two commits
@@ -1397,13 +1397,13 @@ export class ReplayRejectedError extends InfrastructureError<"REPLAY_REJECTED"> 
  * `UnitOfWork.run` passes it through unchanged instead of wrapping it in
  * `CommitError`.
  */
-export class EventHarvestError extends KitWiringError<"EVENT_HARVEST_FAILED"> {
+export class EventCollectionError extends KitWiringError<"EVENT_COLLECTION_FAILED"> {
 	constructor(
 		message: string,
 		/** The `type` of the offending event, for programmatic routing. */
 		public readonly eventType?: string,
 	) {
-		super("EVENT_HARVEST_FAILED", message);
+		super("EVENT_COLLECTION_FAILED", message);
 	}
 }
 
@@ -2167,7 +2167,7 @@ export type KitErrorCode =
 	| "ERROR_MAPPER_FAILED"
 	| "EVENT_AGGREGATE_IDENTITY_INVALID"
 	| "EVENT_BUS_CLOSED"
-	| "EVENT_HARVEST_FAILED"
+	| "EVENT_COLLECTION_FAILED"
 	| "EVENT_ID_INVALID"
 	| "EVENT_ID_REQUIRED"
 	| "EVENT_OCCURRED_AT_INVALID"

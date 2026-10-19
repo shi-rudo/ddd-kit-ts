@@ -11,7 +11,7 @@ import type { Id } from "../../domain/identity/id";
 import {
 	AggregateDeletedError,
 	ConcurrencyConflictError,
-	EventHarvestError,
+	EventCollectionError,
 	InfrastructureError,
 	UnregisteredChangesError,
 	UnmanagedInstanceError,
@@ -283,7 +283,7 @@ function createUow(overrides?: {
 	return { uow, outbox, bus, scope };
 }
 
-/** Expected persistence envelope for one harvested event. */
+/** Expected persistence envelope for one collected event. */
 function stamped(
 	event: TestEvent,
 	aggregateVersion = 1,
@@ -1087,7 +1087,7 @@ describe("UnitOfWork", () => {
 					repositories.orders.trackLoaded(aggregate);
 					// A decision the shell forgot to stamp with
 					// stampPendingEvents: the rejection must land at update()
-					// registration. Waiting for the harvest guard would be too
+					// registration. Waiting for the collection guard would be too
 					// late for a non-transactional event store, whose flush
 					// append is already durable by then.
 					aggregate.changeWithUnstampedEvent("o-1");
@@ -1677,7 +1677,7 @@ describe("UnitOfWork", () => {
 	});
 
 	describe("registration + post-commit lifecycle", () => {
-		it("does not harvest or acknowledge a fresh aggregate that was never added", async () => {
+		it("does not collect or acknowledge a fresh aggregate that was never added", async () => {
 			const { uow, outbox } = createUow();
 			const event = testEvent("o-unsaved");
 			const aggregate = createMockAggregate("o-unsaved", [event]);
@@ -1701,7 +1701,7 @@ describe("UnitOfWork", () => {
 			expect(persistedVersionOf(aggregate)).toBeUndefined();
 		});
 
-		it("saved aggregates: events harvested, application observer after commit, publish last", async () => {
+		it("saved aggregates: events collected, application observer after commit, publish last", async () => {
 			const callOrder: string[] = [];
 			const scope: TransactionScope<undefined> = {
 				transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
@@ -1852,7 +1852,7 @@ describe("UnitOfWork", () => {
 			}
 		});
 
-		it("saving the same instance twice harvests its events once and markPersists once", async () => {
+		it("saving the same instance twice collects its events once and markPersists once", async () => {
 			const { uow, outbox } = createUow();
 			const event = testEvent("o-1");
 			const agg = createMockAggregate("o-1", [event]);
@@ -1873,7 +1873,7 @@ describe("UnitOfWork", () => {
 			expect(persistedVersionOf(agg)).toBe(agg.version);
 		});
 
-		it("deleted aggregates: recorded deletion events are harvested into the outbox", async () => {
+		it("deleted aggregates: recorded deletion events are collected into the outbox", async () => {
 			const { uow, outbox } = createUow();
 			const deletionEvent = testEvent("o-1");
 			const agg = createMockAggregate("o-1");
@@ -1988,7 +1988,7 @@ describe("UnitOfWork", () => {
 	describe("session seal + scope retries", () => {
 		it("adapter tracking is closed as soon as the callback resolves", async () => {
 			// A leaked adapter session must not accept registration after the
-			// callback settled. The harvest snapshot is already taken, so the
+			// callback settled. The collection snapshot is already taken, so the
 			// session is sealed at callback completion and fails loudly.
 			const lateAggregate = createMockAggregate("late-1", [
 				testEvent("late-1"),
@@ -2001,7 +2001,7 @@ describe("UnitOfWork", () => {
 			const scope: TransactionScope<undefined> = {
 				transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
 					const result = await fn(undefined);
-					// We are now past the callback (and past harvest), still
+					// We are now past the callback (and past collect), still
 					// inside the transaction - the window in question.
 					try {
 						leakedTracking.trackLoaded(lateAggregate);
@@ -2061,7 +2061,7 @@ describe("UnitOfWork", () => {
 			});
 
 			expect(result).toBe("second-attempt");
-			// Only the committed attempt's events were harvested; the
+			// Only the committed attempt's events were collected; the
 			// rolled-back attempt's registration did not leak into the retry.
 			expect(outbox.added).toEqual([[stamped(event2)]]);
 			expect(persistedVersionOf(attempt1Aggregate)).toBeUndefined();
@@ -2379,7 +2379,7 @@ describe("UnitOfWork", () => {
 			});
 
 			expect(repos[0]?.hydrations).toBe(1);
-			// One instance → one harvest, one acknowledgement.
+			// One instance → one collect, one acknowledgement.
 			expect(outbox.added).toEqual([[stamped(event, 2)]]);
 		});
 
@@ -2604,7 +2604,7 @@ describe("UnitOfWork", () => {
 			).rejects.toBeInstanceOf(AggregateDeletedError);
 		});
 
-		it("a deleted aggregate's events are harvested without saved acknowledgement or observation", async () => {
+		it("a deleted aggregate's events are collected without saved acknowledgement or observation", async () => {
 			const event = testEvent("o-1");
 			const rows = new Map([["o-1", [event]]]);
 			const { uow, outbox } = createCachingUow(rows);
@@ -2677,7 +2677,7 @@ describe("UnitOfWork", () => {
 			expect((rejection as CommitError).cause).toBe(commitFailure);
 		});
 
-		it("a deterministic harvest-guard violation surfaces as EventHarvestError, not a retryable CommitError", async () => {
+		it("a deterministic collection-guard violation surfaces as EventCollectionError, not a retryable CommitError", async () => {
 			// An event missing aggregateId is a createDomainEvent misuse:
 			// deterministic, fails identically on every retry. It must NOT be
 			// wrapped in CommitError (an InfrastructureError a retry loop
@@ -2702,16 +2702,16 @@ describe("UnitOfWork", () => {
 					(e: unknown) => e,
 				);
 
-			expect(rejection).toBeInstanceOf(EventHarvestError);
+			expect(rejection).toBeInstanceOf(EventCollectionError);
 			expect(rejection).not.toBeInstanceOf(CommitError);
 			expect(rejection).not.toBeInstanceOf(InfrastructureError);
 			expect(persistedVersionOf(agg)).toBeUndefined();
 		});
 
-		it("a wrapping scope that nests the harvest-guard error still surfaces EventHarvestError, not CommitError", async () => {
-			// The harvest guard throws inside scope.transactional(), so a
+		it("a wrapping scope that nests the collection-guard error still surfaces EventCollectionError, not CommitError", async () => {
+			// The collection guard throws inside scope.transactional(), so a
 			// scope that wraps its callback's rejection nests the
-			// EventHarvestError in its cause chain. run() must still treat it
+			// EventCollectionError in its cause chain. run() must still treat it
 			// as the deterministic, non-retryable failure it is.
 			const scope: TransactionScope<undefined> = {
 				transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
@@ -2742,7 +2742,7 @@ describe("UnitOfWork", () => {
 					(e: unknown) => e,
 				);
 
-			expect(rejection).toBeInstanceOf(EventHarvestError);
+			expect(rejection).toBeInstanceOf(EventCollectionError);
 			expect(rejection).not.toBeInstanceOf(InfrastructureError);
 		});
 
@@ -3800,8 +3800,8 @@ describe("UnitOfWork", () => {
 					(error: unknown) => error,
 				);
 
-			expect(rejection).toBeInstanceOf(EventHarvestError);
-			expect((rejection as EventHarvestError).message).toMatch(
+			expect(rejection).toBeInstanceOf(EventCollectionError);
+			expect((rejection as EventCollectionError).message).toMatch(
 				/event source ended/,
 			);
 			expect(persistedVersionOf(recreated)).toBeUndefined();

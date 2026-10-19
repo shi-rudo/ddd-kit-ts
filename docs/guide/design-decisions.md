@@ -378,7 +378,7 @@ The unit of work is consequently the public repository write context in v3.
 Low-level `withCommit` remains available for infrastructure compositions that
 do not present the standard aggregate repository protocol, but there is no
 parallel direct-repository `save` path. Two paths create different owners for
-the same OCC and event-harvest rules.
+the same OCC and event-collection rules.
 
 ## TransactionScope stays minimal and the Unit of Work lives above it
 

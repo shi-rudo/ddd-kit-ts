@@ -36,7 +36,7 @@ Most write-side code follows this shape:
 2. Call a domain method on it.
 3. The aggregate validates the move, changes state, and records events.
 4. The application service saves the aggregate.
-5. `withCommit` harvests events into the outbox and marks the aggregate
+5. `withCommit` collects events into the outbox and marks the aggregate
    persisted after the transaction commits.
 
 The aggregate is the consistency boundary. Application code asks it to do
@@ -138,7 +138,7 @@ This example shows the core conventions:
 - `pendingEvents` are not historical events yet. Before recording they are
   immutable domain decisions. After recording they carry their stable event id
   and stamp time. They remain unflushed until the transaction/outbox
-  boundary harvests them.
+  boundary collects them.
 
 At this point, persistence has not occurred. Persistence is an adapter concern.
 The aggregate completed its domain work. A repository and `withCommit` still

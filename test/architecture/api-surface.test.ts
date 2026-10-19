@@ -130,7 +130,7 @@ const INDEX_SURFACE = [
 	"ErrorMapperFailedError",
 	"EventBusClosedError",
 	"EventBusImpl",
-	"EventHarvestError",
+	"EventCollectionError",
 	"EventSourcedAggregate",
 	"FoldReturnedNoStateError",
 	"ForeignEventError",

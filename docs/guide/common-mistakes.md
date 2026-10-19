@@ -2,7 +2,7 @@
 
 This page collects mistakes that have shown up in real kit usage.
 
-Read it less like a list of gotchas and more like a debugging guide. Each mistake points to a small mismatch in the mental model: where aggregate metadata comes from, who owns transaction state, when events are harvested, or what a repository is allowed to do.
+Read it less like a list of gotchas and more like a debugging guide. Each mistake points to a small mismatch in the mental model: where aggregate metadata comes from, who owns transaction state, when events are collected, or what a repository is allowed to do.
 
 The sections are ordered by how the mistake usually appears:
 
@@ -70,7 +70,7 @@ The word "pending" matters. These events have happened in memory, but they
 have not been safely handed to the transaction/outbox boundary yet. Calling
 them `domainEvents` makes them sound like a historical event log. They are not.
 They are a short-lived queue owned by the aggregate until `UnitOfWork`
-harvests and acknowledges the exact registered batch through an internal
+collects and acknowledges the exact registered batch through an internal
 capability.
 
 Review signal: application code can call `stampPendingEvents`. It must not
@@ -116,13 +116,13 @@ return {
 };
 ```
 
-The callback's job is to provide commit evidence for repository writes that participated in this invocation. Tokens are opaque and invocation-scoped, so a forged token or one retained from an earlier call is rejected inside the transaction. Every token issued during the callback must be returned in `commits`; omitting one also rejects inside the transaction. If an registered write should not commit, throw so the transaction rolls back. `withCommit` then harvests events from those registered aggregates at the correct point in the lifecycle.
+The callback's job is to provide commit evidence for repository writes that participated in this invocation. Tokens are opaque and invocation-scoped, so a forged token or one retained from an earlier call is rejected inside the transaction. Every token issued during the callback must be returned in `commits`; omitting one also rejects inside the transaction. If an registered write should not commit, throw so the transaction rolls back. `withCommit` then collects events from those registered aggregates at the correct point in the lifecycle.
 
-Manual harvesting is tempting because it looks explicit. The problem is timing. If every caller decides when to read events, clear events, or publish events, the transaction boundary stops being a boundary. Some callers will harvest before the repository flush, some after it, and some after an error. The whole point of `withCommit` is to centralize that order:
+Manual collection is tempting because it looks explicit. The problem is timing. If every caller decides when to read events, clear events, or publish events, the transaction boundary stops being a boundary. Some callers will collect before the repository flush, some after it, and some after an error. The whole point of `withCommit` is to centralize that order:
 
 1. Run the application work.
 2. Flush every registered aggregate write.
-3. Harvest pending events.
+3. Collect pending events.
 4. Write the outbox in the same transaction.
 5. Commit.
 6. Acknowledge saved aggregates through the kit-internal capability.
@@ -148,7 +148,7 @@ this.setState(
 
 That metadata is not incidental. It is how downstream code connects a fact back to the aggregate that produced it. A projection may need to know which order to update. An outbox dispatcher may need to shard or route by aggregate type. A process manager may need to correlate follow-up work.
 
-`withCommit` has a harvest guard that catches events missing aggregate metadata. That guard is a last line of defense, not the preferred workflow. The preferred workflow is to record aggregate events through the aggregate so the metadata cannot be forgotten.
+`withCommit` has a collection guard that catches events missing aggregate metadata. That guard is a last line of defense, not the preferred workflow. The preferred workflow is to record aggregate events through the aggregate so the metadata cannot be forgotten.
 
 Review signal: `createDomainEvent` inside a method on an `StateStoredAggregate` or `EventSourcedAggregate` should draw attention. Outside aggregates it can be correct; inside aggregates it is usually the wrong abstraction. See [Domain Events](./domain-events.md).
 
@@ -191,7 +191,7 @@ aggregate lifecycle.
 
 Only `withCommit` and `UnitOfWork` hold the internal acknowledgement capability.
 If repository code uses a cast or other escape hatch to clear events earlier,
-pending events disappear before the transaction boundary can harvest them and
+pending events disappear before the transaction boundary can collect them and
 the outbox receives nothing.
 
 This mistake usually comes from the following assumption. The assumption is
@@ -607,4 +607,4 @@ When you review code that uses the kit, make sure that these rules apply:
 - Pass `context.signal` into every publication a handler makes.
 - Call the unsubscribe function that `subscribe` returns.
 
-Most production bugs in this area come from moving responsibility one layer too early: repositories clearing events, callers harvesting events, tests owning globals, or application code bypassing aggregate metadata. Keep each responsibility at its boundary and the kit stays predictable.
+Most production bugs in this area come from moving responsibility one layer too early: repositories clearing events, callers collecting events, tests owning globals, or application code bypassing aggregate metadata. Keep each responsibility at its boundary and the kit stays predictable.

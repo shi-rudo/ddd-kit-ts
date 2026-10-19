@@ -27,7 +27,7 @@ import {
 	type DuplicateAggregateErrorOptions,
 	type DuplicateEventIdErrorOptions,
 	ErrorMapperFailedError,
-	EventHarvestError,
+	EventCollectionError,
 	FoldReturnedNoStateError,
 	ForeignEventError,
 	HostileStateKeyError,
@@ -435,8 +435,9 @@ describe("kit errors are StructuredErrors (code = name = the one identifier)", (
 
 	it("further structured kit errors carry their codes", () => {
 		expect(
-			new EventHarvestError("event without aggregateId", "OrderConfirmed").code,
-		).toBe("EVENT_HARVEST_FAILED");
+			new EventCollectionError("event without aggregateId", "OrderConfirmed")
+				.code,
+		).toBe("EVENT_COLLECTION_FAILED");
 		expect(
 			new UnregisteredChangesError({
 				identity: { aggregateType: "Order", aggregateId: "o-1" },
@@ -660,7 +661,7 @@ describe("KitErrorCode stays in sync with the classes", () => {
 			AssertKitCode<DirectStateMutationError["code"]>,
 			AssertKitCode<DuplicateAggregateError["code"]>,
 			AssertKitCode<ErrorMapperFailedError["code"]>,
-			AssertKitCode<EventHarvestError["code"]>,
+			AssertKitCode<EventCollectionError["code"]>,
 			AssertKitCode<FoldReturnedNoStateError["code"]>,
 			AssertKitCode<ForeignEventError["code"]>,
 			AssertKitCode<HostileStateKeyError["code"]>,

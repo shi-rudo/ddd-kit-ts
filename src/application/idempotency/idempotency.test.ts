@@ -8,7 +8,7 @@ import {
 import type { Id } from "../../domain/identity/id";
 import {
 	ConcurrencyConflictError,
-	EventHarvestError,
+	EventCollectionError,
 	IdempotencyCompletionWithoutClaimError,
 	IdempotencyInFlightError,
 	IdempotencyKeyReuseError,
@@ -98,7 +98,7 @@ describe("withIdempotentCommit", () => {
 						aggregates: [order],
 					}) as unknown as WithCommitWorkResult<AnyDomainEvent, string>,
 			),
-		).rejects.toBeInstanceOf(EventHarvestError);
+		).rejects.toBeInstanceOf(EventCollectionError);
 		expect(order.pendingEvents).toHaveLength(1);
 		expect(await deps.outbox.getPending()).toEqual([]);
 
@@ -167,7 +167,7 @@ describe("withIdempotentCommit", () => {
 		await completeStarted;
 
 		expect(() => leaked?.registerSaved(new Order("o-late" as OrderId))).toThrow(
-			EventHarvestError,
+			EventCollectionError,
 		);
 		releaseComplete();
 		await expect(execution).resolves.toEqual({ replayed: false, result: "ok" });
@@ -213,7 +213,7 @@ describe("withIdempotentCommit", () => {
 		expect(await deps.outbox.getPending()).toHaveLength(1);
 	});
 
-	it("runs the work fresh, stores the outcome, and harvests events", async () => {
+	it("runs the work fresh, stores the outcome, and collects events", async () => {
 		const deps = createDeps();
 		const order = new Order("o-1" as OrderId);
 
@@ -257,7 +257,7 @@ describe("withIdempotentCommit", () => {
 
 		expect(executions).toBe(1);
 		expect(replayed).toEqual({ replayed: true, result: { orderId: "o-1" } });
-		// No second harvest: the duplicate emitted no events.
+		// No second collection: the duplicate emitted no events.
 		expect(await deps.outbox.getPending()).toHaveLength(1);
 	});
 

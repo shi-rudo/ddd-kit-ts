@@ -12,7 +12,7 @@ import type { Id } from "../../domain/identity/id";
 import {
 	describeAggregateIdentity,
 	copyAggregateIdentity,
-	EventHarvestError,
+	EventCollectionError,
 } from "../../errors/kit-errors";
 import { abortReason } from "../../internal/async/abort";
 import {
@@ -118,7 +118,7 @@ export interface AggregateCommitToken<
  * callback. Call `registerSaved` only for an aggregate participating in the
  * repository write, and return every resulting token in `commits`. Omitting
  * any token rejects the transaction: an registered write may not commit without
- * its event harvest and post-commit acknowledgement. Registrable instances
+ * its event collection and post-commit acknowledgement. Registrable instances
  * must extend `StateStoredAggregate` or `EventSourcedAggregate`; structural
  * `Aggregate` lookalikes have no internal lifecycle capability and fail
  * before commit.
@@ -130,7 +130,7 @@ export interface CommitRegistration<Evt extends AnyDomainEvent> {
 	): AggregateCommitToken<Evt>;
 	/**
 	 * Register an aggregate whose row is deleted by the current transaction.
-	 * Its events are harvested and discarded after commit, but the saved-only
+	 * Its events are collected and discarded after commit, but the saved-only
 	 * application `onPersisted` observer is not called.
 	 */
 	registerDeleted(
@@ -177,7 +177,7 @@ interface AggregateCommitRecord<Evt extends AnyDomainEvent> {
 /**
  * True when the aggregate's live version or pending-event batch no longer
  * matches its registration-time snapshot. Shared by the duplicate-registration
- * gate and the harvest-time recheck: both must reject the same divergence,
+ * gate and the collection-time recheck: both must reject the same divergence,
  * or events recorded after registration would be silently dropped.
  */
 function registrationDiverged<Evt extends AnyDomainEvent>(
@@ -215,7 +215,7 @@ function createCommitTokenScope<
 		options?: CommitRegistrationOptions,
 	): AggregateCommitToken<Evt> => {
 		if (!open) {
-			throw new EventHarvestError(
+			throw new EventCollectionError(
 				"withCommit: commit registration was used after its work callback " +
 					"settled. Await every repository write and return its token before " +
 					"leaving the callback.",
@@ -226,12 +226,12 @@ function createCommitTokenScope<
 		if (existing) {
 			const record = recordsByToken.get(existing);
 			if (!record) {
-				throw new EventHarvestError(
+				throw new EventCollectionError(
 					"withCommit: internal commit-token registry is inconsistent.",
 				);
 			}
 			if (record.disposition === "deleted" && disposition === "saved") {
-				throw new EventHarvestError(
+				throw new EventCollectionError(
 					`withCommit: aggregate ${describeAggregateIdentity(aggregate.aggregateIdentity)} was registered as ` +
 						"saved after it was registered as deleted in the same transaction.",
 				);
@@ -243,7 +243,7 @@ function createCommitTokenScope<
 				options?.expectedVersion !== undefined &&
 				options.expectedVersion !== record.expectedVersion
 			) {
-				throw new EventHarvestError(
+				throw new EventCollectionError(
 					`withCommit: aggregate ${describeAggregateIdentity(aggregate.aggregateIdentity)} was re-registered ` +
 						`with expectedVersion ${String(options.expectedVersion)}, but its ` +
 						`registration recorded ${String(record.expectedVersion)}. Duplicate ` +
@@ -251,7 +251,7 @@ function createCommitTokenScope<
 				);
 			}
 			if (registrationDiverged(record)) {
-				throw new EventHarvestError(
+				throw new EventCollectionError(
 					`withCommit: aggregate ${describeAggregateIdentity(aggregate.aggregateIdentity)} changed after its ` +
 						"commit batch was registered. Register persistence intent last.",
 				);
@@ -277,18 +277,18 @@ function createCommitTokenScope<
 		// The pendingEvents getter already returns a frozen copy;
 		// re-copying and re-freezing it here would only duplicate the work.
 		const events = aggregate.pendingEvents;
-		// Recorded-before-persistence is checked HERE, not only at harvest:
+		// Stamped-before-persistence is checked HERE, not only at collection:
 		// the UnitOfWork registers at write registration, so this rejection
-		// lands before any adapter flush. The harvest guard alone fires after
+		// lands before any adapter flush. The collection guard alone fires after
 		// flush, and a non-transactional event store would already have
 		// appended the unstamped batch durably.
 		for (const event of events) {
 			if (!isStampedDomainEvent(event)) {
-				throw new EventHarvestError(
+				throw new EventCollectionError(
 					`withCommit: event "${(event as { readonly type: string }).type}" ` +
 						"has not been recorded. Call stampPendingEvents(aggregate, " +
 						"createStamp) in the application shell before persistence or " +
-						"outbox harvest.",
+						"outbox collection.",
 					(event as { readonly type: string }).type,
 				);
 			}
@@ -329,7 +329,7 @@ function createCommitTokenScope<
 		},
 		resolve: (tokens) => {
 			if (!Array.isArray(tokens)) {
-				throw new EventHarvestError(
+				throw new EventCollectionError(
 					"withCommit: the work callback must return `commits` containing " +
 						"tokens from the current registration capability. Naked aggregate " +
 						"arrays are not commit evidence.",
@@ -343,7 +343,7 @@ function createCommitTokenScope<
 					token === null ||
 					(typeof token !== "object" && typeof token !== "function")
 				) {
-					throw new EventHarvestError(
+					throw new EventCollectionError(
 						"withCommit: a commit token was not minted by this callback's " +
 							"registration capability. Forged and stale tokens are rejected.",
 					);
@@ -351,20 +351,20 @@ function createCommitTokenScope<
 				const tokenObject = token as object;
 				const record = recordsByToken.get(tokenObject);
 				if (!record) {
-					throw new EventHarvestError(
+					throw new EventCollectionError(
 						"withCommit: a commit token was not minted by this callback's " +
 							"registration capability. Forged and stale tokens are rejected.",
 					);
 				}
 				if (seen.has(tokenObject)) continue;
 				seen.add(tokenObject);
-				// Harvest-time recheck of the registration snapshot: an event
+				// Collection-time recheck of the registration snapshot: an event
 				// recorded after registerSaved but before the callback returned
-				// would be excluded from the harvest and silently lost by the
+				// would be excluded from the collection and silently lost by the
 				// post-commit prefix acknowledgement. Divergence fails loudly
 				// inside the transaction instead.
 				if (registrationDiverged(record)) {
-					throw new EventHarvestError(
+					throw new EventCollectionError(
 						`withCommit: aggregate ${describeAggregateIdentity(record.aggregate.aggregateIdentity)} changed ` +
 							"after its commit batch was registered; events recorded after " +
 							"registration are not part of the attested write and would be " +
@@ -375,7 +375,7 @@ function createCommitTokenScope<
 				records.push(record);
 			}
 			if (seen.size !== mintedTokenCount) {
-				throw new EventHarvestError(
+				throw new EventCollectionError(
 					"withCommit: every token minted by the current registration " +
 						"capability must be returned in `commits`. If an registered write " +
 						"must not commit, throw so the transaction rolls back.",
@@ -391,7 +391,7 @@ function createCommitTokenScope<
  *
  * The use-case callback receives an invocation-scoped registration capability
  * and returns opaque commit tokens for the repository writes that completed
- * in the transaction. `withCommit` owns the post-commit lifecycle (harvest,
+ * in the transaction. `withCommit` owns the post-commit lifecycle (collection,
  * outbox, mark-persisted, publish). A naked aggregate is not commit evidence:
  * merely touching or constructing one must never make it look persisted.
  *
@@ -408,10 +408,10 @@ function createCommitTokenScope<
  *     mutations + repo writes happen here. After a repository write has
  *     registered an aggregate, the callback includes that opaque token in its
  *     `commits` result. Tokens are invocation-bound: forged or stale tokens
- *     fail before harvest. `ctx` is whatever transaction handle the `scope`
+ *     fail before collection. `ctx` is whatever transaction handle the `scope`
  *     exposes (Drizzle `tx`, Prisma `tx`, Mongo session, or `undefined` for
  *     context-free scopes).
- *  2. **Still inside the transaction**, `withCommit` harvests every
+ *  2. **Still inside the transaction**, `withCommit` collects every
  *     aggregate's `pendingEvents` and writes them via `outbox.add` (so
  *     events persist atomically with the state change). Skipped when no
  *     events were recorded. Each bare domain event is composed into an
@@ -421,7 +421,7 @@ function createCommitTokenScope<
  *     resulting `CommittedDomainEvent`. The domain event itself is never
  *     stamped or copied.
  *
- *     **Harvest order.** Events are concatenated in the order
+ *     **Collection order.** Events are concatenated in the order
  *     tokens appear in the returned `commits` array, then in
  *     each aggregate's `pendingEvents` order (insertion order via
  *     `apply` / `commit` / `addDomainEvent`). So tokens for `[a, b]`
@@ -482,7 +482,7 @@ function createCommitTokenScope<
  *
  * **Duplicate registration is idempotent by reference.** Registering the same
  * instance repeatedly returns the same token, and a repeated token in
- * `commits` is harvested once. A repeat call that omits `expectedVersion`
+ * `commits` is collected once. A repeat call that omits `expectedVersion`
  * makes no OCC assertion; only a supplied value that contradicts the
  * registration-time baseline rejects. Each event lands in the outbox exactly once
  * and post-commit acknowledgement runs exactly once. Two
@@ -573,7 +573,7 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 			} finally {
 				// A callback can leak the capability into delayed work. Seal it as
 				// soon as the callback settles so a late registration fails loudly
-				// instead of being accepted after the harvest snapshot.
+				// instead of being accepted after the collection snapshot.
 				tokenScope.close();
 			}
 			try {
@@ -588,7 +588,7 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 						record.persistedVersion !== undefined &&
 						(record.version as number) <= (record.persistedVersion as number)
 					) {
-						throw new EventHarvestError(
+						throw new EventCollectionError(
 							`withCommit: aggregate ${describeAggregateIdentity(registered)} recorded events but ` +
 								`did not advance its version beyond the persisted version ` +
 								`(${String(record.persistedVersion)}). An eventful commit needs a unique ` +
@@ -600,10 +600,10 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 					const registeredType = registered.aggregateType;
 					return record.events.map((event, index) => {
 						if (!isStampedDomainEvent(event)) {
-							throw new EventHarvestError(
+							throw new EventCollectionError(
 								`withCommit: event "${event.type}" has not been recorded. ` +
 									"Call stampPendingEvents(aggregate, createStamp) in the " +
-									"application shell before persistence or outbox harvest.",
+									"application shell before persistence or outbox collection.",
 								event.type,
 							);
 						}
@@ -615,7 +615,7 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 						if (!aggregateId) missing.push("aggregateId");
 						if (!aggregateType) missing.push("aggregateType");
 						if (!aggregateId || !aggregateType) {
-							throw new EventHarvestError(
+							throw new EventCollectionError(
 								`withCommit: event "${recordedEvent.type}" is missing ${missing.join(
 									" and ",
 								)}. ` +
@@ -633,7 +633,7 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 							aggregateId !== registeredId ||
 							aggregateType !== registeredType
 						) {
-							throw new EventHarvestError(
+							throw new EventCollectionError(
 								`withCommit: event "${recordedEvent.type}" belongs to ` +
 									`${describeAggregateIdentity({ aggregateType, aggregateId })} but ` +
 									"was registered under " +
@@ -680,7 +680,7 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 					// never written.
 					for (const record of commitRecords) {
 						if (registrationDiverged(record)) {
-							throw new EventHarvestError(
+							throw new EventCollectionError(
 								`withCommit: aggregate ${describeAggregateIdentity(record.aggregate.aggregateIdentity)} ` +
 									"changed while its outbox write ran. Await every change " +
 									"inside the work callback.",

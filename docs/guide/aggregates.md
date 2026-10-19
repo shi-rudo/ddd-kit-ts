@@ -660,7 +660,7 @@ that the final version equals the stream head (see
 - a multi-step operation where you want exactly one version bump at the end
 
 When you do this, mutate state first and record events second. An
-already-persisted aggregate may not harvest events without advancing its
+already-persisted aggregate may not collect events without advancing its
 version: `withCommit` rejects that cursor collision.
 
 ::: warning Un-bumped mutations can lose concurrent writes

@@ -397,10 +397,10 @@ function trackingReasonMessage(options: AggregateTrackingErrorOptions): string {
  * A `CommitError` is the **potentially transient** post-completion
  * failure (a commit-time serialization failure is the classic case), so
  * it is the one a retrying caller should consider re-running. The
- * deterministic post-completion failure, a harvest-guard violation (an
+ * deterministic post-completion failure, a collection-guard violation (an
  * event missing `aggregateId` / `aggregateType`, or an eventful persisted
  * aggregate that did not advance its version), is a programming bug and surfaces as
- * {@link EventHarvestError} instead, which does NOT extend
+ * {@link EventCollectionError} instead, which does NOT extend
  * `InfrastructureError`, so it stays out of retry paths by construction.
  */
 export class CommitError extends InfrastructureError<"COMMIT_FAILED"> {

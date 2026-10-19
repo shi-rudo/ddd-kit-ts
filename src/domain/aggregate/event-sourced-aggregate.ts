@@ -161,7 +161,7 @@ export abstract class EventSourcedAggregate<
 		// guarantee), a present-but-foreign aggregate identity throws
 		// MisattributedEventError before anything is recorded. Without
 		// this, a misattributed event would mutate state, version, and
-		// pendingEvents and only fail later at harvest or on the next
+		// pendingEvents and only fail later at collect or on the next
 		// load, poisoning the own stream.
 		const stamped = this.attributeNewEvent(event);
 		this.assertEventIdsNotPending([stamped]);
