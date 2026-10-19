@@ -25,7 +25,7 @@ import type { PersistenceModel } from "../../persistence/repository/persistence-
 import { RetryingTransactionScope } from "../../persistence/repository/retrying-scope";
 import type { TransactionScope } from "../../persistence/repository/scope";
 import { recordingOutbox } from "../../testing/recording-outbox";
-import { unstampedAggregate } from "../../testing/unstamped-aggregate";
+import { unattributedAggregate } from "../../testing/unattributed-aggregate";
 import {
 	AggregateTrackingError,
 	CommitError,
@@ -74,8 +74,8 @@ class MockAggregate extends StateStoredAggregate<
 		this.setState(this.state, event);
 	}
 
-	/** Records a decision the shell has NOT yet stamped via recordPendingEvents. */
-	public changeWithUnrecordedEvent(orderId: string): void {
+	/** Records a decision the shell has NOT yet stamped via stampPendingEvents. */
+	public changeWithUnstampedEvent(orderId: string): void {
 		this.setState(this.state, this.createEvent("OrderCreated", { orderId }));
 	}
 }
@@ -89,7 +89,7 @@ function createMockAggregate(
 
 /** A MockOrder as an instance from another package copy. */
 function unstampedOrder(events: TestEvent[]): MockAggregate {
-	return unstampedAggregate(
+	return unattributedAggregate(
 		"x" as TestId,
 		"MockOrder",
 		events,
@@ -1061,7 +1061,7 @@ describe("UnitOfWork", () => {
 			);
 		});
 
-		it("rejects unrecorded events at write registration, before any flush", async () => {
+		it("rejects unstamped events at write registration, before any flush", async () => {
 			let flushCalls = 0;
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
@@ -1086,11 +1086,11 @@ describe("UnitOfWork", () => {
 				uow.run(async ({ repositories }) => {
 					repositories.orders.trackLoaded(aggregate);
 					// A decision the shell forgot to stamp with
-					// recordPendingEvents: the rejection must land at update()
+					// stampPendingEvents: the rejection must land at update()
 					// registration. Waiting for the harvest guard would be too
 					// late for a non-transactional event store, whose flush
 					// append is already durable by then.
-					aggregate.changeWithUnrecordedEvent("o-1");
+					aggregate.changeWithUnstampedEvent("o-1");
 					repositories.orders.update(aggregate);
 					return undefined;
 				}),

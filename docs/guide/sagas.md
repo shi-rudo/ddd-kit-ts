@@ -255,7 +255,7 @@ not the past-tense spelling by itself. The failure is hidden point-to-point
 intent behind publish/subscribe semantics.
 
 The event-sourced example uses a dedicated command outbox. The aggregate first
-accepts a private fact. `recordPendingEvents` gives that fact its recording
+accepts a private fact. `stampPendingEvents` gives that fact its recording
 identity and trace metadata. Still inside the same transaction,
 `routeEventsToCommandOutbox` maps it to the exact addressed command that must
 survive the commit:
@@ -274,7 +274,7 @@ await withCommit(
   },
   async (tx, enrollment) => {
     saga.advanceToShipping(shipmentId);
-    const recorded = recordPendingEvents(saga, () =>
+    const recorded = stampPendingEvents(saga, () =>
       domainEvents.createStamp({
         metadata: {
           correlationId: paymentReceived.metadata?.correlationId,

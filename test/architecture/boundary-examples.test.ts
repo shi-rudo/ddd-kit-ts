@@ -239,7 +239,7 @@ describe("untrusted-boundary examples", () => {
 		expect(useCase).not.toContain("result: ok(");
 		expectBefore(
 			useCase,
-			"recordPendingEvents(order, domainEvents);",
+			"stampPendingEvents(order, domainEvents);",
 			"commits: [enrollment.enrollSaved(order)]",
 		);
 		expect(useCase).toContain('outcome.result.status === "confirmed"');

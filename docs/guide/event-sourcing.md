@@ -24,7 +24,7 @@ import {
   EventSourcedAggregate,
   type DomainEvent,
   type Id,
-  type UncommittedDomainEventOf,
+  type UnstampedDomainEventOf,
 } from "@shirudo/ddd-kit";
 
 type OrderId = Id<"OrderId">;
@@ -117,7 +117,7 @@ class Order extends EventSourcedAggregate<
   }
 
   protected override validateEvent(
-    event: UncommittedDomainEventOf<OrderEvent>,
+    event: UnstampedDomainEventOf<OrderEvent>,
   ): void {
     if (event.type !== "OrderConfirmed") return;
 
@@ -133,7 +133,7 @@ class Order extends EventSourcedAggregate<
   protected readonly folds = {
     OrderCreated: (
       _state: OrderState,
-      event: UncommittedDomainEventOf<OrderCreated>,
+      event: UnstampedDomainEventOf<OrderCreated>,
     ): OrderState => ({
       customerId: event.payload.customerId,
       status: "pending",
@@ -177,10 +177,10 @@ There is no `setState(...)` helper on `EventSourcedAggregate`. `apply(...)`
 already ties the event and the state transition together.
 
 A fold must derive state from `type` and `payload` only. A live `apply(...)`
-folds the event before the shell records it, so `eventId` and
-`occurredAt` do not exist yet. Replay folds recorded events through the
+folds the event before the shell stamps it, so `eventId` and
+`occurredAt` do not exist yet. Replay folds stamped events through the
 same map, so those fields are present there at runtime. The fold
-parameter type declares the uncommitted shape to keep them out of reach, but
+parameter type declares the unstamped shape to keep them out of reach, but
 TypeScript cannot protect an `as any` cast or plain JavaScript. A fold
 that reads a stamp field puts `undefined` into live state and a value into
 every replayed instance, and the two silently diverge. When a time changes a
@@ -237,7 +237,7 @@ unit of work and replays the command from fresh history.
 
 The event store receives the recorded pending events. The outbox receives
 envelopes that reference those same immutable objects. Calling
-`recordPendingEvents` again during a retry does not generate another identity
+`stampPendingEvents` again during a retry does not generate another identity
 or timestamp.
 
 The outbox source finalizes those envelopes with the full cursor under `position`:

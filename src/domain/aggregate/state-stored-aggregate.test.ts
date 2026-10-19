@@ -686,7 +686,7 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 			}
 		}
 
-		it("stamps the aggregate identity and leaves identity and time to the shell", () => {
+		it("attributes the event to the aggregate and leaves the event id and time to the shell", () => {
 			const agg = new DecidingAggregate("r-1" as TestId, {
 				value: 0,
 				status: "inactive",
@@ -1305,7 +1305,7 @@ describe("one identity per pending fact on the state-stored path", () => {
 			{ eventId, aggregateId: "test-1", aggregateType: "IdentityAggregate" },
 		);
 
-	it("rejects a recorded event appended twice in one batch before the state moves", () => {
+	it("rejects a stamped event appended twice in one batch before the state moves", () => {
 		const aggregate = fresh();
 		const recorded = noted("fact-1");
 
@@ -1313,7 +1313,7 @@ describe("one identity per pending fact on the state-stored path", () => {
 			DuplicateEventIdError,
 		);
 		expect(() => aggregate.commitWith(recorded, recorded)).toThrow(
-			/append a recorded event once/,
+			/append a stamped event once/,
 		);
 
 		expect(aggregate.state.value).toBe(0);
@@ -1321,7 +1321,7 @@ describe("one identity per pending fact on the state-stored path", () => {
 		expect(aggregate.pendingEvents).toHaveLength(0);
 	});
 
-	it("rejects a recorded event that is already pending before the state moves", () => {
+	it("rejects a stamped event that is already pending before the state moves", () => {
 		const aggregate = fresh();
 		const recorded = noted("fact-1");
 		aggregate.commitWith(recorded);
@@ -1335,7 +1335,7 @@ describe("one identity per pending fact on the state-stored path", () => {
 		expect(aggregate.pendingEvents).toHaveLength(1);
 	});
 
-	it("rejects a recorded event that is already pending on addDomainEvent", () => {
+	it("rejects a stamped event that is already pending on addDomainEvent", () => {
 		const aggregate = fresh();
 		const recorded = noted("fact-1");
 		aggregate.record(recorded);
@@ -1350,7 +1350,7 @@ describe("one identity per pending fact on the state-stored path", () => {
 		expect(aggregate.pendingEvents).toHaveLength(1);
 	});
 
-	it("accepts recorded events with distinct ids in one batch", () => {
+	it("accepts stamped events with distinct ids in one batch", () => {
 		const aggregate = fresh();
 
 		aggregate.commitWith(noted("fact-1"), noted("fact-2"));

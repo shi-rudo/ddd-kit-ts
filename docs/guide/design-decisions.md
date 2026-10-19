@@ -150,12 +150,12 @@ last caller. A synchronous scoped helper can restore a global with
 `try/finally`, but it cannot make that global request-local across overlapping
 async work. The correct fix is to remove the shared write location.
 
-### Aggregates decide and the application records
+### Aggregates decide and the application stamps
 
-An aggregate first produces an immutable, uncommitted domain event. The value
+An aggregate first produces an immutable, unstamped domain event. The value
 is already a domain fact. The aggregate accepted the type and payload after its
 state changed. The value is not yet a technical event record. It has no
-generated identifier, recording time, or trace metadata.
+generated identifier, stamp time, or trace metadata.
 
 ```ts
 const domainEvents = createDomainEventFactory({
@@ -166,7 +166,7 @@ const domainEvents = createDomainEventFactory({
 await uow.run(async ({ repositories }) => {
   const order = await repositories.orders.getById(command.orderId);
   order.confirm();
-  recordPendingEvents(order, domainEvents, {
+  stampPendingEvents(order, domainEvents, {
     metadata: { correlationId: command.correlationId },
   });
   repositories.orders.update(order);
@@ -176,8 +176,8 @@ await uow.run(async ({ repositories }) => {
 Inside the aggregate, `createEvent(type, payload, { version })` adds the
 aggregate address and payload schema version but does not read the factory,
 clock, or Web Crypto. Equal aggregate state and command data therefore produce
-equal decisions. `recordPendingEvents` is the application-shell step that
-attaches a `DomainEventStamp` exactly once. A retry sees the already recorded
+equal decisions. `stampPendingEvents` is the application-shell step that
+attaches a `DomainEventStamp` exactly once. A retry sees the already stamped
 events and reuses their identities.
 
 Snapshot creation follows the same boundary. The application supplies a time
@@ -185,10 +185,10 @@ to `captureAggregateSnapshot(snapshotModel, aggregate, snapshotAt)`, while the
 adapter-owned model projects a plain persistence DTO. The aggregate neither
 reads a clock nor knows the stored snapshot schema.
 
-`occurredAt` is recording information, not a universal business clock. If a
+`occurredAt` is stamp information, not a universal business clock. If a
 time changes a business decision, pass it as a domain input. Put this time in
 the payload. The application can use the same instant for both roles. It then
-supplies the value as business input and as the stamp recording time. This
+supplies the value as business input and as the stamp time. This
 equality becomes an explicit decision instead of an effect of a hidden clock.
 
 ## Private process facts do not double as participant commands

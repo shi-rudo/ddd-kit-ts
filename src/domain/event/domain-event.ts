@@ -82,7 +82,7 @@ export interface EventMetadata {
  * Events are immutable and carry information about what occurred.
  *
  * **Events are PLAIN DATA objects**, constructed via `createDomainEvent`
- * (or the aggregate's `createEvent` plus application-shell recording path)
+ * (or the aggregate's `createEvent` plus application-shell stamping)
  * and deeply frozen. Class-based
  * event objects that satisfy this shape structurally via prototype
  * members are unsupported.
@@ -162,15 +162,15 @@ export interface DomainEvent<T extends string, P = void> {
 export type AnyDomainEvent = DomainEvent<string, unknown>;
 
 /**
- * A domain event accepted by an aggregate but not yet given its recording
- * identity, recording time, or delivery metadata.
+ * A domain event accepted by an aggregate but not yet given its event id,
+ * stamp time, or delivery metadata.
  *
  * The aggregate owns the event type, payload, source aggregate identity,
  * and payload schema version because those values describe the business
  * fact it produced.
  * The application shell later turns this value into a {@link DomainEvent}.
  */
-export interface UncommittedDomainEvent<T extends string, P = void> {
+export interface UnstampedDomainEvent<T extends string, P = void> {
 	readonly type: T;
 	readonly aggregateId?: string;
 	readonly aggregateType?: string;
@@ -178,22 +178,22 @@ export interface UncommittedDomainEvent<T extends string, P = void> {
 	readonly schemaVersion: number;
 }
 
-/** Upper-bound alias for any uncommitted domain-event shape. */
-export type AnyUncommittedDomainEvent = UncommittedDomainEvent<string, unknown>;
+/** Upper-bound alias for any unstamped domain-event shape. */
+export type AnyUnstampedDomainEvent = UnstampedDomainEvent<string, unknown>;
 
-/** Derives the uncommitted shape represented by a concrete event or event union. */
-export type UncommittedDomainEventOf<TEvent extends AnyDomainEvent> =
+/** Derives the unstamped shape represented by a concrete event or event union. */
+export type UnstampedDomainEventOf<TEvent extends AnyDomainEvent> =
 	TEvent extends DomainEvent<infer TType, infer TPayload>
-		? UncommittedDomainEvent<TType, TPayload>
+		? UnstampedDomainEvent<TType, TPayload>
 		: never;
 
-/** An aggregate may hold unstamped decisions and already recorded events together. */
+/** An aggregate may hold unstamped decisions and already stamped events together. */
 export type PendingDomainEvent<TEvent extends AnyDomainEvent> =
 	| TEvent
-	| UncommittedDomainEventOf<TEvent>;
+	| UnstampedDomainEventOf<TEvent>;
 
-/** Producer-owned options for an uncommitted event. */
-export interface CreateUncommittedDomainEventOptions {
+/** Producer-owned options for an unstamped event. */
+export interface CreateUnstampedDomainEventOptions {
 	readonly aggregateId?: string;
 	readonly aggregateType?: string;
 	readonly schemaVersion?: number;
@@ -236,7 +236,7 @@ export interface CreateDomainEventOptions {
 	metadata?: EventMetadata;
 }
 
-/** Technical recording data attached by the application shell. */
+/** Technical stamp data attached by the application shell. */
 export interface DomainEventStamp {
 	/** Stable identity for this event instance. */
 	readonly eventId: string;
@@ -247,7 +247,7 @@ export interface DomainEventStamp {
 }
 
 /** Full strict-construction options, including producer-owned event fields. */
-export interface CreateDomainEventFromFactsOptions extends DomainEventStamp {
+export interface CreateStampedDomainEventOptions extends DomainEventStamp {
 	readonly aggregateId?: string;
 	readonly aggregateType?: string;
 	readonly schemaVersion?: number;
@@ -284,7 +284,7 @@ export interface DomainEventFactoryOptions {
  */
 export interface DomainEventFactory {
 	/**
-	 * Creates immutable technical recording data in the application shell.
+	 * Creates immutable technical stamp data in the application shell.
 	 */
 	readonly createStamp: (
 		options?: CreateDomainEventStampOptions,
@@ -326,7 +326,7 @@ export interface DomainEventFactory {
  *   clock: () => new Date(),
  * });
  * order.confirm();
- * recordPendingEvents(order, domainEvents);
+ * stampPendingEvents(order, domainEvents);
  * ```
  */
 export function createDomainEventFactory(
@@ -404,15 +404,15 @@ function buildDomainEventFactory(
 export const defaultDomainEventFactory: DomainEventFactory =
 	buildDomainEventFactory({}, "createDomainEvent");
 
-// Every recorded event a kit constructor returns is registered here: the
+// Every stamped event a kit constructor returns is registered here: the
 // module-private tier of the recorded-event marker (nothing outside this
 // module can add to the set), so the aggregate recording paths can check
 // "minted by the constructor" directly instead of approximating it with
 // frozen-ness probes. Minted implies deeply frozen with owned payload/metadata
 // (binary buffers, which cannot be frozen, are rejected at the door).
 // WeakSet entries do not keep events alive.
-const RECORDED_EVENTS = new WeakSet<object>();
-const UNCOMMITTED_EVENTS = new WeakSet<object>();
+const STAMPED_EVENTS = new WeakSet<object>();
+const UNSTAMPED_EVENTS = new WeakSet<object>();
 const FACTORY_OWNED_EVENT_STAMPS = new WeakSet<object>();
 
 // Cooperative cross-instance tier of the mint check: a WeakSet is
@@ -424,15 +424,15 @@ const FACTORY_OWNED_EVENT_STAMPS = new WeakSet<object>();
 // The key strings are the cross-copy wire contract: every kit copy in a
 // process reads and stamps the same keys. The constant names follow the
 // shapes; the keys never change.
-const RECORDED_BRAND = Symbol.for("@shirudo/ddd-kit.mintedEvent");
-const UNCOMMITTED_BRAND = Symbol.for("@shirudo/ddd-kit.uncommittedEvent");
+const STAMPED_BRAND = Symbol.for("@shirudo/ddd-kit/stamped-event/v1");
+const UNSTAMPED_BRAND = Symbol.for("@shirudo/ddd-kit/unstamped-event/v1");
 
-function stampRecordedBrand(event: object): void {
-	stampCooperativeBrand(event, RECORDED_BRAND);
+function brandStampedEvent(event: object): void {
+	stampCooperativeBrand(event, STAMPED_BRAND);
 }
 
-function stampUncommittedBrand(event: object): void {
-	stampCooperativeBrand(event, UNCOMMITTED_BRAND);
+function brandUnstampedEvent(event: object): void {
+	stampCooperativeBrand(event, UNSTAMPED_BRAND);
 }
 
 function isFactoryOwnedDomainEventStamp(stamp: object): boolean {
@@ -440,11 +440,11 @@ function isFactoryOwnedDomainEventStamp(stamp: object): boolean {
 }
 
 /**
- * Whether `event` is a recorded domain event: it came out of
- * {@link createDomainEvent}, {@link createDomainEventFromFacts}, or
- * {@link recordDomainEvent}, so it is deeply frozen with defensively copied
- * payload and metadata. An uncommitted decision carries the other brand; see
- * {@link isUncommittedDomainEvent}. Two tiers: events of THIS
+ * Whether `event` is a stamped domain event: it came out of
+ * {@link createDomainEvent}, {@link createStampedDomainEvent}, or
+ * {@link stampDomainEvent}, so it is deeply frozen with defensively copied
+ * payload and metadata. An unstamped decision carries the other brand; see
+ * {@link isUnstampedDomainEvent}. Two tiers: events of THIS
  * loaded copy of the kit are verified through the module-private
  * WeakSet; events minted by ANOTHER copy (duplicate dependency, dual
  * CJS/ESM load) are recognized through a cooperative `Symbol.for`
@@ -452,104 +452,104 @@ function isFactoryOwnedDomainEventStamp(stamp: object): boolean {
  * accidents, not adversaries. Module-internal export for the aggregate
  * recording paths; not part of the package entries.
  */
-export function isRecordedDomainEvent(event: object): event is AnyDomainEvent {
+export function isStampedDomainEvent(event: object): event is AnyDomainEvent {
 	return (
-		RECORDED_EVENTS.has(event) || hasCooperativeBrand(event, RECORDED_BRAND)
+		STAMPED_EVENTS.has(event) || hasCooperativeBrand(event, STAMPED_BRAND)
 	);
 }
 
-/** Whether a value was created by {@link createUncommittedDomainEvent}. */
-export function isUncommittedDomainEvent(
+/** Whether a value was created by {@link createUnstampedDomainEvent}. */
+export function isUnstampedDomainEvent(
 	event: object,
-): event is AnyUncommittedDomainEvent {
+): event is AnyUnstampedDomainEvent {
 	return (
-		UNCOMMITTED_EVENTS.has(event) ||
-		hasCooperativeBrand(event, UNCOMMITTED_BRAND)
+		UNSTAMPED_EVENTS.has(event) ||
+		hasCooperativeBrand(event, UNSTAMPED_BRAND)
 	);
 }
 
 /**
- * Creates an uncommitted domain event: the event that an aggregate method
- * returns before the application shell records it. The payload and the
+ * Creates an unstamped domain event: the event that an aggregate method
+ * returns before the application shell stamps it. The payload and the
  * metadata follow the input ownership rule of {@link createDomainEvent}.
  */
-export function createUncommittedDomainEvent<T extends string>(
+export function createUnstampedDomainEvent<T extends string>(
 	type: T,
 	payload?: undefined,
-	options?: CreateUncommittedDomainEventOptions,
-): UncommittedDomainEvent<T, void>;
-export function createUncommittedDomainEvent<T extends string, P>(
+	options?: CreateUnstampedDomainEventOptions,
+): UnstampedDomainEvent<T, void>;
+export function createUnstampedDomainEvent<T extends string, P>(
 	type: T,
 	payload: P,
-	options?: CreateUncommittedDomainEventOptions,
-): UncommittedDomainEvent<T, P>;
-export function createUncommittedDomainEvent<T extends string, P>(
+	options?: CreateUnstampedDomainEventOptions,
+): UnstampedDomainEvent<T, P>;
+export function createUnstampedDomainEvent<T extends string, P>(
 	type: T,
 	payload?: P,
-	options?: CreateUncommittedDomainEventOptions,
-): UncommittedDomainEvent<T, P> {
-	return mintUncommittedDomainEvent(
+	options?: CreateUnstampedDomainEventOptions,
+): UnstampedDomainEvent<T, P> {
+	return buildUnstampedDomainEvent(
 		type,
 		payload,
 		options,
-		"createUncommittedDomainEvent",
+		"createUnstampedDomainEvent",
 	);
 }
 
 /**
- * {@link createUncommittedDomainEvent} whose errors name `operation`, the
+ * {@link createUnstampedDomainEvent} whose errors name `operation`, the
  * function that the caller called. Module-internal export; not part of the
  * package entries.
  */
-export function mintUncommittedDomainEvent<T extends string, P>(
+export function buildUnstampedDomainEvent<T extends string, P>(
 	type: T,
 	payload: P | undefined,
-	options: CreateUncommittedDomainEventOptions | undefined,
+	options: CreateUnstampedDomainEventOptions | undefined,
 	operation: string,
-): UncommittedDomainEvent<T, P> {
+): UnstampedDomainEvent<T, P> {
 	assertProducerOwnedEventFields(type, options);
-	const event: UncommittedDomainEvent<T, P> = {
+	const event: UnstampedDomainEvent<T, P> = {
 		type,
 		aggregateId: options?.aggregateId,
 		aggregateType: options?.aggregateType,
 		payload: cloneOwnedEventData(payload as P, "payload", operation),
 		schemaVersion: options?.schemaVersion ?? 1,
 	};
-	stampUncommittedBrand(event);
-	const uncommitted = deepFreeze(event) as UncommittedDomainEvent<T, P>;
-	UNCOMMITTED_EVENTS.add(uncommitted);
-	return uncommitted;
+	brandUnstampedEvent(event);
+	const unstamped = deepFreeze(event) as UnstampedDomainEvent<T, P>;
+	UNSTAMPED_EVENTS.add(unstamped);
+	return unstamped;
 }
 
-/** Brands and freezes a kit-derived copy of an uncommitted event. */
-export function adoptUncommittedDomainEvent<T extends object>(copy: T): T {
-	stampUncommittedBrand(copy);
+/** Brands and freezes a kit-derived copy of an unstamped event. */
+export function adoptUnstampedDomainEvent<T extends object>(copy: T): T {
+	brandUnstampedEvent(copy);
 	Object.freeze(copy);
-	UNCOMMITTED_EVENTS.add(copy);
+	UNSTAMPED_EVENTS.add(copy);
 	return copy;
 }
 
 /**
- * Attaches shell-owned recording data to an accepted aggregate decision.
+ * Attaches shell-owned stamp data to an accepted aggregate decision.
  *
  * The decision supplies the domain type, payload, source aggregate
  * identity, and payload schema version. The stamp supplies only event
- * identity, recording time, and trace metadata.
+ * identity, stamp time, and trace metadata.
  */
-export function recordDomainEvent<T extends string, P>(
-	event: UncommittedDomainEvent<T, P>,
+export function stampDomainEvent<T extends string, P>(
+	event: UnstampedDomainEvent<T, P>,
 	stamp: DomainEventStamp,
 ): DomainEvent<T, P> {
-	if (!isUncommittedDomainEvent(event)) {
+	if (!isUnstampedDomainEvent(event)) {
 		throw new TypeError(
-			"recordDomainEvent requires an event created by createUncommittedDomainEvent",
+			"stampDomainEvent requires an event created by createUnstampedDomainEvent",
 		);
 	}
 	if (isFactoryOwnedDomainEventStamp(stamp)) {
 		// createStamp already validated, defensively copied, and deep-froze
 		// every stamp field; re-validating or re-copying here would only pay
-		// the work twice per recorded event.
-		return mintRecordedEvent(
+		// the work twice per stamped event.
+		return buildStampedEvent(
 			event,
 			stamp.eventId,
 			stamp.occurredAt,
@@ -560,8 +560,8 @@ export function recordDomainEvent<T extends string, P>(
 	// the stamp fields before they enter the immutable event.
 	assertNonBlankEventField(stamp.eventId, "eventId", "EVENT_ID_INVALID");
 	const occurredAt = deepFreeze(copyValidEventDate(stamp.occurredAt)) as Date;
-	const metadata = ownedEventMetadata(stamp.metadata, "recordDomainEvent");
-	return mintRecordedEvent(
+	const metadata = ownedEventMetadata(stamp.metadata, "stampDomainEvent");
+	return buildStampedEvent(
 		event,
 		stamp.eventId,
 		occurredAt,
@@ -574,12 +574,12 @@ export function recordDomainEvent<T extends string, P>(
 /**
  * Single mint tail for both stamp provenances. The stamp fields arrive
  * pre-validated, copied, and frozen (by `createStamp` for factory-owned
- * stamps, by `recordDomainEvent` for caller-built stamps); the uncommitted
+ * stamps, by `stampDomainEvent` for caller-built stamps); the unstamped
  * event's payload is already defensively cloned and deeply frozen by its
  * constructor and is shared instead of paying a second deep copy per event.
  */
-function mintRecordedEvent<T extends string, P>(
-	event: UncommittedDomainEvent<T, P>,
+function buildStampedEvent<T extends string, P>(
+	event: UnstampedDomainEvent<T, P>,
 	eventId: string,
 	occurredAt: Date,
 	metadata: EventMetadata | undefined,
@@ -595,14 +595,14 @@ function mintRecordedEvent<T extends string, P>(
 		schemaVersion: event.schemaVersion,
 		metadata,
 	};
-	stampRecordedBrand(recorded);
+	brandStampedEvent(recorded);
 	Object.freeze(recorded);
-	RECORDED_EVENTS.add(recorded);
+	STAMPED_EVENTS.add(recorded);
 	return recorded;
 }
 
 /**
- * Brands, freezes, and registers a kit-derived copy of a recorded event
+ * Brands, freezes, and registers a kit-derived copy of a stamped event
  * (e.g. the copy `apply()` stamps with the aggregate identity) as recorded
  * itself.
  * The copy shares the already-frozen payload/metadata of its source,
@@ -611,10 +611,10 @@ function mintRecordedEvent<T extends string, P>(
  * instance as well as by this instance's WeakSet. Module-internal
  * export; not part of the package entries.
  */
-export function adoptRecordedDomainEvent<T extends object>(copy: T): T {
-	stampRecordedBrand(copy);
+export function adoptStampedDomainEvent<T extends object>(copy: T): T {
+	brandStampedEvent(copy);
 	Object.freeze(copy);
-	RECORDED_EVENTS.add(copy);
+	STAMPED_EVENTS.add(copy);
 	return copy;
 }
 
@@ -696,24 +696,24 @@ export function createDomainEvent<T extends string, P>(
  * and is useful when replay, migration, or a caller-owned boundary already has
  * the final identity and occurrence time.
  *
- * Aggregate behavior normally creates an {@link UncommittedDomainEvent} through
+ * Aggregate behavior normally creates an {@link UnstampedDomainEvent} through
  * its protected `createEvent` helper. The application shell later records that
  * pending fact with caller-owned time and identity.
  */
-export function createDomainEventFromFacts<T extends string>(
+export function createStampedDomainEvent<T extends string>(
 	type: T,
 	payload: undefined,
-	options: CreateDomainEventFromFactsOptions,
+	options: CreateStampedDomainEventOptions,
 ): DomainEvent<T, void>;
-export function createDomainEventFromFacts<T extends string, P>(
+export function createStampedDomainEvent<T extends string, P>(
 	type: T,
 	payload: P,
-	options: CreateDomainEventFromFactsOptions,
+	options: CreateStampedDomainEventOptions,
 ): DomainEvent<T, P>;
-export function createDomainEventFromFacts<T extends string, P>(
+export function createStampedDomainEvent<T extends string, P>(
 	type: T,
 	payload: P | undefined,
-	options: CreateDomainEventFromFactsOptions,
+	options: CreateStampedDomainEventOptions,
 ): DomainEvent<T, P> {
 	if (options?.eventId === undefined) {
 		missingExplicitEventId();
@@ -727,7 +727,7 @@ export function createDomainEventFromFacts<T extends string, P>(
 		options,
 		missingExplicitEventId,
 		missingExplicitOccurredAt,
-		"createDomainEventFromFacts",
+		"createStampedDomainEvent",
 	);
 }
 
@@ -735,7 +735,7 @@ function missingExplicitEventId(): string {
 	throw new DomainEventValidationError(
 		"EVENT_ID_REQUIRED",
 		"eventId",
-		"createDomainEventFromFacts requires an explicit eventId",
+		"createStampedDomainEvent requires an explicit eventId",
 	);
 }
 
@@ -743,7 +743,7 @@ function missingExplicitOccurredAt(): Date {
 	throw new DomainEventValidationError(
 		"EVENT_OCCURRED_AT_REQUIRED",
 		"occurredAt",
-		"createDomainEventFromFacts requires an explicit occurredAt",
+		"createStampedDomainEvent requires an explicit occurredAt",
 	);
 }
 
@@ -787,9 +787,9 @@ function mintDomainEvent<T extends string, P>(
 	// (Vernon, IDDD §8).
 	// Brand BEFORE the freeze (a frozen object rejects new properties);
 	// non-enumerable, so spreads, JSON, and equality never see it.
-	stampRecordedBrand(event);
+	brandStampedEvent(event);
 	const minted = deepFreeze(event) as DomainEvent<T, P>;
-	RECORDED_EVENTS.add(minted);
+	STAMPED_EVENTS.add(minted);
 	return minted;
 }
 
@@ -797,7 +797,7 @@ function assertProducerOwnedEventFields(
 	type: unknown,
 	options:
 		| CreateDomainEventOptions
-		| CreateUncommittedDomainEventOptions
+		| CreateUnstampedDomainEventOptions
 		| undefined,
 ): void {
 	assertNonBlankEventField(type, "type", "EVENT_TYPE_INVALID");

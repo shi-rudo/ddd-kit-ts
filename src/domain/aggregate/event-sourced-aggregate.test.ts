@@ -16,11 +16,11 @@ import {
 import {
 	type AnyDomainEvent,
 	createDomainEvent,
-	createUncommittedDomainEvent,
+	createUnstampedDomainEvent,
 	type DomainEvent,
-	isRecordedDomainEvent,
-	isUncommittedDomainEvent,
-	type UncommittedDomainEventOf,
+	isStampedDomainEvent,
+	isUnstampedDomainEvent,
+	type UnstampedDomainEventOf,
 } from "../event/domain-event";
 import type { Id } from "../identity/id";
 import type { Version } from "./aggregate";
@@ -86,9 +86,9 @@ type TestEvent =
 	| TestEventActivated
 	| TestEventDeactivated
 	| TestEventInvalid;
-type TestEventDecision = UncommittedDomainEventOf<TestEvent>;
-type TestEventCreatedDecision = UncommittedDomainEventOf<TestEventCreated>;
-type TestEventUpdatedDecision = UncommittedDomainEventOf<TestEventUpdated>;
+type TestEventDecision = UnstampedDomainEventOf<TestEvent>;
+type TestEventCreatedDecision = UnstampedDomainEventOf<TestEventCreated>;
+type TestEventUpdatedDecision = UnstampedDomainEventOf<TestEventUpdated>;
 
 class InvalidTestEventError extends DomainError<"INVALID_TEST_EVENT"> {
 	constructor(reason: string) {
@@ -598,7 +598,7 @@ describe("EventSourcedAggregate", () => {
 		it("throws UnreplayableAggregateError when the aggregate carries pending events", () => {
 			// A factory-created aggregate holds an unpersisted creation event.
 			// Replaying stored history onto the same object would mix an
-			// uncommitted decision with facts from a different stream baseline.
+			// unstamped decision with facts from a different stream baseline.
 			const aggregate = TestEventSourcedAggregate.create(
 				"test-1" as TestId,
 				10,
@@ -772,7 +772,7 @@ describe("EventSourcedAggregate", () => {
 			protected readonly folds = {
 				ItemAdded: (
 					state: NestedEsState,
-					event: UncommittedDomainEventOf<ItemAdded>,
+					event: UnstampedDomainEventOf<ItemAdded>,
 				): NestedEsState => ({
 					...state,
 					items: [...state.items, event.payload.item],
@@ -966,7 +966,7 @@ describe("replay trusts history", () => {
 		expect(agg.state.value).toBe(10);
 	});
 
-	it("apply() stamps missing aggregate identity fields, so recorded events always carry their full aggregate identity", () => {
+	it("apply() attributes events to the aggregate, so every event carries their full aggregate identity", () => {
 		// Without the stamp, an event without an aggregate identity mutates
 		// state and then fails far away: at harvest (withCommit) or on the
 		// next load (replay guard).
@@ -989,12 +989,12 @@ describe("replay trusts history", () => {
 		expect(Object.isFrozen(recorded)).toBe(true);
 	});
 
-	it("keeps a decision stamped with the aggregate identity uncommitted until the shell records it", () => {
+	it("keeps a decision attributed to the aggregate unstamped until the shell stamps it", () => {
 		const agg = new RuleTighteningAggregate("test-1" as TestId, {
 			value: 10,
 			status: "inactive",
 		});
-		const decision = createUncommittedDomainEvent("TestEventUpdated", {
+		const decision = createUnstampedDomainEvent("TestEventUpdated", {
 			newValue: 42,
 		});
 
@@ -1005,8 +1005,8 @@ describe("replay trusts history", () => {
 		expect(pending?.aggregateType).toBe("RuleTighteningAggregate");
 		expect(pending).not.toHaveProperty("eventId");
 		expect(pending).not.toHaveProperty("occurredAt");
-		expect(isUncommittedDomainEvent(pending as object)).toBe(true);
-		expect(isRecordedDomainEvent(pending as object)).toBe(false);
+		expect(isUnstampedDomainEvent(pending as object)).toBe(true);
+		expect(isStampedDomainEvent(pending as object)).toBe(false);
 	});
 
 	// createDomainEvent deep-freezes and defensively copies; a bare
@@ -1068,25 +1068,25 @@ describe("replay trusts history", () => {
 			payload: { value: { newValue: 99 }, enumerable: true, writable: true },
 		}) as TestEventUpdated;
 
-		expect(isRecordedDomainEvent(lookalike)).toBe(false);
+		expect(isStampedDomainEvent(lookalike)).toBe(false);
 		expect(() => agg.testApply(lookalike)).toThrow(UnmintedEventError);
 		expect(agg.state.value).toBe(10);
 		expect(agg.pendingEvents).toHaveLength(0);
 	});
 
-	it("rejects a lookalike that inherits an uncommitted decision through its prototype", () => {
+	it("rejects a lookalike that inherits an unstamped decision through its prototype", () => {
 		const agg = new RuleTighteningAggregate("test-1" as TestId, {
 			value: 10,
 			status: "inactive",
 		});
-		const decision = createUncommittedDomainEvent("TestEventUpdated", {
+		const decision = createUnstampedDomainEvent("TestEventUpdated", {
 			newValue: 99,
 		});
 		const lookalike = Object.create(decision, {
 			payload: { value: { newValue: 99 }, enumerable: true, writable: true },
 		}) as unknown as TestEventUpdated;
 
-		expect(isUncommittedDomainEvent(lookalike)).toBe(false);
+		expect(isUnstampedDomainEvent(lookalike)).toBe(false);
 		expect(() => agg.testApply(lookalike)).toThrow(UnmintedEventError);
 		expect(agg.state.value).toBe(10);
 		expect(agg.pendingEvents).toHaveLength(0);
@@ -1105,14 +1105,14 @@ describe("replay trusts history", () => {
 			payload: { newValue: 99 },
 			schemaVersion: 1,
 		};
-		Object.defineProperty(literal, Symbol.for("@shirudo/ddd-kit.mintedEvent"), {
+		Object.defineProperty(literal, Symbol.for("@shirudo/ddd-kit/stamped-event/v1"), {
 			value: true,
 			enumerable: false,
 			writable: false,
 			configurable: false,
 		});
 
-		expect(isRecordedDomainEvent(literal)).toBe(false);
+		expect(isStampedDomainEvent(literal)).toBe(false);
 		expect(() => agg.testApply(literal as TestEventUpdated)).toThrow(
 			UnmintedEventError,
 		);
@@ -1645,7 +1645,7 @@ describe("apply and replay bookkeeping", () => {
 		expect(agg.pendingEvents[0]).toBe(event);
 	});
 
-	it("rejects a recorded event that is already pending before anything moves", () => {
+	it("rejects a stamped event that is already pending before anything moves", () => {
 		const agg = fresh();
 		const event = createDomainEvent(
 			"TestEventUpdated",
@@ -1675,7 +1675,7 @@ describe("apply and replay bookkeeping", () => {
 		expect(recorded).not.toBe(event);
 		expect(recorded?.aggregateType).toBe("TestEventSourcedAggregate");
 		expect((recorded as TestEventUpdated).eventId).toBe("evt-partial");
-		expect(isRecordedDomainEvent(recorded as object)).toBe(true);
+		expect(isStampedDomainEvent(recorded as object)).toBe(true);
 	});
 
 	it("stamps the missing id of a partial aggregate identity that names only the type", () => {
@@ -1807,7 +1807,7 @@ describe("apply and replay bookkeeping", () => {
 			protected readonly folds = {
 				ItemAdded: (
 					state: Shelf,
-					event: UncommittedDomainEventOf<ItemAdded>,
+					event: UnstampedDomainEventOf<ItemAdded>,
 				): Shelf => ({ items: [...state.items, { sku: event.payload.sku }] }),
 			};
 		}
@@ -1895,7 +1895,7 @@ describe("a fold that writes into nested state in place", () => {
 			// instead of building a new one: the defect both tests describe.
 			ItemShelved: (
 				state: Shelf,
-				event: UncommittedDomainEventOf<ItemShelved>,
+				event: UnstampedDomainEventOf<ItemShelved>,
 			): Shelf => {
 				state.items.push(event.payload.sku);
 				return { ...state };

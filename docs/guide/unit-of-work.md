@@ -170,7 +170,7 @@ Creating and updating are intentionally different operations:
 ```ts
 const orderId = await new UnitOfWork(deps).run(async ({ repositories }) => {
   const order = Order.place(newOrderId(), customerId, items);
-  recordPendingEvents(order, domainEvents);
+  stampPendingEvents(order, domainEvents);
 
   repositories.orders.add(order);
   return order.id;
@@ -182,7 +182,7 @@ await new UnitOfWork(deps).run(async ({ repositories }) => {
   const order = await repositories.orders.getById(orderId);
 
   order.confirm();
-  recordPendingEvents(order, domainEvents);
+  stampPendingEvents(order, domainEvents);
 
   repositories.orders.update(order);
 });
@@ -334,7 +334,7 @@ await new UnitOfWork(deps).run(async ({ repositories }) => {
   const booking = await repositories.bookings.getById(bookingId);
 
   booking.requestPayment(paymentId);
-  recordPendingEvents(booking, domainEvents);
+  stampPendingEvents(booking, domainEvents);
   repositories.bookings.update(booking);
 });
 ```
@@ -353,7 +353,7 @@ await new UnitOfWork(deps).run(
   async ({ repositories, signal }) => {
     const order = await repositories.orders.getById(orderId);
     order.confirm();
-    recordPendingEvents(order, domainEvents);
+    stampPendingEvents(order, domainEvents);
 
     if (signal?.aborted) throw signal.reason;
     repositories.orders.update(order);

@@ -139,7 +139,7 @@ const confirmOrder: CommandHandler<
         const order = await repositories.orders.getById(command.orderId);
 
         order.confirm();
-        recordPendingEvents(order, domainEvents);
+        stampPendingEvents(order, domainEvents);
         repositories.orders.update(order);
         return order.id;
       },
@@ -172,7 +172,7 @@ return uow.run(async ({ repositories }) => {
   const order = await repositories.orders.getById(command.orderId);
 
   order.confirm();
-  recordPendingEvents(order, domainEvents);
+  stampPendingEvents(order, domainEvents);
   repositories.orders.update(order);
   return ok(order.id);
 });
@@ -300,7 +300,7 @@ const orderId = await uow.run(async ({ repositories }) => {
   const order = await repositories.orders.getById(id);
 
   order.confirm();
-  recordPendingEvents(order, domainEvents);
+  stampPendingEvents(order, domainEvents);
   repositories.orders.update(order);
   return order.id;
 });
@@ -317,7 +317,7 @@ calls `UnitOfWork.run` directly, catch and map errors there.
 const orderId = await uow.run(async ({ repositories }) => {
   const order = await repositories.orders.getById(id);
   order.confirm();
-  recordPendingEvents(order, domainEvents);
+  stampPendingEvents(order, domainEvents);
   repositories.orders.update(order);
   return order.id;
 });

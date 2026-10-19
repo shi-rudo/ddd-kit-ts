@@ -1,5 +1,5 @@
 import { EventSourcedAggregate } from "../../src/domain/aggregate/event-sourced-aggregate";
-import type { UncommittedDomainEventOf } from "../../src/domain/event/domain-event";
+import type { UnstampedDomainEventOf } from "../../src/domain/event/domain-event";
 import type { Id } from "../../src/domain/identity/id";
 import { deepFreeze } from "../../src/domain/value-object/value-object";
 import type {
@@ -118,7 +118,7 @@ export class RugbyMatch extends EventSourcedAggregate<
 	protected readonly folds = {
 		MatchScheduled: (
 			state: MatchState,
-			event: UncommittedDomainEventOf<MatchScheduled>,
+			event: UnstampedDomainEventOf<MatchScheduled>,
 		): MatchState => ({
 			...state,
 			homeTeam: event.payload.homeTeam,
@@ -128,7 +128,7 @@ export class RugbyMatch extends EventSourcedAggregate<
 		}),
 		TryScored: (
 			state: MatchState,
-			event: UncommittedDomainEventOf<TryScored>,
+			event: UnstampedDomainEventOf<TryScored>,
 		): MatchState => ({
 			...state,
 			homeScore:
@@ -144,7 +144,7 @@ export class RugbyMatch extends EventSourcedAggregate<
 		}),
 		ConversionScored: (
 			state: MatchState,
-			event: UncommittedDomainEventOf<ConversionScored>,
+			event: UnstampedDomainEventOf<ConversionScored>,
 		): MatchState => ({
 			...state,
 			homeScore:
@@ -162,7 +162,7 @@ export class RugbyMatch extends EventSourcedAggregate<
 		}),
 		PenaltyGoalScored: (
 			state: MatchState,
-			event: UncommittedDomainEventOf<PenaltyGoalScored>,
+			event: UnstampedDomainEventOf<PenaltyGoalScored>,
 		): MatchState => ({
 			...state,
 			homeScore:

@@ -95,13 +95,13 @@ immutable. Run one kit version per process during a cutover.
   event-sourced aggregate that calls `setState` throws
   `DirectStateMutationError`. The compiler does not flag a one-argument
   `setState` that now bumps; the guide says how to audit the call sites.
-- The aggregate decides, and the application shell records. A domain method
-  creates an uncommitted event with `createEvent`, and `recordPendingEvents`
+- The aggregate decides, and the application shell stamps. A domain method
+  creates an unstamped event with `createEvent`, and `stampPendingEvents`
   stamps the event id, the time, and the metadata before the registration.
-  `recordEvent` is gone, and `withCommit` rejects an unrecorded event. Event
+  `recordEvent` is gone, and `withCommit` rejects an unstamped event. Event
   ids and the clock come from an immutable `createDomainEventFactory` value;
   the six module setters and scoped helpers are gone. See
-  [The aggregate decides; the shell records](docs/guide/migrating-to-v3.md#the-aggregate-decides-the-shell-records).
+  [The aggregate decides; the shell stamps](docs/guide/migrating-to-v3.md#the-aggregate-decides-the-shell-stamps).
 - Events are readonly and minted. A recording path accepts only an event that
   a kit constructor minted and throws `UnmintedEventError` for a hand-built
   object. `createDomainEvent` rejects binary buffers and a `RegExp`, because a
@@ -131,7 +131,7 @@ immutable. Run one kit version per process during a cutover.
   compile. An event-sourced aggregate runs the validator on each `apply()`.
 - Replay trusts history: it runs no `validateEvent`. Both paths check the
   aggregate identity of an event. `apply()`, `setState`, and
-  `addDomainEvent` stamp missing fields and throw `MisattributedEventError`
+  `addDomainEvent` attribute the event: they fill in missing fields and throw `MisattributedEventError`
   for an event of another aggregate. Replay throws `ForeignEventError`. A fold
   that returns `undefined` throws `FoldReturnedNoStateError`, and an own
   `"__proto__"` key in a fold result or a payload throws
@@ -304,8 +304,8 @@ immutable. Run one kit version per process during a cutover.
 #### Aggregates and events
 
 - `createDomainEventFactory({ eventIdFactory, clock, source })` and the frozen
-  `defaultDomainEventFactory`. `recordPendingEvents` accepts shared stamp
-  options for a batch. `createDomainEventFromFacts` builds an event whose
+  `defaultDomainEventFactory`. `stampPendingEvents` accepts shared stamp
+  options for a batch. `createStampedDomainEvent` builds an event whose
   identity and time the caller owns.
 - `AggregateConfig.maxPendingEvents` limits the pending list with
   `PendingEventLimitExceededError`. `DuplicateEventIdError` and

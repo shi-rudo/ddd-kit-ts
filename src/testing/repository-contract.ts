@@ -21,7 +21,7 @@ import {
 	OVERLAPPING_CALLS_BOUND_MS,
 	overlappingCallsPreflight,
 	parkRunCall,
-	recordedPendingEventIds,
+	stampedPendingEventIds,
 	sortedCommittedEventIds,
 } from "./contract-assertions";
 
@@ -186,9 +186,9 @@ export function createRepositoryContractTests<
 	const pendingEventIds = (
 		events: ReadonlyArray<PendingDomainEvent<TEvent>>,
 	): string[] =>
-		recordedPendingEventIds(
+		stampedPendingEventIds(
 			events,
-			"the harness must record pending events before persistence",
+			"the harness must stamp pending events before persistence",
 		);
 
 	const tests: RepositoryContractTest[] = [

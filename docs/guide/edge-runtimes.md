@@ -90,7 +90,7 @@ it("emits deterministic event ids", () => {
   const order = makeOrder();
 
   order.confirm();
-  recordPendingEvents(order, domainEvents);
+  stampPendingEvents(order, domainEvents);
 });
 ```
 
@@ -555,7 +555,7 @@ const confirmOrder = async (command: ConfirmOrder) => {
       }
 
       order.confirm();
-      recordPendingEvents(order, domainEvents);
+      stampPendingEvents(order, domainEvents);
       await updateOrderForDirectCommit(tx, order, loaded.expectedVersion);
       return {
         result: {

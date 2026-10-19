@@ -1,7 +1,7 @@
 import { EventSourcedAggregate } from "../../src/domain/aggregate/event-sourced-aggregate";
 import type {
 	DomainEvent,
-	UncommittedDomainEventOf,
+	UnstampedDomainEventOf,
 } from "../../src/domain/event/domain-event";
 import type { Money } from "../../src/domain/value-object/money";
 import { DomainError } from "../../src/errors/kit-errors";
@@ -324,7 +324,7 @@ export class EventSourcedCheckoutSaga extends EventSourcedAggregate<
 	}
 
 	protected validateEvent(
-		event: UncommittedDomainEventOf<EventSourcedCheckoutSagaEvent>,
+		event: UnstampedDomainEventOf<EventSourcedCheckoutSagaEvent>,
 	): void {
 		const expected = EXPECTED_STEPS_BY_EVENT[event.type];
 		if (!expected.some((step) => step === this.state.step)) {
@@ -365,7 +365,7 @@ export class EventSourcedCheckoutSaga extends EventSourcedAggregate<
 	protected readonly folds = {
 		CheckoutStartedAwaitingPayment: (
 			state: EventSourcedCheckoutSagaState,
-			event: UncommittedDomainEventOf<CheckoutStartedAwaitingPayment>,
+			event: UnstampedDomainEventOf<CheckoutStartedAwaitingPayment>,
 		): EventSourcedCheckoutSagaState => ({
 			...state,
 			step: "awaiting-payment",
@@ -374,7 +374,7 @@ export class EventSourcedCheckoutSaga extends EventSourcedAggregate<
 		}),
 		CheckoutAdvancedToShipping: (
 			state: EventSourcedCheckoutSagaState,
-			event: UncommittedDomainEventOf<CheckoutAdvancedToShipping>,
+			event: UnstampedDomainEventOf<CheckoutAdvancedToShipping>,
 		): EventSourcedCheckoutSagaState => ({
 			...state,
 			step: "awaiting-shipping",
@@ -394,7 +394,7 @@ export class EventSourcedCheckoutSaga extends EventSourcedAggregate<
 		}),
 		CheckoutCancellationStartedAfterPaymentFailure: (
 			state: EventSourcedCheckoutSagaState,
-			event: UncommittedDomainEventOf<CheckoutCancellationStartedAfterPaymentFailure>,
+			event: UnstampedDomainEventOf<CheckoutCancellationStartedAfterPaymentFailure>,
 		): EventSourcedCheckoutSagaState => ({
 			...state,
 			step: "awaiting-cancellation-after-payment-failure",
@@ -402,7 +402,7 @@ export class EventSourcedCheckoutSaga extends EventSourcedAggregate<
 		}),
 		CheckoutCompensationStartedAfterShippingFailure: (
 			state: EventSourcedCheckoutSagaState,
-			event: UncommittedDomainEventOf<CheckoutCompensationStartedAfterShippingFailure>,
+			event: UnstampedDomainEventOf<CheckoutCompensationStartedAfterShippingFailure>,
 		): EventSourcedCheckoutSagaState => ({
 			...state,
 			step: "awaiting-refund-after-shipping-failure",

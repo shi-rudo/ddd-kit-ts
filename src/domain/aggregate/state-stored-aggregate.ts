@@ -36,7 +36,7 @@ export abstract class StateStoredAggregate<
 			? events
 			: [events as PendingDomainEvent<TEvent>];
 		const stamped = eventBatch.map((event) =>
-			this.stampNewEventIdentity(event),
+			this.attributeNewEvent(event),
 		);
 		this.assertEventIdsNotPending(stamped);
 		this.assertPendingEventLimit(stamped.length);

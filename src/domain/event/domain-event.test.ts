@@ -3,26 +3,26 @@ import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vite-plus/test";
 import { HostileStateKeyError } from "../../errors/kit-errors";
 import {
-	type CreateDomainEventFromFactsOptions,
+	type CreateStampedDomainEventOptions,
 	type CreateDomainEventOptions,
 	copyMetadata,
 	createDomainEvent,
 	createDomainEventFactory,
-	createDomainEventFromFacts,
-	createUncommittedDomainEvent,
+	createStampedDomainEvent,
+	createUnstampedDomainEvent,
 	type DomainEvent,
 	defaultDomainEventFactory,
 	type EventMetadata,
 	mergeMetadata,
-	recordDomainEvent,
+	stampDomainEvent,
 } from "./domain-event";
 import { DomainEventValidationError } from "./domain-event-errors";
 
 describe("DomainEvent", () => {
-	describe("uncommitted decisions", () => {
+	describe("unstamped decisions", () => {
 		it("records shell-owned identity and time without changing producer-owned data", () => {
 			const occurredAt = new Date("2027-04-05T06:07:08.000Z");
-			const decision = createUncommittedDomainEvent(
+			const decision = createUnstampedDomainEvent(
 				"CustomerRenamed",
 				{ name: "Ada" },
 				{
@@ -32,7 +32,7 @@ describe("DomainEvent", () => {
 				},
 			);
 
-			const event = recordDomainEvent(decision, {
+			const event = stampDomainEvent(decision, {
 				eventId: "event-1",
 				occurredAt,
 				metadata: { correlationId: "correlation-1" },
@@ -60,13 +60,13 @@ describe("DomainEvent", () => {
 				correlationId: "correlation-1",
 				context: { tenant: "tenant-1" },
 			};
-			const decision = createUncommittedDomainEvent("CustomerRenamed", payload);
+			const decision = createUnstampedDomainEvent("CustomerRenamed", payload);
 			const stamp = createDomainEventFactory({
 				eventIdFactory: () => "event-1",
 				clock: () => new Date("2027-04-05T06:07:08.000Z"),
 			}).createStamp({ metadata });
 
-			const event = recordDomainEvent(decision, stamp);
+			const event = stampDomainEvent(decision, stamp);
 			payload.nested.locale = "de";
 			metadata.context.tenant = "tenant-2";
 
@@ -83,7 +83,7 @@ describe("DomainEvent", () => {
 			"rejects blank event ids through every recording path",
 			(eventId) => {
 				const occurredAt = new Date("2027-04-05T06:07:08.000Z");
-				const decision = createUncommittedDomainEvent("CustomerRenamed", {
+				const decision = createUnstampedDomainEvent("CustomerRenamed", {
 					name: "Ada",
 				});
 				const factory = createDomainEventFactory({
@@ -95,7 +95,7 @@ describe("DomainEvent", () => {
 						createDomainEvent("CustomerRenamed", { name: "Ada" }, { eventId }),
 					() => factory.create("CustomerRenamed", { name: "Ada" }),
 					() =>
-						createDomainEventFromFacts(
+						createStampedDomainEvent(
 							"CustomerRenamed",
 							{ name: "Ada" },
 							{
@@ -104,7 +104,7 @@ describe("DomainEvent", () => {
 							},
 						),
 					() => factory.createStamp(),
-					() => recordDomainEvent(decision, { eventId, occurredAt }),
+					() => stampDomainEvent(decision, { eventId, occurredAt }),
 				];
 
 				for (const action of actions) {
@@ -127,7 +127,7 @@ describe("DomainEvent", () => {
 					field: "type",
 				}),
 			);
-			expect(() => createUncommittedDomainEvent(type, undefined)).toThrowError(
+			expect(() => createUnstampedDomainEvent(type, undefined)).toThrowError(
 				expect.objectContaining({
 					code: "EVENT_TYPE_INVALID",
 					field: "type",
@@ -141,9 +141,9 @@ describe("DomainEvent", () => {
 				const actions = [
 					() => createDomainEvent("Demo", undefined, { schemaVersion }),
 					() =>
-						createUncommittedDomainEvent("Demo", undefined, { schemaVersion }),
+						createUnstampedDomainEvent("Demo", undefined, { schemaVersion }),
 					() =>
-						createDomainEventFromFacts("Demo", undefined, {
+						createStampedDomainEvent("Demo", undefined, {
 							eventId: "event-1",
 							occurredAt: new Date(0),
 							schemaVersion,
@@ -171,7 +171,7 @@ describe("DomainEvent", () => {
 				}),
 			);
 			expect(() =>
-				createUncommittedDomainEvent("Demo", undefined, options),
+				createUnstampedDomainEvent("Demo", undefined, options),
 			).toThrowError(
 				expect.objectContaining({
 					code: "EVENT_AGGREGATE_IDENTITY_INVALID",
@@ -395,12 +395,12 @@ describe("DomainEvent", () => {
 				metadata: { correlationId: "corr-1" },
 			};
 
-			const first = createDomainEventFromFacts(
+			const first = createStampedDomainEvent(
 				"OrderConfirmed",
 				{ orderId: "order-1" },
 				options,
 			);
-			const second = createDomainEventFromFacts(
+			const second = createStampedDomainEvent(
 				"OrderConfirmed",
 				{ orderId: "order-1" },
 				options,
@@ -414,7 +414,7 @@ describe("DomainEvent", () => {
 
 		it("rejects an invalid explicit occurrence time", () => {
 			expect(() =>
-				createDomainEventFromFacts("OrderConfirmed", undefined, {
+				createStampedDomainEvent("OrderConfirmed", undefined, {
 					eventId: "event-1",
 					occurredAt: new Date(Number.NaN),
 				}),
@@ -425,7 +425,7 @@ describe("DomainEvent", () => {
 				}),
 			);
 			expect(() =>
-				createDomainEventFromFacts("OrderConfirmed", undefined, {
+				createStampedDomainEvent("OrderConfirmed", undefined, {
 					eventId: "event-1",
 					occurredAt: 0 as unknown as Date,
 				}),
@@ -441,9 +441,9 @@ describe("DomainEvent", () => {
 			const occurredAt = new Date("2027-04-05T06:07:08.000Z");
 
 			expect(() =>
-				createDomainEventFromFacts("OrderConfirmed", undefined, {
+				createStampedDomainEvent("OrderConfirmed", undefined, {
 					occurredAt,
-				} as CreateDomainEventFromFactsOptions),
+				} as CreateStampedDomainEventOptions),
 			).toThrowError(
 				expect.objectContaining({
 					code: "EVENT_ID_REQUIRED",
@@ -451,9 +451,9 @@ describe("DomainEvent", () => {
 				}),
 			);
 			expect(() =>
-				createDomainEventFromFacts("OrderConfirmed", undefined, {
+				createStampedDomainEvent("OrderConfirmed", undefined, {
 					eventId: "event-1",
-				} as CreateDomainEventFromFactsOptions),
+				} as CreateStampedDomainEventOptions),
 			).toThrowError(
 				expect.objectContaining({
 					code: "EVENT_OCCURRED_AT_REQUIRED",
@@ -465,11 +465,11 @@ describe("DomainEvent", () => {
 		it("requires event identity and occurrence time at compile time", () => {
 			const missingFactsMustNotCompile = (): void => {
 				// @ts-expect-error explicit construction requires eventId
-				createDomainEventFromFacts("OrderConfirmed", undefined, {
+				createStampedDomainEvent("OrderConfirmed", undefined, {
 					occurredAt: new Date(0),
 				});
 				// @ts-expect-error explicit construction requires occurredAt
-				createDomainEventFromFacts("OrderConfirmed", undefined, {
+				createStampedDomainEvent("OrderConfirmed", undefined, {
 					eventId: "event-1",
 				});
 			};
@@ -760,7 +760,7 @@ describe("DomainEvent", () => {
 				HostileStateKeyError,
 			);
 			expect(() =>
-				createUncommittedDomainEvent("OrderPlaced", hostilePayload()),
+				createUnstampedDomainEvent("OrderPlaced", hostilePayload()),
 			).toThrow(HostileStateKeyError);
 			expect(({} as Record<string, unknown>).isAdmin).toBeUndefined();
 		});
@@ -842,9 +842,9 @@ describe("createDomainEvent metadata is guarded at the source", () => {
 		).toThrow(/Event metadata/);
 	});
 
-	it("createDomainEventFromFacts rejects metadata carrying an own __proto__ key", () => {
+	it("createStampedDomainEvent rejects metadata carrying an own __proto__ key", () => {
 		const mint = () =>
-			createDomainEventFromFacts("Ticked", undefined, {
+			createStampedDomainEvent("Ticked", undefined, {
 				eventId: "event-1",
 				occurredAt: new Date("2026-01-01T00:00:00.000Z"),
 				metadata: hostileMetadata(),
@@ -862,10 +862,10 @@ describe("createDomainEvent metadata is guarded at the source", () => {
 		expect(stamp).toThrow(/Event metadata/);
 	});
 
-	it("recordDomainEvent rejects a caller-built stamp whose metadata carries an own __proto__ key", () => {
-		const decision = createUncommittedDomainEvent("Ticked", {});
+	it("stampDomainEvent rejects a caller-built stamp whose metadata carries an own __proto__ key", () => {
+		const decision = createUnstampedDomainEvent("Ticked", {});
 		const record = () =>
-			recordDomainEvent(decision, {
+			stampDomainEvent(decision, {
 				eventId: "event-1",
 				occurredAt: new Date("2026-01-01T00:00:00.000Z"),
 				metadata: hostileMetadata(),
@@ -881,9 +881,9 @@ describe("createDomainEvent metadata is guarded at the source", () => {
 			() => createDomainEvent("Ticked", {}, { metadata: null as never }),
 		],
 		[
-			"createDomainEventFromFacts",
+			"createStampedDomainEvent",
 			() =>
-				createDomainEventFromFacts("Ticked", undefined, {
+				createStampedDomainEvent("Ticked", undefined, {
 					eventId: "event-1",
 					occurredAt: new Date("2026-01-01T00:00:00.000Z"),
 					metadata: null as never,
@@ -894,9 +894,9 @@ describe("createDomainEvent metadata is guarded at the source", () => {
 			() => createDomainEventFactory().createStamp({ metadata: null as never }),
 		],
 		[
-			"recordDomainEvent",
+			"stampDomainEvent",
 			() =>
-				recordDomainEvent(createUncommittedDomainEvent("Ticked", {}), {
+				stampDomainEvent(createUnstampedDomainEvent("Ticked", {}), {
 					eventId: "event-1",
 					occurredAt: new Date("2026-01-01T00:00:00.000Z"),
 					metadata: null as never,
@@ -1001,7 +1001,7 @@ describe("a symbol is rejected at the mint", () => {
 				metadata: Symbol("tag") as unknown as EventMetadata,
 			}),
 		).toThrow(TypeError);
-		expect(() => createUncommittedDomainEvent("Tagged", Symbol("tag"))).toThrow(
+		expect(() => createUnstampedDomainEvent("Tagged", Symbol("tag"))).toThrow(
 			TypeError,
 		);
 	});
@@ -1349,7 +1349,7 @@ describe("event data that a copy or a freeze would change is rejected", () => {
 			TypeError,
 		);
 		expect(() =>
-			createUncommittedDomainEvent("Priced", { value: make() }),
+			createUnstampedDomainEvent("Priced", { value: make() }),
 		).toThrow(TypeError);
 		expect(() =>
 			createDomainEvent(

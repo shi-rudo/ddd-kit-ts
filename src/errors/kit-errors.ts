@@ -854,7 +854,7 @@ export class SnapshotCorruptedError extends InfrastructureError<"SNAPSHOT_CORRUP
  * Thrown when an event reaches the aggregate's recording paths
  * (`apply`, `setState`, `addDomainEvent`) without having been minted by
  * the kit's constructors: `createDomainEvent`,
- * `createDomainEventFromFacts`, `createUncommittedDomainEvent`, or the
+ * `createStampedDomainEvent`, `createUnstampedDomainEvent`, or the
  * aggregate `createEvent` helper. Those constructors deep-freeze the
  * event, defensively copy payload and metadata, and mark the result as
  * minted. The mark has two tiers: a
@@ -890,12 +890,12 @@ export interface ReentrantEventRecordingErrorOptions {
 }
 
 /**
- * Thrown by `recordPendingEvents` when the aggregate's pending-event list
+ * Thrown by `stampPendingEvents` when the aggregate's pending-event list
  * changes while its events are being stamped: a stamp provider that
  * directly or transitively triggers a new decision on the same aggregate
  * would otherwise have that decision silently discarded when recording
  * replaces the pending list. Recording is atomic: when this guard fires,
- * every decision (including the re-entrant one) remains unrecorded. A
+ * every decision (including the re-entrant one) remains unstamped. A
  * wiring error: deterministic bug at the call site, the remedy is keeping
  * stamp providers free of domain decisions.
  */
@@ -907,7 +907,7 @@ export class ReentrantEventRecordingError extends KitWiringError<"REENTRANT_EVEN
 			"REENTRANT_EVENT_RECORDING",
 			"Pending events of aggregate " +
 				`${describeAggregateIdentity(options.identity)} changed while ` +
-				"recordPendingEvents was stamping them. A stamp provider must not " +
+				"stampPendingEvents was stamping them. A stamp provider must not " +
 				"trigger new decisions on the aggregate being recorded; make every " +
 				"domain decision first, then record.",
 		);
@@ -928,9 +928,9 @@ export interface DuplicateEventIdErrorOptions {
 
 /**
  * Thrown when two facts of one aggregate would carry the same `eventId`.
- * Two causes, two sites: the aggregate rejects a recorded event that is
+ * Two causes, two sites: the aggregate rejects a stamped event that is
  * already pending at the append, before the state moves; and
- * `recordPendingEvents` rejects a stamp provider that returns one reused
+ * `stampPendingEvents` rejects a stamp provider that returns one reused
  * stamp (or repeats an explicit id). Either would mint two distinct facts
  * sharing one identity, and downstream idempotent consumers keyed on
  * `eventId` silently drop one of them. A wiring error: deterministic bug at
@@ -948,7 +948,7 @@ export class DuplicateEventIdError extends KitWiringError<"DUPLICATE_EVENT_ID"> 
 			"Two pending events of aggregate " +
 				`${describeAggregateIdentity(options.identity)} carry the same ` +
 				`eventId "${options.eventId}". Each fact needs its own event id: ` +
-				"append a recorded event once, and return a fresh stamp per " +
+				"append a stamped event once, and return a fresh stamp per " +
 				"decision from the stamp provider.",
 		);
 		this.identity = detachAggregateIdentity(options.identity);

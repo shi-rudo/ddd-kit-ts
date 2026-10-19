@@ -4,7 +4,7 @@ import { EventSourcedAggregate } from "../../domain/aggregate/event-sourced-aggr
 import {
 	createDomainEvent,
 	type DomainEvent,
-	type UncommittedDomainEventOf,
+	type UnstampedDomainEventOf,
 } from "../../domain/event/domain-event";
 import { SnapshotTimeValidationError } from "../../domain/event/domain-event-errors";
 import type { Id } from "../../domain/identity/id";
@@ -569,7 +569,7 @@ describe("adapter-owned snapshot models", () => {
 			protected readonly folds = {
 				Incremented: (
 					state: { readonly value: number },
-					event: UncommittedDomainEventOf<Incremented>,
+					event: UnstampedDomainEventOf<Incremented>,
 				) => ({ value: state.value + event.payload.by }),
 			};
 		}

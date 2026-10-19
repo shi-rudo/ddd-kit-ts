@@ -130,9 +130,9 @@ export type {
 export {
 	type DomainEventStampFactory,
 	type DomainEventStampProvider,
-	recordPendingEvents,
+	stampPendingEvents,
 	type SharedDomainEventStampOptions,
-} from "./application/unit-of-work/record-pending-events";
+} from "./application/unit-of-work/stamp-pending-events";
 export {
 	type AggregateWriteRegistration,
 	type AppendOnlyWriteRegistration,
@@ -189,15 +189,15 @@ export {
 // Domain events
 export {
 	type AnyDomainEvent,
-	type AnyUncommittedDomainEvent,
+	type AnyUnstampedDomainEvent,
 	type ClockFactory,
-	type CreateDomainEventFromFactsOptions,
+	type CreateStampedDomainEventOptions,
 	type CreateDomainEventOptions,
 	type CreateDomainEventStampOptions,
 	copyMetadata,
 	createDomainEvent,
 	createDomainEventFactory,
-	createDomainEventFromFacts,
+	createStampedDomainEvent,
 	type DomainEvent,
 	type DomainEventFactory,
 	type DomainEventFactoryOptions,
@@ -207,8 +207,8 @@ export {
 	type EventMetadata,
 	mergeMetadata,
 	type PendingDomainEvent,
-	type UncommittedDomainEvent,
-	type UncommittedDomainEventOf,
+	type UnstampedDomainEvent,
+	type UnstampedDomainEventOf,
 } from "./domain/event/domain-event";
 export {
 	type DomainEventValidationCode,

@@ -111,7 +111,7 @@ That example is deliberately small, but it shows the core shape:
 - The domain throws an error when an invariant is broken.
 - `setState(...)` changes the state and records the event together.
 - `createEvent(...)` captures the immutable domain decision and aggregate source.
-- The application shell adds event identity, recording time, and trace metadata.
+- The application shell adds event identity, stamp time, and trace metadata.
 - Persistence stays outside the aggregate.
 
 In production, a repository and `withCommit` or `UnitOfWork` persist the state,

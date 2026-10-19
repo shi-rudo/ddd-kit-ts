@@ -213,7 +213,7 @@ const concreteCases: ReadonlyArray<{
 	},
 	{
 		error: () =>
-			new UnmanagedInstanceError("recordPendingEvents", "aggregate", "order-1"),
+			new UnmanagedInstanceError("stampPendingEvents", "aggregate", "order-1"),
 		code: "UNMANAGED_INSTANCE",
 		category: "WIRING",
 		retryable: false,
@@ -417,13 +417,13 @@ describe("kit errors are StructuredErrors (code = name = the one identifier)", (
 
 	it("UnmanagedInstanceError appends the registry detail when given one", () => {
 		const withDetail = new UnmanagedInstanceError(
-			"recordPendingEvents",
+			"stampPendingEvents",
 			"aggregate",
 			"order-1",
 			"The registry is private.",
 		);
 		const withoutDetail = new UnmanagedInstanceError(
-			"recordPendingEvents",
+			"stampPendingEvents",
 			"aggregate",
 			"order-1",
 		);

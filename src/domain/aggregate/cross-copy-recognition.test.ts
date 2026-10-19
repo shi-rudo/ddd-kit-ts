@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
 	createDomainEvent,
 	type DomainEvent,
-	isRecordedDomainEvent,
-	type UncommittedDomainEventOf,
+	isStampedDomainEvent,
+	type UnstampedDomainEventOf,
 } from "../event/domain-event";
 import type { Id } from "../identity/id";
 import { EventSourcedAggregate } from "./event-sourced-aggregate";
@@ -45,7 +45,7 @@ class ApplyingAggregate extends EventSourcedAggregate<
 	protected readonly folds = {
 		ValueUpdated: (
 			state: TestState,
-			event: UncommittedDomainEventOf<ValueUpdated>,
+			event: UnstampedDomainEventOf<ValueUpdated>,
 		): TestState => ({ ...state, value: event.payload.newValue }),
 	};
 }
@@ -87,9 +87,9 @@ describe("recognition across package copies", () => {
 
 		vi.resetModules();
 		const secondCopy = await import("../event/domain-event");
-		expect(secondCopy.isRecordedDomainEvent).not.toBe(isRecordedDomainEvent);
+		expect(secondCopy.isStampedDomainEvent).not.toBe(isStampedDomainEvent);
 
-		expect(secondCopy.isRecordedDomainEvent(stamped as ValueUpdated)).toBe(
+		expect(secondCopy.isStampedDomainEvent(stamped as ValueUpdated)).toBe(
 			true,
 		);
 	});

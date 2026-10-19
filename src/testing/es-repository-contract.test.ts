@@ -14,8 +14,8 @@ import { EventSourcedAggregate } from "../domain/aggregate/event-sourced-aggrega
 import {
 	createDomainEvent,
 	type DomainEvent,
-	isRecordedDomainEvent,
-	type UncommittedDomainEventOf,
+	isStampedDomainEvent,
+	type UnstampedDomainEventOf,
 } from "../domain/event/domain-event";
 import type { Id } from "../domain/identity/id";
 import {
@@ -154,15 +154,15 @@ class ContractEsOrder extends EventSourcedAggregate<
 	protected readonly folds = {
 		EsOrderCreated: (
 			state: EsOrderState,
-			event: UncommittedDomainEventOf<EsOrderCreated>,
+			event: UnstampedDomainEventOf<EsOrderCreated>,
 		): EsOrderState => ({ ...state, name: event.payload.name }),
 		EsOrderRenamed: (
 			state: EsOrderState,
-			event: UncommittedDomainEventOf<EsOrderRenamed>,
+			event: UnstampedDomainEventOf<EsOrderRenamed>,
 		): EsOrderState => ({ ...state, name: event.payload.name }),
 		EsItemAdded: (
 			state: EsOrderState,
-			event: UncommittedDomainEventOf<EsItemAdded>,
+			event: UnstampedDomainEventOf<EsItemAdded>,
 		): EsOrderState => ({
 			...state,
 			items: [...state.items, event.payload.item],
@@ -470,8 +470,8 @@ function flushEsOrder(
 			actualVersion: stream.length,
 		});
 	}
-	if (!write.events.every(isRecordedDomainEvent)) {
-		throw new Error("repository received an unrecorded domain event");
+	if (!write.events.every(isStampedDomainEvent)) {
+		throw new Error("repository received an unstamped domain event");
 	}
 	if (write.events.length === 0) return;
 	transaction.mutated = true;

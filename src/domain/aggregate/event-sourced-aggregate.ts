@@ -16,7 +16,7 @@ import {
 import type {
 	AnyDomainEvent,
 	PendingDomainEvent,
-	UncommittedDomainEventOf,
+	UnstampedDomainEventOf,
 } from "../event/domain-event";
 import type { Id } from "../identity/id";
 import type { ReplayableAggregate, Version } from "./aggregate";
@@ -113,7 +113,7 @@ export abstract class EventSourcedAggregate<
 	 * the read boundary (see the event-upcasting guide) so the folds
 	 * always receive the current event shape.
 	 */
-	protected validateEvent(_event: UncommittedDomainEventOf<TEvent>): void {}
+	protected validateEvent(_event: UnstampedDomainEventOf<TEvent>): void {}
 
 	/**
 	 * Always throws {@link DirectStateMutationError}. An event-sourced
@@ -163,7 +163,7 @@ export abstract class EventSourcedAggregate<
 		// this, a misattributed event would mutate state, version, and
 		// pendingEvents and only fail later at harvest or on the next
 		// load, poisoning the own stream.
-		const stamped = this.stampNewEventIdentity(event);
+		const stamped = this.attributeNewEvent(event);
 		this.assertEventIdsNotPending([stamped]);
 		this.assertPendingEventLimit(1);
 		// Both gates run here, not in fold: apply checks only new facts
@@ -175,7 +175,7 @@ export abstract class EventSourcedAggregate<
 		// state, so a rejected result stays frozen. The hostile own-key
 		// guard runs on every new fact; replay runs it once on the final
 		// state. The event was stamped above, so it is appended as is.
-		this.validateEvent(stamped as UncommittedDomainEventOf<TEvent>);
+		this.validateEvent(stamped as UnstampedDomainEventOf<TEvent>);
 		const next = freezeEntityState(this, this.fold(stamped));
 		// A hostile row can reach the fold through the payload or its own
 		// construction; the guard runs at the same depth and on the same
@@ -212,7 +212,7 @@ export abstract class EventSourcedAggregate<
 	 * stream corruption) after the all-or-nothing rollback. History
 	 * events without the optional aggregate identity fields pass unchecked (the
 	 * fields are optional on the event shape); NEW events are covered
-	 * by the stricter `stampNewEventIdentity` on the apply path.
+	 * by the stricter `attributeNewEvent` on the apply path.
 	 */
 	private assertReplayedEventBelongsHere(event: TEvent): void {
 		const idMismatch =
@@ -232,7 +232,7 @@ export abstract class EventSourcedAggregate<
 		}
 	}
 
-	private fold(event: TEvent | UncommittedDomainEventOf<TEvent>): TState {
+	private fold(event: TEvent | UnstampedDomainEventOf<TEvent>): TState {
 		// Own-key guard: the folds map is an object literal, so a plain
 		// property get for event.type === "toString" / "constructor" /
 		// "__proto__" (a corrupt or adversarial stream row) would resolve
@@ -240,7 +240,7 @@ export abstract class EventSourcedAggregate<
 		const fold = Object.hasOwn(this.folds, event.type)
 			? (this.folds[event.type as keyof typeof this.folds] as Fold<
 					TState,
-					TEvent | UncommittedDomainEventOf<TEvent>
+					TEvent | UnstampedDomainEventOf<TEvent>
 				>)
 			: undefined;
 		if (!fold) {
@@ -339,9 +339,9 @@ export abstract class EventSourcedAggregate<
 	 * state as `null` or as a status field, never as `undefined`.
 	 *
 	 * A fold MUST derive state from `type` and `payload` only. The
-	 * parameter is typed as the uncommitted shape because a live `apply()`
-	 * folds the event BEFORE the shell records it: `eventId` and
-	 * `occurredAt` do not exist yet. Replay folds recorded events
+	 * parameter is typed as the unstamped shape because a live `apply()`
+	 * folds the event BEFORE the shell stamps it: `eventId` and
+	 * `occurredAt` do not exist yet. Replay folds stamped events
 	 * through the same map, so those fields ARE present at runtime
 	 * there. A fold that reads them through an escape hatch (`as any`,
 	 * plain JavaScript) sees `undefined` live and a value on replay,
@@ -351,7 +351,7 @@ export abstract class EventSourcedAggregate<
 	protected abstract readonly folds: {
 		[K in TEvent["type"]]: Fold<
 			TState,
-			UncommittedDomainEventOf<Extract<TEvent, { type: K }>>
+			UnstampedDomainEventOf<Extract<TEvent, { type: K }>>
 		>;
 	};
 }

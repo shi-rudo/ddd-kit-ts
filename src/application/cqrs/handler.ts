@@ -5,7 +5,7 @@ import {
 } from "../../domain/aggregate/pending-event-lifecycle";
 import {
 	type AnyDomainEvent,
-	isRecordedDomainEvent,
+	isStampedDomainEvent,
 	type PendingDomainEvent,
 } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
@@ -283,10 +283,10 @@ function createCommitTokenScope<
 		// flush, and a non-transactional event store would already have
 		// appended the unstamped batch durably.
 		for (const event of events) {
-			if (!isRecordedDomainEvent(event)) {
+			if (!isStampedDomainEvent(event)) {
 				throw new EventHarvestError(
 					`withCommit: event "${(event as { readonly type: string }).type}" ` +
-						"has not been recorded. Call recordPendingEvents(aggregate, " +
+						"has not been recorded. Call stampPendingEvents(aggregate, " +
 						"createStamp) in the application shell before persistence or " +
 						"outbox harvest.",
 					(event as { readonly type: string }).type,
@@ -599,10 +599,10 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 					const enrolledId = enrolled.aggregateId;
 					const enrolledType = enrolled.aggregateType;
 					return record.events.map((event, index) => {
-						if (!isRecordedDomainEvent(event)) {
+						if (!isStampedDomainEvent(event)) {
 							throw new EventHarvestError(
 								`withCommit: event "${event.type}" has not been recorded. ` +
-									"Call recordPendingEvents(aggregate, createStamp) in the " +
+									"Call stampPendingEvents(aggregate, createStamp) in the " +
 									"application shell before persistence or outbox harvest.",
 								event.type,
 							);
@@ -636,7 +636,7 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 									"was enrolled under " +
 									`${describeAggregateIdentity({ aggregateType: enrolledType, aggregateId: enrolledId })}. ` +
 									"The aggregate base " +
-									"classes stamp the aggregate identity on every recording path; an " +
+									"classes attribute every event to the aggregate on every recording path; an " +
 									"instance from another package copy must stamp it the " +
 									"same way.",
 								recordedEvent.type,

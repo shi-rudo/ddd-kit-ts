@@ -73,7 +73,7 @@ They are a short-lived queue owned by the aggregate until `UnitOfWork`
 harvests and acknowledges the exact registered batch through an internal
 capability.
 
-Review signal: application code can call `recordPendingEvents`. It must not
+Review signal: application code can call `stampPendingEvents`. It must not
 persist a manually read `pendingEvents` array. Repository `flush` receives the
 immutable batch as `write.events`.
 
@@ -86,7 +86,7 @@ decision first and then register its lifecycle explicitly:
 await uow.run(async ({ repositories }) => {
   const order = await repositories.orders.getById(orderId);
   order.confirm();
-  recordPendingEvents(order, domainEvents);
+  stampPendingEvents(order, domainEvents);
   repositories.orders.update(order);
 });
 ```
@@ -323,7 +323,7 @@ const domainEvents = createDomainEventFactory({
 
 const order = makeOrder();
 order.confirm();
-const events = recordPendingEvents(order, domainEvents);
+const events = stampPendingEvents(order, domainEvents);
 ```
 
 No reset is needed, and awaited code keeps using the same value because nothing

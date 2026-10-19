@@ -22,7 +22,7 @@ The main path looks like this:
 ```ts
 import {
   InMemoryOutbox,
-  recordPendingEvents,
+  stampPendingEvents,
   UnitOfWork,
 } from "@shirudo/ddd-kit";
 
@@ -36,7 +36,7 @@ const orderId = await new UnitOfWork({
   const order = await repositories.orders.getById(id);
 
   order.confirm();
-  recordPendingEvents(order, domainEvents);
+  stampPendingEvents(order, domainEvents);
   repositories.orders.update(order);
   return order.id;
 });
@@ -150,7 +150,7 @@ await uow.run(async ({ repositories }) => {
   const order = await repositories.orders.getById(orderId);
 
   order.confirm();
-  recordPendingEvents(order, domainEvents);
+  stampPendingEvents(order, domainEvents);
   repositories.orders.update(order);
   return order.id;
 });

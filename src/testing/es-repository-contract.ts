@@ -26,7 +26,7 @@ import {
 	OVERLAPPING_CALLS_BOUND_MS,
 	overlappingCallsPreflight,
 	parkRunCall,
-	recordedPendingEventIds,
+	stampedPendingEventIds,
 	sortedCommittedEventIds,
 } from "./contract-assertions";
 
@@ -132,7 +132,7 @@ export function createEsRepositoryContractTests<
 	const recordedIds = (
 		events: ReadonlyArray<PendingDomainEvent<TEvent>>,
 	): string[] =>
-		recordedPendingEventIds(
+		stampedPendingEventIds(
 			events,
 			"pending events must be recorded before flush",
 		);
@@ -291,7 +291,7 @@ export function createEsRepositoryContractTests<
 				assertEqual(
 					reloaded.pendingEvents.length,
 					0,
-					"replay must not re-record historical events",
+					"replay must not re-stamp historical events",
 				);
 				if (snapshotState) {
 					assert(

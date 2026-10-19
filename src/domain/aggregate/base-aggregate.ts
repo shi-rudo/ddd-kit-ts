@@ -12,16 +12,16 @@ import { assertPositiveSafeInteger } from "../../internal/validate";
 import { Entity, type EntityConfig } from "../entity/entity";
 import {
 	type AnyDomainEvent,
-	type AnyUncommittedDomainEvent,
-	adoptRecordedDomainEvent,
-	adoptUncommittedDomainEvent,
-	type CreateUncommittedDomainEventOptions,
-	isRecordedDomainEvent,
-	isUncommittedDomainEvent,
-	mintUncommittedDomainEvent,
+	type AnyUnstampedDomainEvent,
+	adoptStampedDomainEvent,
+	adoptUnstampedDomainEvent,
+	type CreateUnstampedDomainEventOptions,
+	isStampedDomainEvent,
+	isUnstampedDomainEvent,
+	buildUnstampedDomainEvent,
 	type PendingDomainEvent,
-	recordDomainEvent,
-	type UncommittedDomainEventOf,
+	stampDomainEvent,
+	type UnstampedDomainEventOf,
 } from "../event/domain-event";
 import type { Id } from "../identity/id";
 import { type Aggregate, toVersion, type Version } from "./aggregate";
@@ -54,8 +54,8 @@ export interface AggregateConfig<TState = unknown>
  * tracking, the kit-internal post-commit acknowledgement capability,
  * the `markReconstituted` post-load marker, and the `createEvent` helper
  * that auto-injects `aggregateId` + `aggregateType` on every event the
- * aggregate emits. The application shell records the pending decisions
- * with `recordPendingEvents` before persistence.
+ * aggregate emits. The application shell stamps the pending decisions
+ * with `stampPendingEvents` before persistence.
  *
  * Consumers do NOT extend this class directly; extend
  * `StateStoredAggregate` for state-stored aggregates or
@@ -170,15 +170,15 @@ export abstract class BaseAggregate<
 	}
 
 	/**
-	 * Stamps every uncommitted decision in the pending list with identity
-	 * and time from `createStamp`, passes an already recorded event through,
+	 * Stamps every unstamped decision in the pending list with identity
+	 * and time from `createStamp`, passes an already stamped event through,
 	 * and replaces the list atomically. Three guards run before the
 	 * assignment: an event that no kit constructor minted is rejected
 	 * ({@link UnmintedEventError}); a stamp provider that recorded a new
 	 * decision on this aggregate mid-map is rejected
 	 * ({@link ReentrantEventRecordingError}); and two decisions that
 	 * received one eventId are rejected ({@link DuplicateEventIdError}).
-	 * When a guard fires, every decision stays unrecorded.
+	 * When a guard fires, every decision stays unstamped.
 	 */
 	private recordPendingDecisions(
 		createStamp: PendingEventStampFactory,
@@ -186,12 +186,12 @@ export abstract class BaseAggregate<
 		const stamped = this._pendingEvents;
 		const stampedCount = stamped.length;
 		const recorded: TEvent[] = stamped.map((event, index) => {
-			const candidate = event as AnyDomainEvent | AnyUncommittedDomainEvent;
-			if (isRecordedDomainEvent(candidate)) return candidate as TEvent;
-			if (!isUncommittedDomainEvent(candidate)) {
+			const candidate = event as AnyDomainEvent | AnyUnstampedDomainEvent;
+			if (isStampedDomainEvent(candidate)) return candidate as TEvent;
+			if (!isUnstampedDomainEvent(candidate)) {
 				throw new UnmintedEventError((event as { readonly type: string }).type);
 			}
-			return recordDomainEvent(
+			return stampDomainEvent(
 				candidate,
 				createStamp(candidate, index),
 			) as TEvent;
@@ -359,7 +359,7 @@ export abstract class BaseAggregate<
 	 * stamped from this aggregate, and an aggregate identity that names another
 	 * aggregate throws {@link MisattributedEventError} before anything is
 	 * recorded. Each append is one fact. A decision appended twice becomes
-	 * two facts with distinct ids. A recorded event that is already pending
+	 * two facts with distinct ids. A stamped event that is already pending
 	 * throws {@link DuplicateEventIdError}, and a list at `maxPendingEvents`
 	 * throws {@link PendingEventLimitExceededError}, before anything is
 	 * recorded. Prefer the higher-level `StateStoredAggregate.setState()`
@@ -372,7 +372,7 @@ export abstract class BaseAggregate<
 	 * application shell rejects it; use `setState(currentState, event)`.
 	 */
 	protected addDomainEvent(event: PendingDomainEvent<TEvent>): void {
-		const stamped = this.stampNewEventIdentity(event);
+		const stamped = this.attributeNewEvent(event);
 		this.assertEventIdsNotPending([stamped]);
 		this.assertPendingEventLimit(1);
 		this.appendStampedEvent(stamped);
@@ -380,7 +380,7 @@ export abstract class BaseAggregate<
 
 	/**
 	 * One identity per fact, checked before the change becomes observable:
-	 * a recorded event whose `eventId` is already pending, or appears twice
+	 * a stamped event whose `eventId` is already pending, or appears twice
 	 * in one batch, throws {@link DuplicateEventIdError}. A decision has no
 	 * `eventId` yet, so a stamp provider that reuses one is caught at
 	 * recording instead.
@@ -390,10 +390,10 @@ export abstract class BaseAggregate<
 	): void {
 		const pendingIds = new Set<string>();
 		for (const pending of this._pendingEvents) {
-			if (isRecordedDomainEvent(pending)) pendingIds.add(pending.eventId);
+			if (isStampedDomainEvent(pending)) pendingIds.add(pending.eventId);
 		}
 		for (const event of batch) {
-			if (!isRecordedDomainEvent(event)) continue;
+			if (!isStampedDomainEvent(event)) continue;
 			if (pendingIds.has(event.eventId)) {
 				throw new DuplicateEventIdError({
 					identity: this.aggregateIdentity,
@@ -425,7 +425,7 @@ export abstract class BaseAggregate<
 
 	/**
 	 * Appends an event that the caller already passed through
-	 * {@link stampNewEventIdentity}, {@link assertEventIdsNotPending} and
+	 * {@link attributeNewEvent}, {@link assertEventIdsNotPending} and
 	 * {@link assertPendingEventLimit}. `setState()` and `apply()` run the
 	 * three before the state moves and append afterwards, so each gate
 	 * runs once per event.
@@ -455,7 +455,7 @@ export abstract class BaseAggregate<
 	 * shared, already deep-frozen by the constructors); a fully stamped
 	 * event is returned as is.
 	 */
-	protected stampNewEventIdentity<E extends PendingDomainEvent<TEvent>>(
+	protected attributeNewEvent<E extends PendingDomainEvent<TEvent>>(
 		event: E,
 	): E {
 		this.assertMintedEvent(event);
@@ -483,10 +483,10 @@ export abstract class BaseAggregate<
 			aggregateId: this.id,
 			aggregateType: this.aggregateType,
 		};
-		const stamped: AnyDomainEvent | AnyUncommittedDomainEvent =
-			isRecordedDomainEvent(event)
-				? adoptRecordedDomainEvent(copy)
-				: adoptUncommittedDomainEvent(copy);
+		const stamped: AnyDomainEvent | AnyUnstampedDomainEvent =
+			isStampedDomainEvent(event)
+				? adoptStampedDomainEvent(copy)
+				: adoptUnstampedDomainEvent(copy);
 		return stamped as E;
 	}
 
@@ -494,17 +494,17 @@ export abstract class BaseAggregate<
 	 * Mint gate for every recording path: only an event that a kit
 	 * constructor produced passes. The kit marks two shapes: a recorded
 	 * event carries the recorded brand (`createDomainEvent`,
-	 * `createDomainEventFromFacts`) and a decision carries the uncommitted
-	 * brand (`createUncommittedDomainEvent`, the aggregate `createEvent`
+	 * `createStampedDomainEvent`) and a decision carries the unstamped
+	 * brand (`createUnstampedDomainEvent`, the aggregate `createEvent`
 	 * helper). Either brand implies deeply frozen with defensively copied
 	 * payload and metadata, a guarantee no frozen-ness probe can establish
 	 * (a shallow-frozen literal with mutable nested data would fool it).
 	 * O(1): one brand check per shape.
 	 */
 	protected assertMintedEvent(event: PendingDomainEvent<TEvent>): void {
-		if (!isRecordedDomainEvent(event) && !isUncommittedDomainEvent(event)) {
+		if (!isStampedDomainEvent(event) && !isUnstampedDomainEvent(event)) {
 			throw new UnmintedEventError(
-				(event as AnyDomainEvent | AnyUncommittedDomainEvent).type,
+				(event as AnyDomainEvent | AnyUnstampedDomainEvent).type,
 			);
 		}
 	}
@@ -513,19 +513,19 @@ export abstract class BaseAggregate<
 	 * Creates the immutable business fact accepted by this aggregate without
 	 * reading a clock, generating an id, or attaching tracing metadata.
 	 *
-	 * The application shell records pending events after the domain operation
+	 * The application shell stamps pending events after the domain operation
 	 * and before persistence. Payload schema version stays here, next to the
-	 * concrete event producer, rather than in shell-owned recording data.
+	 * concrete event producer, rather than in shell-owned stamp data.
 	 */
 	protected createEvent<E extends TEvent>(
 		type: E["type"],
 		payload: E["payload"],
 		options?: Omit<
-			CreateUncommittedDomainEventOptions,
+			CreateUnstampedDomainEventOptions,
 			"aggregateId" | "aggregateType"
 		>,
-	): UncommittedDomainEventOf<E> {
-		return mintUncommittedDomainEvent(
+	): UnstampedDomainEventOf<E> {
+		return buildUnstampedDomainEvent(
 			type,
 			payload,
 			{
@@ -534,7 +534,7 @@ export abstract class BaseAggregate<
 				aggregateType: this.aggregateType,
 			},
 			"createEvent",
-		) as UncommittedDomainEventOf<E>;
+		) as UnstampedDomainEventOf<E>;
 	}
 }
 

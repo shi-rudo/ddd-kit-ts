@@ -4,7 +4,7 @@ import {
 	createDomainEventFactory,
 	detachState,
 	InMemoryEventStore,
-	recordPendingEvents,
+	stampPendingEvents,
 	StateStoredAggregate,
 } from "@shirudo/ddd-kit";
 import { addMoney, moneyOfMinor, moneyToDto } from "@shirudo/ddd-kit/money";
@@ -49,10 +49,10 @@ export async function runEdgeRuntimeSmoke(runtime) {
 
 	const order = new EdgeOrder();
 	order.confirm();
-	// The v3 flow: the aggregate produces the uncommitted decision, the
-	// application shell records it with the factory before persistence.
+	// The v3 flow: the aggregate produces the unstamped decision, the
+	// application shell stamps it with the factory before persistence.
 	const domainEvents = createDomainEventFactory();
-	recordPendingEvents(order, domainEvents);
+	stampPendingEvents(order, domainEvents);
 	const orderView = order.toView();
 	assert(orderView.status === "confirmed", "aggregate state did not change");
 	assert(orderView.version === 1, "aggregate version did not advance");

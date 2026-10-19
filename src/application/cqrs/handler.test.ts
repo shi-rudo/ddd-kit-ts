@@ -17,8 +17,8 @@ import type { EventCommitCandidate } from "../../messaging/committed-event";
 import type { EventBus } from "../../messaging/event-bus/ports";
 import type { TransactionScope } from "../../persistence/repository/scope";
 import { recordingOutbox } from "../../testing/recording-outbox";
-import { unstampedAggregate } from "../../testing/unstamped-aggregate";
-import { recordPendingEvents } from "../unit-of-work/record-pending-events";
+import { unattributedAggregate } from "../../testing/unattributed-aggregate";
+import { stampPendingEvents } from "../unit-of-work/stamp-pending-events";
 import {
 	type AggregateCommitToken,
 	type CommitEnrollment,
@@ -117,7 +117,7 @@ function stamped(
 function unstampedOrder(
 	events: ReadonlyArray<TestEvent>,
 ): Aggregate<TestId, TestEvent> {
-	return unstampedAggregate("agg-1" as TestId, "MockOrder", events);
+	return unattributedAggregate("agg-1" as TestId, "MockOrder", events);
 }
 
 /** The version the kit acknowledged as persisted; a discard leaves it. */
@@ -267,7 +267,7 @@ describe("withCommit", () => {
 		expect(bus.published).toEqual([]);
 	});
 
-	it("rejects an unrecorded aggregate decision before writing the outbox", async () => {
+	it("rejects an unstamped aggregate decision before writing the outbox", async () => {
 		class DecisionAggregate extends StateStoredAggregate<
 			Readonly<Record<string, never>>,
 			TestId,
@@ -336,8 +336,8 @@ describe("withCommit", () => {
 
 	it("records createEvent decisions in the shell and harvests them with their stamps", async () => {
 		// The documented producer path end to end: the aggregate mints an
-		// uncommitted decision, the shell stamps it inside the transaction,
-		// withCommit harvests the recorded event and acknowledges it.
+		// unstamped decision, the shell stamps it inside the transaction,
+		// withCommit harvests the stamped event and acknowledges it.
 		class ProducingAggregate extends StateStoredAggregate<
 			Readonly<Record<string, never>>,
 			TestId,
@@ -365,7 +365,7 @@ describe("withCommit", () => {
 		await withCommit(
 			{ outbox, scope: createMockScope() },
 			async (_ctx, enrollment) => {
-				recordPendingEvents(aggregate, factory);
+				stampPendingEvents(aggregate, factory);
 				return enrolledResult(enrollment, "ok", [aggregate]);
 			},
 		);

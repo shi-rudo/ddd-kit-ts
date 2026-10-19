@@ -5,7 +5,7 @@
  */
 
 import type { AggregateWriteIntent } from "../application/unit-of-work/persistence-contract";
-import { isRecordedDomainEvent } from "../domain/event/domain-event";
+import { isStampedDomainEvent } from "../domain/event/domain-event";
 import { runBoundedExecution } from "../internal/async/execution";
 
 /**
@@ -321,7 +321,7 @@ export function gatedContractTest(
  * the suite-specific rule the harness violated when an event is not
  * recorded.
  */
-export function recordedPendingEventIds(
+export function stampedPendingEventIds(
 	events: ReadonlyArray<unknown>,
 	requirement: string,
 ): string[] {
@@ -329,7 +329,7 @@ export function recordedPendingEventIds(
 		assert(
 			typeof event === "object" &&
 				event !== null &&
-				isRecordedDomainEvent(event),
+				isStampedDomainEvent(event),
 			requirement,
 		);
 		return (event as { readonly eventId: string }).eventId;

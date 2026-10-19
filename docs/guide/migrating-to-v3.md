@@ -62,7 +62,7 @@ await new UnitOfWork(deps).run(async ({ repositories }) => {
   const order = await repositories.orders.getById(orderId);
 
   order.confirm();
-  recordPendingEvents(order, domainEvents);
+  stampPendingEvents(order, domainEvents);
   repositories.orders.update(order);
 });
 ```
@@ -191,7 +191,7 @@ Repository writes are valid only through the application-facing facade:
 await new UnitOfWork(deps).run(async ({ repositories }) => {
   const order = Order.create(newOrderId(), customerId);
   order.addItems(items);
-  recordPendingEvents(order, domainEvents);
+  stampPendingEvents(order, domainEvents);
 
   repositories.orders.add(order);
 });
@@ -201,7 +201,7 @@ await new UnitOfWork(deps).run(async ({ repositories }) => {
 await new UnitOfWork(deps).run(async ({ repositories }) => {
   const order = await repositories.orders.getById(orderId);
   order.addItems(items);
-  recordPendingEvents(order, domainEvents);
+  stampPendingEvents(order, domainEvents);
 
   repositories.orders.update(order);
 });
@@ -596,12 +596,12 @@ cosmetic cache. `apply()` records only new facts; replay goes through
 `replayHistory`. An event-sourced aggregate that calls `setState` throws
 `DirectStateMutationError`, because its state changes only through `apply()`.
 
-#### The aggregate decides; the shell records
+#### The aggregate decides; the shell stamps
 
-A domain method creates an uncommitted event with `this.createEvent(type,
+A domain method creates an unstamped event with `this.createEvent(type,
 payload)`. The event carries the fact and the aggregate identity only. The
 application shell stamps the event id, the time, and the metadata with
-`recordPendingEvents`, before the repository registration.
+`stampPendingEvents`, before the repository registration.
 
 ```ts
 // before
@@ -617,7 +617,7 @@ confirm(): void {
 await new UnitOfWork(deps).run(async ({ repositories }) => {
   const order = await repositories.orders.getById(command.orderId);
   order.confirm();
-  recordPendingEvents(order, domainEvents, {
+  stampPendingEvents(order, domainEvents, {
     metadata: { correlationId: command.correlationId },
   });
   repositories.orders.update(order);
@@ -645,7 +645,7 @@ const event = domainEvents.create("OrderConfirmed", payload);
 ```
 
 The top-level `createDomainEvent` uses the frozen
-`defaultDomainEventFactory`. `createDomainEventFromFacts` builds an event
+`defaultDomainEventFactory`. `createStampedDomainEvent` builds an event
 whose caller owns the identity and the time, outside an aggregate.
 
 #### Events are readonly and minted
@@ -870,7 +870,7 @@ await withCommit({ scope, outbox, bus }, async (tx) => {
 await withCommit({ scope, outbox, bus }, async (tx, enrollment) => {
   const order = await orders(tx).getById(orderId);
   order.confirm();
-  recordPendingEvents(order, domainEvents);
+  stampPendingEvents(order, domainEvents);
   await orders(tx).save(order);
   return { result: order.id, commits: [enrollment.enrollSaved(order)] };
 });
