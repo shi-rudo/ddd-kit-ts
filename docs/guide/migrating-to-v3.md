@@ -785,7 +785,7 @@ events without the optional fields pass.
 Two more rules apply on both paths. A fold that returns `undefined` throws
 `FoldReturnedNoStateError`; model an absent state as `null` or as a status
 field. A fold result with an own `"__proto__"` key throws
-`HostileStateKeyError`, and `createDomainEvent` throws it for such a
+`PrototypePollutionError`, and `createDomainEvent` throws it for such a
 payload. Replay throws both errors after the rollback, instead of returning
 `Err`. Fix such folds before you load the streams that contain the events.
 

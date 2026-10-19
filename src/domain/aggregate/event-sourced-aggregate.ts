@@ -8,7 +8,7 @@ import {
 	MissingFoldError,
 } from "../../errors/kit-errors";
 import {
-	assertStateHasNoHostileOwnKey,
+	assertStateHasNoOwnProtoKey,
 	assertStateInvariant,
 	freezeEntityState,
 	storeTrustedState,
@@ -180,7 +180,7 @@ export abstract class EventSourcedAggregate<
 		// A hostile row can reach the fold through the payload or its own
 		// construction; the guard runs at the same depth and on the same
 		// shapes as setState, on the state that is about to be stored.
-		assertStateHasNoHostileOwnKey(next, "Aggregate state");
+		assertStateHasNoOwnProtoKey(next, "Aggregate state");
 		assertStateInvariant(this, next);
 		// The version write is the last step that can throw (an override of
 		// setVersion). The store and the append run after it and cannot
@@ -306,7 +306,7 @@ export abstract class EventSourcedAggregate<
 			// Only the final fold result is stored, so the hostile own-key
 			// guard runs once here instead of once per replayed event; a
 			// rejection rolls back below like any other replay failure.
-			assertStateHasNoHostileOwnKey(this.state, "Aggregate state");
+			assertStateHasNoOwnProtoKey(this.state, "Aggregate state");
 			// Inside the try on purpose: a fold that records a decision
 			// makes this throw, and the rollback below must cover that case
 			// too.

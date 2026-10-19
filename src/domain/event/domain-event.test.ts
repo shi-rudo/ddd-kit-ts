@@ -1,7 +1,7 @@
 // @ts-expect-error Node's VM exists in the test runtime; the package stays Node-type-free.
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vite-plus/test";
-import { HostileStateKeyError } from "../../errors/kit-errors";
+import { PrototypePollutionError } from "../../errors/kit-errors";
 import {
 	type CreateStampedDomainEventOptions,
 	type CreateDomainEventOptions,
@@ -742,7 +742,7 @@ describe("DomainEvent", () => {
 			// would be silent mutation. Loud rejection is the one safe
 			// contract, and the global prototype stays clean.
 			expect(() => mergeMetadata({ correlationId: "corr-1" }, hostile)).toThrow(
-				HostileStateKeyError,
+				PrototypePollutionError,
 			);
 			expect(({} as Record<string, unknown>).isAdmin).toBeUndefined();
 		});
@@ -757,11 +757,11 @@ describe("DomainEvent", () => {
 
 		it("rejects a payload carrying an own __proto__ key at mint", () => {
 			expect(() => createDomainEvent("OrderPlaced", hostilePayload())).toThrow(
-				HostileStateKeyError,
+				PrototypePollutionError,
 			);
 			expect(() =>
 				createUnstampedDomainEvent("OrderPlaced", hostilePayload()),
-			).toThrow(HostileStateKeyError);
+			).toThrow(PrototypePollutionError);
 			expect(({} as Record<string, unknown>).isAdmin).toBeUndefined();
 		});
 
@@ -773,7 +773,7 @@ describe("DomainEvent", () => {
 			});
 
 			expect(() => createDomainEvent("OrderPlaced", payload)).toThrow(
-				HostileStateKeyError,
+				PrototypePollutionError,
 			);
 		});
 
@@ -836,7 +836,7 @@ describe("createDomainEvent metadata is guarded at the source", () => {
 	it("rejects options.metadata carrying an own __proto__ key", () => {
 		expect(() =>
 			createDomainEvent("Ticked", {}, { metadata: hostileMetadata() }),
-		).toThrow(HostileStateKeyError);
+		).toThrow(PrototypePollutionError);
 		expect(() =>
 			createDomainEvent("Ticked", {}, { metadata: hostileMetadata() }),
 		).toThrow(/Event metadata/);
@@ -850,7 +850,7 @@ describe("createDomainEvent metadata is guarded at the source", () => {
 				metadata: hostileMetadata(),
 			});
 
-		expect(build).toThrow(HostileStateKeyError);
+		expect(build).toThrow(PrototypePollutionError);
 		expect(build).toThrow(/Event metadata/);
 	});
 
@@ -858,7 +858,7 @@ describe("createDomainEvent metadata is guarded at the source", () => {
 		const factory = createDomainEventFactory();
 		const stamp = () => factory.createStamp({ metadata: hostileMetadata() });
 
-		expect(stamp).toThrow(HostileStateKeyError);
+		expect(stamp).toThrow(PrototypePollutionError);
 		expect(stamp).toThrow(/Event metadata/);
 	});
 
@@ -871,7 +871,7 @@ describe("createDomainEvent metadata is guarded at the source", () => {
 				metadata: hostileMetadata(),
 			});
 
-		expect(record).toThrow(HostileStateKeyError);
+		expect(record).toThrow(PrototypePollutionError);
 		expect(record).toThrow(/Event metadata/);
 	});
 
@@ -913,7 +913,7 @@ describe("createDomainEvent metadata is guarded at the source", () => {
 			'{"correlationId":"c-1","__proto__":{"isAdmin":true}}',
 		) as Record<string, unknown>;
 
-		expect(() => copyMetadata(event, hostile)).toThrow(HostileStateKeyError);
+		expect(() => copyMetadata(event, hostile)).toThrow(PrototypePollutionError);
 	});
 
 	it("copyMetadata also rejects a hostile SOURCE event (hand-built, not via createDomainEvent)", () => {
@@ -931,7 +931,7 @@ describe("createDomainEvent metadata is guarded at the source", () => {
 		};
 
 		expect(() => copyMetadata(handBuilt as never)).toThrow(
-			HostileStateKeyError,
+			PrototypePollutionError,
 		);
 	});
 });

@@ -6,7 +6,7 @@ import {
 	DuplicateEventIdError,
 	FoldReturnedNoStateError,
 	ForeignEventError,
-	HostileStateKeyError,
+	PrototypePollutionError,
 	MisattributedEventError,
 	MissingFoldError,
 	PendingEventLimitExceededError,
@@ -1441,7 +1441,7 @@ describe("hostile own keys on the fold result", () => {
 			status: "inactive",
 		});
 
-		expect(() => agg.updateValue(1)).toThrow(HostileStateKeyError);
+		expect(() => agg.updateValue(1)).toThrow(PrototypePollutionError);
 
 		expect(agg.state).toEqual({ value: 0, status: "inactive" });
 		expect(agg.version).toBe(0);
@@ -1462,7 +1462,7 @@ describe("hostile own keys on the fold result", () => {
 					newValue: 1,
 				}) as TestEventUpdated,
 			]),
-		).toThrow(HostileStateKeyError);
+		).toThrow(PrototypePollutionError);
 
 		expect(agg.state).toEqual({ value: 0, status: "inactive" });
 		expect(agg.version).toBe(0);

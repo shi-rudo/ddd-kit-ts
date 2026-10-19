@@ -94,7 +94,7 @@ decision with `stampPendingEvents(...)` before persistence.
 Two wiring guards sit on the recording paths. An event that no kit
 constructor built throws `HandBuiltEventError` (code `HAND_BUILT_EVENT`). A
 state or payload root that carries an own `__proto__` key throws
-`HostileStateKeyError` (code `HOSTILE_STATE_KEY`). Both guard against
+`PrototypePollutionError` (code `PROTOTYPE_POLLUTION`). Both guard against
 accidents, not against code in the same process: the mint mark has a
 cooperative tier that another loaded copy of the kit can stamp, and the key
 guard looks at the root object only. Validate and strip untrusted input at

@@ -1,4 +1,4 @@
-import { assertNoHostileOwnProtoKey } from "../../errors/kit-errors";
+import { assertNoOwnProtoKey } from "../../errors/kit-errors";
 import {
 	hasCooperativeBrand,
 	applyCooperativeBrand,
@@ -927,7 +927,7 @@ function cloneOwnedEventData<T>(
 	// check runs first, so this key throws its own error whatever else is
 	// wrong with the data.
 	if (value !== null && typeof value === "object") {
-		assertNoHostileOwnProtoKey(value, `Event ${field} of ${operation}`);
+		assertNoOwnProtoKey(value, `Event ${field} of ${operation}`);
 	}
 	// The freeze rule keeps the guarantee "kit-built implies deeply
 	// frozen".
@@ -956,10 +956,10 @@ export function copyMetadata(
 	// createDomainEvent. Spread itself is safe (CreateDataProperty, never
 	// the __proto__ setter); the guard is about not CARRYING the payload.
 	if (sourceEvent.metadata !== undefined) {
-		assertNoHostileOwnProtoKey(sourceEvent.metadata, "Event metadata");
+		assertNoOwnProtoKey(sourceEvent.metadata, "Event metadata");
 	}
 	if (additionalMetadata !== undefined) {
-		assertNoHostileOwnProtoKey(additionalMetadata, "Event metadata");
+		assertNoOwnProtoKey(additionalMetadata, "Event metadata");
 	}
 	return {
 		...(sourceEvent.metadata ?? {}),
@@ -990,7 +990,7 @@ export function mergeMetadata(
 	const merged: Record<PropertyKey, unknown> = {};
 	for (const metadata of metadataObjects) {
 		if (!metadata) continue;
-		assertNoHostileOwnProtoKey(metadata, "Event metadata");
+		assertNoOwnProtoKey(metadata, "Event metadata");
 		for (const key of Reflect.ownKeys(metadata)) {
 			const descriptor = Object.getOwnPropertyDescriptor(metadata, key);
 			if (!descriptor?.enumerable) continue;

@@ -510,7 +510,7 @@ stream, so its `Err` is the `DomainError` of the aggregate itself.
 stream can be corrupt in ways the domain can name (a fold that rejects a
 payload it cannot map). Two groups of failures deliberately do NOT ride the
 `Result`. The wiring errors `MissingFoldError`, `FoldReturnedNoStateError`,
-`HostileStateKeyError`, and `UnreplayableAggregateError` throw, after the
+`PrototypePollutionError`, and `UnreplayableAggregateError` throw, after the
 rollback, because a code bug must not look like a corrupt stream.
 `HandBuiltEventError` belongs to `apply()` only: replay input comes from
 storage rows, and the kit-built check does not run on it. And an

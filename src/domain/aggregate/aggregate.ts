@@ -114,7 +114,7 @@ export interface ReplayableAggregate<
 	 *   decisions, or a fold records one
 	 * @throws MissingFoldError when no fold is declared for an event type
 	 * @throws FoldReturnedNoStateError when a fold returns `undefined`
-	 * @throws HostileStateKeyError when the folded state carries an own
+	 * @throws PrototypePollutionError when the folded state carries an own
 	 *   `__proto__` key
 	 */
 	replayHistory(history: ReadonlyArray<TEvent>): Result<void, DomainError>;

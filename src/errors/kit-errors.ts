@@ -574,15 +574,15 @@ export class InvalidCommandMessageError extends InfrastructureError<"INVALID_COM
  * input at the application edge; model genuinely arbitrary keys with a
  * `Map`, not a plain object.
  */
-export class HostileStateKeyError extends KitWiringError<"HOSTILE_STATE_KEY"> {
+export class PrototypePollutionError extends KitWiringError<"PROTOTYPE_POLLUTION"> {
 	constructor(
 		public readonly key: string,
 		subject: string = "Entity state",
 	) {
 		super(
-			"HOSTILE_STATE_KEY",
-			`${subject} carries a hostile own "${key}" key, which can never ` +
-				"be legitimate domain data. Validate and strip untrusted input " +
+			"PROTOTYPE_POLLUTION",
+			`${subject} carries an own "${key}" key, a prototype-pollution ` +
+				"payload that can never be legitimate domain data. Validate and strip untrusted input " +
 				"at the boundary, or model arbitrary keys with a Map.",
 		);
 	}
@@ -1461,12 +1461,9 @@ export class UnmanagedInstanceError extends KitWiringError<"UNMANAGED_INSTANCE">
  * helpers. One implementation so the contract cannot drift.
  * Module-internal export; not part of the package entries.
  */
-export function assertNoHostileOwnProtoKey(
-	value: object,
-	subject: string,
-): void {
+export function assertNoOwnProtoKey(value: object, subject: string): void {
 	if (Object.hasOwn(value, "__proto__")) {
-		throw new HostileStateKeyError("__proto__", subject);
+		throw new PrototypePollutionError("__proto__", subject);
 	}
 }
 
@@ -2175,7 +2172,7 @@ export type KitErrorCode =
 	| "EVENT_TYPE_INVALID"
 	| "FOLD_RETURNED_NO_STATE"
 	| "FOREIGN_EVENT"
-	| "HOSTILE_STATE_KEY"
+	| "PROTOTYPE_POLLUTION"
 	| "IDEMPOTENCY_CLAIM_LOST"
 	| "IDEMPOTENCY_COMPLETED_WITHOUT_CLAIM"
 	| "IDEMPOTENCY_IN_FLIGHT"

@@ -262,7 +262,7 @@ export {
 	type EventStreamPageReason,
 	FoldReturnedNoStateError,
 	ForeignEventError,
-	HostileStateKeyError,
+	PrototypePollutionError,
 	IdempotencyClaimLostError,
 	type IdempotencyClaimLostErrorOptions,
 	IdempotencyCompletionWithoutClaimError,

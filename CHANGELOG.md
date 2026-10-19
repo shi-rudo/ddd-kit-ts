@@ -135,7 +135,7 @@ immutable. Run one kit version per process during a cutover.
   for an event of another aggregate. Replay throws `ForeignEventError`. A fold
   that returns `undefined` throws `FoldReturnedNoStateError`, and an own
   `"__proto__"` key in a fold result or a payload throws
-  `HostileStateKeyError`. See
+  `PrototypePollutionError`. See
   [Replay trusts history, and events name their aggregate](docs/guide/migrating-to-v3.md#replay-trusts-history-and-events-name-their-aggregate).
 - The `Aggregate` interface has `aggregateIdentity`, the aggregate type and
   the id as one frozen `AggregateIdentity` value. A hand-written
@@ -471,7 +471,7 @@ immutable. Run one kit version per process during a cutover.
   failure inside the transaction as its cause and the scope's error as
   `rollbackCause`.
 - An own `"__proto__"` key in an entity state, or in event metadata passed to
-  `mergeMetadata` or `copyMetadata`, throws `HostileStateKeyError`. Before,
+  `mergeMetadata` or `copyMetadata`, throws `PrototypePollutionError`. Before,
   the state copy replaced its prototype, and the key vanished.
 - A value object accepts a nested value object again. Version 2.2.0 rejected
   it as a class instance.
