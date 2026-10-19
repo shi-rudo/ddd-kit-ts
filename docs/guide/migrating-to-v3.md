@@ -876,7 +876,7 @@ await withCommit({ scope, outbox, bus }, async (tx, registration) => {
 });
 ```
 
-For a physical removal, return `registration.registerDeleted(aggregate)`. The
+For a physical removal, return `registration.registerRemoved(aggregate)`. The
 `deleted` array is gone. Every token that the callback receives must be in
 `commits`. A `UnitOfWork` use case keeps returning its result directly.
 
@@ -1419,7 +1419,7 @@ slimmer. Replace the rc.12 names:
 | `UncommittedDomainEvent`, `AnyUncommittedDomainEvent`, `UncommittedDomainEventOf` | `UnstampedDomainEvent`, `AnyUnstampedDomainEvent`, `UnstampedDomainEventOf` |
 | protected `stampNewEventIdentity(event)` | protected `attributeNewEvent(event)` |
 | `detachState` | `copyPlainState` |
-| `CommitEnrollment`, `enrollSaved`, `enrollDeleted` | `CommitRegistration`, `registerSaved`, `registerDeleted` |
+| `CommitEnrollment`, `enrollSaved`, `enrollDeleted` | `CommitRegistration`, `registerSaved`, `registerRemoved` |
 | `UnenrolledChangesError` (code `UNENROLLED_CHANGES`) | `UnregisteredChangesError` (code `UNREGISTERED_CHANGES`) |
 | `EventHarvestError` (code `EVENT_HARVEST_FAILED`) | `EventCollectionError` (code `EVENT_COLLECTION_FAILED`) |
 | `UnmintedEventError` (code `UNMINTED_EVENT`) | `HandBuiltEventError` (code `HAND_BUILT_EVENT`) |

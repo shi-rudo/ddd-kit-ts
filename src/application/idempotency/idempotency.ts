@@ -344,11 +344,11 @@ function scopeWorkRegistration<Evt extends AnyDomainEvent>(
 				assertOpen();
 				return parent.registerSaved(aggregate);
 			},
-			registerDeleted: (
-				aggregate: Parameters<CommitRegistration<Evt>["registerDeleted"]>[0],
+			registerRemoved: (
+				aggregate: Parameters<CommitRegistration<Evt>["registerRemoved"]>[0],
 			) => {
 				assertOpen();
-				return parent.registerDeleted(aggregate);
+				return parent.registerRemoved(aggregate);
 			},
 		}),
 		close: () => {

@@ -296,7 +296,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		// Idempotent by reference, like add and update: a repeated remove of
 		// the SAME instance re-declares the same final lifecycle outcome
 		// (collection semantics; the registration layer already returns the
-		// same token for a repeat registerDeleted). The deletion-finality gate
+		// same token for a repeat registerRemoved). The deletion-finality gate
 		// stays sharp for everything else: add, update, and trackLoaded
 		// after remove, and any OTHER instance with the same id, still
 		// reject.
@@ -491,7 +491,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		expectedVersion: Version | undefined,
 	): AggregateCommitToken<Evt> {
 		this.assertOpen("repository.remove");
-		const token = this.commitRegistration.registerDeleted(aggregate, {
+		const token = this.commitRegistration.registerRemoved(aggregate, {
 			expectedVersion,
 		});
 		// One call does ALL the deletion bookkeeping: the identity-map

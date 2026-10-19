@@ -129,11 +129,11 @@ export interface CommitRegistration<Evt extends AnyDomainEvent> {
 		options?: CommitRegistrationOptions,
 	): AggregateCommitToken<Evt>;
 	/**
-	 * Register an aggregate whose row is deleted by the current transaction.
+	 * Register an aggregate whose row the current transaction removes.
 	 * Its events are collected and discarded after commit, but the saved-only
 	 * application `onPersisted` observer is not called.
 	 */
-	registerDeleted(
+	registerRemoved(
 		aggregate: Aggregate<Id<string>, Evt>,
 		options?: CommitRegistrationOptions,
 	): AggregateCommitToken<Evt>;
@@ -257,7 +257,7 @@ function createCommitTokenScope<
 				);
 			}
 			// The widened disposition is adopted only after every check passed:
-			// a rejected registerDeleted whose error the callback catches must
+			// a rejected registerRemoved whose error the callback catches must
 			// not leave a saved aggregate marked deleted, or the post-commit
 			// loop would discard instead of acknowledge.
 			if (disposition === "deleted") {
@@ -319,7 +319,7 @@ function createCommitTokenScope<
 				aggregate: Aggregate<Id<string>, Evt>,
 				options?: CommitRegistrationOptions,
 			) => register(aggregate, "saved", options),
-			registerDeleted: (
+			registerRemoved: (
 				aggregate: Aggregate<Id<string>, Evt>,
 				options?: CommitRegistrationOptions,
 			) => register(aggregate, "deleted", options),

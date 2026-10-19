@@ -136,7 +136,7 @@ function registeredResult<R>(
 		result,
 		commits: aggregates.map((aggregate) =>
 			deletedSet.has(aggregate)
-				? registration.registerDeleted(aggregate)
+				? registration.registerRemoved(aggregate)
 				: registration.registerSaved(aggregate),
 		),
 	};
@@ -2059,7 +2059,7 @@ describe("commit registration lifecycle", () => {
 			{ outbox: recordingOutbox<TestEvent>(), scope: createMockScope() },
 			async (_ctx, registration) => ({
 				result: "r",
-				commits: [registration.registerDeleted(aggregate)],
+				commits: [registration.registerRemoved(aggregate)],
 			}),
 		);
 
@@ -2086,7 +2086,7 @@ describe("commit registration lifecycle", () => {
 				// A rejected delete registration whose error the callback catches
 				// must not flip the record to deleted behind the token's back.
 				expect(() =>
-					registration.registerDeleted(aggregate, {
+					registration.registerRemoved(aggregate, {
 						expectedVersion: 99 as Version,
 					}),
 				).toThrow(/re-registered with expectedVersion/);
@@ -2137,7 +2137,7 @@ describe("commit registration lifecycle", () => {
 			withCommit(
 				{ outbox, scope: createMockScope() },
 				async (_ctx, registration) => {
-					registration.registerDeleted(aggregate);
+					registration.registerRemoved(aggregate);
 					registration.registerSaved(aggregate);
 					return { result: "r", commits: [] };
 				},

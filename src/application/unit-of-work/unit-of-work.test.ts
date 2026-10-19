@@ -2596,7 +2596,7 @@ describe("UnitOfWork", () => {
 					// A DIFFERENT instance with the same logical identity, e.g.
 					// re-created via a static factory after the delete. The
 					// instance-keyed gate cannot see it; the class+id tombstone
-					// (recorded automatically by registerDeleted) must.
+					// (recorded automatically by registerRemoved) must.
 					const resurrected = new OrderAggregate("o-1" as TestId);
 					repositories.orders.update(resurrected);
 					return undefined;
