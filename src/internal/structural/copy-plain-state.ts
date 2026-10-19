@@ -15,7 +15,7 @@ import { isMutatorShadow } from "./shadowed-mutators";
  * symbol-keyed, non-enumerable, or accessor property and an expando on a
  * built-in are dropped. A function or a symbol value throws a raw
  * `DataCloneError`. An Error, a Promise, a WeakMap, or a WeakSet cannot be
- * detached at all. A SharedArrayBuffer and a view over one keep sharing
+ * copied at all. A SharedArrayBuffer and a view over one keep sharing
  * their memory. A Proxy fails in the walk or in the clone; a failure in
  * the clone is rethrown as a `TypeError` with the cause. An error that a
  * Proxy trap throws in the walk passes unchanged, so a coded error of the
@@ -44,28 +44,31 @@ import { isMutatorShadow } from "./shadowed-mutators";
  * throws. A non-enumerable symbol key passes anywhere: it is metadata by
  * convention.
  *
- * The concrete entity uses it for a detached read DTO of a plain-data
+ * The concrete entity uses it for a read DTO of a plain-data
  * state. The snapshot model uses it for the captured DTO and the restored
  * state. A state that carries a class-based child is mapped to plain data
  * first, in the entity or in the model.
  */
-export function detachState<T>(state: T, subject = "detachState: state"): T {
-	return detach(state, subject, "clone");
+export function copyPlainState<T>(
+	state: T,
+	subject = "copyPlainState: state",
+): T {
+	return copyState(state, subject, "clone");
 }
 
 /**
- * {@link detachState} that also rejects what `deepFreeze` cannot make
+ * {@link copyPlainState} that also rejects what `deepFreeze` cannot make
  * immutable: binary data (a typed array, a DataView, an ArrayBuffer, or a
  * SharedArrayBuffer) and a RegExp. The walk rejects such a value at its
  * tag, before it reads the indices of a typed array. Kit modules only.
  */
-export function detachFreezableState<T>(state: T, subject: string): T {
-	return detach(state, subject, "freeze");
+export function copyFreezableState<T>(state: T, subject: string): T {
+	return copyState(state, subject, "freeze");
 }
 
-function detach<T>(state: T, subject: string, rule: Walk["rule"]): T {
+function copyState<T>(state: T, subject: string, rule: Walk["rule"]): T {
 	const recording = new StepRecording();
-	assertDetachable(state, "", newWalk(subject, rule, recording));
+	assertCopyable(state, "", newWalk(subject, rule, recording));
 	let copy: T;
 	try {
 		copy = structuredClone(state);
@@ -83,7 +86,7 @@ function detach<T>(state: T, subject: string, rule: Walk["rule"]): T {
 	// balance out with the content of the built-in, so this walk compares
 	// each of its steps with the step of the first walk.
 	const comparison = new StepComparison(recording, subject);
-	assertDetachable(copy, "", newWalk(subject, rule, comparison));
+	assertCopyable(copy, "", newWalk(subject, rule, comparison));
 	comparison.assertComplete();
 	return copy;
 }
@@ -211,7 +214,7 @@ function describeStep(step: Step | undefined): string {
 	return /^[AEIOU]/.test(name) ? `an ${name}` : `a ${name}`;
 }
 
-function assertDetachable(value: unknown, path: string, walk: Walk): void {
+function assertCopyable(value: unknown, path: string, walk: Walk): void {
 	if (typeof value === "function") {
 		throw new TypeError(
 			`${walk.subject}${path} is a function; map it to plain data`,
@@ -234,7 +237,7 @@ function assertDetachable(value: unknown, path: string, walk: Walk): void {
 			throwClassInstance(object, path, walk.subject);
 		}
 		step(walk, ARRAY_STEP, path);
-		assertOwnPropertiesDetachable(object, path, walk, "array");
+		assertOwnPropertiesCopyable(object, path, walk, "array");
 		return;
 	}
 
@@ -252,14 +255,14 @@ function assertDetachable(value: unknown, path: string, walk: Walk): void {
 			for (const [key, entry] of mapEntries.call(
 				object as Map<unknown, unknown>,
 			)) {
-				assertDetachable(key, `${path}<map key #${index}>`, walk);
-				assertDetachable(entry, `${path}<map value #${index}>`, walk);
+				assertCopyable(key, `${path}<map key #${index}>`, walk);
+				assertCopyable(entry, `${path}<map value #${index}>`, walk);
 				index++;
 			}
 		} else if (tag === "[object Set]") {
 			let index = 0;
 			for (const member of setValues.call(object as Set<unknown>)) {
-				assertDetachable(member, `${path}<set member #${index}>`, walk);
+				assertCopyable(member, `${path}<set member #${index}>`, walk);
 				index++;
 			}
 		} else if (
@@ -268,7 +271,7 @@ function assertDetachable(value: unknown, path: string, walk: Walk): void {
 			tag === "[object WeakSet]"
 		) {
 			throw new TypeError(
-				`${walk.subject}${path} is a ${builtInTypeName(tag)} and cannot be detached`,
+				`${walk.subject}${path} is a ${builtInTypeName(tag)} and cannot be copied`,
 			);
 		} else if (tag === "[object Error]") {
 			throw new TypeError(
@@ -279,7 +282,7 @@ function assertDetachable(value: unknown, path: string, walk: Walk): void {
 				`${walk.subject}${path} is backed by a SharedArrayBuffer and the copy would share its memory; map it to plain data`,
 			);
 		}
-		assertOwnPropertiesDetachable(object, path, walk, tag);
+		assertOwnPropertiesCopyable(object, path, walk, tag);
 		return;
 	}
 
@@ -292,7 +295,7 @@ function assertDetachable(value: unknown, path: string, walk: Walk): void {
 		throwClassInstance(object, path, walk.subject);
 	}
 	step(walk, RECORD_STEP, path);
-	assertOwnPropertiesDetachable(object, path, walk, "record");
+	assertOwnPropertiesCopyable(object, path, walk, "record");
 }
 
 /**
@@ -305,7 +308,7 @@ function assertDetachable(value: unknown, path: string, walk: Walk): void {
  * built-in is an expando. `owner` is the kind of `object`: an array, a
  * record, or the tag of a built-in.
  */
-function assertOwnPropertiesDetachable(
+function assertOwnPropertiesCopyable(
 	object: object,
 	path: string,
 	walk: Walk,
@@ -347,7 +350,7 @@ function assertOwnPropertiesDetachable(
 			);
 		}
 		step(walk, key, memberPath);
-		assertDetachable(descriptor.value, memberPath, walk);
+		assertCopyable(descriptor.value, memberPath, walk);
 	}
 }
 

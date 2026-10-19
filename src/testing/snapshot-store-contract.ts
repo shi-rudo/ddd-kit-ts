@@ -223,7 +223,7 @@ export function createSnapshotStoreContractTests(
 			}),
 		},
 		{
-			name: "loads are detached copies and saves capture the input: later mutations touch nothing",
+			name: "loads are copies and saves capture the input: later mutations touch nothing",
 			run: inEnv(async (env) => {
 				const input = snapshot(5, { total: 5, items: [{ sku: "a", qty: 1 }] });
 				await env.store.save(identity("Order", "o-1"), input);
@@ -243,7 +243,7 @@ export function createSnapshotStoreContractTests(
 				assertEqual(
 					reloaded?.state.total,
 					5,
-					"load must hand out a detached copy, never live internal state",
+					"load must hand out a copy, never live internal state",
 				);
 			}),
 		},

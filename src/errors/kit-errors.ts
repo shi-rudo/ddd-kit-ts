@@ -392,7 +392,7 @@ export class DirectStateMutationError extends KitWiringError<"DIRECT_STATE_MUTAT
 				"through apply(). Record the fact as an event and fold it in a " +
 				"handler instead of calling setState.",
 		);
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 	}
 }
 
@@ -684,7 +684,7 @@ export class UnreplayableAggregateError extends KitWiringError<"UNREPLAYABLE_AGG
 				`${options.reason}. Reconstitute on a fresh instance ` +
 				"(no factory-recorded events, no unpersisted mutations).",
 		);
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 	}
 }
 
@@ -725,7 +725,7 @@ export function describeAggregateIdentity(identity: {
  * properties into the log. Kit modules only; not part of the package
  * entries.
  */
-export function detachAggregateIdentity(identity: {
+export function copyAggregateIdentity(identity: {
 	readonly aggregateType: string;
 	readonly aggregateId: string;
 }): { readonly aggregateType: string; readonly aggregateId: string } {
@@ -735,7 +735,7 @@ export function detachAggregateIdentity(identity: {
 	});
 }
 
-function detachPartialAggregateIdentity(
+function copyPartialAggregateIdentity(
 	identity: AggregateIdentityMismatchOptions["actual"],
 ): AggregateIdentityMismatchOptions["actual"] {
 	return Object.freeze({
@@ -786,8 +786,8 @@ export class MisattributedEventError extends KitWiringError<"MISATTRIBUTED_EVENT
 				`${describeAggregateIdentity(options.expected)}: ` +
 				"fix the call site (createEvent stamps the right identity).",
 		);
-		this.expected = detachAggregateIdentity(options.expected);
-		this.actual = detachPartialAggregateIdentity(options.actual);
+		this.expected = copyAggregateIdentity(options.expected);
+		this.actual = copyPartialAggregateIdentity(options.actual);
 		this.eventType = options.eventType;
 	}
 }
@@ -828,7 +828,7 @@ export class SnapshotVersionNotRestoredError extends KitWiringError<"SNAPSHOT_VE
 				"the persisted version; call markReconstituted(version) inside " +
 				"the aggregate factory.",
 		);
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 		this.snapshotVersion = options.snapshotVersion;
 		this.restoredVersion = options.restoredVersion;
 	}
@@ -911,7 +911,7 @@ export class ReentrantEventRecordingError extends KitWiringError<"REENTRANT_EVEN
 				"trigger new decisions on the aggregate being recorded; make every " +
 				"domain decision first, then record.",
 		);
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 	}
 }
 
@@ -951,7 +951,7 @@ export class DuplicateEventIdError extends KitWiringError<"DUPLICATE_EVENT_ID"> 
 				"append a stamped event once, and return a fresh stamp per " +
 				"decision from the stamp provider.",
 		);
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 		this.eventId = options.eventId;
 	}
 }
@@ -995,7 +995,7 @@ export class PendingEventLimitExceededError extends KitWiringError<"PENDING_EVEN
 				"A decision that emits this many facts points at a missing " +
 				"aggregate boundary.",
 		);
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 		this.limit = options.limit;
 		this.pending = options.pending;
 		this.added = options.added;
@@ -1037,7 +1037,7 @@ export class PendingEventBatchMismatchError extends KitWiringError<"PENDING_EVEN
 				`${describeAggregateIdentity(options.identity)} (${options.pendingLength} ` +
 				"pending). Acknowledge exactly the batch that was enrolled, once.",
 		);
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 		this.batchLength = options.batchLength;
 		this.pendingLength = options.pendingLength;
 	}
@@ -1076,8 +1076,8 @@ export class ForeignEventError extends InfrastructureError<"FOREIGN_EVENT"> {
 				`${describeAggregateIdentity(options.expected)}: ` +
 				"the stream row belongs to a different aggregate.",
 		});
-		this.expected = detachAggregateIdentity(options.expected);
-		this.actual = detachPartialAggregateIdentity(options.actual);
+		this.expected = copyAggregateIdentity(options.expected);
+		this.actual = copyPartialAggregateIdentity(options.actual);
 		this.eventType = options.eventType;
 	}
 }
@@ -1227,7 +1227,7 @@ export class InvalidEventStreamPageError extends InfrastructureError<"INVALID_EV
 			code: "INVALID_EVENT_STREAM_PAGE",
 			message: eventStreamPageReasonMessage(stream, options),
 		});
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 		this.reason = options.reason;
 		this.fromVersion = options.fromVersion;
 		this.targetVersion = options.targetVersion;
@@ -1315,7 +1315,7 @@ export class ReplayTargetMismatchError extends InfrastructureError<"REPLAY_TARGE
 		const stream = `${describeAggregateIdentity(options.identity)}`;
 		const message = replayTargetMismatchMessage(stream, options);
 		super({ code: "REPLAY_TARGET_MISMATCH", message });
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 		this.reason = options.reason;
 		this.fromVersion = options.fromVersion;
 		this.targetVersion = options.targetVersion;
@@ -1372,7 +1372,7 @@ export class ReplayRejectedError extends InfrastructureError<"REPLAY_REJECTED"> 
 						`(${options.fromVersion}, ${options.toVersion}] with ${rejected}`,
 			cause: options.cause,
 		});
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 		this.fromVersion = options.fromVersion;
 		this.toVersion = options.toVersion;
 	}
@@ -1631,7 +1631,7 @@ export class UnenrolledChangesError extends KitWiringError<"UNENROLLED_CHANGES">
 					: "but no update intent was registered. Call repository.update(aggregate) " +
 						"after the final domain decision so state and events flush together."),
 		);
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 	}
 }
 
@@ -1666,7 +1666,7 @@ export class AggregateDeletedError extends KitWiringError<"AGGREGATE_DELETED"> {
 				"remove of the SAME instance is an accepted no-op; if the " +
 				"aggregate must remain, do not remove it.",
 		);
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 	}
 }
 
@@ -1702,7 +1702,7 @@ export class AggregateNotFoundError extends InfrastructureError<"AGGREGATE_NOT_F
 			message: `Aggregate not found: ${describeAggregateIdentity(options.identity)}`,
 			cause: options.cause,
 		});
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 	}
 }
 
@@ -1744,7 +1744,7 @@ export class DuplicateAggregateError extends InfrastructureError<"DUPLICATE_AGGR
 			message: `Duplicate aggregate: ${describeAggregateIdentity(options.identity)} already exists`,
 			cause: options.cause,
 		});
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 	}
 }
 
@@ -1788,7 +1788,7 @@ export class SnapshotSchemaMismatchError extends InfrastructureError<"SNAPSHOT_S
 				`the model's migrate function to upgrade old snapshots, or discard the snapshot ` +
 				`and refold from the full event stream.`,
 		});
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 		this.expectedSchemaVersion = options.expectedSchemaVersion;
 		this.actualSchemaVersion = options.actualSchemaVersion;
 	}
@@ -1894,7 +1894,7 @@ export class ConcurrencyConflictError extends InfrastructureError<"CONCURRENCY_C
 			// repeats it, so that one reason is not retryable.
 			retryable: options.reason !== "version_unchanged",
 		});
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 		this.intent = options.intent ?? null;
 		this.expectedVersion = options.expectedVersion;
 		this.actualVersion = options.actualVersion ?? null;

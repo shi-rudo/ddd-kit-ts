@@ -309,12 +309,12 @@ Changing aggregate state should normally move the version. If you deliberately n
 surfaces that the aggregate declares:
 
 - Domain queries such as `order.status`. Application code reads these.
-- One detached read DTO: an immutable copy of the state that shares nothing
+- One read DTO: an immutable copy of the state that shares nothing
   with the live graph. A persistence adapter captures the aggregate through
   it.
 
 ```ts
-import { deepFreeze, detachState } from "@shirudo/ddd-kit";
+import { deepFreeze, copyPlainState } from "@shirudo/ddd-kit";
 
 class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   get status(): OrderState["status"] {
@@ -322,7 +322,7 @@ class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   }
 
   get stateDto(): Readonly<OrderState> {
-    return deepFreeze(detachState(this.state));
+    return deepFreeze(copyPlainState(this.state));
   }
 }
 ```
@@ -330,16 +330,16 @@ class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
 The getter walks and clones the whole state on every read. That cost belongs
 to the adapter. The unit of work reads the DTO several times per aggregate:
 at load, when it registers the write, and at commit. The snapshot model
-detaches the captured DTO once more, so a snapshot capture clones twice.
+copies the captured DTO once more, so a snapshot capture clones twice.
 Application code reads domain queries and never the DTO in a loop.
 
-`detachState` is a `structuredClone` behind a guard. A structured clone keeps
+`copyPlainState` is a `structuredClone` behind a guard. A structured clone keeps
 the data properties of a class instance and drops the methods on its
 prototype, without an error. The guard throws a `TypeError` that names the
 field path and the class instead:
 
 ```
-TypeError: detachState: state.items[0] is a class instance (OrderItem); map it to plain data
+TypeError: copyPlainState: state.items[0] is a class instance (OrderItem); map it to plain data
 ```
 
 The tell is a state field whose type carries behaviour. A type alias hides
@@ -363,11 +363,11 @@ get stateDto(): OrderStateDto {
 ```
 
 A subclass of a built-in (`class Tags extends Set`) is a class instance too.
-`detachState` also rejects a function, a symbol, an enumerable symbol-keyed
+`copyPlainState` also rejects a function, a symbol, an enumerable symbol-keyed
 property, a non-enumerable property on a record or an array, an accessor
 property, an expando on a built-in (also a non-enumerable one), an `Error`, a
 `Promise`, a `WeakMap`, a `WeakSet`, a `SharedArrayBuffer`, and a view over
-one. A `Proxy` fails in the walk or in the clone; `detachState` rethrows a
+one. A `Proxy` fails in the walk or in the clone; `copyPlainState` rethrows a
 failure of the clone as a `TypeError` that keeps the cause. The checks catch
 accidents, not a hostile `Proxy`. Plain objects, arrays, `Date`, `Map`, `Set`,
 `RegExp`, bigints, and typed arrays pass.
@@ -627,7 +627,7 @@ const fresh = reconstituteAggregateFromSnapshot(
 ```
 
 `captureAggregateSnapshot` rejects an invalid application-supplied time. It also
-detaches the persistence DTO and deep-freezes the snapshot, its `state` and
+copies the persistence DTO and deep-freezes the snapshot, its `state` and
 `snapshotAt` included. A later change to the aggregate, or to the DTO that
 `capture` returned, cannot alter the snapshot. A write into the snapshot
 between capture and save throws a `TypeError`. The freeze cannot seal every
@@ -641,7 +641,7 @@ restore then throws `SnapshotVersionNotRestoredError` (code
 `SNAPSHOT_VERSION_NOT_RESTORED`).
 
 Live aggregate state remains `protected`. The model captures the aggregate
-through its detached read DTO (`order.stateDto`) or through domain queries,
+through its read DTO (`order.stateDto`) or through domain queries,
 never through a public state getter. See
 [Reading State from Outside](#reading-state-from-outside). For
 event-sourced aggregates, restore the

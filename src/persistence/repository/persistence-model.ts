@@ -14,7 +14,7 @@ export type PersistenceLifecycle = "loaded" | "new";
 export interface PersistenceModel<TAggregate, TBaseline, TChangeSet> {
 	/**
 	 * Captures the adapter's persistence projection at the current moment.
-	 * Return a detached value or an immutable value object: the Unit of Work
+	 * Return a copied value or an immutable value object: the Unit of Work
 	 * retains it as a baseline and cannot make an arbitrary adapter type safe.
 	 *
 	 * Capture must be deterministic for an unchanged aggregate: the Unit of

@@ -172,7 +172,7 @@ export class Order extends StateStoredAggregate<OrderState, OrderId> {
 	}
 
 	/**
-	 * Returns a detached, immutable read DTO rather than a live child entity.
+	 * Returns an immutable read DTO rather than a live child entity.
 	 */
 	getItem(itemId: ItemId): OrderItemView | undefined {
 		const item = findEntityById(this.state.items, itemId);

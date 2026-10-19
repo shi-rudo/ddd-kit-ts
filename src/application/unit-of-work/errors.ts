@@ -1,7 +1,7 @@
 import type { AggregateIdentity } from "../../domain/aggregate/aggregate-identity";
 import {
 	describeAggregateIdentity,
-	detachAggregateIdentity,
+	copyAggregateIdentity,
 	InfrastructureError,
 	isWiringErrorLike,
 	KitWiringError,
@@ -148,7 +148,7 @@ export class RepositoryErrorMappingFailedError extends KitWiringError<"REPOSITOR
 				"mapperCause.",
 			options.persistenceError,
 		);
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 		this.intent = options.intent;
 		this.mapperCause = options.mapperError;
 	}
@@ -198,7 +198,7 @@ export class InvalidFlushStatementError extends KitWiringError<"INVALID_FLUSH_ST
 			flushStatementReasonMessage(options),
 			options.cause,
 		);
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 		this.intent = options.intent ?? null;
 		this.reason = options.reason;
 		this.received = options.received;
@@ -310,7 +310,7 @@ export class AggregateTrackingError extends KitWiringError<"AGGREGATE_TRACKING">
 
 	constructor(options: AggregateTrackingErrorOptions) {
 		super("AGGREGATE_TRACKING", trackingReasonMessage(options));
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 		this.operation = options.operation;
 		this.reason = options.reason;
 		this.registeredIntent = options.registeredIntent;

@@ -325,7 +325,7 @@ export type {
 	DeliveryFailureClassifier,
 	DeliveryFailureKind,
 } from "./internal/delivery-failure";
-// Structural equality and detachment
+// Structural equality and copies
 export { deepEqual } from "./internal/structural/deep-equal";
 export {} from "./internal/structural/deep-equal-except";
 export {
@@ -334,7 +334,7 @@ export {
 	type DeepOmitPathSegment,
 	deepOmit,
 } from "./internal/structural/deep-omit";
-export { detachState } from "./internal/structural/detach-state";
+export { copyPlainState } from "./internal/structural/copy-plain-state";
 // Messaging: commit envelope, bus, outbox, dispatcher
 export type {
 	CommitPosition,

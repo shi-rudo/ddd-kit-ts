@@ -1,11 +1,11 @@
 # Structural Comparison
 
-Functions that compare, reshape, and detach a value structure in depth: equality, equality with exclusions, key removal, and a guarded structured clone. They work over objects, arrays, Maps, Sets and TypedArrays.
+Functions that compare, reshape, and copy a value structure in depth: equality, equality with exclusions, key removal, and a guarded structured clone. They work over objects, arrays, Maps, Sets and TypedArrays.
 
 ## Installation
 
 ```ts
-import { deepEqual, deepOmit, deepEqualExcept, detachState } from '@shirudo/ddd-kit';
+import { deepEqual, deepOmit, deepEqualExcept, copyPlainState } from '@shirudo/ddd-kit';
 ```
 
 ## Functions
@@ -110,9 +110,9 @@ const result2 = deepOmit(obj, {
 
 ---
 
-### `detachState(state, subject?)`
+### `copyPlainState(state, subject?)`
 
-Returns a copy of `state` that shares no object with the original. The copy is a `structuredClone`, taken after a walk that rejects every value the clone would lose or silently degrade. A class instance keeps its data properties in a clone and loses the methods on its prototype; the walk throws a `TypeError` that names the path and the class instead. The optional `subject` replaces `detachState: state` at the start of every message.
+Returns a copy of `state` that shares no object with the original. The copy is a `structuredClone`, taken after a walk that rejects every value the clone would lose or silently degrade. A class instance keeps its data properties in a clone and loses the methods on its prototype; the walk throws a `TypeError` that names the path and the class instead. The optional `subject` replaces `copyPlainState: state` at the start of every message.
 
 The walk reads the graph through property descriptors and walks a `Map` or a `Set` with the built-in iteration. No accessor and no own iterator of the state runs. A `Proxy` runs its traps during the walk. A trap can change the graph, and an accessor that a trap adds runs during the clone. A second walk checks the clone, so a value that a trap swapped in and the content of a built-in whose prototype was replaced are rejected too. The second walk also follows the steps of the first walk: the kind of each object and the key of each data property, in walk order. A clone that differs throws, with the path: a built-in whose prototype was replaced is a built-in again in the clone and loses its own properties.
 
@@ -126,29 +126,29 @@ The walk reads the graph through property descriptors and walks a `Map` or a `Se
 - An expando on a built-in such as a `Map` or a `Date`, also at an index key (the clone drops it)
 - An `Error`, a `Promise`, a `WeakMap`, or a `WeakSet`
 - A `SharedArrayBuffer` or a view over one (the copy would share its memory)
-- A `Proxy`: the walk or the clone fails; `detachState` rethrows a failure of the clone as a `TypeError` that keeps the cause
+- A `Proxy`: the walk or the clone fails; `copyPlainState` rethrows a failure of the clone as a `TypeError` that keeps the cause
 
 Plain objects from any realm, arrays, `Date`, `Map`, `Set`, `RegExp`, bigints, and typed arrays pass. Circular references are preserved.
 
 #### Example
 
 ```ts
-import { deepFreeze, detachState } from '@shirudo/ddd-kit';
+import { deepFreeze, copyPlainState } from '@shirudo/ddd-kit';
 
 class Order extends StateStoredAggregate<OrderState, OrderId> {
-  /** A detached, immutable copy of the state. Never the live graph. */
+  /** An immutable copy of the state. Never the live graph. */
   get stateDto(): Readonly<OrderState> {
-    return deepFreeze(detachState(this.state));
+    return deepFreeze(copyPlainState(this.state));
   }
 }
 
-detachState({ review: new OwnerReview() });
-// TypeError: detachState: state.review is a class instance (OwnerReview); map it to plain data
+copyPlainState({ review: new OwnerReview() });
+// TypeError: copyPlainState: state.review is a class instance (OwnerReview); map it to plain data
 ```
 
 #### Notes
 
-- The snapshot model detaches the captured DTO and the restored state with the same function
+- The snapshot model copies the captured DTO and the restored state with the same function
 - A state that carries a class-based child entity is mapped to plain data first; the walk names the field to map
 
 ---

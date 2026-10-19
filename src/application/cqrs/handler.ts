@@ -11,7 +11,7 @@ import {
 import type { Id } from "../../domain/identity/id";
 import {
 	describeAggregateIdentity,
-	detachAggregateIdentity,
+	copyAggregateIdentity,
 	EventHarvestError,
 } from "../../errors/kit-errors";
 import { abortReason } from "../../internal/async/abort";
@@ -274,7 +274,7 @@ function createCommitTokenScope<
 		const token = Object.freeze(
 			Object.create(null),
 		) as AggregateCommitToken<Evt>;
-		// The pendingEvents getter already returns a frozen detached copy;
+		// The pendingEvents getter already returns a frozen copy;
 		// re-copying and re-freezing it here would only duplicate the work.
 		const events = aggregate.pendingEvents;
 		// Recorded-before-persistence is checked HERE, not only at harvest:
@@ -656,7 +656,7 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 				const endedSources = commitRecords
 					.filter((record) => record.disposition === "deleted")
 					.map((record) =>
-						detachAggregateIdentity(record.aggregate.aggregateIdentity),
+						copyAggregateIdentity(record.aggregate.aggregateIdentity),
 					);
 				if (candidates.length > 0) {
 					// The bus publishes the events of these same candidates, so the

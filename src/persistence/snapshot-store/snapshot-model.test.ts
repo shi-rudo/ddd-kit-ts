@@ -74,7 +74,7 @@ describe("adapter-owned snapshot models", () => {
 		);
 	});
 
-	it("captures a detached snapshot envelope from an aggregate", () => {
+	it("captures an independent snapshot envelope from an aggregate", () => {
 		const state = { status: "placed" };
 		const order: Order = {
 			id: "order-1" as OrderId,
@@ -355,7 +355,7 @@ describe("adapter-owned snapshot models", () => {
 		);
 	});
 
-	it("detaches nested data on capture and reconstitution", () => {
+	it("copies nested data on capture and reconstitution", () => {
 		type NestedOrder = Omit<Order, "state"> & {
 			readonly state: { readonly lines: ReadonlyArray<{ quantity: number }> };
 		};

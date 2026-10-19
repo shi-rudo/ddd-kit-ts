@@ -184,7 +184,7 @@ When an adapter loads an aggregate, `UnitOfWork` keeps the model's baseline
 internally. The use case and the aggregate cannot inspect it. At write registration, the same adapter capability derives
 and seals the exact change set.
 
-A full-row model can be small. It reads the aggregate through its detached
+A full-row model can be small. It reads the aggregate through its
 read DTO; see
 [Aggregates -> Reading State from Outside](./aggregates.md#reading-state-from-outside).
 The row holds a JSON-safe encoding of that DTO: `encodeOrderState` maps each
@@ -252,7 +252,7 @@ must still persist the new version. Skipping the write desyncs the stored
 version and produces false concurrency conflicts on later updates.
 
 Projection functions must use meaningful aggregate queries and return
-detached persistence DTOs. Both `capture` and `changes` must avoid mutable
+copied persistence DTOs. Both `capture` and `changes` must avoid mutable
 references into the aggregate. The Unit of Work cannot safely clone or freeze
 an arbitrary adapter-native type. A baseline that aliases aggregate state can
 move when the aggregate moves. A change set that aliases it can change after
@@ -721,7 +721,7 @@ The complete recipe with the coded discard set is in
 [Event Sourcing -> Snapshots](./event-sourcing.md#snapshots).
 
 `captureAggregateSnapshot` supplies no hidden clock and performs no I/O. It
-detaches the DTO and rejects functions, promises, errors, symbol-keyed fields,
+copies the DTO and rejects functions, promises, errors, symbol-keyed fields,
 and class instances that cannot round-trip safely. Map child entities and
 value objects to persistence DTOs explicitly.
 

@@ -409,7 +409,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		entry.registration = Object.freeze({
 			intent,
 			version: entry.aggregate.version,
-			// Already a frozen detached copy from the pendingEvents getter.
+			// Already a frozen copy from the pendingEvents getter.
 			events: entry.aggregate.pendingEvents,
 			baseline: recapturePersistenceBaseline(entry.baseline, entry.aggregate),
 			changes: derivePersistenceChanges(entry.baseline, entry.aggregate),

@@ -13,7 +13,7 @@ import {
 	SnapshotSchemaMismatchError,
 	SnapshotVersionNotRestoredError,
 } from "../../errors/kit-errors";
-import { detachState } from "../../internal/structural/detach-state";
+import { copyPlainState } from "../../internal/structural/copy-plain-state";
 import { assertPositiveSafeInteger } from "../../internal/validate";
 
 interface SnapshotAggregate {
@@ -80,13 +80,13 @@ export function defineSnapshotModel<
 	// copies own enumerable properties only, so capture/reconstitute carried
 	// on a prototype (class instance) vanish silently and would surface much
 	// later as a raw TypeError outside the corruption channel.
-	const detached = Object.freeze({ ...model });
-	assertSnapshotModel(detached);
-	return detached;
+	const copy = Object.freeze({ ...model });
+	assertSnapshotModel(copy);
+	return copy;
 }
 
 /**
- * Captures a detached persistence envelope at an application-supplied time.
+ * Captures an independent persistence envelope at an application-supplied time.
  * The application decides when snapshotting is worthwhile; this function does
  * not read a clock or perform I/O. The envelope is deep-frozen, its `state`
  * and its `snapshotAt` included: a write into the captured state or a
@@ -104,7 +104,7 @@ export function captureAggregateSnapshot<
 ): AggregateSnapshot<TSnapshotState> {
 	assertSnapshotModel(model);
 	const recordedAt = copySnapshotAt(snapshotAt);
-	const state = detachState(model.capture(aggregate));
+	const state = copyPlainState(model.capture(aggregate));
 	return deepFreeze({
 		state,
 		version: aggregate.version,
@@ -160,10 +160,10 @@ export function reconstituteAggregateFromSnapshot<
 	try {
 		let state: TSnapshotState;
 		if (storedSchemaVersion === model.schemaVersion) {
-			state = detachState(snapshot.state) as TSnapshotState;
+			state = copyPlainState(snapshot.state) as TSnapshotState;
 		} else if (model.migrate) {
-			state = detachState(
-				model.migrate(detachState(snapshot.state), storedSchemaVersion),
+			state = copyPlainState(
+				model.migrate(copyPlainState(snapshot.state), storedSchemaVersion),
 			);
 		} else {
 			throw new SnapshotSchemaMismatchError({

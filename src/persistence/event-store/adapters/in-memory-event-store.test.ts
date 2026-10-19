@@ -58,7 +58,7 @@ describe("InMemoryEventStore in an InMemoryTransactionScope", () => {
 });
 
 describe("InMemoryEventStore", () => {
-	it("hands out detached events so a mutated read result never rewrites history", async () => {
+	it("hands out copied events so a mutated read result never rewrites history", async () => {
 		const store = new InMemoryEventStore<OrderEvent>();
 		const identity: AggregateIdentity = {
 			aggregateType: "SalesOrder",

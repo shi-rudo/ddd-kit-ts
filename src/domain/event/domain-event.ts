@@ -3,7 +3,7 @@ import {
 	hasCooperativeBrand,
 	stampCooperativeBrand,
 } from "../../internal/cooperative-brand";
-import { detachFreezableState } from "../../internal/structural/detach-state";
+import { copyFreezableState } from "../../internal/structural/copy-plain-state";
 import { isIntrinsicConstructorPrototype } from "../../internal/structural/is-built-in";
 import { deepFreeze } from "../value-object/value-object";
 import { type ClockFactory, defaultClockFactory, readClock } from "./clock";
@@ -916,7 +916,7 @@ function isPlainRecordCopy(copy: unknown): boolean {
 /**
  * Deep-clones caller-supplied event data (payload, metadata) before the
  * event is frozen, so a constructor never freezes or aliases the caller's
- * own object graph. {@link detachFreezableState} checks the data and the
+ * own object graph. {@link copyFreezableState} checks the data and the
  * clone; its JSDoc states the rule and its limits.
  */
 function cloneOwnedEventData<T>(
@@ -934,7 +934,7 @@ function cloneOwnedEventData<T>(
 	}
 	// The freeze rule keeps the mint guarantee "minted implies deeply
 	// frozen".
-	return detachFreezableState(value, `${operation}: ${field}`);
+	return copyFreezableState(value, `${operation}: ${field}`);
 }
 
 /**

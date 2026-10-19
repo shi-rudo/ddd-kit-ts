@@ -49,7 +49,7 @@ A repository definition has six parts:
 - The application supplies a repository port to `defineRepository`.
 - The aggregate class is the identity-map key.
 - The adapter owns a `PersistenceModel`. It reads the aggregate through its
-  detached read DTO, `order.stateDto`; see
+  read DTO, `order.stateDto`; see
   [Aggregates -> Reading State from Outside](./aggregates.md#reading-state-from-outside).
 - `create` builds the transaction-bound read adapter.
 - `flush` performs the registered write.
@@ -300,7 +300,7 @@ interface AggregatePersistenceWrite<TAggregate, TChangeSet> {
 
 The receipt object, its `changes` envelope, and its event array are frozen.
 `TChangeSet` remains adapter-owned, so `PersistenceModel.changes` must return a
-detached or immutable value rather than a mutable reference into the
+copied or immutable value rather than a mutable reference into the
 aggregate. The Unit of Work cannot safely deep-freeze arbitrary database
 driver values.
 

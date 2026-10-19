@@ -310,7 +310,7 @@ immutable. Run one kit version per process during a cutover.
 - `AggregateConfig.maxPendingEvents` limits the pending list with
   `PendingEventLimitExceededError`. `DuplicateEventIdError` and
   `ReentrantEventRecordingError` protect the recording.
-- `EntityConfig.trustInitialState`, `detachState`, `toVersion`, and
+- `EntityConfig.trustInitialState`, `copyPlainState`, `toVersion`, and
   `reconstituteAggregateFromHistory`.
 - `DomainEventValidationError` and `SnapshotTimeValidationError` carry a
   `code` and a `field`.
@@ -402,7 +402,7 @@ immutable. Run one kit version per process during a cutover.
 
 ### Fixed
 
-- `detachState` and `InMemoryEventStore.append` check the copy with a second
+- `copyPlainState` and `InMemoryEventStore.append` check the copy with a second
   walk. Before, a `Map`, a `Set`, an `ArrayBuffer`, a `SharedArrayBuffer`, or
   a boxed bigint whose prototype was replaced passed the walk as a record,
   and the walk did not see its content. The copy then kept an `Error`, a
@@ -413,7 +413,7 @@ immutable. Run one kit version per process during a cutover.
   copy that differs throws, with the path. In rc.11, the walks compared only
   the number of data properties, and the content of the built-in could
   balance that number.
-- `detachState` and `InMemoryEventStore.append` reject every expando on a
+- `copyPlainState` and `InMemoryEventStore.append` reject every expando on a
   built-in that the copy would drop. This includes an index key and a
   non-enumerable data property or accessor. Before, the copy lost such a key
   without an error, for example `0` on a `Map` or a key after the last
@@ -437,7 +437,7 @@ immutable. Run one kit version per process during a cutover.
   a position that is not a valid commit position. The message names the
   event, the field, and the value. Before, such a candidate could reach the
   outbox state, and a `NaN` position broke the order of its source.
-- `detachState` and the other plain-data checks of the kit accept a
+- `copyPlainState` and the other plain-data checks of the kit accept a
   structured clone in the Vercel Edge runtime. That runtime replaces the
   global `Object`, so its source text no longer names `Object`, while a
   clone keeps the constructor of the host. Before, the checks took every
@@ -449,7 +449,7 @@ immutable. Run one kit version per process during a cutover.
   waits. A leaked write then gets `TransactionClosedError`. Before, it got
   `AggregateTrackingError` with the reason `registered_during_flush`.
 - `InMemoryEventStore.append` writes all of a batch or nothing, and it stores
-  only plain data. It copies each event with `detachState`, the state
+  only plain data. It copies each event with `copyPlainState`, the state
   detachment of the kit. An event with a value that the copy would lose or
   change rejects with a `TypeError` that names the event index and the stream.
   Examples are a function, a class instance, an accessor, an `Error`, and a
@@ -458,7 +458,7 @@ immutable. Run one kit version per process during a cutover.
   Before, the store dropped the prototype of a class instance, ran accessors,
   and could keep part of a failed batch. It reads its arguments once, so a
   getter on them cannot bypass the version check.
-- `detachState` walks a Map or a Set with the built-in iteration and reads
+- `copyPlainState` walks a Map or a Set with the built-in iteration and reads
   class names through property descriptors, so no own iterator and no accessor
   of the state runs. A Proxy still runs its traps, and an accessor that a trap
   adds can run. Before, an own iterator could hide a class instance from the

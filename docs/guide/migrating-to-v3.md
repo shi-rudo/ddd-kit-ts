@@ -120,17 +120,17 @@ shows.
 
 `Entity.state` is `protected` in v3. Every `order.state.x` read outside the
 aggregate no longer compiles. Replace application reads with domain queries
-(`order.status`). Give the persistence adapter one detached read DTO:
+(`order.status`). Give the persistence adapter one read DTO:
 
 ```ts
 class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   get stateDto(): Readonly<OrderState> {
-    return deepFreeze(detachState(this.state));
+    return deepFreeze(copyPlainState(this.state));
   }
 }
 ```
 
-`detachState` throws when the state carries a class instance, a function, a
+`copyPlainState` throws when the state carries a class instance, a function, a
 symbol, or another value a structured clone would lose, and names the field
 path. A state with class-based child entities
 needs an explicit mapper to plain data instead of the clone. See
@@ -689,7 +689,7 @@ absent: `null`, a string, a number, an array, or a `Map` throws a `TypeError`.
 
 `Entity.state` is `protected`, and `IEntity<TId, TState>` is `IEntity<TId>`.
 A public live state let a caller change nested state past every rule. Step 1
-shows the domain queries and the detached read DTO that replace it.
+shows the domain queries and the read DTO that replace it.
 
 A subclass no longer sees `_state` and `freezeState`. Every write goes
 through `setState`, which validates and freezes.
@@ -1387,14 +1387,14 @@ Behavior that a use case or an adapter can notice:
 
 **3.0.0.**
 
-- `detachState` rejects an index key and a non-enumerable data property or
+- `copyPlainState` rejects an index key and a non-enumerable data property or
   accessor on a built-in, for example `0` on a `Map` or a key after the last
   character of a boxed `String`. Before, the copy dropped such a key without
   an error. The `lastIndex` of a `RegExp`, the `length` of a boxed `String`,
   and the mutator shadows of a frozen `Date`, `Map`, or `Set` still pass.
   Entity read views, the snapshot model, and `InMemoryEventStore.append` use
   the same check.
-- `detachState` rejects a built-in whose prototype was replaced, for example
+- `copyPlainState` rejects a built-in whose prototype was replaced, for example
   a `Map` with `Object.prototype` as its prototype, also when it has no own
   property: the copy is a `Map` again. In rc.11 such a value passed when it
   had no own property, and also when the records in it had as many keys as
