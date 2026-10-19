@@ -45,8 +45,8 @@ entities, value objects, domain events, repositories, and the use-case boundary.
 - `@shirudo/ddd-kit/http` RFC 9457 Problem Details presenters
 - `@shirudo/ddd-kit/public-errors` presentation-layer mapping
 - `@shirudo/ddd-kit/testing` repository contract suites
-- `@shirudo/ddd-kit/money` money contract and boundary module
-- `@shirudo/ddd-kit/state-machine` domain state machine (optional)
+- `@shirudo/ddd-kit/money` money contract and boundary module (experimental)
+- `@shirudo/ddd-kit/state-machine` domain state machine (experimental)
 
 ## Related
 

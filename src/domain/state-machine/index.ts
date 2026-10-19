@@ -2,6 +2,8 @@
  * The domain state machine: a declared lifecycle with guarded transitions,
  * pure transition functions, and a static analysis of a definition. An
  * optional capability of the kit, published as `@shirudo/ddd-kit/state-machine`.
+ * The entry point is experimental: a minor release can change it in a
+ * breaking way (see STABILITY.md).
  */
 export {
 	analyzeDomainMachineDefinition,

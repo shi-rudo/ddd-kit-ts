@@ -1,5 +1,7 @@
 // Money contract & boundary helpers. Opt-in entry point
-// (`@shirudo/ddd-kit/money`) so the core kit stays money-free. The kit
+// (`@shirudo/ddd-kit/money`) so the core kit stays money-free. The entry
+// point is experimental: a minor release can change it in a breaking way
+// (see STABILITY.md). The kit
 // ships EXACT operations only: the canonical plain-data shape for
 // aggregate state, events, and snapshots (bigint minor units, frozen,
 // clone-safe), lossless add/subtract/negate/rescale (mismatch-guarded,
