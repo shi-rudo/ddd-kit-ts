@@ -189,7 +189,7 @@ lose a trigger between publication and the subscriber. The
 - A saga timeout is an input. Store the deadline in the same transaction as
   the wait. `DeadlineProcessor` later returns the deadline as an input. The
   state machine can reject a stale deadline after a state change.
-- `EventBusImpl.publish` collects subscriber errors and throws after the batch.
+- `InProcessEventBus.publish` collects subscriber errors and throws after the batch.
   One failed saga step does not stop its peers. The dispatcher uses bounded
   retries and dead-lettering.
 

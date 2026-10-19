@@ -423,9 +423,9 @@ specifier does not resolve in an edge bundle.
 
 ```ts
 import { AsyncLocalStorage } from "node:async_hooks";
-import { EventBusImpl, type PublishChainState } from "@shirudo/ddd-kit";
+import { InProcessEventBus, type PublishChainState } from "@shirudo/ddd-kit";
 
-const bus = new EventBusImpl<OrderEvent>({
+const bus = new InProcessEventBus<OrderEvent>({
   chainStore: new AsyncLocalStorage<PublishChainState>(),
 });
 ```
@@ -494,7 +494,7 @@ bundle. A no-op is then a decision in the code, not a signal you did not know
 about.
 
 ```ts
-const bus = new EventBusImpl<OrderEvent>({
+const bus = new InProcessEventBus<OrderEvent>({
   observers: {
     // One event type accumulates subscriptions.
     onSubscriptionThresholdExceeded: (report) => {

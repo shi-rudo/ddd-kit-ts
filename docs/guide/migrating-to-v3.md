@@ -957,7 +957,7 @@ the cause. An adapter implements `readStream` and passes
 
 A hand-written `EventBus` implements `subscribeAll`, `subscribeMany`, and
 `close`, and `publish` accepts `PublishOptions`. An `EventHandler` receives
-an `ExecutionContext` with a `signal` as its second argument. `EventBusImpl`
+an `ExecutionContext` with a `signal` as its second argument. `InProcessEventBus`
 users need no change.
 
 ```ts

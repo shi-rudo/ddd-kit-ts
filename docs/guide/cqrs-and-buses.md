@@ -8,7 +8,7 @@ The kit ships small in-process buses for those two flows:
 
 - `CommandBus` dispatches commands to `CommandHandler`s.
 - `QueryBus` dispatches queries to `QueryHandler`s.
-- `EventBusImpl` dispatches domain events to in-process subscribers.
+- `InProcessEventBus` dispatches domain events to in-process subscribers.
 
 The important boundary: these buses are dispatchers, not brokers. They do not replace RabbitMQ, Kafka, SQS, NATS, or a workflow engine. They give your application a typed handler contract and a simple in-process dispatcher. If you later move a handler behind a queue, keep the handler type and replace the transport.
 
@@ -40,7 +40,7 @@ or updating a cache are all side effects. This work can be slow, fail, or wait
 forever. The imperative shell is the part of the application that invokes the
 handler and supervises the I/O it starts.
 
-`EventBusImpl` therefore bounds the execution of every handler. For each call
+`InProcessEventBus` therefore bounds the execution of every handler. For each call
 to `publish`, it creates one `ExecutionContext` and passes it to every handler
 for the event type, including handlers registered through `subscribeAll`. The
 context gives all of those handlers the same cancellation signal and time
@@ -779,7 +779,7 @@ for (const test of tests) {
 ```
 
 The suite covers the port. It does not cover the construction options of
-`EventBusImpl`, so your own implementation is free to omit them.
+`InProcessEventBus`, so your own implementation is free to omit them.
 
 ## How to Choose
 
@@ -790,7 +790,7 @@ Use this as the default split:
 | Run one write use case in-process | `CommandBus` + `CommandHandler` |
 | Read data for a screen or API response | `QueryBus` + read model |
 | Persist aggregate changes and events atomically | `withCommit` or `UnitOfWork` |
-| Notify in-process subscribers after commit | `EventBusImpl` passed to `withCommit` |
+| Notify in-process subscribers after commit | `InProcessEventBus` passed to `withCommit` |
 | Deliver events across processes | `Outbox` + dispatcher |
 | Coordinate long-running cross-aggregate workflows | Process manager / saga built from events and commands |
 

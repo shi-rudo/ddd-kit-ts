@@ -8,7 +8,7 @@ import {
 	runBoundedExecution,
 } from "../../internal/async/execution";
 import { EventBusClosedError, PublishDepthExceededError } from "./errors";
-import { EventBusImpl, type EventBusObservers } from "./event-bus";
+import { InProcessEventBus, type EventBusObservers } from "./event-bus";
 import type { PublishChainStore } from "./publish-chain";
 
 /** Every observer is required. Tests override only the one they assert on. */
@@ -22,10 +22,10 @@ type OrderCreated = DomainEvent<"OrderCreated", { orderId: string }>;
 type OrderShipped = DomainEvent<"OrderShipped", { orderId: string }>;
 type OrderEvent = OrderCreated | OrderShipped;
 
-describe("EventBusImpl", () => {
+describe("InProcessEventBus", () => {
 	describe("subscribe", () => {
 		it("should subscribe handlers to event types", () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			let called = false;
 
 			bus.subscribe("OrderCreated", async () => {
@@ -36,7 +36,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("should allow multiple handlers for the same event type", () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			const calls: string[] = [];
 
 			bus.subscribe("OrderCreated", async () => {
@@ -51,7 +51,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("should return unsubscribe function", () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 
 			const unsubscribe = bus.subscribe("OrderCreated", async () => {});
 
@@ -59,7 +59,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("should unsubscribe handler when unsubscribe is called", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			let called = false;
 
 			const unsubscribe = bus.subscribe("OrderCreated", async () => {
@@ -80,7 +80,7 @@ describe("EventBusImpl", () => {
 
 	describe("publish", () => {
 		it("should call subscribed handlers when events are published", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			let called = false;
 			let receivedOrderId: string | null = null;
 
@@ -101,7 +101,7 @@ describe("EventBusImpl", () => {
 
 		it("times out a never-settling handler and aborts its execution context", async () => {
 			vi.useFakeTimers();
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			let context: ExecutionContext | undefined;
 			let handlerStarted!: () => void;
 			const started = new Promise<void>((resolve) => {
@@ -134,7 +134,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("carries accumulated handler failures on the abort error", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			const handlerFailure = new Error("db write failed");
 			bus.subscribe("OrderCreated", async () => {
 				throw handlerFailure;
@@ -169,7 +169,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("propagates owner cancellation to a never-settling handler", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			let context: ExecutionContext | undefined;
 			bus.subscribe("OrderCreated", async (_event, received) => {
 				context = received;
@@ -193,7 +193,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("rejects an invalid publication timeout", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 
 			await expect(bus.publish([], { timeoutMs: Number.NaN })).rejects.toThrow(
 				/timeoutMs/,
@@ -201,7 +201,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("rejects a publication timeout above the largest timer delay", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 
 			await expect(bus.publish([], { timeoutMs: 2 ** 31 })).rejects.toThrow(
 				/timeoutMs/,
@@ -211,7 +211,7 @@ describe("EventBusImpl", () => {
 		it.each([2 ** 31, -1, Number.NaN])(
 			"once() rejects the invalid timeout %s instead of timing out at once",
 			async (timeoutMs) => {
-				const bus = new EventBusImpl<OrderEvent>();
+				const bus = new InProcessEventBus<OrderEvent>();
 
 				await expect(bus.once("OrderCreated", { timeoutMs })).rejects.toThrow(
 					/timeoutMs/,
@@ -220,7 +220,7 @@ describe("EventBusImpl", () => {
 		);
 
 		it("should call all handlers for an event type", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			const calls: string[] = [];
 
 			bus.subscribe("OrderCreated", async () => {
@@ -248,7 +248,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("should handle multiple events", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			const orderCreatedCalls: string[] = [];
 			const orderShippedCalls: string[] = [];
 
@@ -276,7 +276,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("should not call handlers for unsubscribed event types", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			let called = false;
 
 			bus.subscribe("OrderCreated", async () => {
@@ -293,7 +293,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("should handle empty event array", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			let called = false;
 
 			bus.subscribe("OrderCreated", async () => {
@@ -306,7 +306,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("should handle async handlers", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			const results: number[] = [];
 
 			bus.subscribe("OrderCreated", async () => {
@@ -329,7 +329,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("should run all handlers even if one fails", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			let handler2Called = false;
 
 			bus.subscribe("OrderCreated", async () => {
@@ -349,7 +349,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("should throw AggregateError when multiple handlers fail", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 
 			bus.subscribe("OrderCreated", async () => {
 				throw new Error("Handler 1 error");
@@ -376,7 +376,7 @@ describe("EventBusImpl", () => {
 			createDomainEvent("OrderShipped", { orderId }) as OrderShipped;
 
 		it("receives every event type, in input order, without enumerating the union", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			const seen: string[] = [];
 
 			bus.subscribeAll(async (event) => {
@@ -389,7 +389,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("runs even when the event type has no typed subscriber", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			const seen: string[] = [];
 
 			bus.subscribeAll(async (event) => {
@@ -402,7 +402,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("shares one batch with typed handlers: a failing peer skips nobody", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			const ran: string[] = [];
 
 			bus.subscribe("OrderCreated", async () => {
@@ -430,7 +430,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("unsubscribe removes exactly one subscription of a twice-subscribed handler", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			let calls = 0;
 			const handler = async () => {
 				calls += 1;
@@ -447,7 +447,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("a synchronous throw in a catch-all handler is collected, not escaping the batch", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 
 			bus.subscribeAll(() => {
 				throw new Error("sync catch-all bug");
@@ -459,7 +459,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("does not disturb once(): the waiter resolves alongside a catch-all", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			const seen: string[] = [];
 			bus.subscribeAll(async (event) => {
 				seen.push(event.type);
@@ -477,7 +477,7 @@ describe("EventBusImpl", () => {
 
 	describe("once", () => {
 		it("should resolve with the event on next publish", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 
 			const promise = bus.once("OrderCreated");
 
@@ -492,7 +492,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("should automatically unsubscribe after first event", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 
 			const promise = bus.once("OrderCreated");
 
@@ -513,7 +513,7 @@ describe("EventBusImpl", () => {
 
 	describe("event immutability across handler boundary", () => {
 		it("a mutating handler cannot poison the event seen by subsequent handlers", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 
 			// Handler A tries to mutate the event; it must throw because
 			// createDomainEvent freezes the event deeply.
@@ -544,7 +544,7 @@ describe("EventBusImpl", () => {
 
 	describe("publish ordering & parallelism contract", () => {
 		it("dispatches events in input order", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			const seen: string[] = [];
 			bus.subscribe("OrderCreated", async (event) => {
 				seen.push(`created:${event.payload.orderId}`);
@@ -566,7 +566,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("runs handlers within a single event in parallel and collects all rejections", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			let aDone = false;
 			let cDone = false;
 
@@ -592,7 +592,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("publishes remaining events when an earlier event's handler throws, then throws AggregateError at the end", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			const seen: string[] = [];
 
 			bus.subscribe("OrderCreated", async (event) => {
@@ -622,7 +622,7 @@ describe("EventBusImpl", () => {
 
 	describe("non-Error rejection reasons", () => {
 		it("preserves the original reason as the Error cause", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			const reason = { code: "RATE_LIMIT", retryAfter: 30 };
 
 			bus.subscribe("OrderCreated", async () => {
@@ -643,7 +643,7 @@ describe("EventBusImpl", () => {
 
 	describe("synchronously throwing handlers", () => {
 		it("runs peer handlers and dispatches remaining events when a handler throws synchronously", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			const seen: string[] = [];
 
 			// EventHandler allows `Promise<void> | void`: a plain sync handler
@@ -672,7 +672,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("aggregates a sync throw with an async rejection instead of orphaning the rejected promise", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 
 			// Order matters: the async rejecter is subscribed FIRST, so its
 			// promise already exists when the second handler throws sync. If
@@ -701,7 +701,7 @@ describe("EventBusImpl", () => {
 
 	describe("duplicate subscription semantics", () => {
 		it("invokes the same handler once per subscription when subscribed twice", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			let calls = 0;
 			const handler = async () => {
 				calls += 1;
@@ -721,7 +721,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("the returned unsubscribe removes exactly the matching subscription, not all duplicates", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			let calls = 0;
 			const handler = async () => {
 				calls += 1;
@@ -752,7 +752,7 @@ describe("EventBusImpl", () => {
 		type OrderEvt = OrderCreated | OrderShipped;
 
 		it("infers the handler event type from the eventType argument", () => {
-			const bus = new EventBusImpl<OrderEvt>();
+			const bus = new InProcessEventBus<OrderEvt>();
 
 			// Type inference from the eventType: handler is typed as OrderCreated
 			bus.subscribe("OrderCreated", (event) => {
@@ -773,13 +773,13 @@ describe("EventBusImpl", () => {
 		});
 
 		it("rejects an unknown event type", () => {
-			const bus = new EventBusImpl<OrderEvt>();
+			const bus = new InProcessEventBus<OrderEvt>();
 			// @ts-expect-error: "OrderBanana" is not a member of OrderEvt["type"]
 			bus.subscribe("OrderBanana", () => {});
 		});
 
 		it("once() rejects when an AbortSignal is fired before the event arrives", async () => {
-			const bus = new EventBusImpl<OrderEvt>();
+			const bus = new InProcessEventBus<OrderEvt>();
 			const ac = new AbortController();
 			const p = bus.once("OrderCreated", { signal: ac.signal });
 
@@ -789,14 +789,14 @@ describe("EventBusImpl", () => {
 		});
 
 		it("once() rejects with a timeout when timeoutMs elapses without the event", async () => {
-			const bus = new EventBusImpl<OrderEvt>();
+			const bus = new InProcessEventBus<OrderEvt>();
 			const p = bus.once("OrderCreated", { timeoutMs: 10 });
 
 			await expect(p).rejects.toThrow(/timed out.*OrderCreated/);
 		});
 
 		it("once() with timeoutMs resolves normally and clears the timer if the event arrives first", async () => {
-			const bus = new EventBusImpl<OrderEvt>();
+			const bus = new InProcessEventBus<OrderEvt>();
 			const p = bus.once("OrderCreated", { timeoutMs: 50 });
 
 			const evt = createDomainEvent("OrderCreated", {
@@ -811,7 +811,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("once() with an already-aborted signal rejects synchronously without subscribing", async () => {
-			const bus = new EventBusImpl<OrderEvt>();
+			const bus = new InProcessEventBus<OrderEvt>();
 			const ac = new AbortController();
 			ac.abort();
 			await expect(
@@ -820,7 +820,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("once() returns the event variant matching the eventType argument", async () => {
-			const bus = new EventBusImpl<OrderEvt>();
+			const bus = new InProcessEventBus<OrderEvt>();
 
 			const p = bus.once("OrderShipped");
 			// p is narrowed to Promise<OrderShipped>
@@ -839,7 +839,7 @@ describe("EventBusImpl", () => {
 
 	describe("unsubscribe", () => {
 		it("ignores a second call", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			const seen: string[] = [];
 			const releaseFirst = bus.subscribe("OrderCreated", () => {
 				seen.push("first");
@@ -861,7 +861,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("ignores a second call on a catch-all subscription", () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			const release = bus.subscribeAll(() => {});
 
 			release();
@@ -873,7 +873,7 @@ describe("EventBusImpl", () => {
 	describe("abort reason that is not an error", () => {
 		it("carries it alongside the handler failures", async () => {
 			const controller = new AbortController();
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 
 			bus.subscribe("OrderCreated", async () => {
 				controller.abort("stopped by a string");
@@ -908,7 +908,7 @@ describe("EventBusImpl", () => {
 			}) as OrderShipped;
 
 		it("delivers every type of the set to one handler", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			const seen: string[] = [];
 			bus.subscribeMany(["OrderCreated", "OrderShipped"], (event) => {
 				seen.push(event.type);
@@ -920,7 +920,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("releases every subscription it made with one call", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			const seen: string[] = [];
 			const release = bus.subscribeMany(
 				["OrderCreated", "OrderShipped"],
@@ -937,7 +937,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("subscribes a repeated type once", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			let calls = 0;
 			bus.subscribeMany(["OrderCreated", "OrderCreated"], () => {
 				calls++;
@@ -949,7 +949,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("subscribes nothing for an empty set", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			let calls = 0;
 			const release = bus.subscribeMany([], () => {
 				calls++;
@@ -962,7 +962,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("does nothing when the release is called again", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			const seen: string[] = [];
 			const release = bus.subscribeMany(["OrderCreated"], (event) => {
 				seen.push(event.type);
@@ -979,7 +979,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("refuses a closed bus", () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			bus.close();
 
 			expect(() => bus.subscribeMany(["OrderCreated"], () => {})).toThrow(
@@ -990,7 +990,7 @@ describe("EventBusImpl", () => {
 
 	describe("metadata and instance isolation", () => {
 		it("hands every subscriber the same event, metadata included", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			const seen: OrderEvent[] = [];
 			bus.subscribe("OrderCreated", (event) => {
 				seen.push(event);
@@ -1029,8 +1029,8 @@ describe("EventBusImpl", () => {
 		});
 
 		it("keeps two buses from reaching each other", async () => {
-			const first = new EventBusImpl<OrderEvent>();
-			const second = new EventBusImpl<OrderEvent>();
+			const first = new InProcessEventBus<OrderEvent>();
+			const second = new InProcessEventBus<OrderEvent>();
 			const onFirst: string[] = [];
 			const onSecond: string[] = [];
 			first.subscribe("OrderCreated", () => {
@@ -1052,8 +1052,8 @@ describe("EventBusImpl", () => {
 		});
 
 		it("leaves the other bus usable when one closes", async () => {
-			const first = new EventBusImpl<OrderEvent>();
-			const second = new EventBusImpl<OrderEvent>();
+			const first = new InProcessEventBus<OrderEvent>();
+			const second = new InProcessEventBus<OrderEvent>();
 			let reached = 0;
 			second.subscribe("OrderCreated", () => {
 				reached++;
@@ -1073,7 +1073,7 @@ describe("EventBusImpl", () => {
 			createDomainEvent("OrderCreated", { orderId: "o-1" }) as OrderCreated;
 
 		it("rejects every operation afterwards", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			bus.close();
 
 			expect(() => bus.subscribe("OrderCreated", () => {})).toThrow(
@@ -1089,7 +1089,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("settles a waiter that would otherwise wait forever", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			// Without a timeout and without a signal this waits for an event
 			// that closing makes impossible.
 			const waiting = bus.once("OrderCreated");
@@ -1100,7 +1100,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("releases the subscriptions it held", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			let called = 0;
 			bus.subscribe("OrderCreated", () => {
 				called++;
@@ -1132,7 +1132,7 @@ describe("EventBusImpl", () => {
 					return typeof value === "function" ? value.bind(target) : value;
 				},
 			});
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			const first = bus.once("OrderCreated", { signal: hostile });
 			const second = bus.once("OrderCreated");
 
@@ -1143,17 +1143,18 @@ describe("EventBusImpl", () => {
 		});
 
 		it("settles a waiter created while an observer closes the bus", async () => {
-			const bus: EventBusImpl<OrderEvent> = new EventBusImpl<OrderEvent>({
-				maxSubscriptionsPerEventType: 1,
-				observers: {
-					...silentObservers(),
-					// once() subscribes internally, so a report can fire while the
-					// waiter is still being built.
-					onSubscriptionThresholdExceeded: () => {
-						bus.close();
+			const bus: InProcessEventBus<OrderEvent> =
+				new InProcessEventBus<OrderEvent>({
+					maxSubscriptionsPerEventType: 1,
+					observers: {
+						...silentObservers(),
+						// once() subscribes internally, so a report can fire while the
+						// waiter is still being built.
+						onSubscriptionThresholdExceeded: () => {
+							bus.close();
+						},
 					},
-				},
-			});
+				});
 
 			const first = bus.once("OrderCreated");
 			const second = bus.once("OrderCreated");
@@ -1163,14 +1164,14 @@ describe("EventBusImpl", () => {
 		});
 
 		it("does nothing when called again", () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			bus.close();
 
 			expect(() => bus.close()).not.toThrow();
 		});
 
 		it("refuses the rest of a batch when it closes mid-publish", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			const seen: string[] = [];
 			bus.subscribe("OrderCreated", async (event) => {
 				seen.push(event.payload.orderId);
@@ -1189,7 +1190,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("does not stop a handler that is already running", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			let finished = false;
 			bus.subscribe("OrderCreated", async () => {
 				await new Promise((resolve) => setTimeout(resolve, 20));
@@ -1211,27 +1212,30 @@ describe("EventBusImpl", () => {
 		it("rejects a maximum publish depth that is not a positive integer", () => {
 			for (const invalid of [0, -1, 1.5, Number.NaN]) {
 				expect(
-					() => new EventBusImpl<OrderEvent>({ maxPublishDepth: invalid }),
+					() => new InProcessEventBus<OrderEvent>({ maxPublishDepth: invalid }),
 				).toThrow();
 			}
 		});
 
 		it("rejects a subscription threshold that is not a positive integer", () => {
 			expect(
-				() => new EventBusImpl<OrderEvent>({ maxSubscriptionsPerEventType: 0 }),
+				() =>
+					new InProcessEventBus<OrderEvent>({
+						maxSubscriptionsPerEventType: 0,
+					}),
 			).toThrow();
 		});
 
 		it("rejects a chain store without run and getStore", () => {
 			expect(
 				() =>
-					new EventBusImpl<OrderEvent>({
+					new InProcessEventBus<OrderEvent>({
 						chainStore: {} as unknown as PublishChainStore,
 					}),
 			).toThrow(TypeError);
 			expect(
 				() =>
-					new EventBusImpl<OrderEvent>({
+					new InProcessEventBus<OrderEvent>({
 						chainStore: {
 							run: () => undefined,
 						} as unknown as PublishChainStore,
@@ -1244,7 +1248,7 @@ describe("EventBusImpl", () => {
 		it("dispatches nothing when the signal is already aborted", async () => {
 			const controller = new AbortController();
 			controller.abort(new Error("owner stopped before publish"));
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			let called = false;
 
 			bus.subscribe("OrderCreated", () => {
@@ -1267,7 +1271,7 @@ describe("EventBusImpl", () => {
 
 		it("stops the batch and leaves the remaining events undispatched", async () => {
 			const controller = new AbortController();
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			const seen: string[] = [];
 
 			bus.subscribe("OrderCreated", async () => {
@@ -1308,7 +1312,7 @@ describe("EventBusImpl", () => {
 		const BRAKE = 200;
 
 		it("rejects a synchronous publish cycle instead of overflowing the stack", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			let depth = 0;
 
 			bus.subscribe("OrderCreated", (_event, context) => {
@@ -1324,7 +1328,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("rejects an asynchronous publish cycle that carries the context signal", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			let depth = 0;
 
 			bus.subscribe("OrderCreated", async (_event, context) => {
@@ -1341,7 +1345,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("bounds a cycle whose signal crosses a nested bounded execution", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			let depth = 0;
 
 			bus.subscribe("OrderCreated", async (_event, context) => {
@@ -1366,7 +1370,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("bounds a synchronous cycle that runs through a later event of a batch", async () => {
-			const bus = new EventBusImpl<OrderEvent>({ maxPublishDepth: 8 });
+			const bus = new InProcessEventBus<OrderEvent>({ maxPublishDepth: 8 });
 			let hops = 0;
 
 			// The nested publication carries two events. The cycling one is
@@ -1389,7 +1393,7 @@ describe("EventBusImpl", () => {
 			// The guide tells a handler to pass context.signal. A poll loop that
 			// obeys it must not run into the bound: every generation finishes
 			// before the next one starts, so nothing is nested.
-			const bus = new EventBusImpl<OrderEvent>({ maxPublishDepth: 4 });
+			const bus = new InProcessEventBus<OrderEvent>({ maxPublishDepth: 4 });
 			let generations = 0;
 			let failure: unknown;
 
@@ -1420,7 +1424,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("names the event types that formed the cycle", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			let depth = 0;
 
 			bus.subscribe("OrderCreated", (_event, context) => {
@@ -1441,7 +1445,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("dispatches nested publications that stay below the limit", async () => {
-			const bus = new EventBusImpl<OrderEvent>({ maxPublishDepth: 4 });
+			const bus = new InProcessEventBus<OrderEvent>({ maxPublishDepth: 4 });
 			const seen: string[] = [];
 
 			bus.subscribe("OrderCreated", (event, context) => {
@@ -1458,7 +1462,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("does not count concurrent publications on one bus as recursion", async () => {
-			const bus = new EventBusImpl<OrderEvent>({ maxPublishDepth: 4 });
+			const bus = new InProcessEventBus<OrderEvent>({ maxPublishDepth: 4 });
 			let handled = 0;
 
 			// One shared bus, published to concurrently, is correct usage. A
@@ -1476,7 +1480,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("honours a configured maximum publish depth", async () => {
-			const bus = new EventBusImpl<OrderEvent>({ maxPublishDepth: 3 });
+			const bus = new InProcessEventBus<OrderEvent>({ maxPublishDepth: 3 });
 			let depth = 0;
 
 			bus.subscribe("OrderCreated", (_event, context) => {
@@ -1497,7 +1501,7 @@ describe("EventBusImpl", () => {
 
 		it("reports the crossing, then each doubling", () => {
 			const reports: unknown[] = [];
-			const bus = new EventBusImpl<OrderEvent>({
+			const bus = new InProcessEventBus<OrderEvent>({
 				maxSubscriptionsPerEventType: 3,
 				observers: {
 					...silentObservers(),
@@ -1517,7 +1521,7 @@ describe("EventBusImpl", () => {
 
 		it("reports each event type separately", () => {
 			const types: (string | null)[] = [];
-			const bus = new EventBusImpl<OrderEvent>({
+			const bus = new InProcessEventBus<OrderEvent>({
 				maxSubscriptionsPerEventType: 1,
 				observers: {
 					...silentObservers(),
@@ -1536,7 +1540,7 @@ describe("EventBusImpl", () => {
 
 		it("reports again after the count drops below the threshold", () => {
 			const counts: number[] = [];
-			const bus = new EventBusImpl<OrderEvent>({
+			const bus = new InProcessEventBus<OrderEvent>({
 				maxSubscriptionsPerEventType: 2,
 				observers: {
 					...silentObservers(),
@@ -1562,7 +1566,7 @@ describe("EventBusImpl", () => {
 
 		it("stays muted while the count is still above the threshold", () => {
 			const counts: number[] = [];
-			const bus = new EventBusImpl<OrderEvent>({
+			const bus = new InProcessEventBus<OrderEvent>({
 				maxSubscriptionsPerEventType: 2,
 				observers: {
 					...silentObservers(),
@@ -1584,7 +1588,7 @@ describe("EventBusImpl", () => {
 
 		it("stays quiet in a steady state at the threshold", () => {
 			let reports = 0;
-			const bus = new EventBusImpl<OrderEvent>({
+			const bus = new InProcessEventBus<OrderEvent>({
 				maxSubscriptionsPerEventType: 4,
 				observers: {
 					...silentObservers(),
@@ -1608,7 +1612,7 @@ describe("EventBusImpl", () => {
 
 		it("re-arms the catch-all report as well", () => {
 			const counts: number[] = [];
-			const bus = new EventBusImpl<OrderEvent>({
+			const bus = new InProcessEventBus<OrderEvent>({
 				maxSubscriptionsPerEventType: 1,
 				observers: {
 					...silentObservers(),
@@ -1629,7 +1633,7 @@ describe("EventBusImpl", () => {
 
 		it("keeps reporting as a monotonic leak grows", () => {
 			const counts: number[] = [];
-			const bus = new EventBusImpl<OrderEvent>({
+			const bus = new InProcessEventBus<OrderEvent>({
 				maxSubscriptionsPerEventType: 4,
 				observers: {
 					...silentObservers(),
@@ -1649,7 +1653,7 @@ describe("EventBusImpl", () => {
 
 		it("reports catch-all subscriptions with a null event type", () => {
 			const reports: { eventType: string | null }[] = [];
-			const bus = new EventBusImpl<OrderEvent>({
+			const bus = new InProcessEventBus<OrderEvent>({
 				maxSubscriptionsPerEventType: 2,
 				observers: {
 					...silentObservers(),
@@ -1668,7 +1672,7 @@ describe("EventBusImpl", () => {
 
 		it("stays silent at or below the threshold", () => {
 			let reported = false;
-			const bus = new EventBusImpl<OrderEvent>({
+			const bus = new InProcessEventBus<OrderEvent>({
 				maxSubscriptionsPerEventType: 4,
 				observers: {
 					...silentObservers(),
@@ -1686,7 +1690,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("keeps subscribing when the observer throws", () => {
-			const bus = new EventBusImpl<OrderEvent>({
+			const bus = new InProcessEventBus<OrderEvent>({
 				maxSubscriptionsPerEventType: 1,
 				observers: {
 					...silentObservers(),
@@ -1704,14 +1708,14 @@ describe("EventBusImpl", () => {
 		it("rejects an observer bundle without the hook", () => {
 			expect(
 				() =>
-					new EventBusImpl<OrderEvent>({
+					new InProcessEventBus<OrderEvent>({
 						observers: {} as unknown as EventBusObservers,
 					}),
 			).toThrow(TypeError);
 		});
 
 		it("subscribes without a configured observer", () => {
-			const bus = new EventBusImpl<OrderEvent>({
+			const bus = new InProcessEventBus<OrderEvent>({
 				maxSubscriptionsPerEventType: 1,
 			});
 
@@ -1728,7 +1732,7 @@ describe("EventBusImpl", () => {
 
 		it("reports a failing handler with its position in the batch", async () => {
 			const failures: unknown[] = [];
-			const bus = new EventBusImpl<OrderEvent>({
+			const bus = new InProcessEventBus<OrderEvent>({
 				observers: {
 					...silentObservers(),
 					onHandlerError: (report) =>
@@ -1762,7 +1766,7 @@ describe("EventBusImpl", () => {
 
 		it("marks a catch-all handler in the failure report", async () => {
 			const catchAll: boolean[] = [];
-			const bus = new EventBusImpl<OrderEvent>({
+			const bus = new InProcessEventBus<OrderEvent>({
 				observers: {
 					...silentObservers(),
 					onHandlerError: (report) => catchAll.push(report.catchAll),
@@ -1783,7 +1787,7 @@ describe("EventBusImpl", () => {
 
 		it("keeps the catch-all flag correct when a peer unsubscribes mid-dispatch", async () => {
 			const flags: boolean[] = [];
-			const bus = new EventBusImpl<OrderEvent>({
+			const bus = new InProcessEventBus<OrderEvent>({
 				observers: {
 					...silentObservers(),
 					onHandlerError: (report) => flags.push(report.catchAll),
@@ -1810,7 +1814,7 @@ describe("EventBusImpl", () => {
 		it("does not report a synchronously finished handler as still running", async () => {
 			const reports: (readonly number[])[] = [];
 			const controller = new AbortController();
-			const bus = new EventBusImpl<OrderEvent>({
+			const bus = new InProcessEventBus<OrderEvent>({
 				observers: {
 					...silentObservers(),
 					onPublishAborted: (report) => reports.push(report.pendingIndices),
@@ -1836,7 +1840,7 @@ describe("EventBusImpl", () => {
 
 		it("names the handlers that were still running when the publish aborted", async () => {
 			const reports: unknown[] = [];
-			const bus = new EventBusImpl<OrderEvent>({
+			const bus = new InProcessEventBus<OrderEvent>({
 				observers: {
 					...silentObservers(),
 					onPublishAborted: (report) =>
@@ -1864,7 +1868,7 @@ describe("EventBusImpl", () => {
 		it("reports nothing when the abort finds every handler settled", async () => {
 			const controller = new AbortController();
 			let reported = false;
-			const bus = new EventBusImpl<OrderEvent>({
+			const bus = new InProcessEventBus<OrderEvent>({
 				observers: {
 					...silentObservers(),
 					onPublishAborted: () => {
@@ -1891,7 +1895,7 @@ describe("EventBusImpl", () => {
 
 		it("reports nothing abandoned when every handler settles", async () => {
 			let aborted = 0;
-			const bus = new EventBusImpl<OrderEvent>({
+			const bus = new InProcessEventBus<OrderEvent>({
 				observers: {
 					...silentObservers(),
 					onPublishAborted: () => {
@@ -1907,7 +1911,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("keeps a rejection that cannot become a string", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 
 			// A value without a prototype has no string form, so String() on it
 			// throws. That must not swallow the failure of a peer.
@@ -1930,7 +1934,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("rejects with an error when the only rejection has no string form", async () => {
-			const bus = new EventBusImpl<OrderEvent>();
+			const bus = new InProcessEventBus<OrderEvent>();
 			const reason = Object.create(null);
 			bus.subscribe("OrderCreated", () => {
 				throw reason;
@@ -1943,7 +1947,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("publishes an empty batch at the depth bound", async () => {
-			const bus = new EventBusImpl<OrderEvent>({ maxPublishDepth: 1 });
+			const bus = new InProcessEventBus<OrderEvent>({ maxPublishDepth: 1 });
 			let nested: unknown = "not attempted";
 
 			// An empty batch dispatches nothing, so it cannot extend a cycle.
@@ -1960,7 +1964,7 @@ describe("EventBusImpl", () => {
 		});
 
 		it("keeps the failure contract when a failure observer throws", async () => {
-			const bus = new EventBusImpl<OrderEvent>({
+			const bus = new InProcessEventBus<OrderEvent>({
 				observers: {
 					...silentObservers(),
 					onHandlerError: () => {

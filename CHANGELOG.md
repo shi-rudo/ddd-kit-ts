@@ -344,7 +344,7 @@ immutable. Run one kit version per process during a cutover.
 - A process manager routes commands through a transactional command outbox:
   `PublishedCommand`, `CommandOutboxWriter`, `routeEventsToCommandOutbox`,
   and `createCommandOutboxContractTests`.
-- `EventBusImpl` reports handler failures, aborted publications, and
+- `InProcessEventBus` reports handler failures, aborted publications, and
   accumulating subscriptions through optional observers. It bounds one
   publish chain with `maxPublishDepth` and `PublishDepthExceededError`, and an
   optional `chainStore` follows a chain across async work.

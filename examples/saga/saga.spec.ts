@@ -17,7 +17,7 @@ import type { Id } from "../../src/domain/identity/id";
 import { InvalidDomainTransitionError } from "../../src/domain/state-machine/domain-state-machine";
 import { type Money, moneyOfMinor } from "../../src/domain/value-object/money";
 import { AggregateNotFoundError } from "../../src/errors/kit-errors";
-import { EventBusImpl } from "../../src/messaging/event-bus/event-bus";
+import { InProcessEventBus } from "../../src/messaging/event-bus/event-bus";
 import type { EventBus } from "../../src/messaging/event-bus/ports";
 import { outboxWriterAcceptingEventLoss } from "../../src/messaging/outbox/outbox";
 import type { OutboxWriter } from "../../src/messaging/outbox/ports";
@@ -400,7 +400,7 @@ function bootstrap() {
 
 	const deps: AppDeps = {
 		commandBus: new CommandBus<AppCommands>(),
-		eventBus: new EventBusImpl<AppEvent>(),
+		eventBus: new InProcessEventBus<AppEvent>(),
 		// Demo wiring: events reach the saga over the bus fast path only,
 		// so the outbox slot gets the explicit event-loss writer instead of
 		// an InMemoryOutbox nobody drains (that dummy would grow unbounded;

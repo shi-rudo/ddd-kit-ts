@@ -3,7 +3,7 @@ import {
 	createDomainEvent,
 	type DomainEvent,
 } from "../domain/event/domain-event";
-import { EventBusImpl } from "../messaging/event-bus/event-bus";
+import { InProcessEventBus } from "../messaging/event-bus/event-bus";
 import { createEventBusContractTests } from "./index";
 
 type ContractPlaced = DomainEvent<"ContractPlaced", { orderId: string }>;
@@ -18,7 +18,7 @@ const identity = {
 describe("event-bus contract suite against the in-memory reference", () => {
 	const tests = createEventBusContractTests<ContractEvent>({
 		createEnvironment: async () => ({
-			bus: new EventBusImpl<ContractEvent>(),
+			bus: new InProcessEventBus<ContractEvent>(),
 		}),
 		createFirstEvent: () =>
 			createDomainEvent(

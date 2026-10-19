@@ -347,7 +347,7 @@ export {
 	PublishDepthExceededError,
 } from "./messaging/event-bus/errors";
 export {
-	EventBusImpl,
+	InProcessEventBus,
 	type EventBusObservers,
 	type EventBusOptions,
 	type HandlerFailureReport,

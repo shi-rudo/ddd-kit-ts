@@ -4,7 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
 	createDomainEvent,
 	type DomainEvent,
-	EventBusImpl,
+	InProcessEventBus,
 	type PublishChainState,
 	PublishDepthExceededError,
 } from "../../src";
@@ -34,7 +34,7 @@ async function until(
  * there and only an injected store can still carry the depth.
  */
 function subscribeMergingSignals(
-	bus: EventBusImpl<OrderCreated>,
+	bus: InProcessEventBus<OrderCreated>,
 	counter: { depth: number },
 ): void {
 	bus.subscribe("OrderCreated", async (_event, context) => {
@@ -52,7 +52,7 @@ function subscribeMergingSignals(
 describe("event bus publish chain across a merged signal", () => {
 	it("bounds the chain when the caller injects a chain store", async () => {
 		const counter = { depth: 0 };
-		const bus = new EventBusImpl<OrderCreated>({
+		const bus = new InProcessEventBus<OrderCreated>({
 			chainStore: new AsyncLocalStorage<PublishChainState>(),
 			maxPublishDepth: 8,
 		});
@@ -66,7 +66,7 @@ describe("event bus publish chain across a merged signal", () => {
 
 	it("loses the chain without a store, which is why the store exists", async () => {
 		const counter = { depth: 0 };
-		const bus = new EventBusImpl<OrderCreated>({ maxPublishDepth: 8 });
+		const bus = new InProcessEventBus<OrderCreated>({ maxPublishDepth: 8 });
 		subscribeMergingSignals(bus, counter);
 
 		await bus.publish([created()]);
@@ -78,7 +78,7 @@ describe("event bus publish chain across a merged signal", () => {
 		// Each generation finishes before the next one starts, so nothing is
 		// nested. AsyncLocalStorage still propagates into the timer callback,
 		// and a depth that keeps counting there kills a correct poll loop.
-		const bus = new EventBusImpl<OrderCreated>({
+		const bus = new InProcessEventBus<OrderCreated>({
 			chainStore: new AsyncLocalStorage<PublishChainState>(),
 			maxPublishDepth: 4,
 		});
@@ -110,7 +110,7 @@ describe("event bus publish chain across a merged signal", () => {
 			undefined,
 			new AsyncLocalStorage<PublishChainState>(),
 		]) {
-			const bus = new EventBusImpl<OrderCreated>({
+			const bus = new InProcessEventBus<OrderCreated>({
 				chainStore: store,
 				maxPublishDepth: 4,
 			});

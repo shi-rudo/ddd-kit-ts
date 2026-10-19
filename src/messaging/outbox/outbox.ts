@@ -174,10 +174,10 @@ type DispatchedEventReceipt = {
  *
  * @example
  * ```ts
- * import { InMemoryOutbox, EventBusImpl } from "@shirudo/ddd-kit";
+ * import { InMemoryOutbox, InProcessEventBus } from "@shirudo/ddd-kit";
  *
  * const outbox = new InMemoryOutbox<OrderEvent>();
- * const bus = new EventBusImpl<OrderEvent>();
+ * const bus = new InProcessEventBus<OrderEvent>();
  *
  * const uow = makeOrderUnitOfWork({ outbox, bus });
  * await uow.run(async ({ repositories }) => {
