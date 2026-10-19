@@ -16,6 +16,7 @@ export type {
 export {
 	CommandBus,
 	type CommandBusOptions,
+	type ICommandBus,
 } from "./application/cqrs/command/command-bus";
 export {
 	type CommandCommitOriginCandidate,
@@ -38,6 +39,7 @@ export {
 } from "./application/cqrs/handler";
 export type { Query, QueryHandler } from "./application/cqrs/query/query";
 export {
+	type IQueryBus,
 	QueryBus,
 	type QueryBusOptions,
 } from "./application/cqrs/query/query-bus";

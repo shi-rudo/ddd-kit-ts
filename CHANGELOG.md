@@ -231,9 +231,9 @@ immutable. Run one kit version per process during a cutover.
   `@shirudo/ddd-kit/state-machine`: `DomainStateMachine`,
   `transitionDomainState`, `canTransitionDomainState`, its errors, and its
   types. The root entry no longer exports them.
-- The root entry no longer exports `deepEqualExcept`, `freezeShallow`,
-  `IValueObject`, `ICommandBus`, and `IQueryBus`. Use
-  `valueObjectEqualsExcept`, and type a value with the class.
+- The root entry no longer exports `deepEqualExcept`, `freezeShallow`, and
+  `IValueObject`. Use `valueObjectEqualsExcept`, and type a value object with
+  `ValueObject`.
 
 #### Names
 

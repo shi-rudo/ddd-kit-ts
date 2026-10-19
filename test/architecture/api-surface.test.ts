@@ -7,8 +7,10 @@ import type {
 	DeliveryFailureClassifier,
 	DomainErrorClass,
 	DurableCommandMessage,
+	ICommandBus,
 	Id,
 	IntegrationMessageRelationships,
+	IQueryBus,
 	OutboxDispatcherObservers,
 	Repository,
 	RepositoryTracking,
@@ -36,6 +38,26 @@ function assertReadonlyEventMetadata(metadata: PublicEventMetadata): void {
 	metadata.custom = "changed";
 }
 void assertReadonlyEventMetadata;
+
+// The buses have private fields, so an object literal cannot take the class
+// type. A test double or another bus implements the port interface.
+const fakeCommandBus: ICommandBus = {
+	execute: async () => {
+		throw new Error("not dispatched");
+	},
+	register: () => {},
+};
+const fakeQueryBus: IQueryBus = {
+	execute: async () => {
+		throw new Error("not dispatched");
+	},
+	executeUnsafe: async () => {
+		throw new Error("not dispatched");
+	},
+	register: () => {},
+};
+void fakeCommandBus;
+void fakeQueryBus;
 
 const publicStateValidator: StateValidator<{ value: number }> = (state) => {
 	void state.value;

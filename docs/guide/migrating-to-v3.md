@@ -1056,7 +1056,7 @@ default `Record<string, unknown>` map.
 | `import { DomainStateMachine } from "@shirudo/ddd-kit"` | `import { DomainStateMachine } from "@shirudo/ddd-kit/state-machine"` |
 | `deepEqualExcept` | not exported; use `valueObjectEqualsExcept` |
 | `freezeShallow` | not exported |
-| `IValueObject`, `ICommandBus`, `IQueryBus` | not exported; type a value with `ValueObject`, `CommandBus`, or `QueryBus` |
+| `IValueObject` | not exported; type a value object with `ValueObject` |
 
 The `utils` entry point duplicated the root, so only the import path
 changes. `@shirudo/ddd-kit/money` is a new entry point. Node 20 reached its
@@ -1432,8 +1432,7 @@ The root entry no longer exports `capturePersistenceBaseline`,
 `derivePersistenceChanges`, `insertPersistenceBaseline`,
 `recapturePersistenceBaseline`, `persistenceProjectionDrifted`,
 `PersistenceBaseline`, `freezeShallow`, `deepEqualExcept`,
-`recordDomainEvent`, `createUncommittedDomainEvent`, `IValueObject`,
-`ICommandBus`, and `IQueryBus`.
+`recordDomainEvent`, `createUncommittedDomainEvent`, and `IValueObject`.
 
 - `copyPlainState` rejects an index key and a non-enumerable data property or
   accessor on a built-in, for example `0` on a `Map` or a key after the last
