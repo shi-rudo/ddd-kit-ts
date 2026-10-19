@@ -224,7 +224,6 @@ export {
 	type SpecificationComposite,
 	specification,
 } from "./domain/specification/specification";
-// Domain State Machine
 // Value Objects
 export {
 	deepFreeze,
@@ -328,7 +327,6 @@ export type {
 export { copyPlainState } from "./internal/structural/copy-plain-state";
 // Structural equality and copies
 export { deepEqual } from "./internal/structural/deep-equal";
-export {} from "./internal/structural/deep-equal-except";
 export {
 	type DeepOmitKey,
 	type DeepOmitOptions,

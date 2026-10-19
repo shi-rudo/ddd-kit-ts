@@ -1,9 +1,7 @@
 import { err, ok, type Result } from "@shirudo/result";
 import { deepEqual } from "../../internal/structural/deep-equal";
-import {
-	type DeepEqualExceptOptions,
-	deepEqualExcept,
-} from "../../internal/structural/deep-equal-except";
+import { deepEqualExcept } from "../../internal/structural/deep-equal-except";
+import type { DeepOmitOptions } from "../../internal/structural/deep-omit";
 import {
 	builtInTagWithoutInvokingAccessors,
 	hasIntrinsicPrototypeChain,
@@ -584,16 +582,14 @@ export function valueObjectEquals<T>(
 export function valueObjectEqualsExcept<T>(
 	a: ValueObjectOf<T>,
 	b: ValueObjectOf<T>,
-	options: DeepEqualExceptOptions,
+	options: DeepOmitOptions,
 ): boolean {
 	return deepEqualExcept(a, b, keepValueObjectClass(options));
 }
 
 // Without the class record two nested value objects of different classes
 // compare equal, so no option may ignore it.
-function keepValueObjectClass(
-	options: DeepEqualExceptOptions,
-): DeepEqualExceptOptions {
+function keepValueObjectClass(options: DeepOmitOptions): DeepOmitOptions {
 	const { ignoreKeys, ignoreKeyPredicate } = options;
 	return {
 		...options,
