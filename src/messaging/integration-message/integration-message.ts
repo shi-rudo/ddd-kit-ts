@@ -124,7 +124,7 @@ export function decodeIntegrationMessage(
 }
 
 /**
- * Composes a validated public message into a minted local projector input.
+ * Composes a validated public message into a kit-built local projector input.
  * Relationship headers become local event metadata. The public JSON schema is
  * retained; producer-private domain types are not reconstructed.
  */

@@ -6,7 +6,7 @@ import {
 	MissingEntityIdError,
 	PendingEventBatchMismatchError,
 	PendingEventLimitExceededError,
-	UnmintedEventError,
+	HandBuiltEventError,
 	UnreplayableAggregateError,
 } from "../../errors/kit-errors";
 import {
@@ -578,10 +578,10 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 				value: 10,
 				status: "inactive",
 			});
-			const minted = agg.valueUpdated(42);
-			const literal = { ...minted, payload: { newValue: 42 } } as ValueUpdated;
+			const built = agg.valueUpdated(42);
+			const literal = { ...built, payload: { newValue: 42 } } as ValueUpdated;
 
-			expect(() => agg.update(42, literal)).toThrow(UnmintedEventError);
+			expect(() => agg.update(42, literal)).toThrow(HandBuiltEventError);
 			expect(agg.state.value).toBe(10);
 			expect(agg.version).toBe(0);
 			expect(agg.pendingEvents).toHaveLength(0);
@@ -1120,7 +1120,7 @@ describe("createEvent options and pending-event bookkeeping", () => {
 				payload: { value: 1 },
 				schemaVersion: 1,
 			}),
-		).toThrow(UnmintedEventError);
+		).toThrow(HandBuiltEventError);
 
 		expect(aggregate.pendingEvents).toHaveLength(0);
 	});
@@ -1140,7 +1140,7 @@ describe("createEvent options and pending-event bookkeeping", () => {
 				eventId: `event-${index}`,
 				occurredAt: new Date("2027-04-05T06:07:08.000Z"),
 			})),
-		).toThrow(UnmintedEventError);
+		).toThrow(HandBuiltEventError);
 	});
 
 	it("reports the pending count across add, record, and acknowledge", () => {

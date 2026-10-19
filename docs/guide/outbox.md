@@ -699,7 +699,7 @@ The converted event represents the published integration schema; it does not
 reconstruct the producer's private domain event or turn ISO strings back into
 domain `Date` objects. A receiving bounded context owns any further mapping to
 its own commands or model. The three relationship headers are copied into the
-minted local event metadata so tracing and process context survive the boundary.
+kit-built local event metadata so tracing and process context survive the boundary.
 
 The dispatcher preserves order up to the sink. After that, broker
 configuration decides what consumers observe. If the broker cannot preserve

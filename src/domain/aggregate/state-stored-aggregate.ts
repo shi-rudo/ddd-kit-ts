@@ -18,7 +18,7 @@ export abstract class StateStoredAggregate<
 > extends BaseAggregate<TState, TId, TEvent> {
 	/**
 	 * Replaces the state, advances the OCC version, and records the events
-	 * of the change, in that order. State validation, the event mint gate,
+	 * of the change, in that order. State validation, the kit-built check,
 	 * the aggregate identity check of the event, the pending event-id check,
 	 * and the pending event limit check run before the change becomes
 	 * observable, so a rejected decision records nothing and moves nothing.

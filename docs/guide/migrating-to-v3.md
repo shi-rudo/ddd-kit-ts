@@ -648,11 +648,11 @@ The top-level `createDomainEvent` uses the frozen
 `defaultDomainEventFactory`. `createStampedDomainEvent` builds an event
 whose caller owns the identity and the time, outside an aggregate.
 
-#### Events are readonly and minted
+#### Events are readonly and kit-built
 
 Every field of `DomainEvent` is `readonly`. The recording paths accept only
-events that the kit constructors minted. A hand-built object literal throws
-`UnmintedEventError` (code `UNMINTED_EVENT`) before the state moves. The
+events that the kit constructors built. A hand-built object literal throws
+`HandBuiltEventError` (code `HAND_BUILT_EVENT`) before the state moves. The
 compiler does not flag a literal, because a literal satisfies the readonly
 interface. Search for event objects built by hand.
 

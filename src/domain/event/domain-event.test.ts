@@ -843,15 +843,15 @@ describe("createDomainEvent metadata is guarded at the source", () => {
 	});
 
 	it("createStampedDomainEvent rejects metadata carrying an own __proto__ key", () => {
-		const mint = () =>
+		const build = () =>
 			createStampedDomainEvent("Ticked", undefined, {
 				eventId: "event-1",
 				occurredAt: new Date("2026-01-01T00:00:00.000Z"),
 				metadata: hostileMetadata(),
 			});
 
-		expect(mint).toThrow(HostileStateKeyError);
-		expect(mint).toThrow(/Event metadata/);
+		expect(build).toThrow(HostileStateKeyError);
+		expect(build).toThrow(/Event metadata/);
 	});
 
 	it("createStamp rejects metadata carrying an own __proto__ key", () => {
@@ -902,9 +902,9 @@ describe("createDomainEvent metadata is guarded at the source", () => {
 					metadata: null as never,
 				}),
 		],
-	])("%s rejects null metadata at the producer", (_producer, mint) => {
-		expect(mint).toThrow(TypeError);
-		expect(mint).toThrow(/metadata must be an object or undefined/);
+	])("%s rejects null metadata at the producer", (_producer, build) => {
+		expect(build).toThrow(TypeError);
+		expect(build).toThrow(/metadata must be an object or undefined/);
 	});
 
 	it("copyMetadata rejects hostile ADDITIONAL metadata", () => {
@@ -1025,7 +1025,7 @@ describe("a RegExp is rejected at the mint", () => {
 describe("binary payloads are rejected at the mint", () => {
 	// Freezing cannot make buffers immutable (the spec forbids freezing
 	// a view with elements, and a frozen view still shares its mutable
-	// buffer), so accepting them would falsify "minted implies deeply
+	// buffer), so accepting them would falsify "kit-built implies deeply
 	// frozen". They do not survive JSON either.
 	it("rejects a top-level TypedArray payload", () => {
 		expect(() =>

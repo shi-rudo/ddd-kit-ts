@@ -10,7 +10,7 @@ import {
 	MisattributedEventError,
 	MissingFoldError,
 	PendingEventLimitExceededError,
-	UnmintedEventError,
+	HandBuiltEventError,
 	UnreplayableAggregateError,
 } from "../../errors/kit-errors";
 import {
@@ -1018,42 +1018,45 @@ describe("replay trusts history", () => {
 	it.each([
 		[
 			"an open literal",
-			(minted: TestEventUpdated): TestEventUpdated =>
-				({ ...minted, payload: { newValue: 99 } }) as TestEventUpdated,
+			(built: TestEventUpdated): TestEventUpdated =>
+				({ ...built, payload: { newValue: 99 } }) as TestEventUpdated,
 		],
 		[
 			"a frozen shell around a mutable payload",
-			(minted: TestEventUpdated): TestEventUpdated =>
+			(built: TestEventUpdated): TestEventUpdated =>
 				Object.freeze({
-					...minted,
+					...built,
 					payload: { newValue: 99 },
 				}) as TestEventUpdated,
 		],
 		[
 			"a frozen shell around mutable metadata",
-			(minted: TestEventUpdated): TestEventUpdated =>
+			(built: TestEventUpdated): TestEventUpdated =>
 				Object.freeze({
-					...minted,
+					...built,
 					metadata: { correlationId: "mutable" },
 				}) as TestEventUpdated,
 		],
-	])("rejects %s of a minted event before anything moves", (_shape, copyOf) => {
-		const agg = new RuleTighteningAggregate("test-1" as TestId, {
-			value: 10,
-			status: "inactive",
-		});
-		const minted = createDomainEvent("TestEventUpdated", {
-			newValue: 99,
-		}) as TestEventUpdated;
+	])(
+		"rejects %s of a kit-built event before anything moves",
+		(_shape, copyOf) => {
+			const agg = new RuleTighteningAggregate("test-1" as TestId, {
+				value: 10,
+				status: "inactive",
+			});
+			const built = createDomainEvent("TestEventUpdated", {
+				newValue: 99,
+			}) as TestEventUpdated;
 
-		expect(() => agg.testApply(copyOf(minted))).toThrow(UnmintedEventError);
+			expect(() => agg.testApply(copyOf(built))).toThrow(HandBuiltEventError);
 
-		expect(agg.state.value).toBe(10);
-		expect(agg.version).toBe(0);
-		expect(agg.pendingEvents).toHaveLength(0);
-	});
+			expect(agg.state.value).toBe(10);
+			expect(agg.version).toBe(0);
+			expect(agg.pendingEvents).toHaveLength(0);
+		},
+	);
 
-	it("rejects a lookalike that inherits a minted event through its prototype", () => {
+	it("rejects a lookalike that inherits a kit-built event through its prototype", () => {
 		// The brand is a non-enumerable own property. A prototype-chain
 		// lookalike inherits it while carrying mutable own overrides, so the
 		// probe reads the own property only.
@@ -1061,15 +1064,15 @@ describe("replay trusts history", () => {
 			value: 10,
 			status: "inactive",
 		});
-		const minted = createDomainEvent("TestEventUpdated", {
+		const built = createDomainEvent("TestEventUpdated", {
 			newValue: 99,
 		}) as TestEventUpdated;
-		const lookalike = Object.create(minted, {
+		const lookalike = Object.create(built, {
 			payload: { value: { newValue: 99 }, enumerable: true, writable: true },
 		}) as TestEventUpdated;
 
 		expect(isStampedDomainEvent(lookalike)).toBe(false);
-		expect(() => agg.testApply(lookalike)).toThrow(UnmintedEventError);
+		expect(() => agg.testApply(lookalike)).toThrow(HandBuiltEventError);
 		expect(agg.state.value).toBe(10);
 		expect(agg.pendingEvents).toHaveLength(0);
 	});
@@ -1087,7 +1090,7 @@ describe("replay trusts history", () => {
 		}) as unknown as TestEventUpdated;
 
 		expect(isUnstampedDomainEvent(lookalike)).toBe(false);
-		expect(() => agg.testApply(lookalike)).toThrow(UnmintedEventError);
+		expect(() => agg.testApply(lookalike)).toThrow(HandBuiltEventError);
 		expect(agg.state.value).toBe(10);
 		expect(agg.pendingEvents).toHaveLength(0);
 	});
@@ -1118,14 +1121,14 @@ describe("replay trusts history", () => {
 
 		expect(isStampedDomainEvent(literal)).toBe(false);
 		expect(() => agg.testApply(literal as TestEventUpdated)).toThrow(
-			UnmintedEventError,
+			HandBuiltEventError,
 		);
 		expect(agg.state.value).toBe(10);
 		expect(agg.pendingEvents).toHaveLength(0);
 	});
 
 	it("accepts the copy apply() mints with the aggregate identity for events without one", () => {
-		// The stamped copy is kit-derived from a minted event and adopted
+		// The stamped copy is kit-derived from a kit-built event and adopted
 		// into the mint marker; the gate must not reject apply's own work.
 		const agg = new RuleTighteningAggregate("test-1" as TestId, {
 			value: 0,
@@ -1148,10 +1151,10 @@ describe("replay trusts history", () => {
 			value: 0,
 			status: "inactive",
 		});
-		const minted = createDomainEvent("TestEventUpdated", {
+		const built = createDomainEvent("TestEventUpdated", {
 			newValue: 7,
 		}) as TestEventUpdated;
-		const row = { ...minted, payload: { newValue: 7 } } as TestEventUpdated;
+		const row = { ...built, payload: { newValue: 7 } } as TestEventUpdated;
 
 		const result = agg.replayHistory([row]);
 

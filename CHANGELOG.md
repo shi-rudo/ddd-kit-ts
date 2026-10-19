@@ -102,8 +102,8 @@ immutable. Run one kit version per process during a cutover.
   ids and the clock come from an immutable `createDomainEventFactory` value;
   the six module setters and scoped helpers are gone. See
   [The aggregate decides; the shell stamps](docs/guide/migrating-to-v3.md#the-aggregate-decides-the-shell-stamps).
-- Events are readonly and minted. A recording path accepts only an event that
-  a kit constructor minted and throws `UnmintedEventError` for a hand-built
+- Events are readonly and kit-built. A recording path accepts only an event
+  that a kit constructor built and throws `HandBuiltEventError` for a hand-built
   object. `createDomainEvent` rejects binary buffers and a `RegExp`, because a
   freeze cannot make them immutable. It checks the payload and the metadata
   before and after it copies them, and `InMemoryEventStore.append` applies the

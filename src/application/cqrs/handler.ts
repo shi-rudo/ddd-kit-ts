@@ -102,7 +102,7 @@ declare const aggregateCommitTokenBrand: unique symbol;
 
 /**
  * Opaque receipt that one aggregate was explicitly registered in the current
- * {@link withCommit} invocation. Tokens are minted only by the invocation's
+ * {@link withCommit} invocation. Tokens are issued only by the invocation's
  * {@link CommitRegistration} capability and are bound to that invocation at
  * runtime; a forged token or one retained from an earlier call is rejected
  * inside the transaction.
@@ -150,7 +150,7 @@ export interface WithCommitWorkResult<Evt extends AnyDomainEvent, R> {
 	result: R;
 	/**
 	 * Commit tokens returned by the invocation's registration capability.
-	 * Every token minted during the callback must appear at least once.
+	 * Every token issued during the callback must appear at least once.
 	 * Naked aggregates are intentionally not accepted: touching an aggregate
 	 * does not prove that its repository write participated in the transaction.
 	 */
@@ -206,7 +206,7 @@ function createCommitTokenScope<
 		Aggregate<Id<string>, Evt>,
 		AggregateCommitToken<Evt>
 	>();
-	let mintedTokenCount = 0;
+	let issuedTokenCount = 0;
 	let open = true;
 
 	const register = (
@@ -309,7 +309,7 @@ function createCommitTokenScope<
 			persistedVersion,
 			events,
 		});
-		mintedTokenCount += 1;
+		issuedTokenCount += 1;
 		return token;
 	};
 
@@ -344,7 +344,7 @@ function createCommitTokenScope<
 					(typeof token !== "object" && typeof token !== "function")
 				) {
 					throw new EventCollectionError(
-						"withCommit: a commit token was not minted by this callback's " +
+						"withCommit: a commit token was not issued by this callback's " +
 							"registration capability. Forged and stale tokens are rejected.",
 					);
 				}
@@ -352,7 +352,7 @@ function createCommitTokenScope<
 				const record = recordsByToken.get(tokenObject);
 				if (!record) {
 					throw new EventCollectionError(
-						"withCommit: a commit token was not minted by this callback's " +
+						"withCommit: a commit token was not issued by this callback's " +
 							"registration capability. Forged and stale tokens are rejected.",
 					);
 				}
@@ -374,9 +374,9 @@ function createCommitTokenScope<
 				}
 				records.push(record);
 			}
-			if (seen.size !== mintedTokenCount) {
+			if (seen.size !== issuedTokenCount) {
 				throw new EventCollectionError(
-					"withCommit: every token minted by the current registration " +
+					"withCommit: every token issued by the current registration " +
 						"capability must be returned in `commits`. If an registered write " +
 						"must not commit, throw so the transaction rolls back.",
 				);

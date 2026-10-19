@@ -852,26 +852,25 @@ export class SnapshotCorruptedError extends InfrastructureError<"SNAPSHOT_CORRUP
 
 /**
  * Thrown when an event reaches the aggregate's recording paths
- * (`apply`, `setState`, `addDomainEvent`) without having been minted by
- * the kit's constructors: `createDomainEvent`,
- * `createStampedDomainEvent`, `createUnstampedDomainEvent`, or the
- * aggregate `createEvent` helper. Those constructors deep-freeze the
+ * (`apply`, `setState`, `addDomainEvent`) without having been built by
+ * the kit's constructors: `createDomainEvent`, `createStampedDomainEvent`, or
+ * the aggregate `createEvent` helper. Those constructors deep-freeze the
  * event, defensively copy payload and metadata, and mark the result as
- * minted. The mark has two tiers: a
+ * kit-built. The mark has two tiers: a
  * module-private one for events of this loaded copy of the kit, and a
- * cooperative `Symbol.for` brand that a second loaded copy stamps and
+ * cooperative `Symbol.for` brand that a second loaded copy applies and
  * recognizes. Anything else (a hand-rolled literal, a shallow-frozen
  * copy with mutable nested data) is rejected: a mutable event recorded
  * next to a state change can silently diverge from it afterwards. A
  * wiring error: deterministic bug at the call site, the remedy is
- * minting through the constructors. The gate catches accidents, not
+ * building through the constructors. The gate catches accidents, not
  * adversaries: code in the same process can fake the brand.
  */
-export class UnmintedEventError extends KitWiringError<"UNMINTED_EVENT"> {
+export class HandBuiltEventError extends KitWiringError<"HAND_BUILT_EVENT"> {
 	constructor(eventType: string) {
 		super(
-			"UNMINTED_EVENT",
-			`Event "${eventType}" was not minted by a domain-event constructor ` +
+			"HAND_BUILT_EVENT",
+			`Event "${eventType}" was not built by a domain-event constructor ` +
 				"or aggregate createEvent(...) helper. Those " +
 				"constructors deep-freeze the event " +
 				"and defensively copy payload and metadata; a mutable event " +
@@ -2227,7 +2226,7 @@ export type KitErrorCode =
 	| "UNREGISTERED_CHANGES"
 	| "UNKNOWN_CURRENCY"
 	| "UNMANAGED_INSTANCE"
-	| "UNMINTED_EVENT"
+	| "HAND_BUILT_EVENT"
 	| "UNPROJECTABLE_EVENT"
 	| "UNREGISTERED_HANDLER"
 	| "UNREPLAYABLE_AGGREGATE";

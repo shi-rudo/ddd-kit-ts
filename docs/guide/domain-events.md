@@ -95,12 +95,12 @@ const event = createDomainEvent(
 
 The returned event is deeply frozen. The payload and metadata are cloned before freezing, so the caller's original objects are not frozen and later mutations to them do not change the event.
 
-The kit marks every event its constructors return as minted. The aggregate
-recording paths (`apply`, `setState`, `addDomainEvent`) accept only minted
-events; a hand-rolled literal throws `UnmintedEventError` (code
-`UNMINTED_EVENT`). The mark has two tiers. A module-private tier covers the
+The kit marks every event its constructors return as kit-built. The aggregate
+recording paths (`apply`, `setState`, `addDomainEvent`) accept only kit-built
+events; a hand-rolled literal throws `HandBuiltEventError` (code
+`HAND_BUILT_EVENT`). The mark has two tiers. A module-private tier covers the
 events of this loaded copy of the kit. A cooperative `Symbol.for` brand
-covers events that a second loaded copy minted (a duplicate dependency, a
+covers events that a second loaded copy built (a duplicate dependency, a
 dual CJS/ESM load). The brand catches accidents, not adversaries: code in the
 same process can fake it. The gate is not a security boundary; validate
 untrusted input at the application edge.
@@ -455,7 +455,7 @@ codec continues to emit and require that canonical representation.
 The wire envelope retains `messageId`, the three relationship headers when
 present, an ISO `occurredAt`, the qualified aggregate source, and the complete
 commit position. Consumers that feed the kit's `Projector` can compose the
-validated message into a minted local event with
+validated message into a kit-built local event with
 `integrationMessageToCommittedEvent`. The relationship headers become local
 event metadata for downstream tracing; the event still uses the published type
 and JSON payload, and restoring the producer's private domain types is

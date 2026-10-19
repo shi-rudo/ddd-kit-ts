@@ -5,14 +5,14 @@
  * that: it is bound to one loaded copy. The brand is a `Symbol.for` key
  * with the value `true`. The property is non-enumerable, so it never
  * leaks into spreads, JSON, or equality, and non-writable and
- * non-configurable, so nothing edits it after the stamp.
+ * non-configurable, so nothing edits it after the brand is applied.
  *
  * The probe reads the brand as an OWN property with exactly these
  * attributes and requires the carrier to be frozen. An object that
  * inherits a branded object through its prototype can carry mutable own
  * overrides; a branded object that is still open can change after the
- * stamp. Neither is what the constructor produced. Every stamp site
- * therefore freezes the carrier right after {@link stampCooperativeBrand}.
+ * brand. Neither is what the constructor produced. Every site that brands
+ * therefore freezes the carrier right after {@link applyCooperativeBrand}.
  *
  * The brand is forgeable BY DESIGN. It catches accidental hand-rolled
  * literals; it is not a security boundary against code in the same
@@ -20,7 +20,7 @@
  *
  * Internal utility (not exported from the package barrels).
  */
-export function stampCooperativeBrand(target: object, brand: symbol): void {
+export function applyCooperativeBrand(target: object, brand: symbol): void {
 	Object.defineProperty(target, brand, {
 		value: true,
 		enumerable: false,

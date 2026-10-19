@@ -32,7 +32,7 @@ export interface IdempotencyLease {
 	readonly renewAfterMs: number;
 }
 
-/** Store-minted ownership receipt for one successful claim. */
+/** Store-issued ownership receipt for one successful claim. */
 export interface IdempotencyClaimHandle {
 	readonly key: string;
 	/** Unique across ownership generations for this key; treat as opaque. */
@@ -95,7 +95,7 @@ export type IdempotencyClaim =
  *
  * A NON-transactional store (the in-memory reference on its own, a separate
  * durable store) cannot see commits or rollbacks. Every fresh claim
- * therefore returns a store-minted token and bounded lease. The wrapper
+ * therefore returns a store-issued token and bounded lease. The wrapper
  * renews it while the transaction runs; `complete`, `renew`, `confirm`,
  * `abandon`, and `reconcile` compare the token so a stale owner cannot
  * mutate a successor claim. An expired PENDING claim may be replaced. An

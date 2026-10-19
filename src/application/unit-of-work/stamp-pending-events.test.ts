@@ -34,7 +34,7 @@ class Counter extends StateStoredAggregate<
 		this.setState({ value }, this.createEvent("CounterChanged", { value }));
 	}
 
-	/** A decision minted with its identity already, as a factory would. */
+	/** A decision built with its identity already, as a factory would. */
 	changeStamped(value: number, eventId: string): void {
 		this.setState({ value }, this.stampedChange(value, eventId));
 	}
@@ -278,7 +278,7 @@ describe("stampPendingEvents", () => {
 
 	it("passes an already stamped event through and stamps only the decisions", () => {
 		const aggregate = new Counter("counter-1" as CounterId, { value: 0 });
-		aggregate.changeStamped(1, "pre-minted");
+		aggregate.changeStamped(1, "pre-stamped");
 		aggregate.change(2);
 		const stampedIndexes: number[] = [];
 
@@ -288,7 +288,7 @@ describe("stampPendingEvents", () => {
 		});
 
 		expect(recorded[0]).toBe(aggregate.pendingEvents[0]);
-		expect(recorded[0]?.eventId).toBe("pre-minted");
+		expect(recorded[0]?.eventId).toBe("pre-stamped");
 		expect(recorded[1]?.eventId).toBe("stamp-1");
 		// The index names the position in the pending list, not among the
 		// decisions that still need a stamp.

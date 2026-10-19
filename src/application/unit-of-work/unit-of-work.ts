@@ -10,7 +10,7 @@ import type { ExecutionContext } from "../../internal/async/execution";
 import { findInCauseChain } from "../../internal/cause-chain";
 import {
 	hasCooperativeBrand,
-	stampCooperativeBrand,
+	applyCooperativeBrand,
 } from "../../internal/cooperative-brand";
 import type { EventBus } from "../../messaging/event-bus/ports";
 import type { OutboxWriter } from "../../messaging/outbox/ports";
@@ -493,7 +493,7 @@ export function defineRepository<
 		// non-enumerable members vanish silently. Without this check, the
 		// loss surfaces as a bare TypeError deep inside the first run().
 		assertRepositoryDefinitionMembers(branded as Record<PropertyKey, unknown>);
-		stampCooperativeBrand(branded, repositoryDefinitionBrand);
+		applyCooperativeBrand(branded, repositoryDefinitionBrand);
 		return Object.freeze(branded);
 	};
 	return builder as unknown as RepositoryDefinitionBuilder<TRepositoryPort>;

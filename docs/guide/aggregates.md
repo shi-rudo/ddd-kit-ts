@@ -92,7 +92,7 @@ Calling `createDomainEvent(...)` directly still works, but inside an aggregate
 decision with `stampPendingEvents(...)` before persistence.
 
 Two wiring guards sit on the recording paths. An event that no kit
-constructor minted throws `UnmintedEventError` (code `UNMINTED_EVENT`). A
+constructor built throws `HandBuiltEventError` (code `HAND_BUILT_EVENT`). A
 state or payload root that carries an own `__proto__` key throws
 `HostileStateKeyError` (code `HOSTILE_STATE_KEY`). Both guard against
 accidents, not against code in the same process: the mint mark has a

@@ -312,7 +312,7 @@ export {
 	UnregisteredChangesError,
 	type UnregisteredChangesErrorOptions,
 	UnmanagedInstanceError,
-	UnmintedEventError,
+	HandBuiltEventError,
 	UnprojectableEventError,
 	UnregisteredHandlerError,
 	type UnregisteredHandlerErrorOptions,

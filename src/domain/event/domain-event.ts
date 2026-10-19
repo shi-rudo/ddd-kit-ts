@@ -1,7 +1,7 @@
 import { assertNoHostileOwnProtoKey } from "../../errors/kit-errors";
 import {
 	hasCooperativeBrand,
-	stampCooperativeBrand,
+	applyCooperativeBrand,
 } from "../../internal/cooperative-brand";
 import { copyFreezableState } from "../../internal/structural/copy-plain-state";
 import { isIntrinsicConstructorPrototype } from "../../internal/structural/is-built-in";
@@ -348,7 +348,7 @@ function buildDomainEventFactory(
 		payload?: P,
 		createOptions?: CreateDomainEventOptions,
 	): DomainEvent<T, P> =>
-		mintDomainEvent(
+		buildDomainEvent(
 			type,
 			payload,
 			createOptions,
@@ -407,8 +407,8 @@ export const defaultDomainEventFactory: DomainEventFactory =
 // Every stamped event a kit constructor returns is registered here: the
 // module-private tier of the recorded-event marker (nothing outside this
 // module can add to the set), so the aggregate recording paths can check
-// "minted by the constructor" directly instead of approximating it with
-// frozen-ness probes. Minted implies deeply frozen with owned payload/metadata
+// "built by a kit constructor" directly instead of approximating it with
+// frozen-ness probes. Kit-built implies deeply frozen with owned payload/metadata
 // (binary buffers, which cannot be frozen, are rejected at the door).
 // WeakSet entries do not keep events alive.
 const STAMPED_EVENTS = new WeakSet<object>();
@@ -417,7 +417,7 @@ const FACTORY_OWNED_EVENT_STAMPS = new WeakSet<object>();
 
 // Cooperative cross-instance tier of the mint check: a WeakSet is
 // bound to ONE loaded copy of this module, so an event legitimately
-// minted by a second copy of the kit would be rejected as unminted.
+// built by a second copy of the kit would be rejected as hand-built.
 // Such events are recognized by the cooperative brand instead, which
 // every constructor and kit-derived copy stamps before it freezes the
 // event (see `cooperative-brand.ts` for the probe rules).
@@ -428,11 +428,11 @@ const STAMPED_BRAND = Symbol.for("@shirudo/ddd-kit/stamped-event/v1");
 const UNSTAMPED_BRAND = Symbol.for("@shirudo/ddd-kit/unstamped-event/v1");
 
 function brandStampedEvent(event: object): void {
-	stampCooperativeBrand(event, STAMPED_BRAND);
+	applyCooperativeBrand(event, STAMPED_BRAND);
 }
 
 function brandUnstampedEvent(event: object): void {
-	stampCooperativeBrand(event, UNSTAMPED_BRAND);
+	applyCooperativeBrand(event, UNSTAMPED_BRAND);
 }
 
 function isFactoryOwnedDomainEventStamp(stamp: object): boolean {
@@ -446,7 +446,7 @@ function isFactoryOwnedDomainEventStamp(stamp: object): boolean {
  * payload and metadata. An unstamped decision carries the other brand; see
  * {@link isUnstampedDomainEvent}. Two tiers: events of THIS
  * loaded copy of the kit are verified through the module-private
- * WeakSet; events minted by ANOTHER copy (duplicate dependency, dual
+ * WeakSet; events built by ANOTHER copy (duplicate dependency, dual
  * CJS/ESM load) are recognized through a cooperative `Symbol.for`
  * brand that code in the same process can fake. The gate catches
  * accidents, not adversaries. Module-internal export for the aggregate
@@ -688,7 +688,7 @@ export function createDomainEvent<T extends string, P>(
 }
 
 /**
- * Creates an already minted domain event exclusively from explicit envelope
+ * Creates a kit-built, stamped domain event exclusively from explicit envelope
  * facts. Unlike {@link createDomainEvent}, it has no clock or event-id fallback
  * and is useful when replay, migration, or a caller-owned boundary already has
  * the final identity and occurrence time.
@@ -718,7 +718,7 @@ export function createStampedDomainEvent<T extends string, P>(
 	if (options.occurredAt === undefined) {
 		missingExplicitOccurredAt();
 	}
-	return mintDomainEvent(
+	return buildDomainEvent(
 		type,
 		payload,
 		options,
@@ -744,7 +744,7 @@ function missingExplicitOccurredAt(): Date {
 	);
 }
 
-function mintDomainEvent<T extends string, P>(
+function buildDomainEvent<T extends string, P>(
 	type: T,
 	payload: P | undefined,
 	options: CreateDomainEventOptions | undefined,
@@ -785,9 +785,9 @@ function mintDomainEvent<T extends string, P>(
 	// Brand BEFORE the freeze (a frozen object rejects new properties);
 	// non-enumerable, so spreads, JSON, and equality never see it.
 	brandStampedEvent(event);
-	const minted = deepFreeze(event) as DomainEvent<T, P>;
-	STAMPED_EVENTS.add(minted);
-	return minted;
+	const built = deepFreeze(event) as DomainEvent<T, P>;
+	STAMPED_EVENTS.add(built);
+	return built;
 }
 
 function assertProducerOwnedEventFields(
@@ -929,7 +929,7 @@ function cloneOwnedEventData<T>(
 	if (value !== null && typeof value === "object") {
 		assertNoHostileOwnProtoKey(value, `Event ${field} of ${operation}`);
 	}
-	// The freeze rule keeps the mint guarantee "minted implies deeply
+	// The freeze rule keeps the guarantee "kit-built implies deeply
 	// frozen".
 	return copyFreezableState(value, `${operation}: ${field}`);
 }

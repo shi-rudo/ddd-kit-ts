@@ -59,7 +59,7 @@ class NotingAggregate extends StateStoredAggregate<TestState, TestId> {
 }
 
 describe("recognition across package copies", () => {
-	it("apply accepts an event minted by a second copy of the kit", async () => {
+	it("apply accepts an event built by a second copy of the kit", async () => {
 		// The event carries the shared recorded brand instead of a WeakSet
 		// membership this copy could see; the gate accepts it. The brand is
 		// cooperative by design: the gate catches accidental literals, it is

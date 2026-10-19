@@ -5,7 +5,7 @@ import {
 	PendingEventBatchMismatchError,
 	PendingEventLimitExceededError,
 	ReentrantEventRecordingError,
-	UnmintedEventError,
+	HandBuiltEventError,
 	UnreplayableAggregateError,
 } from "../../errors/kit-errors";
 import { assertPositiveSafeInteger } from "../../internal/validate";
@@ -173,8 +173,8 @@ export abstract class BaseAggregate<
 	 * Stamps every unstamped decision in the pending list with identity
 	 * and time from `createStamp`, passes an already stamped event through,
 	 * and replaces the list atomically. Three guards run before the
-	 * assignment: an event that no kit constructor minted is rejected
-	 * ({@link UnmintedEventError}); a stamp provider that recorded a new
+	 * assignment: an event that no kit constructor built is rejected
+	 * ({@link HandBuiltEventError}); a stamp provider that recorded a new
 	 * decision on this aggregate mid-map is rejected
 	 * ({@link ReentrantEventRecordingError}); and two decisions that
 	 * received one eventId are rejected ({@link DuplicateEventIdError}).
@@ -189,7 +189,9 @@ export abstract class BaseAggregate<
 			const candidate = event as AnyDomainEvent | AnyUnstampedDomainEvent;
 			if (isStampedDomainEvent(candidate)) return candidate as TEvent;
 			if (!isUnstampedDomainEvent(candidate)) {
-				throw new UnmintedEventError((event as { readonly type: string }).type);
+				throw new HandBuiltEventError(
+					(event as { readonly type: string }).type,
+				);
 			}
 			return stampDomainEvent(
 				candidate,
@@ -354,7 +356,7 @@ export abstract class BaseAggregate<
 	}
 
 	/**
-	 * Appends a domain event to the pending list. The event must be minted
+	 * Appends a domain event to the pending list. The event must be kit-built
 	 * by a kit constructor; a missing `aggregateId` or `aggregateType` is
 	 * stamped from this aggregate, and an aggregate identity that names another
 	 * aggregate throws {@link MisattributedEventError} before anything is
@@ -449,8 +451,8 @@ export abstract class BaseAggregate<
 	 * throws {@link MisattributedEventError}; missing fields are filled in
 	 * from the aggregate, so a recorded event always carries its full
 	 * aggregate identity and can never fail the collection or the replay guard
-	 * later. The mint gate
-	 * runs first, so an unminted event fails before anything else. The
+	 * later. The kit-built check
+	 * runs first, so a hand-built event fails before anything else. The
 	 * stamped copy is frozen like the original (payload and metadata are
 	 * shared, already deep-frozen by the constructors); a fully stamped
 	 * event is returned as is.
@@ -458,7 +460,7 @@ export abstract class BaseAggregate<
 	protected attributeNewEvent<E extends PendingDomainEvent<TEvent>>(
 		event: E,
 	): E {
-		this.assertMintedEvent(event);
+		this.assertKitBuiltEvent(event);
 		const { aggregateId, aggregateType } = event;
 		const idForeign = aggregateId !== undefined && aggregateId !== this.id;
 		const typeForeign =
@@ -491,7 +493,7 @@ export abstract class BaseAggregate<
 	}
 
 	/**
-	 * Mint gate for every recording path: only an event that a kit
+	 * Kit-built check for every recording path: only an event that a kit
 	 * constructor produced passes. The kit marks two shapes: a recorded
 	 * event carries the recorded brand (`createDomainEvent`,
 	 * `createStampedDomainEvent`) and a decision carries the unstamped
@@ -501,9 +503,9 @@ export abstract class BaseAggregate<
 	 * (a shallow-frozen literal with mutable nested data would fool it).
 	 * O(1): one brand check per shape.
 	 */
-	protected assertMintedEvent(event: PendingDomainEvent<TEvent>): void {
+	protected assertKitBuiltEvent(event: PendingDomainEvent<TEvent>): void {
 		if (!isStampedDomainEvent(event) && !isUnstampedDomainEvent(event)) {
-			throw new UnmintedEventError(
+			throw new HandBuiltEventError(
 				(event as AnyDomainEvent | AnyUnstampedDomainEvent).type,
 			);
 		}

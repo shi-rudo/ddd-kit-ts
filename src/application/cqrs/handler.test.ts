@@ -476,7 +476,7 @@ describe("withCommit", () => {
 		expect(persistedVersionOf(aggregate)).not.toBe(aggregate.version);
 	});
 
-	it("rejects a token minted by an earlier withCommit invocation", async () => {
+	it("rejects a token issued by an earlier withCommit invocation", async () => {
 		let staleToken: AggregateCommitToken<TestEvent> | undefined;
 		const firstAggregate = createMockAggregate([]);
 		await withCommit(
