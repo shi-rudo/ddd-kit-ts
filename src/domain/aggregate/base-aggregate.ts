@@ -246,7 +246,7 @@ export abstract class BaseAggregate<
 	/**
 	 * Post-commit cleanup for the deleted disposition. The row is gone, so
 	 * there is no persisted version to advance: stamping the marker from the
-	 * live instance would make a later legitimate re-registerment of this
+	 * live instance would make a later legitimate re-registration of this
 	 * instance trip the unique-cursor guard for a row that does not exist.
 	 */
 	private discardPendingEventsAfterDeletion(
@@ -553,7 +553,7 @@ export abstract class BaseAggregate<
  * Deliberately a module-level function, not a class method: it MUST not be
  * overridable by consumer subclasses (a no-op override would silently
  * disable the guard at every call site). The callers pass the count of
- * the private list; the commit collect reads the public `pendingEvents`
+ * the private list; the commit collection reads the public `pendingEvents`
  * getter, so a subclass that overrides the getter changes the collection,
  * not this guard.
  *

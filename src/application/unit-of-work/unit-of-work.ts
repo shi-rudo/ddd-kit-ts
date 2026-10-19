@@ -620,7 +620,7 @@ export interface UnitOfWorkDeps<
  * transaction and either persist completely or not at all.
  *
  * Built ON TOP of `withCommit` - the commit orchestration (event
- * collect into the outbox inside the transaction, internal acknowledgement
+ * collection into the outbox inside the transaction, internal acknowledgement
  * after the commit, best-effort in-process publish last) is inherited,
  * not reimplemented. What this layer adds:
  *

@@ -34,7 +34,7 @@ export type AggregateClass<TAgg> =
  * `AggregatePersistence` implementations: two `findById(id)` calls in the same
  * unit of work MUST return the same instance, because commit-token
  * write registration dedupes by JavaScript object identity. Two instances for
- * one logical aggregate can otherwise produce two tokens, two collects,
+ * one logical aggregate can otherwise produce two tokens, two collections,
  * and two post-commit lifecycle calls.
  *
  * Storage is two-level (per-type stores created lazily), so
@@ -142,7 +142,7 @@ export class IdentityMap {
 					`${describeAggregateIdentity(aggregate.aggregateIdentity)}. Check get() ` +
 					"before hydrating: two live instances of one aggregate break the " +
 					"one-instance-per-unit-of-work contract that exactly-once event " +
-					"collect relies on.",
+					"collection relies on.",
 			);
 		}
 		store.set(id, aggregate);

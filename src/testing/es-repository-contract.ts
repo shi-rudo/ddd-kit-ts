@@ -127,14 +127,14 @@ export function createEsRepositoryContractTests<
 			"the stream was not appended or replayed correctly",
 		);
 	const streamFor = (id: TAggregate["id"]) => harness.streamKeyFor(id);
-	// Pre-flush identities: the in-memory batch must be recorded before
+	// Pre-flush identities: the in-memory batch must be stamped before
 	// the adapter may flush it.
 	const recordedIds = (
 		events: ReadonlyArray<PendingDomainEvent<TEvent>>,
 	): string[] =>
 		stampedPendingEventIds(
 			events,
-			"pending events must be recorded before flush",
+			"pending events must be stamped before flush",
 		);
 	// Read-back identities: adapters may serialize committed events to rows
 	// and decode them on read. A decoded event does not carry the in-memory

@@ -116,7 +116,7 @@ return {
 };
 ```
 
-The callback's job is to provide commit evidence for repository writes that participated in this invocation. Tokens are opaque and invocation-scoped, so a forged token or one retained from an earlier call is rejected inside the transaction. Every token issued during the callback must be returned in `commits`; omitting one also rejects inside the transaction. If an registered write should not commit, throw so the transaction rolls back. `withCommit` then collects events from those registered aggregates at the correct point in the lifecycle.
+The callback's job is to provide commit evidence for repository writes that participated in this invocation. Tokens are opaque and invocation-scoped, so a forged token or one retained from an earlier call is rejected inside the transaction. Every token issued during the callback must be returned in `commits`; omitting one also rejects inside the transaction. If a registered write should not commit, throw so the transaction rolls back. `withCommit` then collects events from those registered aggregates at the correct point in the lifecycle.
 
 Manual collection is tempting because it looks explicit. The problem is timing. If every caller decides when to read events, clear events, or publish events, the transaction boundary stops being a boundary. Some callers will collect before the repository flush, some after it, and some after an error. The whole point of `withCommit` is to centralize that order:
 

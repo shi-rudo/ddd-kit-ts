@@ -497,7 +497,7 @@ describe("withCommit", () => {
 		expect(outbox.added).toEqual([]);
 	});
 
-	it("rejects an registered aggregate whose token was not returned", async () => {
+	it("rejects a registered aggregate whose token was not returned", async () => {
 		const outbox = recordingOutbox<TestEvent>();
 		const event = createDomainEvent(
 			"OrderCreated",
@@ -1989,7 +1989,7 @@ describe("commit registration lifecycle", () => {
 		expect(persistedVersionOf(aggregate)).not.toBe(aggregate.version);
 	});
 
-	it("treats an omitted expectedVersion on re-registerment as no assertion", async () => {
+	it("treats an omitted expectedVersion on re-registration as no assertion", async () => {
 		const event = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "o-1" },
@@ -2064,7 +2064,7 @@ describe("commit registration lifecycle", () => {
 		);
 
 		// The row is gone: stamping the marker from the live instance would
-		// trip the unique-cursor guard on a later legitimate re-registerment.
+		// trip the unique-cursor guard on a later legitimate re-registration.
 		const lifecycle = pendingEventLifecycleReadViewFor(aggregate);
 		expect(lifecycle?.persistedVersion()).toBe(5);
 		expect(aggregate.pendingEvents).toHaveLength(0);
@@ -2098,7 +2098,7 @@ describe("commit registration lifecycle", () => {
 		expect(persistedVersionOf(aggregate)).toBe(aggregate.version);
 	});
 
-	it("rejects re-registerment that asserts a different expectedVersion", async () => {
+	it("rejects a re-registration that asserts a different expectedVersion", async () => {
 		const event = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "o-1" },

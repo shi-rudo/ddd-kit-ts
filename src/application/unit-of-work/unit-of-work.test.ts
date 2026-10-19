@@ -1094,7 +1094,7 @@ describe("UnitOfWork", () => {
 					repositories.orders.update(aggregate);
 					return undefined;
 				}),
-			).rejects.toThrow(/has not been recorded/);
+			).rejects.toThrow(/has not been stamped/);
 			expect(flushCalls).toBe(0);
 		});
 

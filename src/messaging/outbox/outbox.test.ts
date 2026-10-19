@@ -1520,7 +1520,7 @@ describe("InMemoryOutbox", () => {
 
 		it("re-adding a pending event refreshes the stored copy but keeps the delivery bookkeeping", async () => {
 			// A failed-commit-then-retry re-adds the same eventId with a NEWLY
-			// stamped aggregateVersion (withCommit stamps at collect). The
+			// assigned aggregateVersion (withCommit assigns it at collection). The
 			// outbox must serve the latest copy, or dispatched events carry a
 			// version from a commit that never happened; the attempts count
 			// belongs to delivery, not to the payload, and survives.

@@ -117,7 +117,7 @@ export interface AggregateCommitToken<
  * Invocation-scoped registration capability handed to a {@link withCommit}
  * callback. Call `registerSaved` only for an aggregate participating in the
  * repository write, and return every resulting token in `commits`. Omitting
- * any token rejects the transaction: an registered write may not commit without
+ * any token rejects the transaction: a registered write may not commit without
  * its event collection and post-commit acknowledgement. Registrable instances
  * must extend `StateStoredAggregate` or `EventSourcedAggregate`; structural
  * `Aggregate` lookalikes have no internal lifecycle capability and fail
@@ -286,7 +286,7 @@ function createCommitTokenScope<
 			if (!isStampedDomainEvent(event)) {
 				throw new EventCollectionError(
 					`withCommit: event "${(event as { readonly type: string }).type}" ` +
-						"has not been recorded. Call stampPendingEvents(aggregate, " +
+						"has not been stamped. Call stampPendingEvents(aggregate, " +
 						"createStamp) in the application shell before persistence or " +
 						"outbox collection.",
 					(event as { readonly type: string }).type,
@@ -377,7 +377,7 @@ function createCommitTokenScope<
 			if (seen.size !== issuedTokenCount) {
 				throw new EventCollectionError(
 					"withCommit: every token issued by the current registration " +
-						"capability must be returned in `commits`. If an registered write " +
+						"capability must be returned in `commits`. If a registered write " +
 						"must not commit, throw so the transaction rolls back.",
 				);
 			}
@@ -601,7 +601,7 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 					return record.events.map((event, index) => {
 						if (!isStampedDomainEvent(event)) {
 							throw new EventCollectionError(
-								`withCommit: event "${event.type}" has not been recorded. ` +
+								`withCommit: event "${event.type}" has not been stamped. ` +
 									"Call stampPendingEvents(aggregate, createStamp) in the " +
 									"application shell before persistence or outbox collection.",
 								event.type,
@@ -675,7 +675,7 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 				fnResult.checkBeforeCommit?.();
 				if (candidates.length > 0 || endedSources.length > 0) {
 					// The outbox write can yield. Work that the callback did not
-					// await could change an registered aggregate meanwhile, and the
+					// await could change a registered aggregate meanwhile, and the
 					// acknowledgement would then cover state or events that were
 					// never written.
 					for (const record of commitRecords) {

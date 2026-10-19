@@ -908,7 +908,7 @@ export class ReentrantEventRecordingError extends KitWiringError<"REENTRANT_EVEN
 				`${describeAggregateIdentity(options.identity)} changed while ` +
 				"stampPendingEvents was stamping them. A stamp provider must not " +
 				"trigger new decisions on the aggregate being recorded; make every " +
-				"domain decision first, then record.",
+				"domain decision first, then stamp.",
 		);
 		this.identity = copyAggregateIdentity(options.identity);
 	}

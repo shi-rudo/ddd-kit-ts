@@ -13,7 +13,7 @@ export type PersistenceLifecycle = "loaded" | "new";
  */
 export interface PersistenceModel<TAggregate, TBaseline, TChangeSet> {
 	/**
-	 * Captures the adapter's persistence capture at the current moment.
+	 * Captures the aggregate for the adapter at the current moment.
 	 * Return a copied value or an immutable value object: the Unit of Work
 	 * retains it as a baseline and cannot make an arbitrary adapter type safe.
 	 *
@@ -34,7 +34,7 @@ export interface PersistenceModel<TAggregate, TBaseline, TChangeSet> {
 	capture(aggregate: TAggregate): TBaseline;
 
 	/**
-	 * Adapter-owned equality for two captures of the persistence capture.
+	 * Adapter-owned equality for two captures.
 	 * Optional: the default is the package's structural deep equality (Set
 	 * members and Map keys by reference). Supply it when the capture shape
 	 * needs domain-specific comparison, for example rebuilt value-object Set
