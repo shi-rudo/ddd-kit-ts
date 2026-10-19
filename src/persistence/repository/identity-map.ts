@@ -168,7 +168,7 @@ export class IdentityMap {
 	 * Registered instances that have recorded MORE pending events than they
 	 * carried when first registered (loaded). Used by the unit of work's
 	 * end-of-run guard: an aggregate that gained events after load but was
-	 * never enrolled would silently drop them. A read-only load, or a
+	 * never registered would silently drop them. A read-only load, or a
 	 * reconstitution that already carried events, shows no increase and is
 	 * not reported.
 	 */
@@ -233,7 +233,7 @@ export class IdentityMap {
 		// A WeakMap cannot be emptied in place; replace it so a reused map
 		// captures FRESH pending-event baselines. A stale (higher) baseline
 		// would make instancesWithNewPendingEvents under-report and defeat
-		// the UnenrolledChangesError safety net.
+		// the UnregisteredChangesError safety net.
 		this._pendingAtRegistration = new WeakMap<object, number>();
 	}
 }

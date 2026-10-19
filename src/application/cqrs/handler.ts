@@ -101,9 +101,9 @@ export interface WithCommitDeps<Evt extends AnyDomainEvent, TCtx> {
 declare const aggregateCommitTokenBrand: unique symbol;
 
 /**
- * Opaque receipt that one aggregate was explicitly enrolled in the current
+ * Opaque receipt that one aggregate was explicitly registered in the current
  * {@link withCommit} invocation. Tokens are minted only by the invocation's
- * {@link CommitEnrollment} capability and are bound to that invocation at
+ * {@link CommitRegistration} capability and are bound to that invocation at
  * runtime; a forged token or one retained from an earlier call is rejected
  * inside the transaction.
  */
@@ -114,33 +114,33 @@ export interface AggregateCommitToken<
 }
 
 /**
- * Invocation-scoped enrollment capability handed to a {@link withCommit}
- * callback. Call `enrollSaved` only for an aggregate participating in the
+ * Invocation-scoped registration capability handed to a {@link withCommit}
+ * callback. Call `registerSaved` only for an aggregate participating in the
  * repository write, and return every resulting token in `commits`. Omitting
- * any token rejects the transaction: an enrolled write may not commit without
- * its event harvest and post-commit acknowledgement. Enrollable instances
+ * any token rejects the transaction: an registered write may not commit without
+ * its event harvest and post-commit acknowledgement. Registrable instances
  * must extend `StateStoredAggregate` or `EventSourcedAggregate`; structural
  * `Aggregate` lookalikes have no internal lifecycle capability and fail
  * before commit.
  */
-export interface CommitEnrollment<Evt extends AnyDomainEvent> {
-	enrollSaved(
+export interface CommitRegistration<Evt extends AnyDomainEvent> {
+	registerSaved(
 		aggregate: Aggregate<Id<string>, Evt>,
-		options?: CommitEnrollmentOptions,
+		options?: CommitRegistrationOptions,
 	): AggregateCommitToken<Evt>;
 	/**
-	 * Enroll an aggregate whose row is deleted by the current transaction.
+	 * Register an aggregate whose row is deleted by the current transaction.
 	 * Its events are harvested and discarded after commit, but the saved-only
 	 * application `onPersisted` observer is not called.
 	 */
-	enrollDeleted(
+	registerDeleted(
 		aggregate: Aggregate<Id<string>, Evt>,
-		options?: CommitEnrollmentOptions,
+		options?: CommitRegistrationOptions,
 	): AggregateCommitToken<Evt>;
 }
 
-/** OCC baseline associated with one exact commit enrollment. */
-export interface CommitEnrollmentOptions {
+/** OCC baseline associated with one exact commit registration. */
+export interface CommitRegistrationOptions {
 	/** Absent for a new aggregate; captured at load for update or removal. */
 	readonly expectedVersion?: Version;
 }
@@ -149,7 +149,7 @@ export interface CommitEnrollmentOptions {
 export interface WithCommitWorkResult<Evt extends AnyDomainEvent, R> {
 	result: R;
 	/**
-	 * Commit tokens returned by the invocation's enrollment capability.
+	 * Commit tokens returned by the invocation's registration capability.
 	 * Every token minted during the callback must appear at least once.
 	 * Naked aggregates are intentionally not accepted: touching an aggregate
 	 * does not prove that its repository write participated in the transaction.
@@ -166,7 +166,7 @@ interface AggregateCommitRecord<Evt extends AnyDomainEvent> {
 	readonly expectedVersion: Version | undefined;
 	/**
 	 * Version the persistence layer last confirmed for the aggregate at
-	 * enrollment time (kit-maintained). `undefined` means the aggregate was
+	 * registration time (kit-maintained). `undefined` means the aggregate was
 	 * never persisted, so any single eventful commit cursor is unique.
 	 */
 	readonly persistedVersion: Version | undefined;
@@ -176,11 +176,11 @@ interface AggregateCommitRecord<Evt extends AnyDomainEvent> {
 
 /**
  * True when the aggregate's live version or pending-event batch no longer
- * matches its enrollment-time snapshot. Shared by the duplicate-enrollment
+ * matches its registration-time snapshot. Shared by the duplicate-registration
  * gate and the harvest-time recheck: both must reject the same divergence,
- * or events recorded after enrollment would be silently dropped.
+ * or events recorded after registration would be silently dropped.
  */
-function enrollmentDiverged<Evt extends AnyDomainEvent>(
+function registrationDiverged<Evt extends AnyDomainEvent>(
 	record: AggregateCommitRecord<Evt>,
 ): boolean {
 	const pending = record.aggregate.pendingEvents;
@@ -192,7 +192,7 @@ function enrollmentDiverged<Evt extends AnyDomainEvent>(
 }
 
 interface CommitTokenScope<Evt extends AnyDomainEvent> {
-	readonly enrollment: CommitEnrollment<Evt>;
+	readonly registration: CommitRegistration<Evt>;
 	close(): void;
 	resolve(tokens: unknown): ReadonlyArray<AggregateCommitRecord<Evt>>;
 }
@@ -209,14 +209,14 @@ function createCommitTokenScope<
 	let mintedTokenCount = 0;
 	let open = true;
 
-	const enroll = (
+	const register = (
 		aggregate: Aggregate<Id<string>, Evt>,
 		disposition: CommitDisposition,
-		options?: CommitEnrollmentOptions,
+		options?: CommitRegistrationOptions,
 	): AggregateCommitToken<Evt> => {
 		if (!open) {
 			throw new EventHarvestError(
-				"withCommit: commit enrollment was used after its work callback " +
+				"withCommit: commit registration was used after its work callback " +
 					"settled. Await every repository write and return its token before " +
 					"leaving the callback.",
 			);
@@ -232,11 +232,11 @@ function createCommitTokenScope<
 			}
 			if (record.disposition === "deleted" && disposition === "saved") {
 				throw new EventHarvestError(
-					`withCommit: aggregate ${describeAggregateIdentity(aggregate.aggregateIdentity)} was enrolled as ` +
-						"saved after it was enrolled as deleted in the same transaction.",
+					`withCommit: aggregate ${describeAggregateIdentity(aggregate.aggregateIdentity)} was registered as ` +
+						"saved after it was registered as deleted in the same transaction.",
 				);
 			}
-			// Duplicate enrollment is idempotent by reference. An omitted
+			// Duplicate registration is idempotent by reference. An omitted
 			// expectedVersion is no assertion, not an assertion of "absent":
 			// only a supplied value is compared against the recorded baseline.
 			if (
@@ -244,20 +244,20 @@ function createCommitTokenScope<
 				options.expectedVersion !== record.expectedVersion
 			) {
 				throw new EventHarvestError(
-					`withCommit: aggregate ${describeAggregateIdentity(aggregate.aggregateIdentity)} was re-enrolled ` +
+					`withCommit: aggregate ${describeAggregateIdentity(aggregate.aggregateIdentity)} was re-registered ` +
 						`with expectedVersion ${String(options.expectedVersion)}, but its ` +
-						`enrollment recorded ${String(record.expectedVersion)}. Duplicate ` +
-						"enrollment must assert the same OCC baseline or none.",
+						`registration recorded ${String(record.expectedVersion)}. Duplicate ` +
+						"registration must assert the same OCC baseline or none.",
 				);
 			}
-			if (enrollmentDiverged(record)) {
+			if (registrationDiverged(record)) {
 				throw new EventHarvestError(
 					`withCommit: aggregate ${describeAggregateIdentity(aggregate.aggregateIdentity)} changed after its ` +
-						"commit batch was enrolled. Register persistence intent last.",
+						"commit batch was registered. Register persistence intent last.",
 				);
 			}
 			// The widened disposition is adopted only after every check passed:
-			// a rejected enrollDeleted whose error the callback catches must
+			// a rejected registerDeleted whose error the callback catches must
 			// not leave a saved aggregate marked deleted, or the post-commit
 			// loop would discard instead of acknowledge.
 			if (disposition === "deleted") {
@@ -268,7 +268,7 @@ function createCommitTokenScope<
 
 		const eventLifecycle = requirePendingEventLifecycleCapability(
 			aggregate,
-			"withCommit enrollment",
+			"withCommit registration",
 		);
 
 		const token = Object.freeze(
@@ -278,7 +278,7 @@ function createCommitTokenScope<
 		// re-copying and re-freezing it here would only duplicate the work.
 		const events = aggregate.pendingEvents;
 		// Recorded-before-persistence is checked HERE, not only at harvest:
-		// the UnitOfWork enrolls at write registration, so this rejection
+		// the UnitOfWork registers at write registration, so this rejection
 		// lands before any adapter flush. The harvest guard alone fires after
 		// flush, and a non-transactional event store would already have
 		// appended the unstamped batch durably.
@@ -293,9 +293,9 @@ function createCommitTokenScope<
 				);
 			}
 		}
-		// The kit-maintained marker, not the enrollment-supplied
+		// The kit-maintained marker, not the registration-supplied
 		// expectedVersion, grounds the unique-cursor guard: it survives
-		// callers who omit enrollment options (the documented
+		// callers who omit registration options (the documented
 		// direct-withCommit style), and grounding the guard in data supplied
 		// by the very caller it checks would be circular.
 		const persistedVersion = eventLifecycle.persistedVersion();
@@ -314,15 +314,15 @@ function createCommitTokenScope<
 	};
 
 	return {
-		enrollment: Object.freeze({
-			enrollSaved: (
+		registration: Object.freeze({
+			registerSaved: (
 				aggregate: Aggregate<Id<string>, Evt>,
-				options?: CommitEnrollmentOptions,
-			) => enroll(aggregate, "saved", options),
-			enrollDeleted: (
+				options?: CommitRegistrationOptions,
+			) => register(aggregate, "saved", options),
+			registerDeleted: (
 				aggregate: Aggregate<Id<string>, Evt>,
-				options?: CommitEnrollmentOptions,
-			) => enroll(aggregate, "deleted", options),
+				options?: CommitRegistrationOptions,
+			) => register(aggregate, "deleted", options),
 		}),
 		close: () => {
 			open = false;
@@ -331,7 +331,7 @@ function createCommitTokenScope<
 			if (!Array.isArray(tokens)) {
 				throw new EventHarvestError(
 					"withCommit: the work callback must return `commits` containing " +
-						"tokens from the current enrollment capability. Naked aggregate " +
+						"tokens from the current registration capability. Naked aggregate " +
 						"arrays are not commit evidence.",
 				);
 			}
@@ -345,7 +345,7 @@ function createCommitTokenScope<
 				) {
 					throw new EventHarvestError(
 						"withCommit: a commit token was not minted by this callback's " +
-							"enrollment capability. Forged and stale tokens are rejected.",
+							"registration capability. Forged and stale tokens are rejected.",
 					);
 				}
 				const tokenObject = token as object;
@@ -353,31 +353,31 @@ function createCommitTokenScope<
 				if (!record) {
 					throw new EventHarvestError(
 						"withCommit: a commit token was not minted by this callback's " +
-							"enrollment capability. Forged and stale tokens are rejected.",
+							"registration capability. Forged and stale tokens are rejected.",
 					);
 				}
 				if (seen.has(tokenObject)) continue;
 				seen.add(tokenObject);
-				// Harvest-time recheck of the enrollment snapshot: an event
-				// recorded after enrollSaved but before the callback returned
+				// Harvest-time recheck of the registration snapshot: an event
+				// recorded after registerSaved but before the callback returned
 				// would be excluded from the harvest and silently lost by the
 				// post-commit prefix acknowledgement. Divergence fails loudly
 				// inside the transaction instead.
-				if (enrollmentDiverged(record)) {
+				if (registrationDiverged(record)) {
 					throw new EventHarvestError(
 						`withCommit: aggregate ${describeAggregateIdentity(record.aggregate.aggregateIdentity)} changed ` +
-							"after its commit batch was enrolled; events recorded after " +
-							"enrollment are not part of the attested write and would be " +
+							"after its commit batch was registered; events recorded after " +
+							"registration are not part of the attested write and would be " +
 							"silently dropped. Make domain decisions first, write, and " +
-							"enroll last.",
+							"register last.",
 					);
 				}
 				records.push(record);
 			}
 			if (seen.size !== mintedTokenCount) {
 				throw new EventHarvestError(
-					"withCommit: every token minted by the current enrollment " +
-						"capability must be returned in `commits`. If an enrolled write " +
+					"withCommit: every token minted by the current registration " +
+						"capability must be returned in `commits`. If an registered write " +
 						"must not commit, throw so the transaction rolls back.",
 				);
 			}
@@ -389,24 +389,24 @@ function createCommitTokenScope<
 /**
  * Helper for executing a write Use Case inside a transaction scope.
  *
- * The use-case callback receives an invocation-scoped enrollment capability
+ * The use-case callback receives an invocation-scoped registration capability
  * and returns opaque commit tokens for the repository writes that completed
  * in the transaction. `withCommit` owns the post-commit lifecycle (harvest,
  * outbox, mark-persisted, publish). A naked aggregate is not commit evidence:
  * merely touching or constructing one must never make it look persisted.
  *
- * **Trust boundary.** A token proves invocation-local enrollment, not that the
+ * **Trust boundary.** A token proves invocation-local registration, not that the
  * kit inspected a database write; a generic transaction helper cannot observe
- * adapter internals. Repository code must enroll only writes participating in
+ * adapter internals. Repository code must register only writes participating in
  * this transaction. `UnitOfWork` centralizes that rule in repository methods.
  * The opaque, scoped token prevents accidental aggregate smuggling and stale
  * reuse; it is not a security boundary against code that deliberately lies to
  * its own persistence capability.
  *
  * Order of operations:
- *  1. `fn(ctx, enrollment)` runs inside `scope.transactional(...)`; domain
+ *  1. `fn(ctx, registration)` runs inside `scope.transactional(...)`; domain
  *     mutations + repo writes happen here. After a repository write has
- *     enrolled an aggregate, the callback includes that opaque token in its
+ *     registered an aggregate, the callback includes that opaque token in its
  *     `commits` result. Tokens are invocation-bound: forged or stale tokens
  *     fail before harvest. `ctx` is whatever transaction handle the `scope`
  *     exposes (Drizzle `tx`, Prisma `tx`, Mongo session, or `undefined` for
@@ -445,7 +445,7 @@ function createCommitTokenScope<
  *     across aggregates at delivery time.
  *  3. The transaction commits.
  *  4. **After** the commit, a non-exported capability acknowledges every
- *     saved enrollment and discards pending events for deleted enrollments.
+ *     saved registration and discards pending events for deleted registrations.
  *     Only after the complete commit set is clean does the optional
  *     application-shell `onPersisted(aggregate, version, context)` observer run for
  *     saved aggregates. Deleted rows never trigger that observer.
@@ -475,16 +475,16 @@ function createCommitTokenScope<
  * If the transaction rolls back, no acknowledgement occurs: the aggregate
  * keeps its pending events, so the caller can retry or discard the instance.
  *
- * Enrollment captures an exact version and event batch. Re-enrolling the same
+ * Registration captures an exact version and event batch. Re-registering the same
  * aggregate after it changes rejects. `UnitOfWork` additionally seals the
  * adapter persistence projection and rejects later mutation before flush. For
- * direct `withCommit` use, make domain decisions first, write, and enroll last.
+ * direct `withCommit` use, make domain decisions first, write, and register last.
  *
- * **Duplicate enrollment is idempotent by reference.** Enrolling the same
+ * **Duplicate registration is idempotent by reference.** Registering the same
  * instance repeatedly returns the same token, and a repeated token in
  * `commits` is harvested once. A repeat call that omits `expectedVersion`
  * makes no OCC assertion; only a supplied value that contradicts the
- * enrollment-time baseline rejects. Each event lands in the outbox exactly once
+ * registration-time baseline rejects. Each event lands in the outbox exactly once
  * and post-commit acknowledgement runs exactly once. Two
  * *different* instances with the same logical id cannot be detected
  * at this layer; that is a Repository contract violation (failure to
@@ -495,12 +495,12 @@ function createCommitTokenScope<
  *
  * @example Tx-bound repos (Drizzle, Prisma, Mongo, …)
  * ```typescript
- * const result = await withCommit({ outbox, bus, scope }, async (tx, enrollment) => {
+ * const result = await withCommit({ outbox, bus, scope }, async (tx, registration) => {
  *   const orderRepository = makeOrderRepository(tx); // your factory binds tx to the repo
  *   const order = await orderRepository.getById(orderId);
  *   order.confirm();
  *   await persistOrder(tx, order);                 // low-level adapter write
- *   const commit = enrollment.enrollSaved(order);   // attest the repository write
+ *   const commit = registration.registerSaved(order);   // attest the repository write
  *   return { result: order.id, commits: [commit] };
  * });
  * ```
@@ -509,13 +509,13 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 	deps: WithCommitDeps<Evt, TCtx>,
 	fn: (
 		ctx: TCtx,
-		enrollment: CommitEnrollment<Evt>,
+		registration: CommitRegistration<Evt>,
 	) => Promise<WithCommitWorkResult<Evt, R>>,
 ): Promise<R> {
 	return withCheckedCommit(
 		deps,
-		async (ctx, enrollment) => {
-			const { result, commits } = await fn(ctx, enrollment);
+		async (ctx, registration) => {
+			const { result, commits } = await fn(ctx, registration);
 			return { result, commits };
 		},
 		undefined,
@@ -545,7 +545,7 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 	deps: WithCommitDeps<Evt, TCtx>,
 	fn: (
 		ctx: TCtx,
-		enrollment: CommitEnrollment<Evt>,
+		registration: CommitRegistration<Evt>,
 	) => Promise<CheckedWorkResult<Evt, R>>,
 	onAttemptStart: (() => void) | undefined,
 ): Promise<R> {
@@ -569,10 +569,10 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 			const tokenScope = createCommitTokenScope<Evt>();
 			let fnResult: CheckedWorkResult<Evt, R>;
 			try {
-				fnResult = await fn(ctx, tokenScope.enrollment);
+				fnResult = await fn(ctx, tokenScope.registration);
 			} finally {
 				// A callback can leak the capability into delayed work. Seal it as
-				// soon as the callback settles so a late enrollment fails loudly
+				// soon as the callback settles so a late registration fails loudly
 				// instead of being accepted after the harvest snapshot.
 				tokenScope.close();
 			}
@@ -582,22 +582,22 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 				// The aggregate's event remains untouched and is what the in-process
 				// domain bus receives.
 				const candidates = commitRecords.flatMap((record) => {
-					const enrolled = record.aggregate.aggregateIdentity;
+					const registered = record.aggregate.aggregateIdentity;
 					if (
 						record.events.length > 0 &&
 						record.persistedVersion !== undefined &&
 						(record.version as number) <= (record.persistedVersion as number)
 					) {
 						throw new EventHarvestError(
-							`withCommit: aggregate ${describeAggregateIdentity(enrolled)} recorded events but ` +
+							`withCommit: aggregate ${describeAggregateIdentity(registered)} recorded events but ` +
 								`did not advance its version beyond the persisted version ` +
 								`(${String(record.persistedVersion)}). An eventful commit needs a unique ` +
 								`cursor; use StateStoredAggregate.setState(currentState, event) instead ` +
 								`of addDomainEvent(event) alone.`,
 						);
 					}
-					const enrolledId = enrolled.aggregateId;
-					const enrolledType = enrolled.aggregateType;
+					const registeredId = registered.aggregateId;
+					const registeredType = registered.aggregateType;
 					return record.events.map((event, index) => {
 						if (!isStampedDomainEvent(event)) {
 							throw new EventHarvestError(
@@ -629,12 +629,15 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 						// Backstop behind the aggregate identity check of the aggregate
 						// itself: the envelope source is copied from the event, so an
 						// event that names another aggregate must never become this commit.
-						if (aggregateId !== enrolledId || aggregateType !== enrolledType) {
+						if (
+							aggregateId !== registeredId ||
+							aggregateType !== registeredType
+						) {
 							throw new EventHarvestError(
 								`withCommit: event "${recordedEvent.type}" belongs to ` +
 									`${describeAggregateIdentity({ aggregateType, aggregateId })} but ` +
-									"was enrolled under " +
-									`${describeAggregateIdentity({ aggregateType: enrolledType, aggregateId: enrolledId })}. ` +
+									"was registered under " +
+									`${describeAggregateIdentity({ aggregateType: registeredType, aggregateId: registeredId })}. ` +
 									"The aggregate base " +
 									"classes attribute every event to the aggregate on every recording path; an " +
 									"instance from another package copy must stamp it the " +
@@ -672,11 +675,11 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 				fnResult.checkBeforeCommit?.();
 				if (candidates.length > 0 || endedSources.length > 0) {
 					// The outbox write can yield. Work that the callback did not
-					// await could change an enrolled aggregate meanwhile, and the
+					// await could change an registered aggregate meanwhile, and the
 					// acknowledgement would then cover state or events that were
 					// never written.
 					for (const record of commitRecords) {
-						if (enrollmentDiverged(record)) {
+						if (registrationDiverged(record)) {
 							throw new EventHarvestError(
 								`withCommit: aggregate ${describeAggregateIdentity(record.aggregate.aggregateIdentity)} ` +
 									"changed while its outbox write ran. Await every change " +

@@ -691,7 +691,7 @@ export class UnitOfWork<
 	 * Execute one unit of work: open the transaction, hand the callback
 	 * tx-bound repositories, commit on resolve, roll back on throw,
 	 * run the post-commit lifecycle (acknowledge, observe, publish) for every
-	 * enrolled aggregate. Returns the callback's result.
+	 * registered aggregate. Returns the callback's result.
 	 */
 	public async run<R>(
 		work: (
@@ -737,15 +737,15 @@ export class UnitOfWork<
 					postCommitTimeoutMs: this.deps.postCommitTimeoutMs,
 					signal: options?.signal,
 				},
-				async (tx, enrollment) => {
+				async (tx, registration) => {
 					// Fresh state per scope invocation: a TransactionScope that
 					// retries its callback (serialization-failure retry wrappers)
 					// re-runs this fn, and state from the rolled-back attempt
-					// (enrollments, identity-map entries, error flags) must not
+					// (registrations, identity-map entries, error flags) must not
 					// leak into the retry. The previous attempt's session is
 					// closed so its leaked contexts turn loud.
 					session?.close();
-					const s = new Session<Evt>(enrollment);
+					const s = new Session<Evt>(registration);
 					session = s;
 					sessions.push(s);
 					const current = startAttempt();

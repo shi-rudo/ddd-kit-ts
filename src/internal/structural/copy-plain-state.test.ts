@@ -39,7 +39,9 @@ describe("copyPlainState", () => {
 	it("rejects a class instance inside an array, a Map, and a Set with the container path", () => {
 		const instance = new OwnerReview(true);
 
-		expect(() => copyPlainState({ list: [instance] })).toThrow(/state\.list\[0\]/);
+		expect(() => copyPlainState({ list: [instance] })).toThrow(
+			/state\.list\[0\]/,
+		);
 		expect(() => copyPlainState({ byId: new Map([["a", instance]]) })).toThrow(
 			/state\.byId<map value #0>/,
 		);
@@ -274,7 +276,9 @@ describe("copyPlainState", () => {
 		expect(() => copyPlainState({ hidden })).toThrow(
 			/state\.hidden\.hidden is not enumerable and the clone would drop it/,
 		);
-		expect(copyPlainState({ tagged: Object.assign([1], { note: "x" }) })).toEqual({
+		expect(
+			copyPlainState({ tagged: Object.assign([1], { note: "x" }) }),
+		).toEqual({
 			tagged: Object.assign([1], { note: "x" }),
 		});
 	});

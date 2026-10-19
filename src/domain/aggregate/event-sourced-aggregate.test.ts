@@ -1105,12 +1105,16 @@ describe("replay trusts history", () => {
 			payload: { newValue: 99 },
 			schemaVersion: 1,
 		};
-		Object.defineProperty(literal, Symbol.for("@shirudo/ddd-kit/stamped-event/v1"), {
-			value: true,
-			enumerable: false,
-			writable: false,
-			configurable: false,
-		});
+		Object.defineProperty(
+			literal,
+			Symbol.for("@shirudo/ddd-kit/stamped-event/v1"),
+			{
+				value: true,
+				enumerable: false,
+				writable: false,
+				configurable: false,
+			},
+		);
 
 		expect(isStampedDomainEvent(literal)).toBe(false);
 		expect(() => agg.testApply(literal as TestEventUpdated)).toThrow(

@@ -30,8 +30,8 @@ export {
 // App orchestration: withCommit + Unit of Work
 export {
 	type AggregateCommitToken,
-	type CommitEnrollment,
-	type CommitEnrollmentOptions,
+	type CommitRegistration,
+	type CommitRegistrationOptions,
 	type WithCommitDeps,
 	type WithCommitWorkResult,
 	withCommit,
@@ -309,8 +309,8 @@ export {
 	type SnapshotSchemaMismatchErrorOptions,
 	SnapshotVersionNotRestoredError,
 	type SnapshotVersionNotRestoredErrorOptions,
-	UnenrolledChangesError,
-	type UnenrolledChangesErrorOptions,
+	UnregisteredChangesError,
+	type UnregisteredChangesErrorOptions,
 	UnmanagedInstanceError,
 	UnmintedEventError,
 	UnprojectableEventError,

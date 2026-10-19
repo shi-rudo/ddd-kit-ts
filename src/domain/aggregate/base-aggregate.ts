@@ -234,7 +234,7 @@ export abstract class BaseAggregate<
 		const persisted = toVersion(committedVersion);
 		this.stripAcknowledgedPrefix(events);
 		// The next eventful commit needs a cursor beyond the version this
-		// commit persisted. The caller passes the enrollment-time version:
+		// commit persisted. The caller passes the registration-time version:
 		// syncing from the live version instead would let un-awaited
 		// concurrent work that mutates the instance in the post-commit window
 		// desync the marker.
@@ -244,7 +244,7 @@ export abstract class BaseAggregate<
 	/**
 	 * Post-commit cleanup for the deleted disposition. The row is gone, so
 	 * there is no persisted version to advance: stamping the marker from the
-	 * live instance would make a later legitimate re-enrollment of this
+	 * live instance would make a later legitimate re-registerment of this
 	 * instance trip the unique-cursor guard for a row that does not exist.
 	 */
 	private discardPendingEventsAfterDeletion(

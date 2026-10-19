@@ -474,7 +474,7 @@ describe("withIdempotentCommit lease orchestration", () => {
 				reconcileIdempotency: async () => "not-committed",
 			},
 			request,
-			async (_ctx, _enrollment, execution) => {
+			async (_ctx, _registration, execution) => {
 				executionToken = execution.claimToken;
 				return { result: "fresh", commits: [] };
 			},

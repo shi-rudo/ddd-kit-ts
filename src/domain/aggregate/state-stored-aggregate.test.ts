@@ -819,10 +819,10 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 				status: "inactive",
 			});
 			aggregate.addValueUpdated(1);
-			const enrolled = aggregate.pendingEvents;
+			const registered = aggregate.pendingEvents;
 			aggregate.addValueUpdated(2);
 
-			lifecycleOf(aggregate).acknowledge(enrolled, 1 as Version);
+			lifecycleOf(aggregate).acknowledge(registered, 1 as Version);
 
 			expect(aggregate.pendingEvents).toHaveLength(1);
 			expect(aggregate.pendingEvents[0]?.payload.newValue).toBe(2);

@@ -60,8 +60,8 @@ import {
 	type SnapshotSchemaMismatchErrorOptions,
 	SnapshotVersionNotRestoredError,
 	type SnapshotVersionNotRestoredErrorOptions,
-	UnenrolledChangesError,
-	type UnenrolledChangesErrorOptions,
+	UnregisteredChangesError,
+	type UnregisteredChangesErrorOptions,
 	UnmanagedInstanceError,
 	UnprojectableEventError,
 	UnregisteredHandlerError,
@@ -438,10 +438,10 @@ describe("kit errors are StructuredErrors (code = name = the one identifier)", (
 			new EventHarvestError("event without aggregateId", "OrderConfirmed").code,
 		).toBe("EVENT_HARVEST_FAILED");
 		expect(
-			new UnenrolledChangesError({
+			new UnregisteredChangesError({
 				identity: { aggregateType: "Order", aggregateId: "o-1" },
 			}).code,
-		).toBe("UNENROLLED_CHANGES");
+		).toBe("UNREGISTERED_CHANGES");
 		expect(
 			new AggregateDeletedError({
 				identity: { aggregateType: "Order", aggregateId: "o-1" },
@@ -685,7 +685,7 @@ describe("KitErrorCode stays in sync with the classes", () => {
 			AssertKitCode<ProjectionReceiptViolationError["code"]>,
 			AssertKitCode<SnapshotSchemaMismatchError["code"]>,
 			AssertKitCode<SnapshotVersionNotRestoredError["code"]>,
-			AssertKitCode<UnenrolledChangesError["code"]>,
+			AssertKitCode<UnregisteredChangesError["code"]>,
 			AssertKitCode<UnmanagedInstanceError["code"]>,
 			AssertKitCode<UnprojectableEventError["code"]>,
 			AssertKitCode<UnregisteredHandlerError["code"]>,
@@ -883,7 +883,7 @@ const identityShapesMatchAggregateIdentity: [
 		PendingEventBatchMismatchErrorOptions["identity"],
 		AggregateIdentity
 	>,
-	SameType<UnenrolledChangesErrorOptions["identity"], AggregateIdentity>,
+	SameType<UnregisteredChangesErrorOptions["identity"], AggregateIdentity>,
 	SameType<AggregateDeletedErrorOptions["identity"], AggregateIdentity>,
 	SameType<ReentrantEventRecordingErrorOptions["identity"], AggregateIdentity>,
 	SameType<DuplicateEventIdErrorOptions["identity"], AggregateIdentity>,

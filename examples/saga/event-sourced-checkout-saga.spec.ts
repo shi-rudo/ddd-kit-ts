@@ -110,7 +110,7 @@ async function commitProcessDecision(
 				checkoutCommandsFromProcessFact,
 			),
 		},
-		async (_ctx, enrollment) => {
+		async (_ctx, registration) => {
 			const recorded = stampPendingEvents(saga, () =>
 				domainEvents.createStamp({
 					metadata: {
@@ -129,7 +129,7 @@ async function commitProcessDecision(
 			await database.append(recorded);
 			return {
 				result: undefined,
-				commits: [enrollment.enrollSaved(saga)],
+				commits: [registration.registerSaved(saga)],
 			};
 		},
 	);

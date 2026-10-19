@@ -143,7 +143,7 @@ class DrizzleScope implements TransactionScope<DrizzleTx> {
 ```
 
 Repository definitions bind their read adapter and flush callback to that
-transaction handle. Application code sees neither `tx` nor enrollment:
+transaction handle. Application code sees neither `tx` nor registration:
 
 ```ts
 await uow.run(async ({ repositories }) => {
@@ -176,7 +176,7 @@ This scope has no rollback. For a test that rolls back or retries, use
 `TransactionScope` does not track aggregates, repository intent, or deletes.
 That lives in `UnitOfWork` above it. `withCommit` remains the lower-level commit
 lifecycle for custom infrastructure compositions.
-If you need transaction-bound repositories, enrollment, and an identity map,
+If you need transaction-bound repositories, registration, and an identity map,
 use `UnitOfWork`.
 
 ## The Outbox Ports

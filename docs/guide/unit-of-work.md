@@ -199,7 +199,7 @@ the transaction back. The guard runs before the flush, after the flush, and
 after the outbox write, because an asynchronous adapter can yield to other
 work while the transaction is still open. The last run also covers a loaded
 aggregate without a write: if it changed, the commit fails with
-`UnenrolledChangesError`. A change of a registered aggregate always fails with
+`UnregisteredChangesError`. A change of a registered aggregate always fails with
 `AggregateTrackingError` and the reason `mutated_after_registration`, also
 while the outbox write runs.
 
@@ -278,7 +278,7 @@ A language probe such as `then` or `constructor` does not.
 Application code cannot access the raw transaction or the tracking capability.
 The `UnitOfWorkContext` contains only `repositories` and the optional
 cooperative-cancellation `signal`. That keeps infrastructure details out of
-the use case and removes the old enrollment escape hatch.
+the use case and removes the old registration escape hatch.
 
 ## What a flush receives
 
@@ -375,7 +375,7 @@ The most useful failures are intentionally specific:
 | Error | Meaning |
 | --- | --- |
 | `AggregateTrackingError` | invalid add/update/remove lifecycle or mutation after registration |
-| `UnenrolledChangesError` | a loaded aggregate changed but the use case never called `update` |
+| `UnregisteredChangesError` | a loaded aggregate changed but the use case never called `update` |
 | `ConcurrencyConflictError` | the adapter's expected-version predicate lost a race |
 | `DuplicateAggregateError` | an `add` collided with an existing identity |
 | `InvalidRepositoryAdapterError` | a repository factory returned no adapter object, or an adapter that defines `add`, `update`, or `remove` |

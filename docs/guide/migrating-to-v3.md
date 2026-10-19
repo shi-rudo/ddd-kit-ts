@@ -53,7 +53,7 @@ await orders.save(order);
 ```
 
 The repository inspected aggregate persistence metadata to choose insert or
-update. Some repositories also enrolled events manually.
+update. Some repositories also registered events manually.
 
 The v3 flow is explicit:
 
@@ -248,8 +248,8 @@ On every successful load:
 3. Reconstitute the aggregate.
 4. Return `tracking.trackLoaded(aggregate)`.
 
-Delete adapter-side manual enrollment. `UnitOfWorkSession` with its
-`enrollSaved` and `enrollDeleted` is gone. Application code cannot see the
+Delete adapter-side manual registration. `UnitOfWorkSession` with its
+`registerSaved` and `registerDeleted` is gone. Application code cannot see the
 tracking capability or raw transaction, and adapter `add`/`update`/`remove`
 methods are not the durable write path.
 
@@ -451,7 +451,7 @@ that names one aggregate carries one `identity` field of the shape
 | `new AggregateNotFoundError({ aggregateType, id })` | `new AggregateNotFoundError({ identity })` |
 | `new DuplicateAggregateError({ aggregateType, aggregateId })` | `new DuplicateAggregateError({ identity })` |
 | `new AggregateDeletedError(aggregateId)` | `new AggregateDeletedError({ identity })` |
-| `new UnenrolledChangesError(aggregateId)` | `new UnenrolledChangesError({ identity })` |
+| `new UnregisteredChangesError(aggregateId)` | `new UnregisteredChangesError({ identity })` |
 | `new UnreplayableAggregateError(aggregateId, reason)` | `new UnreplayableAggregateError({ identity, reason })` |
 | `error.aggregateType`, `error.aggregateId` | `error.identity.aggregateType`, `error.identity.aggregateId` |
 | `error.id` on `AggregateNotFoundError` | `error.identity.aggregateId` |
@@ -853,7 +853,7 @@ multi-result method a validated limit, one stable order, and a cursor.
 
 #### `withCommit` takes commit tokens
 
-A direct caller of `withCommit` returns tokens from the enrollment
+A direct caller of `withCommit` returns tokens from the registration
 capability, not the aggregates it touched. A touched aggregate is no proof
 that its write joined the transaction.
 
@@ -867,16 +867,16 @@ await withCommit({ scope, outbox, bus }, async (tx) => {
 });
 
 // after
-await withCommit({ scope, outbox, bus }, async (tx, enrollment) => {
+await withCommit({ scope, outbox, bus }, async (tx, registration) => {
   const order = await orders(tx).getById(orderId);
   order.confirm();
   stampPendingEvents(order, domainEvents);
   await orders(tx).save(order);
-  return { result: order.id, commits: [enrollment.enrollSaved(order)] };
+  return { result: order.id, commits: [registration.registerSaved(order)] };
 });
 ```
 
-For a physical removal, return `enrollment.enrollDeleted(aggregate)`. The
+For a physical removal, return `registration.registerDeleted(aggregate)`. The
 `deleted` array is gone. Every token that the callback mints must be in
 `commits`. A `UnitOfWork` use case keeps returning its result directly.
 

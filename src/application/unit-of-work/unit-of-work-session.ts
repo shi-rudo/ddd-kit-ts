@@ -11,7 +11,7 @@ import {
 	ConcurrencyConflictError,
 	type InfrastructureError,
 	isInfrastructureErrorLike,
-	UnenrolledChangesError,
+	UnregisteredChangesError,
 } from "../../errors/kit-errors";
 import { findInCauseChain } from "../../internal/cause-chain";
 import {
@@ -27,7 +27,7 @@ import {
 	persistenceProjectionDrifted,
 	recapturePersistenceBaseline,
 } from "../../persistence/repository/persistence-model";
-import type { AggregateCommitToken, CommitEnrollment } from "../cqrs/handler";
+import type { AggregateCommitToken, CommitRegistration } from "../cqrs/handler";
 import {
 	AggregateTrackingError,
 	attributeFlushStatementIntent,
@@ -80,7 +80,7 @@ interface TrackedAggregate<Evt extends AnyDomainEvent> {
 export class Session<Evt extends AnyDomainEvent> {
 	// Read tracking order is independent of write registration order. Flush
 	// follows this list so adapters observe the same explicit order as the use
-	// case's add/update/remove calls. Enrollment and removal state are NOT
+	// case's add/update/remove calls. Registration and removal state are NOT
 	// separate collections: both derive from each entry's registration, so
 	// the bookkeeping cannot drift apart.
 	private readonly _registeredWrites: TrackedAggregate<Evt>[] = [];
@@ -89,7 +89,7 @@ export class Session<Evt extends AnyDomainEvent> {
 	// What adapters receive: the typed read-only view, enforced at runtime.
 	// Handing out the map itself would expose set/delete/clear to JavaScript
 	// callers, and a stray clear() erases deletion tombstones and the
-	// pending-event baselines behind UnenrolledChangesError. A view that an
+	// pending-event baselines behind UnregisteredChangesError. A view that an
 	// adapter keeps answers empty once the session is no longer open, so it
 	// cannot serve an instance after its attempt ended.
 	private readonly _identityMapView = Object.freeze({
@@ -118,7 +118,7 @@ export class Session<Evt extends AnyDomainEvent> {
 	private _lateRegistrationsFailAttempt = false;
 	private _registrationDuringFlush: AggregateTrackingError | undefined;
 
-	constructor(private readonly commitEnrollment: CommitEnrollment<Evt>) {}
+	constructor(private readonly commitRegistration: CommitRegistration<Evt>) {}
 
 	public get identityMap(): UnitOfWorkIdentityMap {
 		this.assertOpen("tracking.identityMap");
@@ -295,8 +295,8 @@ export class Session<Evt extends AnyDomainEvent> {
 		if (this.isRepeatAdmitted(aggregate, definition, "remove")) return;
 		// Idempotent by reference, like add and update: a repeated remove of
 		// the SAME instance re-declares the same final lifecycle outcome
-		// (collection semantics; the enrollment layer already returns the
-		// same token for a repeat enrollDeleted). The deletion-finality gate
+		// (collection semantics; the registration layer already returns the
+		// same token for a repeat registerDeleted). The deletion-finality gate
 		// stays sharp for everything else: add, update, and trackLoaded
 		// after remove, and any OTHER instance with the same id, still
 		// reject.
@@ -309,7 +309,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		this.registerWrite(loaded, "remove", definition);
 	}
 
-	/** Registers persistence intent and commit enrollment as one operation. */
+	/** Registers persistence intent and commit registration as one operation. */
 	private registerWrite(
 		entry: TrackedAggregate<Evt>,
 		intent: AggregateWriteIntent,
@@ -418,7 +418,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		return true;
 	}
 
-	/** Restores the pre-registration state when commit enrollment rejects. */
+	/** Restores the pre-registration state when commit registration rejects. */
 	private rollbackIntentRegistration(entry: TrackedAggregate<Evt>): void {
 		const index = this._registeredWrites.lastIndexOf(entry);
 		if (index >= 0) this._registeredWrites.splice(index, 1);
@@ -478,7 +478,7 @@ export class Session<Evt extends AnyDomainEvent> {
 				identity: aggregate.aggregateIdentity,
 			});
 		}
-		const token = this.commitEnrollment.enrollSaved(aggregate, {
+		const token = this.commitRegistration.registerSaved(aggregate, {
 			expectedVersion,
 		});
 		this._commitTokens.add(token);
@@ -491,7 +491,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		expectedVersion: Version | undefined,
 	): AggregateCommitToken<Evt> {
 		this.assertOpen("repository.remove");
-		const token = this.commitEnrollment.enrollDeleted(aggregate, {
+		const token = this.commitRegistration.registerDeleted(aggregate, {
 			expectedVersion,
 		});
 		// One call does ALL the deletion bookkeeping: the identity-map
@@ -530,13 +530,13 @@ export class Session<Evt extends AnyDomainEvent> {
 			}
 			// Capture-to-capture drift against the load-time baseline: a
 			// full-replacement model's changes() is never empty, which would
-			// misreport every merely-loaded aggregate as unenrolled changes.
+			// misreport every merely-loaded aggregate as unregistered changes.
 			if (
 				entry.lifecycle === "loaded" &&
 				(entry.aggregate.version !== entry.expectedVersion ||
 					persistenceProjectionDrifted(entry.baseline, entry.aggregate))
 			) {
-				throw new UnenrolledChangesError({
+				throw new UnregisteredChangesError({
 					identity: entry.aggregate.aggregateIdentity,
 					appendOnly: entry.definition.appendOnly === true,
 				});
@@ -545,7 +545,7 @@ export class Session<Evt extends AnyDomainEvent> {
 
 		for (const instance of this._identityMap.instancesWithNewPendingEvents()) {
 			// Any registration (add, update, or remove) means the instance is
-			// enrolled and its batch will be harvested.
+			// registered and its batch will be harvested.
 			if (
 				instance !== null &&
 				typeof instance === "object" &&
@@ -557,7 +557,7 @@ export class Session<Evt extends AnyDomainEvent> {
 			// registered, yet it has no write intent: a forgotten update whose
 			// events would be silently dropped.
 			const aggregate = instance as Aggregate<Id<string>, Evt>;
-			throw new UnenrolledChangesError({
+			throw new UnregisteredChangesError({
 				identity: aggregate.aggregateIdentity,
 				appendOnly:
 					this._trackingByAggregate.get(aggregate)?.definition.appendOnly ===

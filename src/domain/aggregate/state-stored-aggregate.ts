@@ -35,9 +35,7 @@ export abstract class StateStoredAggregate<
 		)
 			? events
 			: [events as PendingDomainEvent<TEvent>];
-		const stamped = eventBatch.map((event) =>
-			this.attributeNewEvent(event),
-		);
+		const stamped = eventBatch.map((event) => this.attributeNewEvent(event));
 		this.assertEventIdsNotPending(stamped);
 		this.assertPendingEventLimit(stamped.length);
 		// The version number is validated before the state moves; the write

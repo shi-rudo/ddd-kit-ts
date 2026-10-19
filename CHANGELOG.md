@@ -67,7 +67,7 @@ immutable. Run one kit version per process during a cutover.
   `SnapshotModel`. `createSnapshot`, `restoreFromSnapshot`,
   `restoreFromSnapshotWithEvents`, the snapshot schema members, and the
   `TSnapshotState` type parameter are gone.
-- `withCommit` takes commit tokens from its enrollment capability in place
+- `withCommit` takes commit tokens from its registration capability in place
   of the touched aggregates, and the `deleted` array is gone. See
   [`withCommit` takes commit tokens](docs/guide/migrating-to-v3.md#withcommit-takes-commit-tokens).
 - The `outbox` dependency of `withCommit` and `UnitOfWork` has the type

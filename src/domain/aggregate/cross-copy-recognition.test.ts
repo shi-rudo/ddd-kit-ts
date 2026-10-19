@@ -89,9 +89,7 @@ describe("recognition across package copies", () => {
 		const secondCopy = await import("../event/domain-event");
 		expect(secondCopy.isStampedDomainEvent).not.toBe(isStampedDomainEvent);
 
-		expect(secondCopy.isStampedDomainEvent(stamped as ValueUpdated)).toBe(
-			true,
-		);
+		expect(secondCopy.isStampedDomainEvent(stamped as ValueUpdated)).toBe(true);
 	});
 
 	it("a second copy of the lifecycle module resolves the capability this copy registered", async () => {

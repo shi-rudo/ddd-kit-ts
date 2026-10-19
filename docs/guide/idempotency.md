@@ -30,7 +30,7 @@ const outcome = await withIdempotentCommit(
     key: request.headers.get("Idempotency-Key")!,
     fingerprint: stableHash(command),
   },
-  async (tx, enrollment) => {
+  async (tx, registration) => {
     const loaded = await loadOrderForDirectCommit(tx, command.orderId);
     const order = loaded.aggregate;
     order.confirm();
@@ -39,7 +39,7 @@ const outcome = await withIdempotentCommit(
 
     return {
       result: { orderId: order.id },
-      commits: [enrollment.enrollSaved(order)],
+      commits: [registration.registerSaved(order)],
     };
   },
 );
@@ -114,7 +114,7 @@ const outcome = await withIdempotentCommit(
       telemetry.report("idempotency.lifecycle.failed", { error, ...context }),
   },
   request,
-  async (tx, enrollment, execution) => {
+  async (tx, registration, execution) => {
     const loaded = await loadOrderForDirectCommit(tx, command.orderId);
     const order = loaded.aggregate;
     order.confirm();
@@ -130,7 +130,7 @@ const outcome = await withIdempotentCommit(
 
     return {
       result: { orderId: order.id },
-      commits: [enrollment.enrollSaved(order)],
+      commits: [registration.registerSaved(order)],
     };
   },
 );

@@ -34,7 +34,7 @@ export interface PendingEventLifecycleCapability
 	extends PendingEventLifecycleReadView {
 	/**
 	 * Acknowledges the committed batch. `committedVersion` is the version the
-	 * commit actually persisted (captured at enrollment); the aggregate syncs
+	 * commit actually persisted (captured at registration); the aggregate syncs
 	 * its persisted-version marker from it rather than from its live version,
 	 * so un-awaited concurrent work mutating the instance in the post-commit
 	 * window cannot desync the marker.
@@ -51,7 +51,7 @@ export interface PendingEventLifecycleCapability
 // The key version stamps the capability SHAPE. Bump it whenever the
 // interface above changes: registrations made under another key stay
 // invisible, so an aggregate constructed by an incompatible package copy
-// fails the UnmanagedInstanceError check at enrollment instead of
+// fails the UnmanagedInstanceError check at registration instead of
 // half-working through a shape it does not fully implement.
 const persistenceCapabilityRegistryKey = Symbol.for(
 	"@shirudo/ddd-kit/pending-event-lifecycle-registry/v7",

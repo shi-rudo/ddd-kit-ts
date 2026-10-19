@@ -79,13 +79,13 @@ type RemovedTrackingSession = PublicUnitOfWorkContext["session"];
 type PublicRepositoryTracking = RepositoryTracking<
 	Aggregate<Id<"TrackingSurface">>
 >;
-// @ts-expect-error legacy enrollment cannot bypass explicit add/update intent
-type RemovedEnrollSaved = PublicRepositoryTracking["enrollSaved"];
+// @ts-expect-error legacy registration cannot bypass explicit add/update intent
+type RemovedRegisterSaved = PublicRepositoryTracking["registerSaved"];
 // @ts-expect-error adapters cannot mutate the Unit-of-Work-owned identity map
 type RemovedIdentityMapSet = UnitOfWorkIdentityMap["set"];
 void (undefined as unknown as RemovedRawTransaction);
 void (undefined as unknown as RemovedTrackingSession);
-void (undefined as unknown as RemovedEnrollSaved);
+void (undefined as unknown as RemovedRegisterSaved);
 void (undefined as unknown as RemovedIdentityMapSet);
 
 const publicIntegrationRelationships: IntegrationMessageRelationships = {
@@ -185,11 +185,11 @@ const INDEX_SURFACE = [
 	"Specification",
 	"StateStoredAggregate",
 	"TransactionClosedError",
-	"UnenrolledChangesError",
 	"UnitOfWork",
 	"UnmanagedInstanceError",
 	"UnmintedEventError",
 	"UnprojectableEventError",
+	"UnregisteredChangesError",
 	"UnregisteredHandlerError",
 	"UnreplayableAggregateError",
 	"ValueObject",

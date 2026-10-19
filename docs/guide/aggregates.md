@@ -683,7 +683,7 @@ no synonyms.
 | stamp | The application shell stamps identity and time on pending decisions. | `stampPendingEvents(aggregate, factory)` |
 | reconstitute | A factory builds an aggregate from persisted facts and yields it only on success. | `reconstituteAggregateFromHistory`, `reconstituteAggregateFromSnapshot`, `markReconstituted` |
 | replay | A built aggregate folds a later page of history into itself. | `replayHistory(history)` |
-| commit | The transaction that persists enrolled aggregates and publishes their events. | `withCommit`, `committedVersion`, `CommittedDomainEvent` |
+| commit | The transaction that persists registered aggregates and publishes their events. | `withCommit`, `committedVersion`, `CommittedDomainEvent` |
 | version | The optimistic-concurrency version of the aggregate. | `aggregate.version`, `expectedVersion` |
 | schemaVersion | The payload schema version of one event or snapshot. | `event.schemaVersion`, `SnapshotModel.schemaVersion` |
 

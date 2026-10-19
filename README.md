@@ -146,7 +146,7 @@ aggregate as persisted after the transaction commits.
 - a per-operation Identity Map contract
 - optimistic concurrency errors and duplicate-insert errors
 - `withCommit` for transaction, outbox, event harvest, and post-commit cleanup
-- `UnitOfWork` for repository registration and enrollment
+- `UnitOfWork` for repository registration and registration
 - outbox dispatcher, projection, event-store, and snapshot ports
 - contract tests for repository and outbox adapters
 

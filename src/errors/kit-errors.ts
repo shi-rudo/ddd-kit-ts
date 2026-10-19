@@ -1022,7 +1022,7 @@ export interface PendingEventBatchMismatchErrorOptions {
  * pending event at the same position. Acknowledging such a batch would
  * drop decisions the commit never persisted or keep events it did. The
  * pending list stays untouched. A wiring error in application commit
- * orchestration: acknowledge exactly the batch that was enrolled, once.
+ * orchestration: acknowledge exactly the batch that was registered, once.
  */
 export class PendingEventBatchMismatchError extends KitWiringError<"PENDING_EVENT_BATCH_MISMATCH"> {
 	readonly identity: PendingEventBatchMismatchErrorOptions["identity"];
@@ -1035,7 +1035,7 @@ export class PendingEventBatchMismatchError extends KitWiringError<"PENDING_EVEN
 			`The committed batch of ${options.batchLength} event(s) is no longer ` +
 				"the pending prefix of aggregate " +
 				`${describeAggregateIdentity(options.identity)} (${options.pendingLength} ` +
-				"pending). Acknowledge exactly the batch that was enrolled, once.",
+				"pending). Acknowledge exactly the batch that was registered, once.",
 		);
 		this.identity = copyAggregateIdentity(options.identity);
 		this.batchLength = options.batchLength;
@@ -1584,8 +1584,8 @@ export class ErrorMapperFailedError extends KitWiringError<"ERROR_MAPPER_FAILED"
 	}
 }
 
-/** Constructor options for {@link UnenrolledChangesError}. */
-export interface UnenrolledChangesErrorOptions {
+/** Constructor options for {@link UnregisteredChangesError}. */
+export interface UnregisteredChangesErrorOptions {
 	/** The aggregate the error names. */
 	readonly identity: {
 		readonly aggregateType: string;
@@ -1618,12 +1618,12 @@ export interface UnenrolledChangesErrorOptions {
  * message names the rule instead: a loaded append-only aggregate must not
  * change.
  */
-export class UnenrolledChangesError extends KitWiringError<"UNENROLLED_CHANGES"> {
-	readonly identity: UnenrolledChangesErrorOptions["identity"];
+export class UnregisteredChangesError extends KitWiringError<"UNREGISTERED_CHANGES"> {
+	readonly identity: UnregisteredChangesErrorOptions["identity"];
 
-	constructor(options: UnenrolledChangesErrorOptions) {
+	constructor(options: UnregisteredChangesErrorOptions) {
 		super(
-			"UNENROLLED_CHANGES",
+			"UNREGISTERED_CHANGES",
 			`Aggregate ${describeAggregateIdentity(options.identity)} was loaded and changed in this unit of work, ` +
 				(options.appendOnly
 					? "but its repository is append-only and installs no update. " +
@@ -1862,7 +1862,7 @@ export type ConcurrencyConflictErrorOptions = {
  * **Retry means a FRESH unit of work** (a new `UnitOfWork.run()` /
  * `withCommit` invocation): reload, re-apply, and register `update` again. Do NOT catch this
  * inside the same `run()` callback and continue: the failed aggregate
- * is already enrolled (its events would be committed for a write that
+ * is already registered (its events would be committed for a write that
  * never happened) and the identity map still serves the same stale
  * instance to any in-place "reload".
  *
@@ -2224,7 +2224,7 @@ export type KitErrorCode =
 	| "SNAPSHOT_TIME_INVALID"
 	| "SNAPSHOT_VERSION_NOT_RESTORED"
 	| "TRANSACTION_CLOSED"
-	| "UNENROLLED_CHANGES"
+	| "UNREGISTERED_CHANGES"
 	| "UNKNOWN_CURRENCY"
 	| "UNMANAGED_INSTANCE"
 	| "UNMINTED_EVENT"

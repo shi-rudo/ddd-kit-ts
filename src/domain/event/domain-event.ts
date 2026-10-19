@@ -453,9 +453,7 @@ function isFactoryOwnedDomainEventStamp(stamp: object): boolean {
  * recording paths; not part of the package entries.
  */
 export function isStampedDomainEvent(event: object): event is AnyDomainEvent {
-	return (
-		STAMPED_EVENTS.has(event) || hasCooperativeBrand(event, STAMPED_BRAND)
-	);
+	return STAMPED_EVENTS.has(event) || hasCooperativeBrand(event, STAMPED_BRAND);
 }
 
 /** Whether a value was created by {@link createUnstampedDomainEvent}. */
@@ -463,8 +461,7 @@ export function isUnstampedDomainEvent(
 	event: object,
 ): event is AnyUnstampedDomainEvent {
 	return (
-		UNSTAMPED_EVENTS.has(event) ||
-		hasCooperativeBrand(event, UNSTAMPED_BRAND)
+		UNSTAMPED_EVENTS.has(event) || hasCooperativeBrand(event, UNSTAMPED_BRAND)
 	);
 }
 

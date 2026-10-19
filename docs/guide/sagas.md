@@ -179,7 +179,7 @@ async function reactToOrderPlaced(event: OrderPlaced): Promise<void> {
     // consumer of the same event keeps its own inbox entry. The
     // fingerprint is a tripwire (see below); any stable content hash works.
     { key: `checkout-saga:${event.eventId}`, fingerprint: stableHash(event.payload) },
-    async (tx, enrollment) => {
+    async (tx, registration) => {
       const deadlines = makeDeadlineStore(tx);
 
       const saga = CheckoutSaga.start(event.aggregateId as OrderId, event.payload.total);
@@ -196,7 +196,7 @@ async function reactToOrderPlaced(event: OrderPlaced): Promise<void> {
 
       return {
         result: saga.id,
-        commits: [enrollment.enrollSaved(saga)],
+        commits: [registration.registerSaved(saga)],
       };
     },
   );
@@ -272,7 +272,7 @@ await withCommit(
     outbox: processCommandWriter,
     // Deliberately no bus: these process facts are private history.
   },
-  async (tx, enrollment) => {
+  async (tx, registration) => {
     saga.advanceToShipping(shipmentId);
     const recorded = stampPendingEvents(saga, () =>
       domainEvents.createStamp({
@@ -287,7 +287,7 @@ await withCommit(
     await makeCheckoutEventStore(tx).append(recorded);
     return {
       result: saga.id,
-      commits: [enrollment.enrollSaved(saga)],
+      commits: [registration.registerSaved(saga)],
     };
   },
 );
