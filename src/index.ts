@@ -229,13 +229,13 @@ export {
 export {
 	deepFreeze,
 	ValueObject,
-	type VO,
-	vo,
-	voEquals,
-	voEqualsExcept,
-	voWithValidation,
+	type ValueObjectOf,
+	valueObject,
+	valueObjectEquals,
+	valueObjectEqualsExcept,
+	valueObjectWithValidation,
 } from "./domain/value-object/value-object";
-export { voValidated } from "./domain/value-object/vo-validated";
+export { valueObjectValidated } from "./domain/value-object/value-object-validated";
 // Errors
 export {
 	AggregateDeletedError,

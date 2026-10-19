@@ -1,16 +1,16 @@
 import { ValidationError } from "@shirudo/base-error";
 import { err, ok, type Result } from "@shirudo/result";
-import { type VO, vo } from "./value-object";
+import { type ValueObjectOf, valueObject } from "./value-object";
 
 /**
  * Builds an immutable value object while collecting **all** validation
  * violations into a single {@link ValidationError}, instead of failing on the
  * first one. This is the Result-first, multi-error counterpart to
- * `voWithValidation` (which returns a single string message).
+ * `valueObjectWithValidation` (which returns a single string message).
  *
  * The `validate` callback receives a fresh `ValidationError` to push field
  * issues onto (via `addIssue` / `addIssues`) and the raw input. When no issue
- * was recorded the input is frozen into a `VO<T>` and returned as `Ok`;
+ * was recorded the input is frozen into a `ValueObjectOf<T>` and returned as `Ok`;
  * otherwise the populated `ValidationError` is returned as `Err`.
  *
  * `ValidationError` comes from `@shirudo/base-error`; import it from there to
@@ -20,7 +20,7 @@ import { type VO, vo } from "./value-object";
  *
  * @example
  * ```ts
- * const result = voValidated(
+ * const result = valueObjectValidated(
  *   { email, age },
  *   (issues, m) => {
  *     if (!isEmail(m.email))
@@ -33,12 +33,12 @@ import { type VO, vo } from "./value-object";
  * // result.isErr() → result.error.publicIssues() has both violations
  * ```
  */
-export function voValidated<T>(
+export function valueObjectValidated<T>(
 	t: T,
 	validate: (issues: ValidationError, value: T) => void,
 	message = "Validation failed",
-): Result<VO<T>, ValidationError> {
+): Result<ValueObjectOf<T>, ValidationError> {
 	const issues = new ValidationError(message);
 	validate(issues, t);
-	return issues.hasIssues() ? err(issues) : ok(vo(t));
+	return issues.hasIssues() ? err(issues) : ok(valueObject(t));
 }

@@ -312,7 +312,7 @@ The contract is:
 - Replace state through `setState`, `setState`, or event-sourced `apply`.
 - Do not widen the protected `state` accessor in a concrete entity.
 - Expose domain queries or immutable read DTOs to consumers.
-- Model deeply immutable data with `vo()` or `ValueObject`.
+- Model deeply immutable data with `valueObject()` or `ValueObject`.
 - If state is deeply nested, use an immutable-update library in the application.
 
 Do not mutate nested state in place. Aggregate state changes use whole-state

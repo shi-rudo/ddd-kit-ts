@@ -4,24 +4,24 @@ import { describe, expect, it } from "vite-plus/test";
 import {
 	deepFreeze,
 	ValueObject,
-	type VO,
-	vo,
-	voEquals,
-	voEqualsExcept,
-	voWithValidation,
+	type ValueObjectOf,
+	valueObject,
+	valueObjectEquals,
+	valueObjectEqualsExcept,
+	valueObjectWithValidation,
 } from "./value-object";
 
-describe("VO", () => {
-	describe("vo()", () => {
+describe("value object functions", () => {
+	describe("valueObject()", () => {
 		it("should create a simple value object", () => {
-			const money = vo({ amount: 100, currency: "USD" });
+			const money = valueObject({ amount: 100, currency: "USD" });
 
 			expect(money.amount).toBe(100);
 			expect(money.currency).toBe("USD");
 		});
 
 		it("should make simple value objects immutable", () => {
-			const money = vo({ amount: 100, currency: "USD" });
+			const money = valueObject({ amount: 100, currency: "USD" });
 
 			expect(() => {
 				(money as any).amount = 200;
@@ -29,7 +29,7 @@ describe("VO", () => {
 		});
 
 		it("should deep freeze nested objects", () => {
-			const address = vo({
+			const address = valueObject({
 				street: "Main St",
 				city: "Berlin",
 				coordinates: { lat: 52.5, lng: 13.4 },
@@ -41,7 +41,7 @@ describe("VO", () => {
 		});
 
 		it("should deep freeze deeply nested objects", () => {
-			const complex = vo({
+			const complex = valueObject({
 				name: "Test",
 				nested: {
 					level1: {
@@ -58,7 +58,7 @@ describe("VO", () => {
 		});
 
 		it("should freeze arrays", () => {
-			const list = vo({ items: [1, 2, 3] });
+			const list = valueObject({ items: [1, 2, 3] });
 
 			expect(() => {
 				list.items.push(4);
@@ -70,7 +70,7 @@ describe("VO", () => {
 		});
 
 		it("should freeze nested objects within arrays", () => {
-			const complex = vo({
+			const complex = valueObject({
 				array: [1, 2, { nested: "in array", deep: { value: "very deep" } }],
 			});
 
@@ -84,7 +84,7 @@ describe("VO", () => {
 		});
 
 		it("should handle empty objects", () => {
-			const empty = vo({});
+			const empty = valueObject({});
 
 			expect(empty).toEqual({});
 			expect(() => {
@@ -93,21 +93,21 @@ describe("VO", () => {
 		});
 
 		it("should handle objects with null values", () => {
-			const withNull = vo({ value: null, other: "test" });
+			const withNull = valueObject({ value: null, other: "test" });
 
 			expect(withNull.value).toBeNull();
 			expect(withNull.other).toBe("test");
 		});
 
 		it("should handle objects with undefined values", () => {
-			const withUndefined = vo({ value: undefined, other: "test" });
+			const withUndefined = valueObject({ value: undefined, other: "test" });
 
 			expect(withUndefined.value).toBeUndefined();
 			expect(withUndefined.other).toBe("test");
 		});
 
 		it("should preserve primitive types", () => {
-			const primitives = vo({
+			const primitives = valueObject({
 				string: "test",
 				number: 42,
 				boolean: true,
@@ -121,7 +121,7 @@ describe("VO", () => {
 		});
 
 		it("should handle arrays of primitives", () => {
-			const array = vo({ numbers: [1, 2, 3], strings: ["a", "b"] });
+			const array = valueObject({ numbers: [1, 2, 3], strings: ["a", "b"] });
 
 			expect(() => {
 				array.numbers.push(4);
@@ -134,120 +134,123 @@ describe("VO", () => {
 
 		it("should create a new object (not mutate original)", () => {
 			const original = { amount: 100, currency: "USD" };
-			const valueObject = vo(original);
+			const created = valueObject(original);
 
-			expect(valueObject).not.toBe(original);
+			expect(created).not.toBe(original);
 			expect(original.amount).toBe(100); // Original unchanged
 		});
 	});
 
-	describe("voEquals()", () => {
+	describe("valueObjectEquals()", () => {
 		it("should return true for equal simple value objects", () => {
-			const money1 = vo({ amount: 100, currency: "USD" });
-			const money2 = vo({ amount: 100, currency: "USD" });
+			const money1 = valueObject({ amount: 100, currency: "USD" });
+			const money2 = valueObject({ amount: 100, currency: "USD" });
 
-			expect(voEquals(money1, money2)).toBe(true);
+			expect(valueObjectEquals(money1, money2)).toBe(true);
 		});
 
 		it("should return false for different simple value objects", () => {
-			const money1 = vo({ amount: 100, currency: "USD" });
-			const money2 = vo({ amount: 200, currency: "USD" });
+			const money1 = valueObject({ amount: 100, currency: "USD" });
+			const money2 = valueObject({ amount: 200, currency: "USD" });
 
-			expect(voEquals(money1, money2)).toBe(false);
+			expect(valueObjectEquals(money1, money2)).toBe(false);
 		});
 
 		it("should return false for different currencies", () => {
-			const money1 = vo({ amount: 100, currency: "USD" });
-			const money2 = vo({ amount: 100, currency: "EUR" });
+			const money1 = valueObject({ amount: 100, currency: "USD" });
+			const money2 = valueObject({ amount: 100, currency: "EUR" });
 
-			expect(voEquals(money1, money2)).toBe(false);
+			expect(valueObjectEquals(money1, money2)).toBe(false);
 		});
 
 		it("should return true for equal nested value objects", () => {
-			const address1 = vo({
+			const address1 = valueObject({
 				street: "Main St",
 				city: "Berlin",
 				coordinates: { lat: 52.5, lng: 13.4 },
 			});
-			const address2 = vo({
+			const address2 = valueObject({
 				street: "Main St",
 				city: "Berlin",
 				coordinates: { lat: 52.5, lng: 13.4 },
 			});
 
-			expect(voEquals(address1, address2)).toBe(true);
+			expect(valueObjectEquals(address1, address2)).toBe(true);
 		});
 
 		it("should return false for different nested value objects", () => {
-			const address1 = vo({
+			const address1 = valueObject({
 				street: "Main St",
 				city: "Berlin",
 				coordinates: { lat: 52.5, lng: 13.4 },
 			});
-			const address2 = vo({
+			const address2 = valueObject({
 				street: "Main St",
 				city: "Berlin",
 				coordinates: { lat: 99.9, lng: 13.4 },
 			});
 
-			expect(voEquals(address1, address2)).toBe(false);
+			expect(valueObjectEquals(address1, address2)).toBe(false);
 		});
 
 		it("should return true for equal arrays", () => {
-			const list1 = vo({ items: [1, 2, 3] });
-			const list2 = vo({ items: [1, 2, 3] });
+			const list1 = valueObject({ items: [1, 2, 3] });
+			const list2 = valueObject({ items: [1, 2, 3] });
 
-			expect(voEquals(list1, list2)).toBe(true);
+			expect(valueObjectEquals(list1, list2)).toBe(true);
 		});
 
 		it("should return false for different arrays", () => {
-			const list1 = vo({ items: [1, 2, 3] });
-			const list2 = vo({ items: [1, 2, 4] });
+			const list1 = valueObject({ items: [1, 2, 3] });
+			const list2 = valueObject({ items: [1, 2, 4] });
 
-			expect(voEquals(list1, list2)).toBe(false);
+			expect(valueObjectEquals(list1, list2)).toBe(false);
 		});
 
 		it("should return true for empty objects", () => {
-			const empty1 = vo({});
-			const empty2 = vo({});
+			const empty1 = valueObject({});
+			const empty2 = valueObject({});
 
-			expect(voEquals(empty1, empty2)).toBe(true);
+			expect(valueObjectEquals(empty1, empty2)).toBe(true);
 		});
 
 		it("should handle objects with null values", () => {
 			type ObjWithNull = { value: null; other: string };
 			type ObjWithString = { value: string; other: string };
 
-			const obj1 = vo<ObjWithNull>({ value: null, other: "test" });
-			const obj2 = vo<ObjWithNull>({ value: null, other: "test" });
-			const obj3 = vo<ObjWithString>({ value: "not null", other: "test" });
+			const obj1 = valueObject<ObjWithNull>({ value: null, other: "test" });
+			const obj2 = valueObject<ObjWithNull>({ value: null, other: "test" });
+			const obj3 = valueObject<ObjWithString>({
+				value: "not null",
+				other: "test",
+			});
 
-			expect(voEquals(obj1, obj2)).toBe(true);
+			expect(valueObjectEquals(obj1, obj2)).toBe(true);
 			// Different types, so not equal
-			expect(voEquals(obj1 as any, obj3 as any)).toBe(false);
+			expect(valueObjectEquals(obj1 as any, obj3 as any)).toBe(false);
 		});
 
 		it("should handle objects with undefined values", () => {
-			const obj1 = vo({ value: undefined, other: "test" });
-			const obj2 = vo({ value: undefined, other: "test" });
-			const obj3 = vo({ other: "test" }); // Missing property
+			const obj1 = valueObject({ value: undefined, other: "test" });
+			const obj2 = valueObject({ value: undefined, other: "test" });
+			const obj3 = valueObject({ other: "test" }); // Missing property
 
-			expect(voEquals(obj1, obj2)).toBe(true);
+			expect(valueObjectEquals(obj1, obj2)).toBe(true);
 			// deepEqual correctly distinguishes between undefined property and missing property
 			// This is more accurate than JSON.stringify which removes undefined properties
-			expect(voEquals(obj1, obj3)).toBe(false);
+			expect(valueObjectEquals(obj1, obj3)).toBe(false);
 		});
 
 		it("should return false when comparing reference equality", () => {
-			const money1 = vo({ amount: 100, currency: "USD" });
+			const money1 = valueObject({ amount: 100, currency: "USD" });
 			const money2 = money1; // Same reference
 
 			expect(money1 === money2).toBe(true); // Reference equality
-			expect(voEquals(money1, money2)).toBe(true); // Value equality
+			expect(valueObjectEquals(money1, money2)).toBe(true); // Value equality
 		});
 
 		it("compares every admitted built-in category by value", () => {
-			const first = vo({
+			const first = valueObject({
 				date: new Date(1_000),
 				regexp: /value/i,
 				map: new Map([["key", { nested: 1 }]]),
@@ -257,7 +260,7 @@ describe("VO", () => {
 				string: new String("value"),
 				bigint: Object(7n),
 			});
-			const second = vo({
+			const second = valueObject({
 				date: new Date(1_000),
 				regexp: /value/i,
 				map: new Map([["key", { nested: 1 }]]),
@@ -268,41 +271,41 @@ describe("VO", () => {
 				bigint: Object(7n),
 			});
 
-			expect(voEquals(first, second)).toBe(true);
+			expect(valueObjectEquals(first, second)).toBe(true);
 		});
 	});
 
-	describe("voEqualsExcept()", () => {
+	describe("valueObjectEqualsExcept()", () => {
 		it("should compare value objects ignoring specified keys", () => {
-			const address1 = vo({
+			const address1 = valueObject({
 				street: "Main St",
 				city: "Berlin",
 				metadata: { createdAt: "2024-01-01", updatedAt: "2024-01-02" },
 			});
-			const address2 = vo({
+			const address2 = valueObject({
 				street: "Main St",
 				city: "Berlin",
 				metadata: { createdAt: "2024-01-01", updatedAt: "2024-01-03" },
 			});
 
 			// Without except: different updatedAt makes them unequal
-			expect(voEquals(address1, address2)).toBe(false);
+			expect(valueObjectEquals(address1, address2)).toBe(false);
 
 			// With except: ignoring updatedAt makes them equal
 			expect(
-				voEqualsExcept(address1, address2, {
+				valueObjectEqualsExcept(address1, address2, {
 					ignoreKeys: ["updatedAt"],
 				}),
 			).toBe(true);
 		});
 
 		it("should compare value objects ignoring nested metadata", () => {
-			const address1 = vo({
+			const address1 = valueObject({
 				street: "Main St",
 				city: "Berlin",
 				metadata: { createdAt: "2024-01-01", updatedAt: "2024-01-02" },
 			});
-			const address2 = vo({
+			const address2 = valueObject({
 				street: "Main St",
 				city: "Berlin",
 				metadata: { createdAt: "2024-01-01", updatedAt: "2024-01-03" },
@@ -310,19 +313,19 @@ describe("VO", () => {
 
 			// Ignore all metadata
 			expect(
-				voEqualsExcept(address1, address2, {
+				valueObjectEqualsExcept(address1, address2, {
 					ignoreKeyPredicate: (key, path) => path.includes("metadata"),
 				}),
 			).toBe(true);
 		});
 
 		it("should still detect differences in non-ignored fields", () => {
-			const address1 = vo({
+			const address1 = valueObject({
 				street: "Main St",
 				city: "Berlin",
 				metadata: { createdAt: "2024-01-01" },
 			});
-			const address2 = vo({
+			const address2 = valueObject({
 				street: "Different St",
 				city: "Berlin",
 				metadata: { createdAt: "2024-01-01" },
@@ -330,20 +333,20 @@ describe("VO", () => {
 
 			// Even with metadata ignored, different street makes them unequal
 			expect(
-				voEqualsExcept(address1, address2, {
+				valueObjectEqualsExcept(address1, address2, {
 					ignoreKeyPredicate: (key, path) => path.includes("metadata"),
 				}),
 			).toBe(false);
 		});
 
 		it("should handle arrays with ignored keys", () => {
-			const list1 = vo({
+			const list1 = valueObject({
 				items: [
 					{ id: 1, value: "a", timestamp: "2024-01-01" },
 					{ id: 2, value: "b", timestamp: "2024-01-02" },
 				],
 			});
-			const list2 = vo({
+			const list2 = valueObject({
 				items: [
 					{ id: 1, value: "a", timestamp: "2024-01-03" },
 					{ id: 2, value: "b", timestamp: "2024-01-04" },
@@ -352,16 +355,16 @@ describe("VO", () => {
 
 			// Ignore timestamps in nested items
 			expect(
-				voEqualsExcept(list1, list2, {
+				valueObjectEqualsExcept(list1, list2, {
 					ignoreKeyPredicate: (key, path) => key === "timestamp",
 				}),
 			).toBe(true);
 		});
 	});
 
-	describe("voWithValidation()", () => {
+	describe("valueObjectWithValidation()", () => {
 		it("should return ok result when validation passes", () => {
-			const result = voWithValidation(
+			const result = valueObjectWithValidation(
 				{ amount: 100, currency: "USD" },
 				(m) => m.amount >= 0 && m.currency.length === 3,
 			);
@@ -374,7 +377,7 @@ describe("VO", () => {
 		});
 
 		it("should return error result when validation fails", () => {
-			const result = voWithValidation(
+			const result = valueObjectWithValidation(
 				{ amount: -100, currency: "USD" },
 				(m) => m.amount >= 0 && m.currency.length === 3,
 			);
@@ -388,7 +391,7 @@ describe("VO", () => {
 		it("should use custom error message when validation fails", () => {
 			const customMessage = "Amount must be non-negative";
 
-			const result = voWithValidation(
+			const result = valueObjectWithValidation(
 				{ amount: -100, currency: "USD" },
 				(m) => m.amount >= 0 && m.currency.length === 3,
 				customMessage,
@@ -401,7 +404,7 @@ describe("VO", () => {
 		});
 
 		it("should use default error message when no custom message provided", () => {
-			const result = voWithValidation(
+			const result = valueObjectWithValidation(
 				{ amount: -100, currency: "USD" },
 				(m) => m.amount >= 0 && m.currency.length === 3,
 			);
@@ -413,7 +416,7 @@ describe("VO", () => {
 		});
 
 		it("should validate nested structures", () => {
-			const result = voWithValidation(
+			const result = valueObjectWithValidation(
 				{
 					street: "Main St",
 					city: "Berlin",
@@ -436,7 +439,7 @@ describe("VO", () => {
 		});
 
 		it("should reject invalid nested structures", () => {
-			const result = voWithValidation(
+			const result = valueObjectWithValidation(
 				{
 					street: "Main St",
 					city: "Berlin",
@@ -455,7 +458,7 @@ describe("VO", () => {
 		});
 
 		it("should create deeply frozen value object after validation", () => {
-			const result = voWithValidation(
+			const result = valueObjectWithValidation(
 				{ amount: 100, currency: "USD" },
 				(m) => m.amount >= 0 && m.currency.length === 3,
 			);
@@ -469,7 +472,7 @@ describe("VO", () => {
 		});
 
 		it("should validate arrays", () => {
-			const result = voWithValidation(
+			const result = valueObjectWithValidation(
 				{ items: [1, 2, 3] },
 				(l) => l.items.length > 0 && l.items.every((i) => i > 0),
 			);
@@ -481,7 +484,7 @@ describe("VO", () => {
 		});
 
 		it("should reject invalid arrays", () => {
-			const result = voWithValidation(
+			const result = valueObjectWithValidation(
 				{ items: [-1, 2, 3] }, // Contains negative number
 				(l) => l.items.length > 0 && l.items.every((i) => i > 0),
 			);
@@ -491,7 +494,7 @@ describe("VO", () => {
 
 		it("should handle complex validation logic", () => {
 			type EmailData = { value: string };
-			const result = voWithValidation(
+			const result = valueObjectWithValidation(
 				{ value: "user@example.com" },
 				(e: EmailData) => {
 					const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -507,23 +510,23 @@ describe("VO", () => {
 		});
 	});
 
-	describe("vo() defensive deep-clone", () => {
+	describe("valueObject() defensive deep-clone", () => {
 		it("does not freeze the caller's nested object reference", () => {
 			const nested = { lat: 52.5, lng: 13.4 };
 			const original = { city: "Berlin", coords: nested };
 
-			const v = vo(original);
+			const v = valueObject(original);
 
-			// The VO is frozen, both at the top level and at the nested level.
+			// The value object is frozen, both at the top level and at the nested level.
 			expect(Object.isFrozen(v)).toBe(true);
 			expect(Object.isFrozen(v.coords)).toBe(true);
 
 			// But the caller's nested object reference must stay mutable:
-			// vo() should not have side-effects on the input graph.
+			// valueObject() should not have side-effects on the input graph.
 			expect(Object.isFrozen(nested)).toBe(false);
 			expect(Object.isFrozen(original.coords)).toBe(false);
 
-			// And mutating the caller's reference must not bleed into the VO.
+			// And mutating the caller's reference must not bleed into the value object.
 			nested.lat = 0;
 			expect(v.coords.lat).toBe(52.5);
 		});
@@ -539,7 +542,7 @@ describe("VO", () => {
 				},
 			});
 
-			expect(() => vo(input)).toThrow(/accessor properties/);
+			expect(() => valueObject(input)).toThrow(/accessor properties/);
 			expect(getterCalls).toBe(0);
 		});
 
@@ -554,7 +557,7 @@ describe("VO", () => {
 				},
 			});
 
-			expect(() => vo(input)).toThrow(/accessor properties/);
+			expect(() => valueObject(input)).toThrow(/accessor properties/);
 			expect(getterCalls).toBe(0);
 		});
 	});
@@ -562,7 +565,10 @@ describe("VO", () => {
 	describe("symbol-keyed properties", () => {
 		it("preserves and freezes symbol-keyed properties (previously dropped by structuredClone)", () => {
 			const tag = Symbol("tag");
-			const v = vo({ [tag]: { nested: 1 } } as Record<symbol, unknown>);
+			const v = valueObject({ [tag]: { nested: 1 } } as Record<
+				symbol,
+				unknown
+			>);
 
 			const nested = (v as unknown as Record<symbol, { nested: number }>)[tag];
 			// NOT vacuous: the property must exist…
@@ -573,7 +579,7 @@ describe("VO", () => {
 
 		it("preserves symbol keys nested below the top level", () => {
 			const meta = Symbol("meta");
-			const v = vo({ outer: { [meta]: "x", plain: 1 } });
+			const v = valueObject({ outer: { [meta]: "x", plain: 1 } });
 
 			expect((v.outer as unknown as Record<symbol, string>)[meta]).toBe("x");
 			expect(v.outer.plain).toBe(1);
@@ -587,7 +593,7 @@ describe("VO", () => {
 				enumerable: false,
 			});
 
-			const result = vo(input) as Record<symbol, { amount: number }>;
+			const result = valueObject(input) as Record<symbol, { amount: number }>;
 
 			expect(result[hidden]).toEqual({ amount: 5 });
 			expect(Object.isFrozen(result[hidden])).toBe(true);
@@ -600,18 +606,18 @@ describe("VO", () => {
 			first[metadata] = { code: "first" };
 			second[metadata] = { code: "second" };
 
-			const firstVo = vo(first);
-			const secondVo = vo(second);
+			const firstVo = valueObject(first);
+			const secondVo = valueObject(second);
 
 			expect(firstVo[metadata]).toEqual({ code: "first" });
 			expect(Object.isFrozen(firstVo[metadata])).toBe(true);
-			expect(voEquals(firstVo, secondVo)).toBe(false);
+			expect(valueObjectEquals(firstVo, secondVo)).toBe(false);
 		});
 
 		it("preserves sparse array holes", () => {
 			const input = new Array<string>(1);
 
-			const result = vo(input);
+			const result = valueObject(input);
 
 			expect(0 in result).toBe(false);
 		});
@@ -619,27 +625,27 @@ describe("VO", () => {
 		it("drops non-enumerable string properties on arrays like it does on objects", () => {
 			// The array and plain-object clone paths must treat a non-enumerable
 			// string property the same way, so structurally parallel inputs do
-			// not yield value objects that voEquals treats differently.
+			// not yield value objects that valueObjectEquals treats differently.
 			const arr = [1, 2] as number[] & Record<string, unknown>;
 			Object.defineProperty(arr, "meta", {
 				value: "hidden",
 				enumerable: false,
 			});
 
-			const result = vo(arr);
+			const result = valueObject(arr);
 
 			expect(Object.getOwnPropertyNames(result)).not.toContain("meta");
 			expect([...result]).toEqual([1, 2]);
 		});
 
-		it("voEquals considers symbol-keyed values", () => {
+		it("valueObjectEquals considers symbol-keyed values", () => {
 			const k = Symbol("k");
-			const a = vo({ [k]: 1 } as Record<symbol, unknown>);
-			const b = vo({ [k]: 1 } as Record<symbol, unknown>);
-			const c = vo({ [k]: 2 } as Record<symbol, unknown>);
+			const a = valueObject({ [k]: 1 } as Record<symbol, unknown>);
+			const b = valueObject({ [k]: 1 } as Record<symbol, unknown>);
+			const c = valueObject({ [k]: 2 } as Record<symbol, unknown>);
 
-			expect(voEquals(a, b)).toBe(true);
-			expect(voEquals(a, c)).toBe(false);
+			expect(valueObjectEquals(a, b)).toBe(true);
+			expect(valueObjectEquals(a, c)).toBe(false);
 		});
 
 		it("does not mutate or freeze the caller's input when symbol keys are present", () => {
@@ -647,7 +653,7 @@ describe("VO", () => {
 			const inner = { nested: 1 };
 			const input = { [tag]: inner } as Record<symbol, { nested: number }>;
 
-			vo(input);
+			valueObject(input);
 
 			expect(Object.isFrozen(inner)).toBe(false);
 			inner.nested = 2;
@@ -664,17 +670,17 @@ describe("VO", () => {
 			["SharedArrayBuffer", () => new SharedArrayBuffer(4)],
 			["Error", () => new Error("failure")],
 		] as const)(
-			"rejects %s because every admitted VO value must be immutable and value-based",
+			"rejects %s because every admitted value must be immutable and value-based",
 			(_name, create) => {
-				expect(() => vo({ value: create() })).toThrow(
+				expect(() => valueObject({ value: create() })).toThrow(
 					/immutable value semantics/,
 				);
 			},
 		);
 
-		it("rejects unsupported values before validation can produce a mutable VO", () => {
+		it("rejects unsupported values before validation can produce a mutable value object", () => {
 			expect(() =>
-				voWithValidation(
+				valueObjectWithValidation(
 					{ data: new Uint8Array([9]) },
 					(value) => value.data.length > 0,
 				),
@@ -691,7 +697,7 @@ describe("VO", () => {
 				},
 			});
 
-			expect(() => vo({ value })).toThrow(/immutable value semantics/);
+			expect(() => valueObject({ value })).toThrow(/immutable value semantics/);
 			expect(accessorInvoked).toBe(false);
 		});
 	});
@@ -700,8 +706,8 @@ describe("VO", () => {
 		// Object.freeze does not protect internal slots: a frozen Date can
 		// still be setTime()d, a frozen Map still set()s. deepFreeze must
 		// block the mutators so the "deeply immutable" guarantee holds.
-		it("blocks Date mutators on a frozen VO", () => {
-			const v = vo({ when: new Date(1000) });
+		it("blocks Date mutators on a frozen value object", () => {
+			const v = valueObject({ when: new Date(1000) });
 
 			expect(() => (v.when as Date).setTime(0)).toThrow(TypeError);
 			expect(() => (v.when as Date).setFullYear(1999)).toThrow(TypeError);
@@ -709,7 +715,7 @@ describe("VO", () => {
 		});
 
 		it("blocks Map mutators while reads keep working", () => {
-			const v = vo({ m: new Map([["k", 1]]) });
+			const v = valueObject({ m: new Map([["k", 1]]) });
 
 			expect(() => v.m.set("x", 2)).toThrow(TypeError);
 			expect(() => v.m.delete("k")).toThrow(TypeError);
@@ -719,7 +725,7 @@ describe("VO", () => {
 		});
 
 		it("blocks Set mutators while reads keep working", () => {
-			const v = vo({ s: new Set([1]) });
+			const v = valueObject({ s: new Set([1]) });
 
 			expect(() => v.s.add(2)).toThrow(TypeError);
 			expect(() => v.s.delete(1)).toThrow(TypeError);
@@ -728,7 +734,7 @@ describe("VO", () => {
 		});
 
 		it("deep-freezes objects stored inside Map values", () => {
-			const v = vo({
+			const v = valueObject({
 				m: new Map([["k", { a: 1 }]]),
 			});
 
@@ -736,35 +742,35 @@ describe("VO", () => {
 			expect(Object.isFrozen(inMap)).toBe(true);
 		});
 
-		it("frozen VOs still round-trip through vo() and compare equal", () => {
+		it("frozen value objects still round-trip through valueObject() and compare equal", () => {
 			// The mutator shadows are non-enumerable expandos; structuredClone
 			// drops them and spread skips them, so re-wrapping must not throw.
-			const a = vo({ d: new Date(5), m: new Map([["k", 1]]) });
-			const b = vo({ ...a });
+			const a = valueObject({ d: new Date(5), m: new Map([["k", 1]]) });
+			const b = valueObject({ ...a });
 
-			expect(voEquals(a, b)).toBe(true);
+			expect(valueObjectEquals(a, b)).toBe(true);
 		});
 
 		it("skips mutator-blocking on a Date the caller froze beforehand", () => {
 			// A pre-frozen Date cannot receive shadow properties, so deepFreeze
 			// must not crash on it (best effort, not a hard guarantee).
 			const preFrozen = Object.freeze(new Date(42));
-			expect(() => vo({ d: preFrozen })).not.toThrow();
+			expect(() => valueObject({ d: preFrozen })).not.toThrow();
 		});
 	});
 
 	describe("boxed BigInt values", () => {
 		it("compares the wrapped primitive instead of the empty object shell", () => {
-			const seven = vo({ value: Object(7n) });
-			const anotherSeven = vo({ value: Object(7n) });
-			const eight = vo({ value: Object(8n) });
+			const seven = valueObject({ value: Object(7n) });
+			const anotherSeven = valueObject({ value: Object(7n) });
+			const eight = valueObject({ value: Object(8n) });
 
-			expect(voEquals(seven, anotherSeven)).toBe(true);
-			expect(voEquals(seven, eight)).toBe(false);
+			expect(valueObjectEquals(seven, anotherSeven)).toBe(true);
+			expect(valueObjectEquals(seven, eight)).toBe(false);
 		});
 	});
 
-	describe("built-in boundary: Map/Set contents go through the vo clone", () => {
+	describe("built-in boundary: Map/Set contents go through the valueObject clone", () => {
 		it("does not invoke overridden Map or Set iterators", () => {
 			let iteratorCalls = 0;
 			const map = new Map([["key", "value"]]);
@@ -776,7 +782,7 @@ describe("VO", () => {
 			Object.defineProperty(map, Symbol.iterator, { value: failIfInvoked });
 			Object.defineProperty(set, Symbol.iterator, { value: failIfInvoked });
 
-			const result = vo({ map, set });
+			const result = valueObject({ map, set });
 
 			expect(result.map.get("key")).toBe("value");
 			expect(result.set.has("member")).toBe(true);
@@ -784,17 +790,17 @@ describe("VO", () => {
 		});
 
 		it("rejects object Map keys and Set members that cannot preserve value equality", () => {
-			expect(() => vo({ m: new Map([[{ id: 1 }, "value"]]) })).toThrow(
+			expect(() => valueObject({ m: new Map([[{ id: 1 }, "value"]]) })).toThrow(
 				/Map keys must be primitive values/,
 			);
-			expect(() => vo({ s: new Set([{ id: 1 }]) })).toThrow(
+			expect(() => valueObject({ s: new Set([{ id: 1 }]) })).toThrow(
 				/Set members must be primitive values/,
 			);
 		});
 
 		it("preserves symbol-keyed properties inside Map values", () => {
 			const s = Symbol("s");
-			const v = vo({
+			const v = valueObject({
 				m: new Map([["k", { [s]: 1 } as Record<symbol, number>]]),
 			});
 
@@ -802,14 +808,14 @@ describe("VO", () => {
 		});
 
 		it("rejects functions inside Map values with the documented TypeError", () => {
-			expect(() => vo({ m: new Map([["f", () => 1]]) })).toThrow(
-				/vo\(\) does not accept function values/,
+			expect(() => valueObject({ m: new Map([["f", () => 1]]) })).toThrow(
+				/valueObject\(\) does not accept function values/,
 			);
 		});
 
 		it("preserves identity for objects shared between the plain graph and a Map value", () => {
 			const shared = { n: 1 };
-			const v = vo({ a: shared, m: new Map([["k", shared]]) });
+			const v = valueObject({ a: shared, m: new Map([["k", shared]]) });
 
 			expect(v.a).toBe(v.m.get("k"));
 		});
@@ -820,16 +826,16 @@ describe("VO", () => {
 			};
 			cfg.lookup = new Map([["self", cfg]]);
 
-			const v = vo(cfg);
+			const v = valueObject(cfg);
 
 			expect(v.lookup?.get("self")).toBe(v);
 		});
 
 		it("rejects Promise/WeakMap/WeakSet with a descriptive TypeError instead of DataCloneError", () => {
-			expect(() => vo({ p: Promise.resolve(1) })).toThrow(
+			expect(() => valueObject({ p: Promise.resolve(1) })).toThrow(
 				/Value Objects are plain data/,
 			);
-			expect(() => vo({ w: new WeakMap() })).toThrow(
+			expect(() => valueObject({ w: new WeakMap() })).toThrow(
 				/Value Objects are plain data/,
 			);
 		});
@@ -837,15 +843,15 @@ describe("VO", () => {
 		it("treats Promise and Error toStringTag spoofers as ordinary value data", () => {
 			for (const tag of ["Promise", "Error"] as const) {
 				const marker = Symbol("marker");
-				const first = vo({
+				const first = valueObject({
 					value: { [Symbol.toStringTag]: tag, [marker]: "kept", count: 1 },
 				});
-				const second = vo({
+				const second = valueObject({
 					value: { [Symbol.toStringTag]: tag, [marker]: "kept", count: 1 },
 				});
 
 				expect(first.value[marker]).toBe("kept");
-				expect(voEquals(first, second)).toBe(true);
+				expect(valueObjectEquals(first, second)).toBe(true);
 			}
 		});
 
@@ -857,7 +863,7 @@ describe("VO", () => {
 				}
 			}
 
-			expect(() => vo({ price: new Money(5) })).toThrow(
+			expect(() => valueObject({ price: new Money(5) })).toThrow(
 				/custom class instances/,
 			);
 		});
@@ -867,17 +873,26 @@ describe("VO", () => {
 			class Points extends ValueObject<{ amount: number }> {}
 			const money = new Money({ amount: 5 });
 
-			const priced = vo({ price: money });
+			const priced = valueObject({ price: money });
 
 			expect(priced.price).toBe(money);
-			expect(voEquals(priced, vo({ price: new Money({ amount: 5 }) }))).toBe(
-				true,
-			);
-			expect(voEquals(priced, vo({ price: new Money({ amount: 6 }) }))).toBe(
-				false,
-			);
 			expect(
-				voEquals(priced, vo({ price: new Points({ amount: 5 }) } as never)),
+				valueObjectEquals(
+					priced,
+					valueObject({ price: new Money({ amount: 5 }) }),
+				),
+			).toBe(true);
+			expect(
+				valueObjectEquals(
+					priced,
+					valueObject({ price: new Money({ amount: 6 }) }),
+				),
+			).toBe(false);
+			expect(
+				valueObjectEquals(
+					priced,
+					valueObject({ price: new Points({ amount: 5 }) } as never),
+				),
 			).toBe(false);
 		});
 
@@ -885,7 +900,7 @@ describe("VO", () => {
 			class Money extends ValueObject<{ amount: number }> {}
 			const money = new Money({ amount: 5 });
 
-			const priced = vo({ price: money });
+			const priced = valueObject({ price: money });
 
 			expect(priced.price).toBe(money);
 			expect(Object.isFrozen(money)).toBe(true);
@@ -894,8 +909,8 @@ describe("VO", () => {
 		it("rejects a value object as the input itself", () => {
 			class Money extends ValueObject<{ amount: number }> {}
 
-			expect(() => vo(new Money({ amount: 5 }))).toThrow(
-				"vo() does not accept a value object as its input: nest the value object under a key, or pass its props",
+			expect(() => valueObject(new Money({ amount: 5 }))).toThrow(
+				"valueObject() does not accept a value object as its input: nest the value object under a key, or pass its props",
 			);
 		});
 
@@ -904,50 +919,60 @@ describe("VO", () => {
 				readonly tags: string[] = [];
 			}
 
-			expect(() => vo({ price: new TaggedMoney({ amount: 5 }) })).toThrow(
-				/own fields outside props \(tags\)/,
-			);
+			expect(() =>
+				valueObject({ price: new TaggedMoney({ amount: 5 }) }),
+			).toThrow(/own fields outside props \(tags\)/);
 		});
 
-		it("keeps nested value objects class-aware under voEqualsExcept", () => {
+		it("keeps nested value objects class-aware under valueObjectEqualsExcept", () => {
 			class Money extends ValueObject<{ amount: number; note: string }> {}
 			class Points extends ValueObject<{ amount: number; note: string }> {}
-			const money = vo({ price: new Money({ amount: 5, note: "a" }) });
-			const sameMoney = vo({ price: new Money({ amount: 5, note: "b" }) });
-			const points = vo({ price: new Points({ amount: 5, note: "a" }) });
+			const money = valueObject({ price: new Money({ amount: 5, note: "a" }) });
+			const sameMoney = valueObject({
+				price: new Money({ amount: 5, note: "b" }),
+			});
+			const points = valueObject({
+				price: new Points({ amount: 5, note: "a" }),
+			});
 
-			expect(voEqualsExcept(money, sameMoney, { ignoreKeys: ["note"] })).toBe(
-				true,
-			);
 			expect(
-				voEqualsExcept(money, points as never, { ignoreKeys: ["note"] }),
+				valueObjectEqualsExcept(money, sameMoney, { ignoreKeys: ["note"] }),
+			).toBe(true);
+			expect(
+				valueObjectEqualsExcept(money, points as never, {
+					ignoreKeys: ["note"],
+				}),
 			).toBe(false);
 		});
 
-		it("never ignores the class of a nested value object under voEqualsExcept", () => {
+		it("never ignores the class of a nested value object under valueObjectEqualsExcept", () => {
 			class Money extends ValueObject<{ amount: number }> {}
 			class Points extends ValueObject<{ amount: number }> {}
-			const money = vo({ price: new Money({ amount: 5 }) });
-			const points = vo({ price: new Points({ amount: 5 }) });
+			const money = valueObject({ price: new Money({ amount: 5 }) });
+			const points = valueObject({ price: new Points({ amount: 5 }) });
 			const classKey = Symbol.for("@shirudo/ddd-kit/value-object-class/v1");
 
 			expect(
-				voEqualsExcept(money, points as never, {
+				valueObjectEqualsExcept(money, points as never, {
 					ignoreKeyPredicate: (key) => typeof key === "symbol",
 				}),
 			).toBe(false);
 			expect(
-				voEqualsExcept(money, points as never, { ignoreKeys: [classKey] }),
+				valueObjectEqualsExcept(money, points as never, {
+					ignoreKeys: [classKey],
+				}),
 			).toBe(false);
 		});
 
-		it("continues the voEqualsExcept path with props inside a nested value object", () => {
+		it("continues the valueObjectEqualsExcept path with props inside a nested value object", () => {
 			class Money extends ValueObject<{ amount: number; note: string }> {}
-			const money = vo({ price: new Money({ amount: 5, note: "a" }) });
-			const sameMoney = vo({ price: new Money({ amount: 5, note: "b" }) });
+			const money = valueObject({ price: new Money({ amount: 5, note: "a" }) });
+			const sameMoney = valueObject({
+				price: new Money({ amount: 5, note: "b" }),
+			});
 			const paths: string[] = [];
 
-			const equal = voEqualsExcept(money, sameMoney, {
+			const equal = valueObjectEqualsExcept(money, sameMoney, {
 				ignoreKeyPredicate: (key, path) => {
 					if (key === "note") paths.push(path.join("."));
 					return key === "note";
@@ -975,12 +1000,12 @@ describe("VO", () => {
 			}
 
 			for (const value of [new PrivateValue(5), new HiddenValue(5)]) {
-				expect(() => vo({ value })).toThrow(/custom class instances/);
+				expect(() => valueObject({ value })).toThrow(/custom class instances/);
 			}
 		});
 
 		it("rejects boxed Symbol values instead of creating slotless wrappers", () => {
-			expect(() => vo({ value: Object(Symbol("value")) })).toThrow(
+			expect(() => valueObject({ value: Object(Symbol("value")) })).toThrow(
 				/custom class instances/,
 			);
 		});
@@ -997,7 +1022,7 @@ describe("VO", () => {
 				new CustomMap([["one", 1]]),
 				new CustomError("failure"),
 			]) {
-				expect(() => vo({ value })).toThrow(/custom class instances/);
+				expect(() => valueObject({ value })).toThrow(/custom class instances/);
 			}
 		});
 
@@ -1011,7 +1036,7 @@ describe("VO", () => {
 			}
 			Reflect.deleteProperty(CustomMap.prototype, "constructor");
 
-			expect(() => vo({ value: new CustomMap() })).toThrow(
+			expect(() => valueObject({ value: new CustomMap() })).toThrow(
 				/custom class instances/,
 			);
 		});
@@ -1034,7 +1059,7 @@ describe("VO", () => {
 			});
 			const value = Object.create(prototype) as object;
 
-			expect(() => vo({ value })).toThrow(/custom class instances/);
+			expect(() => valueObject({ value })).toThrow(/custom class instances/);
 			expect(nameAccessorInvoked).toBe(false);
 		});
 
@@ -1057,7 +1082,7 @@ describe("VO", () => {
 			};
 			value.amount = 5;
 
-			expect(() => vo(value)).toThrow(/custom class instances/);
+			expect(() => valueObject(value)).toThrow(/custom class instances/);
 			expect(descriptorTrapCalls).toBe(0);
 		});
 
@@ -1066,7 +1091,7 @@ describe("VO", () => {
 				nested: { amount: number };
 			};
 
-			const result = vo(value);
+			const result = valueObject(value);
 
 			expect(result).toEqual({ nested: { amount: 5 } });
 			expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
@@ -1083,7 +1108,7 @@ describe("VO", () => {
 				map: Map<string, number>;
 			};
 
-			const result = vo(value);
+			const result = valueObject(value);
 
 			expect(result.items).toEqual([1, 2]);
 			expect(Object.getPrototypeOf(result.items)).toBe(Array.prototype);
@@ -1096,7 +1121,7 @@ describe("VO", () => {
 				amount: 5,
 			});
 
-			const result = vo(value);
+			const result = valueObject(value);
 
 			expect(result.amount).toBe(5);
 			expect(Object.getPrototypeOf(result)).toBeNull();
@@ -1105,14 +1130,14 @@ describe("VO", () => {
 
 	describe("Symbol.toStringTag spoofing and exotic freeze targets", () => {
 		it("treats a plain object spoofing the Map tag as a plain object instead of crashing", () => {
-			const v = vo({ m: { [Symbol.toStringTag]: "Map", x: 1 } });
+			const v = valueObject({ m: { [Symbol.toStringTag]: "Map", x: 1 } });
 
 			expect(v.m.x).toBe(1);
 			expect(Object.isFrozen(v.m)).toBe(true);
 		});
 
 		it("does not install Date mutator shadows on a plain object spoofing the Date tag", () => {
-			const v = vo({ d: { [Symbol.toStringTag]: "Date", x: 1 } });
+			const v = valueObject({ d: { [Symbol.toStringTag]: "Date", x: 1 } });
 
 			expect(v.d.x).toBe(1);
 			expect(Object.hasOwn(v.d, "setTime")).toBe(false);
@@ -1130,19 +1155,19 @@ describe("VO", () => {
 
 	describe("Type safety", () => {
 		it("should preserve TypeScript types", () => {
-			type Money = VO<{
+			type Money = ValueObjectOf<{
 				amount: number;
 				currency: string;
 			}>;
 
-			const money: Money = vo({ amount: 100, currency: "USD" });
+			const money: Money = valueObject({ amount: 100, currency: "USD" });
 
 			expect(typeof money.amount).toBe("number");
 			expect(typeof money.currency).toBe("string");
 		});
 
 		it("should make properties readonly", () => {
-			const money = vo({ amount: 100, currency: "USD" });
+			const money = valueObject({ amount: 100, currency: "USD" });
 
 			// TypeScript should prevent this, but runtime should also enforce it
 			expect(() => {
@@ -1153,7 +1178,7 @@ describe("VO", () => {
 
 	describe("Edge cases", () => {
 		it("should handle objects with Date values", () => {
-			const event = vo({
+			const event = valueObject({
 				name: "Meeting",
 				date: new Date("2024-01-01"),
 			});
@@ -1163,13 +1188,13 @@ describe("VO", () => {
 		});
 
 		it("rejects function properties (Value Objects are data, not behaviour)", () => {
-			// vo() deep-clones via structuredClone before freezing so the
+			// valueObject() deep-clones via structuredClone before freezing so the
 			// caller's input graph is not touched as a side-effect.
 			// structuredClone refuses to clone function values, which catches
 			// the DDD anti-pattern of putting behaviour on a Value Object
 			// at construction time.
 			expect(() =>
-				vo({
+				valueObject({
 					data: "test",
 					fn: () => "hello",
 				}),
@@ -1182,15 +1207,15 @@ describe("VO", () => {
 			obj.self = obj; // Circular reference
 
 			// This should not throw during creation (no stack overflow)
-			const valueObject = vo(obj);
-			expect(valueObject.name).toBe("test");
+			const created = valueObject(obj);
+			expect(created.name).toBe("test");
 			// The circular reference is preserved within the copied object
-			expect(valueObject.self).toBeDefined();
-			expect((valueObject.self as any).name).toBe("test");
+			expect(created.self).toBeDefined();
+			expect((created.self as any).name).toBe("test");
 		});
 
 		it("should handle very large nested structures", () => {
-			const large = vo({
+			const large = valueObject({
 				level1: {
 					level2: {
 						level3: {
@@ -1211,14 +1236,14 @@ describe("VO", () => {
 	});
 });
 
-describe("voWithValidation – error path never throws", () => {
+describe("valueObjectWithValidation – error path never throws", () => {
 	it("returns err for cyclic input when no custom message is given", () => {
 		const cyclic: { name: string; self?: unknown } = { name: "a" };
 		cyclic.self = cyclic;
 
 		// The default error message used JSON.stringify, which throws on
 		// circular structures; the Result contract must hold instead.
-		const result = voWithValidation(cyclic, () => false);
+		const result = valueObjectWithValidation(cyclic, () => false);
 
 		expect(result.isErr()).toBe(true);
 		if (result.isErr()) {
@@ -1227,7 +1252,7 @@ describe("voWithValidation – error path never throws", () => {
 	});
 
 	it("returns err for BigInt-bearing input when no custom message is given", () => {
-		const result = voWithValidation({ big: 1n }, () => false);
+		const result = valueObjectWithValidation({ big: 1n }, () => false);
 
 		expect(result.isErr()).toBe(true);
 	});
@@ -1235,8 +1260,8 @@ describe("voWithValidation – error path never throws", () => {
 
 describe("deepFreeze – mutator shadows are shared module-level functions", () => {
 	it("installs the same thrower function instance across freezes", () => {
-		const a = vo({ d: new Date(1) });
-		const b = vo({ d: new Date(2) });
+		const a = valueObject({ d: new Date(1) });
+		const b = valueObject({ d: new Date(2) });
 
 		const setTimeA = Object.getOwnPropertyDescriptor(a.d, "setTime")?.value;
 		const setTimeB = Object.getOwnPropertyDescriptor(b.d, "setTime")?.value;
@@ -1248,9 +1273,9 @@ describe("deepFreeze – mutator shadows are shared module-level functions", () 
 	});
 });
 
-describe("vo() – RegExp value semantics", () => {
+describe("valueObject() – RegExp value semantics", () => {
 	it("admits a plain RegExp and keeps it usable after freezing", () => {
-		const value = vo({ pattern: /ab+c/i });
+		const value = valueObject({ pattern: /ab+c/i });
 
 		// A non-global, non-sticky RegExp never touches lastIndex, so it is
 		// a genuine immutable value.
@@ -1261,11 +1286,15 @@ describe("vo() – RegExp value semantics", () => {
 	it("rejects a global RegExp whose lastIndex is mutable scan state", () => {
 		// A global RegExp advances lastIndex on every test()/exec(), so it
 		// is a stateful object, not a value.
-		expect(() => vo({ pattern: /ab+c/g })).toThrow(TypeError);
-		expect(() => vo({ pattern: /ab+c/g })).toThrow(/global or sticky RegExp/);
+		expect(() => valueObject({ pattern: /ab+c/g })).toThrow(TypeError);
+		expect(() => valueObject({ pattern: /ab+c/g })).toThrow(
+			/global or sticky RegExp/,
+		);
 	});
 
 	it("rejects a sticky RegExp for the same reason", () => {
-		expect(() => vo({ pattern: /ab+c/y })).toThrow(/global or sticky RegExp/);
+		expect(() => valueObject({ pattern: /ab+c/y })).toThrow(
+			/global or sticky RegExp/,
+		);
 	});
 });

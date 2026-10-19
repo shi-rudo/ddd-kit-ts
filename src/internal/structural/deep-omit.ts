@@ -56,7 +56,7 @@ export interface DeepOmitOptions {
  * built via `Object.create(proto)` so the prototype is preserved, but the
  * constructor is NOT re-invoked, so class invariants enforced by the
  * constructor are not re-checked. `deepOmit` is therefore best used for
- * comparison/serialisation (`voEqualsExcept`, `deepEqualExcept`), not as
+ * comparison/serialisation (`valueObjectEqualsExcept`, `deepEqualExcept`), not as
  * a general-purpose clone for behaviour-carrying objects.
  *
  * @param value - The value to create a deep copy from

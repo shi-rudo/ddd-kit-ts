@@ -146,7 +146,7 @@ immutable. Run one kit version per process during a cutover.
   `deepFreeze` takes one argument. The `Entity` constructor rejects a blank
   id with `MissingEntityIdError`, and a version that is not a safe integer of
   at least zero throws `InvalidVersionError`.
-- `voEquals` and `deepEqual` compare the class of a value object instance.
+- `valueObjectEquals` and `deepEqual` compare the class of a value object instance.
   Two instances of different classes with the same props are not equal.
 
 #### Event store

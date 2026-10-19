@@ -122,7 +122,7 @@ aggregate as persisted after the transaction commits.
 
 **Domain modeling**
 
-- value objects via `vo()` and `ValueObject<T>`
+- value objects via `valueObject()` and `ValueObject<T>`
 - exact Money helpers in `@shirudo/ddd-kit/money`
 - child entities with branded identity
 - state-stored and event-sourced aggregate roots
@@ -137,7 +137,7 @@ aggregate as persisted after the transaction commits.
   runtimes
 - a clear error split: domain code throws, command/query boundaries return
   `Result`
-- `voValidated` for collecting field-level validation issues
+- `valueObjectValidated` for collecting field-level validation issues
 - optional HTTP/RFC 9457 presentation helpers
 
 **Persistence and delivery**

@@ -622,7 +622,7 @@ export function adoptStampedDomainEvent<T extends object>(copy: T): T {
  * **Input ownership.** The event is deeply frozen, and `payload` and
  * `metadata` are deep-cloned first, so the caller's own objects are never
  * frozen in place and later mutation of them does not bleed into the event
- * (same contract as `vo()`). The event data rule checks the data before the
+ * (same contract as `valueObject()`). The event data rule checks the data before the
  * copy and the copy after it. So the copy loses no data without an error,
  * and no getter of the data runs. The in-memory event store applies the
  * same rule on append. The checks catch accidents, not a hostile `Proxy`: a
@@ -771,7 +771,7 @@ function buildDomainEvent<T extends string, P>(
 		// (parts of) live aggregate state as payload, or reusing a metadata
 		// object across events, would freeze the caller's objects in place;
 		// the next mutation then throws far away from the cause. Same
-		// ownership contract as `vo()` and the occurredAt copy.
+		// ownership contract as `valueObject()` and the occurredAt copy.
 		payload: cloneOwnedEventData(payload as P, "payload", operation),
 		// A caller-supplied occurredAt and a factory reading are both copied
 		// before the event is frozen, so neither aliases caller-owned state.

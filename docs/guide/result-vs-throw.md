@@ -19,8 +19,8 @@ about boundaries:
 | Aggregate method | returns `void` or data | throws `DomainError` subclass |
 | `domainErrorToResult` | `Ok<T>` | listed `DomainError` subclass becomes `Err`; everything else throws |
 | Value object class constructor | instance | throws `DomainError` subclass |
-| `voWithValidation` | `Result<VO<T>, string>` | `Err<string>` |
-| `voValidated` | `Result<VO<T>, ValidationError>` | `Err<ValidationError>` |
+| `valueObjectWithValidation` | `Result<ValueObjectOf<T>, string>` | `Err<string>` |
+| `valueObjectValidated` | `Result<ValueObjectOf<T>, ValidationError>` | `Err<ValidationError>` |
 | `CommandHandler<C, R, E>` | `Ok<R>` | `Err<E>` or throw |
 | `CommandBus.execute` | `Result<R, E>` | passes through `Err<E>`; selectively maps a recognized throw, otherwise rethrows |
 | `QueryHandler<Q, R>` | `R` | throws |
@@ -416,12 +416,12 @@ application uses another result type at its outer boundary, adapt there.
 
 Use validation helpers for untrusted input at the application edge.
 
-`voWithValidation` is fail-fast and returns a string error:
+`valueObjectWithValidation` is fail-fast and returns a string error:
 
 ```ts
-import { voWithValidation } from "@shirudo/ddd-kit";
+import { valueObjectWithValidation } from "@shirudo/ddd-kit";
 
-const parsed = voWithValidation(
+const parsed = valueObjectWithValidation(
   body,
   (value) => isEmail(value.email),
   "Email is invalid",
@@ -432,12 +432,12 @@ if (parsed.isErr()) {
 }
 ```
 
-`voValidated` collects all field issues into a `ValidationError`:
+`valueObjectValidated` collects all field issues into a `ValidationError`:
 
 ```ts
-import { voValidated } from "@shirudo/ddd-kit";
+import { valueObjectValidated } from "@shirudo/ddd-kit";
 
-const parsed = voValidated(
+const parsed = valueObjectValidated(
   { email, age },
   (issues, value) => {
     if (!isEmail(value.email)) {
