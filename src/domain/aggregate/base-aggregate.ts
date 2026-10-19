@@ -494,11 +494,10 @@ export abstract class BaseAggregate<
 
 	/**
 	 * Kit-built check for every recording path: only an event that a kit
-	 * constructor produced passes. The kit marks two shapes: a recorded
-	 * event carries the recorded brand (`createDomainEvent`,
+	 * constructor produced passes. The kit marks two shapes: a stamped
+	 * event carries the stamped brand (`createDomainEvent`,
 	 * `createStampedDomainEvent`) and a decision carries the unstamped
-	 * brand (`createUnstampedDomainEvent`, the aggregate `createEvent`
-	 * helper). Either brand implies deeply frozen with defensively copied
+	 * brand (the aggregate `createEvent` helper). Either brand implies deeply frozen with defensively copied
 	 * payload and metadata, a guarantee no frozen-ness probe can establish
 	 * (a shallow-frozen literal with mutable nested data would fool it).
 	 * O(1): one brand check per shape.

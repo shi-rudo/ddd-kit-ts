@@ -457,7 +457,7 @@ export function isStampedDomainEvent(event: object): event is AnyDomainEvent {
 	return STAMPED_EVENTS.has(event) || hasCooperativeBrand(event, STAMPED_BRAND);
 }
 
-/** Whether a value was created by {@link createUnstampedDomainEvent}. */
+/** Whether a value is a kit-built unstamped event. */
 export function isUnstampedDomainEvent(
 	event: object,
 ): event is AnyUnstampedDomainEvent {
@@ -540,7 +540,7 @@ export function stampDomainEvent<T extends string, P>(
 ): DomainEvent<T, P> {
 	if (!isUnstampedDomainEvent(event)) {
 		throw new TypeError(
-			"stampDomainEvent requires an event created by createUnstampedDomainEvent",
+			"stampDomainEvent requires an unstamped event from an aggregate's createEvent",
 		);
 	}
 	if (isFactoryOwnedDomainEventStamp(stamp)) {
