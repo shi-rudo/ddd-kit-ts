@@ -1,7 +1,7 @@
 import type { AggregateIdentity } from "../../domain/aggregate/aggregate-identity";
 import {
-	describeAggregateIdentity,
 	copyAggregateIdentity,
+	describeAggregateIdentity,
 	InfrastructureError,
 	isWiringErrorLike,
 	KitWiringError,

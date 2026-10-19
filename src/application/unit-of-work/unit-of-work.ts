@@ -9,8 +9,8 @@ import { abortReason } from "../../internal/async/abort";
 import type { ExecutionContext } from "../../internal/async/execution";
 import { findInCauseChain } from "../../internal/cause-chain";
 import {
-	hasCooperativeBrand,
 	applyCooperativeBrand,
+	hasCooperativeBrand,
 } from "../../internal/cooperative-brand";
 import type { EventBus } from "../../messaging/event-bus/ports";
 import type { OutboxWriter } from "../../messaging/outbox/ports";

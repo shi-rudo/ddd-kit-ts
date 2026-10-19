@@ -6,11 +6,11 @@ import {
 	DuplicateEventIdError,
 	FoldReturnedNoStateError,
 	ForeignEventError,
-	PrototypePollutionError,
+	HandBuiltEventError,
 	MisattributedEventError,
 	MissingFoldError,
 	PendingEventLimitExceededError,
-	HandBuiltEventError,
+	PrototypePollutionError,
 	UnreplayableAggregateError,
 } from "../../errors/kit-errors";
 import {

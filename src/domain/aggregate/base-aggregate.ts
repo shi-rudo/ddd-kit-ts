@@ -1,11 +1,11 @@
 import {
 	DuplicateEventIdError,
+	HandBuiltEventError,
 	InvalidVersionError,
 	MisattributedEventError,
 	PendingEventBatchMismatchError,
 	PendingEventLimitExceededError,
 	ReentrantEventRecordingError,
-	HandBuiltEventError,
 	UnreplayableAggregateError,
 } from "../../errors/kit-errors";
 import { assertPositiveSafeInteger } from "../../internal/validate";
@@ -15,10 +15,10 @@ import {
 	type AnyUnstampedDomainEvent,
 	adoptStampedDomainEvent,
 	adoptUnstampedDomainEvent,
+	buildUnstampedDomainEvent,
 	type CreateUnstampedDomainEventOptions,
 	isStampedDomainEvent,
 	isUnstampedDomainEvent,
-	buildUnstampedDomainEvent,
 	type PendingDomainEvent,
 	stampDomainEvent,
 	type UnstampedDomainEventOf,

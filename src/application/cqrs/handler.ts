@@ -10,8 +10,8 @@ import {
 } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
 import {
-	describeAggregateIdentity,
 	copyAggregateIdentity,
+	describeAggregateIdentity,
 	EventCollectionError,
 } from "../../errors/kit-errors";
 import { abortReason } from "../../internal/async/abort";

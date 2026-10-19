@@ -13,8 +13,8 @@ import {
 	ConcurrencyConflictError,
 	EventCollectionError,
 	InfrastructureError,
-	UnregisteredChangesError,
 	UnmanagedInstanceError,
+	UnregisteredChangesError,
 } from "../../errors/kit-errors";
 import type { EventCommitCandidate } from "../../messaging/committed-event";
 import type { EventBus } from "../../messaging/event-bus/ports";

@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
 	DuplicateEventIdError,
+	HandBuiltEventError,
 	InvalidVersionError,
 	MisattributedEventError,
 	MissingEntityIdError,
 	PendingEventBatchMismatchError,
 	PendingEventLimitExceededError,
-	HandBuiltEventError,
 	UnreplayableAggregateError,
 } from "../../errors/kit-errors";
 import {

@@ -130,8 +130,8 @@ export type {
 export {
 	type DomainEventStampFactory,
 	type DomainEventStampProvider,
-	stampPendingEvents,
 	type SharedDomainEventStampOptions,
+	stampPendingEvents,
 } from "./application/unit-of-work/stamp-pending-events";
 export {
 	type AggregateWriteRegistration,
@@ -191,9 +191,9 @@ export {
 	type AnyDomainEvent,
 	type AnyUnstampedDomainEvent,
 	type ClockFactory,
-	type CreateStampedDomainEventOptions,
 	type CreateDomainEventOptions,
 	type CreateDomainEventStampOptions,
+	type CreateStampedDomainEventOptions,
 	copyMetadata,
 	createDomainEvent,
 	createDomainEventFactory,
@@ -262,7 +262,7 @@ export {
 	type EventStreamPageReason,
 	FoldReturnedNoStateError,
 	ForeignEventError,
-	PrototypePollutionError,
+	HandBuiltEventError,
 	IdempotencyClaimLostError,
 	type IdempotencyClaimLostErrorOptions,
 	IdempotencyCompletionWithoutClaimError,
@@ -297,6 +297,7 @@ export {
 	ProjectionIdentityViolationError,
 	ProjectionOrderViolationError,
 	ProjectionReceiptViolationError,
+	PrototypePollutionError,
 	ReentrantEventRecordingError,
 	type ReentrantEventRecordingErrorOptions,
 	ReplayRejectedError,
@@ -309,11 +310,10 @@ export {
 	type SnapshotSchemaMismatchErrorOptions,
 	SnapshotVersionNotRestoredError,
 	type SnapshotVersionNotRestoredErrorOptions,
+	UnmanagedInstanceError,
+	UnprojectableEventError,
 	UnregisteredChangesError,
 	type UnregisteredChangesErrorOptions,
-	UnmanagedInstanceError,
-	HandBuiltEventError,
-	UnprojectableEventError,
 	UnregisteredHandlerError,
 	type UnregisteredHandlerErrorOptions,
 	UnreplayableAggregateError,
@@ -325,6 +325,7 @@ export type {
 	DeliveryFailureClassifier,
 	DeliveryFailureKind,
 } from "./internal/delivery-failure";
+export { copyPlainState } from "./internal/structural/copy-plain-state";
 // Structural equality and copies
 export { deepEqual } from "./internal/structural/deep-equal";
 export {} from "./internal/structural/deep-equal-except";
@@ -334,7 +335,6 @@ export {
 	type DeepOmitPathSegment,
 	deepOmit,
 } from "./internal/structural/deep-omit";
-export { copyPlainState } from "./internal/structural/copy-plain-state";
 // Messaging: commit envelope, bus, outbox, dispatcher
 export type {
 	CommitPosition,
@@ -347,10 +347,10 @@ export {
 	PublishDepthExceededError,
 } from "./messaging/event-bus/errors";
 export {
-	InProcessEventBus,
 	type EventBusObservers,
 	type EventBusOptions,
 	type HandlerFailureReport,
+	InProcessEventBus,
 	type PublishAbortedReport,
 	type SubscriptionThresholdReport,
 } from "./messaging/event-bus/event-bus";

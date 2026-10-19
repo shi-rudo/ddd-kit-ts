@@ -1,7 +1,7 @@
 import { assertNoOwnProtoKey } from "../../errors/kit-errors";
 import {
-	hasCooperativeBrand,
 	applyCooperativeBrand,
+	hasCooperativeBrand,
 } from "../../internal/cooperative-brand";
 import { copyFreezableState } from "../../internal/structural/copy-plain-state";
 import { isIntrinsicConstructorPrototype } from "../../internal/structural/is-built-in";

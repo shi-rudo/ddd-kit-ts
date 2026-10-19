@@ -1,6 +1,6 @@
 import {
-	hasCooperativeBrand,
 	applyCooperativeBrand,
+	hasCooperativeBrand,
 } from "../cooperative-brand";
 import { type BuiltInTag, builtInTypeName } from "./is-built-in";
 

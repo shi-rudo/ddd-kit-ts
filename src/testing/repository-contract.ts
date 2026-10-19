@@ -21,8 +21,8 @@ import {
 	OVERLAPPING_CALLS_BOUND_MS,
 	overlappingCallsPreflight,
 	parkRunCall,
-	stampedPendingEventIds,
 	sortedCommittedEventIds,
+	stampedPendingEventIds,
 } from "./contract-assertions";
 
 /** Application-facing state-stored repository exercised by the suite. */

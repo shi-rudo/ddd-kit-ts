@@ -26,8 +26,8 @@ import {
 	OVERLAPPING_CALLS_BOUND_MS,
 	overlappingCallsPreflight,
 	parkRunCall,
-	stampedPendingEventIds,
 	sortedCommittedEventIds,
+	stampedPendingEventIds,
 } from "./contract-assertions";
 
 /** Event-sourced repositories normally expose no physical removal. */

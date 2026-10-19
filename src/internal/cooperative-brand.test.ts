@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
-	hasCooperativeBrand,
 	applyCooperativeBrand,
+	hasCooperativeBrand,
 } from "./cooperative-brand";
 
 const BRAND = Symbol.for("@shirudo/ddd-kit/test-brand");

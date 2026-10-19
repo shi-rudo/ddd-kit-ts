@@ -17,8 +17,8 @@ import type {
 	UnitOfWorkIdentityMap,
 } from "../../src";
 import * as index from "../../src";
-import * as money from "../../src/domain/value-object/money";
 import * as stateMachine from "../../src/domain/state-machine";
+import * as money from "../../src/domain/value-object/money";
 import * as presentation from "../../src/presentation/errors";
 import * as http from "../../src/presentation/http/problem-details";
 import * as testing from "../../src/testing";

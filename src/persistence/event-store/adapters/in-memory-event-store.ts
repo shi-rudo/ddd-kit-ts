@@ -5,8 +5,8 @@ import {
 import type { AnyDomainEvent } from "../../../domain/event/domain-event";
 import {
 	ConcurrencyConflictError,
-	describeAggregateIdentity,
 	copyAggregateIdentity,
+	describeAggregateIdentity,
 	InMemoryCapacityExceededError,
 } from "../../../errors/kit-errors";
 import { abortReason } from "../../../internal/async/abort";

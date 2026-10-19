@@ -3,8 +3,8 @@ import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vite-plus/test";
 import { PrototypePollutionError } from "../../errors/kit-errors";
 import {
-	type CreateStampedDomainEventOptions,
 	type CreateDomainEventOptions,
+	type CreateStampedDomainEventOptions,
 	copyMetadata,
 	createDomainEvent,
 	createDomainEventFactory,

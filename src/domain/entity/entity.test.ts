@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
-	PrototypePollutionError,
 	MissingEntityIdError,
+	PrototypePollutionError,
 	UnmanagedInstanceError,
 } from "../../errors/kit-errors";
 import type { Id } from "../identity/id";

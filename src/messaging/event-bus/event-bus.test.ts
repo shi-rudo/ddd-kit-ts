@@ -8,7 +8,7 @@ import {
 	runBoundedExecution,
 } from "../../internal/async/execution";
 import { EventBusClosedError, PublishDepthExceededError } from "./errors";
-import { InProcessEventBus, type EventBusObservers } from "./event-bus";
+import { type EventBusObservers, InProcessEventBus } from "./event-bus";
 import type { PublishChainStore } from "./publish-chain";
 
 /** Every observer is required. Tests override only the one they assert on. */
