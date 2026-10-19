@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+import type { Version } from "../../domain/aggregate/aggregate";
 import { StateStoredAggregate } from "../../domain/aggregate/state-stored-aggregate";
 import {
 	type AnyDomainEvent,
@@ -234,6 +235,27 @@ describe("withIdempotentCommit", () => {
 		const pending = await deps.outbox.getPending();
 		expect(pending).toHaveLength(1);
 		expect(pending[0]?.event.type).toBe("OrderConfirmed");
+	});
+
+	it("passes the registration options to withCommit, so a contradicting re-registration rejects", async () => {
+		const deps = createDeps();
+		const order = new Order("o-1" as OrderId);
+
+		const execution = withIdempotentCommit(
+			deps,
+			request,
+			async (_ctx, registration) => {
+				order.confirm();
+				const first = registration.registerSaved(order, {
+					expectedVersion: 0 as Version,
+				});
+				registration.registerSaved(order, { expectedVersion: 1 as Version });
+				return { result: order.id, commits: [first] };
+			},
+		);
+
+		await expect(execution).rejects.toBeInstanceOf(EventCollectionError);
+		expect(await deps.outbox.getPending()).toHaveLength(0);
 	});
 
 	it("replays the stored outcome on a duplicate without re-running the work", async () => {
