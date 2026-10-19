@@ -127,7 +127,8 @@ aggregate as persisted after the transaction commits.
 - child entities with branded identity
 - state-stored and event-sourced aggregate roots
 - domain events with metadata, schema version, and commit stamps
-- a domain state machine for named lifecycle states
+- a domain state machine for named lifecycle states in
+  `@shirudo/ddd-kit/state-machine`
 
 **Application boundaries**
 

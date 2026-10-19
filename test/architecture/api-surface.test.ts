@@ -18,6 +18,7 @@ import type {
 } from "../../src";
 import * as index from "../../src";
 import * as money from "../../src/domain/value-object/money";
+import * as stateMachine from "../../src/domain/state-machine";
 import * as presentation from "../../src/presentation/errors";
 import * as http from "../../src/presentation/http/problem-details";
 import * as testing from "../../src/testing";
@@ -122,8 +123,6 @@ const INDEX_SURFACE = [
 	"DirectStateMutationError",
 	"DomainError",
 	"DomainEventValidationError",
-	"DomainStateMachine",
-	"DomainTransitionGuardRejectedError",
 	"DuplicateAggregateError",
 	"DuplicateEventIdError",
 	"DuplicateHandlerRegistrationError",
@@ -152,13 +151,6 @@ const INDEX_SURFACE = [
 	"InMemoryTransactionScope",
 	"InfrastructureError",
 	"InvalidCommandMessageError",
-	"InvalidDomainMachineContextError",
-	"InvalidDomainMachineDefinitionError",
-	"InvalidDomainMachineInputError",
-	"InvalidDomainMachineSnapshotError",
-	"InvalidDomainTransitionError",
-	"InvalidDomainTransitionGuardResultError",
-	"InvalidDomainTransitionResultError",
 	"InvalidEventStreamPageError",
 	"InvalidFlushStatementError",
 	"InvalidIntegrationMessageError",
@@ -180,7 +172,6 @@ const INDEX_SURFACE = [
 	"Projector",
 	"PublishDepthExceededError",
 	"QueryBus",
-	"ReentrantDomainStateMachineEvaluationError",
 	"ReentrantEventRecordingError",
 	"ReplayRejectedError",
 	"ReplayTargetMismatchError",
@@ -202,15 +193,12 @@ const INDEX_SURFACE = [
 	"UnregisteredHandlerError",
 	"UnreplayableAggregateError",
 	"ValueObject",
-	"analyzeDomainMachineDefinition",
-	"canTransitionDomainState",
 	"captureAggregateSnapshot",
 	"classifyConcurrencyConflict",
 	"copyMetadata",
 	"createDomainEvent",
 	"createDomainEventFactory",
 	"createDomainEventFromFacts",
-	"createInitialDomainMachineSnapshot",
 	"createIntegrationMessage",
 	"decodeIntegrationMessage",
 	"deepEqual",
@@ -235,7 +223,6 @@ const INDEX_SURFACE = [
 	"mergeMetadata",
 	"outboxWriterAcceptingEventLoss",
 	"pinTargetVersion",
-	"prepareDomainMachineDefinition",
 	"projectionFromHandlers",
 	"readStreamPages",
 	"reconstituteAggregateFromHistory",
@@ -249,7 +236,6 @@ const INDEX_SURFACE = [
 	"sameVersion",
 	"specification",
 	"toVersion",
-	"transitionDomainState",
 	"updateEntityById",
 	"versionedFlush",
 	"vo",
@@ -281,6 +267,24 @@ const HTTP_SURFACE = ["toProblemDetails"] as const;
 const PRESENTATION_SURFACE = [
 	"createKitPublicErrors",
 	"toPublicErrorView",
+] as const;
+
+const STATE_MACHINE_SURFACE = [
+	"DomainStateMachine",
+	"DomainTransitionGuardRejectedError",
+	"InvalidDomainMachineContextError",
+	"InvalidDomainMachineDefinitionError",
+	"InvalidDomainMachineInputError",
+	"InvalidDomainMachineSnapshotError",
+	"InvalidDomainTransitionError",
+	"InvalidDomainTransitionGuardResultError",
+	"InvalidDomainTransitionResultError",
+	"ReentrantDomainStateMachineEvaluationError",
+	"analyzeDomainMachineDefinition",
+	"canTransitionDomainState",
+	"createInitialDomainMachineSnapshot",
+	"prepareDomainMachineDefinition",
+	"transitionDomainState",
 ] as const;
 
 const MONEY_SURFACE = [
@@ -335,5 +339,11 @@ describe("public API surface (runtime exports)", () => {
 
 	it("the money entry exports exactly the pinned names", () => {
 		expect(Object.keys(money).sort()).toEqual([...MONEY_SURFACE]);
+	});
+
+	it("the state machine entry exports exactly the pinned names", () => {
+		expect(Object.keys(stateMachine).sort()).toEqual([
+			...STATE_MACHINE_SURFACE,
+		]);
 	});
 });

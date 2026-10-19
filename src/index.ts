@@ -225,36 +225,6 @@ export {
 	specification,
 } from "./domain/specification/specification";
 // Domain State Machine
-export {
-	analyzeDomainMachineDefinition,
-	canTransitionDomainState,
-	createInitialDomainMachineSnapshot,
-	type DomainMachineDefinition,
-	type DomainMachineDefinitionAnalysis,
-	type DomainMachineDefinitionDiagnostic,
-	type DomainMachineInput,
-	type DomainMachineReadonly,
-	type DomainMachineSnapshot,
-	type DomainMachineTransitionDescription,
-	DomainStateMachine,
-	type DomainStateNode,
-	type DomainTransition,
-	DomainTransitionGuardRejectedError,
-	type DomainTransitionGuardResult,
-	type DomainTransitionOutcome,
-	type DomainTransitionResult,
-	InvalidDomainMachineContextError,
-	InvalidDomainMachineDefinitionError,
-	InvalidDomainMachineInputError,
-	InvalidDomainMachineSnapshotError,
-	InvalidDomainTransitionError,
-	InvalidDomainTransitionGuardResultError,
-	InvalidDomainTransitionResultError,
-	type PreparedDomainMachineDefinition,
-	prepareDomainMachineDefinition,
-	ReentrantDomainStateMachineEvaluationError,
-	transitionDomainState,
-} from "./domain/state-machine/domain-state-machine";
 // Value Objects
 export {
 	deepFreeze,
@@ -357,8 +327,7 @@ export type {
 } from "./internal/delivery-failure";
 // Structural equality and detachment
 export { deepEqual } from "./internal/structural/deep-equal";
-export {
-} from "./internal/structural/deep-equal-except";
+export {} from "./internal/structural/deep-equal-except";
 export {
 	type DeepOmitKey,
 	type DeepOmitOptions,

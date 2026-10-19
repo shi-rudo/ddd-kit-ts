@@ -33,11 +33,11 @@ A definition names the initial state, creates the initial context, and lists
 the transitions that are meaningful from each state.
 
 ```ts
+import { DomainError } from "@shirudo/ddd-kit";
 import {
-  DomainError,
   DomainStateMachine,
   type DomainMachineDefinition,
-} from "@shirudo/ddd-kit";
+} from "@shirudo/ddd-kit/state-machine";
 
 type CheckoutState =
   | "awaiting-payment"
@@ -322,7 +322,7 @@ import {
   canTransitionDomainState,
   createInitialDomainMachineSnapshot,
   transitionDomainState,
-} from "@shirudo/ddd-kit";
+} from "@shirudo/ddd-kit/state-machine";
 
 const definition = createCheckoutLifecycle("order-1");
 const snapshot = createInitialDomainMachineSnapshot(definition);
@@ -355,7 +355,7 @@ safe for one-off use, but it is avoidable work on hot paths. Prepare the
 definition once when you dispatch repeatedly:
 
 ```ts
-import { prepareDomainMachineDefinition } from "@shirudo/ddd-kit";
+import { prepareDomainMachineDefinition } from "@shirudo/ddd-kit/state-machine";
 
 const prepared = prepareDomainMachineDefinition(createCheckoutLifecycle("order-1"));
 
@@ -380,7 +380,7 @@ the definition. The definition is executable domain code and should come from
 the current application version when the record is loaded.
 
 ```ts
-import type { DomainMachineSnapshot } from "@shirudo/ddd-kit";
+import type { DomainMachineSnapshot } from "@shirudo/ddd-kit/state-machine";
 
 type CheckoutRow = {
   id: string;
@@ -538,7 +538,7 @@ The machine does not own a clock or scheduler. Store deadlines as context data,
 let infrastructure decide when to wake up, and pass the observed time as input:
 
 ```ts
-import type { DomainTransition } from "@shirudo/ddd-kit";
+import type { DomainTransition } from "@shirudo/ddd-kit/state-machine";
 
 type PaymentDeadlineReached = {
   type: "PaymentDeadlineReached";
@@ -583,7 +583,7 @@ Use `analyzeDomainMachineDefinition(...)` in tests or development tooling to
 review the declared graph without creating a snapshot or executing domain code:
 
 ```ts
-import { analyzeDomainMachineDefinition } from "@shirudo/ddd-kit";
+import { analyzeDomainMachineDefinition } from "@shirudo/ddd-kit/state-machine";
 
 const analysis = analyzeDomainMachineDefinition(orderLifecycle);
 

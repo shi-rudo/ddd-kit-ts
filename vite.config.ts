@@ -14,6 +14,7 @@ export default defineConfig({
 			http: "src/presentation/http/problem-details.ts",
 			money: "src/domain/value-object/money/index.ts",
 			"public-errors": "src/presentation/errors/index.ts",
+			"state-machine": "src/domain/state-machine/index.ts",
 			testing: "src/testing/index.ts",
 		},
 		format: ["esm"],

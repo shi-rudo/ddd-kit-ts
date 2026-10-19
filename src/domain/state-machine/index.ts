@@ -1,0 +1,35 @@
+/**
+ * The domain state machine: a declared lifecycle with guarded transitions,
+ * pure transition functions, and a static analysis of a definition. An
+ * optional capability of the kit, published as `@shirudo/ddd-kit/state-machine`.
+ */
+export {
+	analyzeDomainMachineDefinition,
+	canTransitionDomainState,
+	createInitialDomainMachineSnapshot,
+	type DomainMachineDefinition,
+	type DomainMachineDefinitionAnalysis,
+	type DomainMachineDefinitionDiagnostic,
+	type DomainMachineInput,
+	type DomainMachineReadonly,
+	type DomainMachineSnapshot,
+	type DomainMachineTransitionDescription,
+	DomainStateMachine,
+	type DomainStateNode,
+	type DomainTransition,
+	DomainTransitionGuardRejectedError,
+	type DomainTransitionGuardResult,
+	type DomainTransitionOutcome,
+	type DomainTransitionResult,
+	InvalidDomainMachineContextError,
+	InvalidDomainMachineDefinitionError,
+	InvalidDomainMachineInputError,
+	InvalidDomainMachineSnapshotError,
+	InvalidDomainTransitionError,
+	InvalidDomainTransitionGuardResultError,
+	InvalidDomainTransitionResultError,
+	type PreparedDomainMachineDefinition,
+	prepareDomainMachineDefinition,
+	ReentrantDomainStateMachineEvaluationError,
+	transitionDomainState,
+} from "./domain-state-machine";

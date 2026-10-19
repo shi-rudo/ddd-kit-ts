@@ -46,6 +46,7 @@ entities, value objects, domain events, repositories, and the use-case boundary.
 - `@shirudo/ddd-kit/public-errors` presentation-layer mapping
 - `@shirudo/ddd-kit/testing` repository contract suites
 - `@shirudo/ddd-kit/money` money contract and boundary module
+- `@shirudo/ddd-kit/state-machine` domain state machine (optional)
 
 ## Related
 
