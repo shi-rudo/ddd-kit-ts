@@ -519,6 +519,15 @@ It ships DDD-specific shapes:
 - value-object helpers
 - testing contracts for adapters
 
-It relies on peer dependencies and the TypeScript ecosystem for general-purpose concerns such as `Result`, structured errors, deep equality, money calculations, HTTP frameworks, and database clients.
+It relies on peer dependencies and the TypeScript ecosystem for general-purpose concerns such as `Result`, structured errors, HTTP frameworks, and database clients.
+
+The root entry also exports a few structural helpers: `deepEqual`, `deepOmit`, `deepFreeze`, and the checked copy of a plain state. They are not general-purpose utilities. They implement the equality, the freeze, and the copy that the value objects, the persistence models, and the snapshot models of the kit rely on, so an adapter can use the same rule as the kit.
+
+Optional capabilities have their own entries, so the root entry stays the core:
+
+- `@shirudo/ddd-kit/state-machine`: the domain state machine
+- `@shirudo/ddd-kit/money`: exact money values with a currency
+- `@shirudo/ddd-kit/http` and `@shirudo/ddd-kit/public-errors`: mapping kit errors to responses
+- `@shirudo/ddd-kit/testing`: the contract suites for adapters
 
 That keeps the surface area small enough to understand. The trade-off is that the kit asks you to compose it with your application architecture instead of hiding that architecture behind framework magic.
