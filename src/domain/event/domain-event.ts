@@ -419,13 +419,14 @@ const FACTORY_OWNED_EVENT_STAMPS = new WeakSet<object>();
 // bound to ONE loaded copy of this module, so an event legitimately
 // built by a second copy of the kit would be rejected as hand-built.
 // Such events are recognized by the cooperative brand instead, which
-// every constructor and kit-derived copy stamps before it freezes the
+// every constructor and kit-derived copy applies before it freezes the
 // event (see `cooperative-brand.ts` for the probe rules).
 // The key strings are the cross-copy wire contract: every kit copy in a
-// process reads and stamps the same keys. The constant names follow the
-// shapes; the keys never change.
-const STAMPED_BRAND = Symbol.for("@shirudo/ddd-kit/stamped-event/v1");
-const UNSTAMPED_BRAND = Symbol.for("@shirudo/ddd-kit/unstamped-event/v1");
+// process reads and applies the same keys. The constant names follow the
+// vocabulary; the key strings never change, so an older word in a key is
+// part of the contract, not a name.
+const STAMPED_BRAND = Symbol.for("@shirudo/ddd-kit.mintedEvent");
+const UNSTAMPED_BRAND = Symbol.for("@shirudo/ddd-kit.uncommittedEvent");
 
 function brandStampedEvent(event: object): void {
 	applyCooperativeBrand(event, STAMPED_BRAND);

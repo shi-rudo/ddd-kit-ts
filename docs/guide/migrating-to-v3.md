@@ -1433,8 +1433,7 @@ The root entry no longer exports `capturePersistenceBaseline`,
 `recapturePersistenceBaseline`, `persistenceProjectionDrifted`,
 `PersistenceBaseline`, `freezeShallow`, `deepEqualExcept`,
 `recordDomainEvent`, `createUncommittedDomainEvent`, `IValueObject`,
-`ICommandBus`, and `IQueryBus`. The cooperative brand keys of events
-changed, so run one kit version per process.
+`ICommandBus`, and `IQueryBus`.
 
 - `copyPlainState` rejects an index key and a non-enumerable data property or
   accessor on a built-in, for example `0` on a `Map` or a key after the last
