@@ -138,7 +138,7 @@ export function createEsRepositoryContractTests<
 		);
 	// Read-back identities: adapters may serialize committed events to rows
 	// and decode them on read. A decoded event does not carry the in-memory
-	// recorded brand, and no contract demands a re-mint on read, so only
+	// recorded brand, and no contract demands a rebuild on read, so only
 	// the persisted identity is asserted here.
 	const ids = (events: ReadonlyArray<TEvent>): string[] =>
 		events.map((event) => {

@@ -1011,7 +1011,7 @@ describe("replay trusts history", () => {
 
 	// createDomainEvent deep-freezes and defensively copies; a bare
 	// literal bypasses that, and a mutable payload could diverge from
-	// the state change it records. The mint marker checks provenance,
+	// the state change it records. The kit-built marker checks provenance,
 	// not frozen-ness, so a frozen shell around mutable nested data is
 	// rejected the same way. Rejected BEFORE validate/dispatch, so
 	// state, version, and pendingEvents stay clean.
@@ -1127,9 +1127,9 @@ describe("replay trusts history", () => {
 		expect(agg.pendingEvents).toHaveLength(0);
 	});
 
-	it("accepts the copy apply() mints with the aggregate identity for events without one", () => {
+	it("accepts the copy apply() builds with the aggregate identity for events without one", () => {
 		// The stamped copy is kit-derived from a kit-built event and adopted
-		// into the mint marker; the gate must not reject apply's own work.
+		// into the kit-built marker; the gate must not reject apply's own work.
 		const agg = new RuleTighteningAggregate("test-1" as TestId, {
 			value: 0,
 			status: "inactive",

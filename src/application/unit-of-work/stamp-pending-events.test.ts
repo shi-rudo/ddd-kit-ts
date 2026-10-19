@@ -194,7 +194,7 @@ describe("stampPendingEvents", () => {
 		]);
 	});
 
-	it("mints a fresh eventId per decision when a wider options object carries one", () => {
+	it("creates a fresh eventId per decision when a wider options object carries one", () => {
 		let id = 0;
 		const factory = createDomainEventFactory({
 			eventIdFactory: () => `event-${++id}`,

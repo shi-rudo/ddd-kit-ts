@@ -12,7 +12,7 @@ import { pendingEventRecordingCapabilityFor } from "./pending-event-recording";
 import { StateStoredAggregate } from "./state-stored-aggregate";
 
 // A duplicate npm dependency or a plugin bundle loads a second copy of the
-// kit. Its module-private state (the mint WeakSet, a private registry) is
+// kit. Its module-private state (the kit-built WeakSet, a private registry) is
 // invisible to this copy; only the shared Symbol.for brands and registry
 // keys connect the two. vi.resetModules() followed by a dynamic import
 // re-evaluates a module exactly like such a second copy would. The reset
@@ -77,7 +77,7 @@ describe("recognition across package copies", () => {
 		expect(aggregate.value).toBe(3);
 	});
 
-	it("a second copy of the kit recognizes the copy apply mints with the aggregate identity", async () => {
+	it("a second copy of the kit recognizes the copy apply builds with the aggregate identity", async () => {
 		const aggregate = new ApplyingAggregate("test-1" as TestId);
 		aggregate.applyEvent(
 			createDomainEvent("ValueUpdated", { newValue: 5 }) as ValueUpdated,

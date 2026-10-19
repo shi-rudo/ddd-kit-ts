@@ -27,7 +27,7 @@ export interface EventBusContractEnvironment<Evt extends AnyDomainEvent> {
 /**
  * What an implementation supplies to run the event-bus contract suite.
  *
- * The suite mints no events, so it stays free of any event union. The two
+ * The suite builds no events, so it stays free of any event union. The two
  * factories must produce DIFFERENT `type` values: the suite subscribes to
  * both to prove that ordering holds across types and that a catch-all
  * subscription sees every type.

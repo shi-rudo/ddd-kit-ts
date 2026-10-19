@@ -249,7 +249,7 @@ On every successful load:
 4. Return `tracking.trackLoaded(aggregate)`.
 
 Delete adapter-side manual registration. `UnitOfWorkSession` with its
-`registerSaved` and `registerDeleted` is gone. Application code cannot see the
+`enrollSaved` and `enrollDeleted` is gone. Application code cannot see the
 tracking capability or raw transaction, and adapter `add`/`update`/`remove`
 methods are not the durable write path.
 
@@ -451,7 +451,7 @@ that names one aggregate carries one `identity` field of the shape
 | `new AggregateNotFoundError({ aggregateType, id })` | `new AggregateNotFoundError({ identity })` |
 | `new DuplicateAggregateError({ aggregateType, aggregateId })` | `new DuplicateAggregateError({ identity })` |
 | `new AggregateDeletedError(aggregateId)` | `new AggregateDeletedError({ identity })` |
-| `new UnregisteredChangesError(aggregateId)` | `new UnregisteredChangesError({ identity })` |
+| `new UnenrolledChangesError(aggregateId)` | `new UnregisteredChangesError({ identity })` |
 | `new UnreplayableAggregateError(aggregateId, reason)` | `new UnreplayableAggregateError({ identity, reason })` |
 | `error.aggregateType`, `error.aggregateId` | `error.identity.aggregateType`, `error.identity.aggregateId` |
 | `error.id` on `AggregateNotFoundError` | `error.identity.aggregateId` |
@@ -877,7 +877,7 @@ await withCommit({ scope, outbox, bus }, async (tx, registration) => {
 ```
 
 For a physical removal, return `registration.registerDeleted(aggregate)`. The
-`deleted` array is gone. Every token that the callback mints must be in
+`deleted` array is gone. Every token that the callback receives must be in
 `commits`. A `UnitOfWork` use case keeps returning its result directly.
 
 #### The outbox dependency is the write half

@@ -65,7 +65,7 @@ describe("InMemoryEventStore", () => {
 			aggregateId: "own-1" as StreamId,
 		};
 		// A structurally typed plain event: unlike kit-built events it is
-		// not frozen, so only store-side detachment protects history.
+		// not frozen, so only the store's own copy protects history.
 		const plainEvent = {
 			eventId: "e-1",
 			type: "OrderRenamed",

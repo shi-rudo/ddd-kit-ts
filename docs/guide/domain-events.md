@@ -269,7 +269,7 @@ it("keeps the decision deterministic and stamps it once", () => {
 No `afterEach` reset is required because the test owns the factory instance and
 never changes module state. More importantly, the aggregate itself never sees
 that factory: two equal aggregates given the same domain input produce equal
-unstamped facts. Recording policy can be tested separately.
+unstamped facts. Stamping policy can be tested separately.
 
 ## Custom id formats
 

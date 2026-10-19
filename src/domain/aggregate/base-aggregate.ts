@@ -209,7 +209,7 @@ export abstract class BaseAggregate<
 				identity: this.aggregateIdentity,
 			});
 		}
-		// One identity per decision: a reused stamp would mint two facts
+		// One identity per decision: a reused stamp would create two facts
 		// sharing one eventId, and idempotent consumers keyed on it would
 		// silently drop one.
 		const seenEventIds = new Set<string>();

@@ -336,7 +336,7 @@ describe("withCommit", () => {
 	});
 
 	it("stamps createEvent decisions in the shell and collects them with their stamps", async () => {
-		// The documented producer path end to end: the aggregate mints an
+		// The documented producer path end to end: the aggregate builds an
 		// unstamped decision, the shell stamps it inside the transaction,
 		// withCommit collects the stamped event and acknowledges it.
 		class ProducingAggregate extends StateStoredAggregate<

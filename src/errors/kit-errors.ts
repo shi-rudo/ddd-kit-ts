@@ -930,7 +930,7 @@ export interface DuplicateEventIdErrorOptions {
  * Two causes, two sites: the aggregate rejects a stamped event that is
  * already pending at the append, before the state moves; and
  * `stampPendingEvents` rejects a stamp provider that returns one reused
- * stamp (or repeats an explicit id). Either would mint two distinct facts
+ * stamp (or repeats an explicit id). Either would create two distinct facts
  * sharing one identity, and downstream idempotent consumers keyed on
  * `eventId` silently drop one of them. A wiring error: deterministic bug at
  * the append site or in the stamp provider, the remedy is one fresh

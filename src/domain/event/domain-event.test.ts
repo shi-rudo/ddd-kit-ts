@@ -755,7 +755,7 @@ describe("DomainEvent", () => {
 				unknown
 			>;
 
-		it("rejects a payload carrying an own __proto__ key at mint", () => {
+		it("rejects a payload carrying an own __proto__ key at construction", () => {
 			expect(() => createDomainEvent("OrderPlaced", hostilePayload())).toThrow(
 				PrototypePollutionError,
 			);
@@ -961,7 +961,7 @@ describe("commit cursor boundary", () => {
 	});
 });
 
-describe("a Proxy payload at the mint", () => {
+describe("a Proxy payload at construction", () => {
 	it("is rejected with a TypeError", () => {
 		const payload = new Proxy({ orderId: "o-1" }, {});
 
@@ -993,7 +993,7 @@ describe("a Proxy payload at the mint", () => {
 	});
 });
 
-describe("a symbol is rejected at the mint", () => {
+describe("a symbol is rejected at construction", () => {
 	it("rejects a symbol as the payload or the metadata", () => {
 		expect(() => createDomainEvent("Tagged", Symbol("tag"))).toThrow(TypeError);
 		expect(() =>
@@ -1007,7 +1007,7 @@ describe("a symbol is rejected at the mint", () => {
 	});
 });
 
-describe("a RegExp is rejected at the mint", () => {
+describe("a RegExp is rejected at construction", () => {
 	it("rejects a RegExp in the payload and in the metadata", () => {
 		expect(() => createDomainEvent("PatternChosen", { pattern: /a/g })).toThrow(
 			TypeError,
@@ -1022,7 +1022,7 @@ describe("a RegExp is rejected at the mint", () => {
 	});
 });
 
-describe("binary payloads are rejected at the mint", () => {
+describe("binary payloads are rejected at construction", () => {
 	// Freezing cannot make buffers immutable (the spec forbids freezing
 	// a view with elements, and a frozen view still shares its mutable
 	// buffer), so accepting them would falsify "kit-built implies deeply
@@ -1079,7 +1079,7 @@ describe("binary payloads are rejected at the mint", () => {
 });
 
 describe("factory source strategy", () => {
-	it("stamps its origin on every event it mints", () => {
+	it("stamps its origin on every event it builds", () => {
 		const factory = createDomainEventFactory({ source: "checkout" });
 
 		const event = factory.create("OrderPlaced", { orderId: "o-1" });
@@ -1087,7 +1087,7 @@ describe("factory source strategy", () => {
 		expect(event.metadata?.source).toBe("checkout");
 	});
 
-	it("stamps its origin on a stamp it mints", () => {
+	it("stamps its origin on a stamp it builds", () => {
 		const factory = createDomainEventFactory({ source: "checkout" });
 
 		const stamp = factory.createStamp();

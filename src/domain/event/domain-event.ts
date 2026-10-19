@@ -267,11 +267,11 @@ export interface DomainEventFactoryOptions {
 	/** Event-recording clock. Defaults to `() => new Date()`. */
 	readonly clock?: ClockFactory;
 	/**
-	 * Origin stamped on every event this factory mints, unless the call site
+	 * Origin stamped on every event this factory builds, unless the call site
 	 * names one itself.
 	 *
 	 * A plain value, not a factory like the two above. Those produce a new
-	 * value for each event. An origin identifies the system that mints them
+	 * value for each event. An origin identifies the system that builds them
 	 * and does not change between two of them.
 	 */
 	readonly source?: string;
@@ -415,7 +415,7 @@ const STAMPED_EVENTS = new WeakSet<object>();
 const UNSTAMPED_EVENTS = new WeakSet<object>();
 const FACTORY_OWNED_EVENT_STAMPS = new WeakSet<object>();
 
-// Cooperative cross-instance tier of the mint check: a WeakSet is
+// Cooperative cross-instance tier of the kit-built check: a WeakSet is
 // bound to ONE loaded copy of this module, so an event legitimately
 // built by a second copy of the kit would be rejected as hand-built.
 // Such events are recognized by the cooperative brand instead, which
@@ -569,7 +569,7 @@ export function stampDomainEvent<T extends string, P>(
 }
 
 /**
- * Single mint tail for both stamp provenances. The stamp fields arrive
+ * Single build tail for both stamp provenances. The stamp fields arrive
  * pre-validated, copied, and frozen (by `createStamp` for factory-owned
  * stamps, by `stampDomainEvent` for caller-built stamps); the unstamped
  * event's payload is already defensively cloned and deeply frozen by its
@@ -603,7 +603,7 @@ function buildStampedEvent<T extends string, P>(
  * (e.g. the copy `apply()` stamps with the aggregate identity) as recorded
  * itself.
  * The copy shares the already-frozen payload/metadata of its source,
- * so the mint guarantee carries over. Stamping the cooperative brand
+ * so the kit-built guarantee carries over. Applying the cooperative brand
  * before freezing keeps the copy recognizable by another loaded kit
  * instance as well as by this instance's WeakSet. Module-internal
  * export; not part of the package entries.
@@ -646,7 +646,7 @@ export function adoptStampedDomainEvent<T extends object>(copy: T): T {
  * route by. The commit boundary validates that both fields are present
  * and throws if they are missing, so a direct `createDomainEvent(...)`
  * call inside an aggregate that forgets the options is caught at
- * runtime. Record pending decisions in the application
+ * runtime. Stamp pending decisions in the application
  * shell before repository persistence or outbox collection.
  *
  * Use `createDomainEvent(...)` directly for events that don't belong to
@@ -860,11 +860,11 @@ function readEventClock(clock: ClockFactory): Date {
 
 /**
  * Copies the caller's metadata and checks the copy. Metadata is a plain
- * record or absent; a null from a JSON envelope would mint and then fail
+ * record or absent; a null from a JSON envelope would build and then fail
  * every metadata read far from the producer. A factory origin fills
  * `source` only after the check, and a call site that names its own source
  * keeps it: an explicit fact about one event outranks the default of the
- * factory that mints it.
+ * factory that builds it.
  */
 function ownedEventMetadata(
 	metadata: EventMetadata | undefined,

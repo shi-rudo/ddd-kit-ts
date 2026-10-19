@@ -95,12 +95,12 @@ Two wiring guards sit on the recording paths. An event that no kit
 constructor built throws `HandBuiltEventError` (code `HAND_BUILT_EVENT`). A
 state or payload root that carries an own `__proto__` key throws
 `PrototypePollutionError` (code `PROTOTYPE_POLLUTION`). Both guard against
-accidents, not against code in the same process: the mint mark has a
-cooperative tier that another loaded copy of the kit can stamp, and the key
+accidents, not against code in the same process: the kit-built mark has a
+cooperative tier that another loaded copy of the kit can apply, and the key
 guard looks at the root object only. Validate and strip untrusted input at
 the application edge. See
 [Domain Events -> Shape](./domain-events.md#shape) for the two tiers of the
-mint mark.
+kit-built mark.
 
 `AggregateConfig.maxPendingEvents` limits the pending list. A recording that
 would grow the list past the limit throws `PendingEventLimitExceededError`
@@ -680,7 +680,7 @@ no synonyms.
 | create | A business factory makes a new aggregate and records its first facts. | `Order.place(...)`, `this.createEvent(...)` |
 | setState | A state-stored aggregate replaces its state, advances its version, and records the events of the change. | `setState(newState, events)` |
 | apply | An event-sourced aggregate folds a new fact into its state and records it. | `apply(event)` |
-| stamp | The application shell stamps identity and time on pending decisions. | `stampPendingEvents(aggregate, factory)` |
+| stamp | The application shell stamps the event id and the time on pending decisions. | `stampPendingEvents(aggregate, factory)` |
 | reconstitute | A factory builds an aggregate from persisted facts and yields it only on success. | `reconstituteAggregateFromHistory`, `reconstituteAggregateFromSnapshot`, `markReconstituted` |
 | replay | A built aggregate folds a later page of history into itself. | `replayHistory(history)` |
 | commit | The transaction that persists registered aggregates and publishes their events. | `withCommit`, `committedVersion`, `CommittedDomainEvent` |

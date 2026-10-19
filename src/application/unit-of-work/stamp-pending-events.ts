@@ -21,7 +21,7 @@ export type DomainEventStampProvider<TEvent extends AnyDomainEvent> = (
 /**
  * Stamp options that every decision of one stamping shares: a stamp time
  * and metadata such as the correlation id of the request. An `eventId` is per
- * fact, so the factory mints it for each decision.
+ * fact, so the factory creates it for each decision.
  */
 export type SharedDomainEventStampOptions = Omit<
 	CreateDomainEventStampOptions,
