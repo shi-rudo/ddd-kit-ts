@@ -6,7 +6,7 @@ import {
 import type { ExecutionContext } from "../../internal/async/execution";
 import { recordingOutbox } from "../../testing/recording-outbox";
 import type { CommittedDomainEvent } from "../committed-event";
-import { EventBusImpl } from "../event-bus/event-bus";
+import { InProcessEventBus } from "../event-bus/event-bus";
 import { InMemoryOutbox } from "./outbox";
 import {
 	eventBusSink,
@@ -985,7 +985,7 @@ describe("OutboxDispatcher", () => {
 
 describe("eventBusSink", () => {
 	it("delivers through the in-process bus and propagates handler failures", async () => {
-		const bus = new EventBusImpl<TestEvent>();
+		const bus = new InProcessEventBus<TestEvent>();
 		const seen: number[] = [];
 		bus.subscribe("ThingHappened", (event) => {
 			if (event.payload.n === 99) throw new Error("handler failed");

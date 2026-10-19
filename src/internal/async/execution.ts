@@ -30,7 +30,7 @@ type ExecutionOptions =
 export const DEFAULT_EXECUTION_TIMEOUT_MS = 30_000;
 
 /**
- * Owner signal of each child signal that {@link runBoundedExecution} minted.
+ * Owner signal of each child signal that {@link runBoundedExecution} created.
  *
  * One bounded operation often wraps another, and every hop derives a fresh
  * signal. A consumer that follows a call chain by signal identity alone loses

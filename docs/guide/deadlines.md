@@ -23,7 +23,7 @@ waiting process in the application. `scope` names the policy, `key` the
 instance:
 
 ```ts
-await withCommit({ scope, outbox }, async (tx, enrollment) => {
+await withCommit({ scope, outbox }, async (tx, registration) => {
   // Both bound to THIS transaction, like every repository in the callback.
   const loaded = await loadSagaForDirectCommit(tx, sagaId);
   const deadlines = makeDeadlineStore(tx);
@@ -44,7 +44,7 @@ await withCommit({ scope, outbox }, async (tx, enrollment) => {
 
   return {
     result: saga.id,
-    commits: [enrollment.enrollSaved(saga)],
+    commits: [registration.registerSaved(saga)],
   };
 });
 ```

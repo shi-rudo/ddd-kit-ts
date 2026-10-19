@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
-	HostileStateKeyError,
 	MissingEntityIdError,
+	PrototypePollutionError,
 	UnmanagedInstanceError,
 } from "../../errors/kit-errors";
 import type { Id } from "../identity/id";
@@ -481,14 +481,14 @@ describe("Entity", () => {
 		it("rejects a JSON-parsed own __proto__ key at construction", () => {
 			expect(
 				() => new RawStateEntity("item-1" as ItemId, hostileState()),
-			).toThrow(HostileStateKeyError);
+			).toThrow(PrototypePollutionError);
 		});
 
 		it("rejects the key on the setState path and keeps the previous state", () => {
 			const entity = new RawStateEntity("item-1" as ItemId, { qty: 0 });
 
 			expect(() => entity.replace(hostileState())).toThrow(
-				HostileStateKeyError,
+				PrototypePollutionError,
 			);
 
 			expect(entity.state.qty).toBe(0);
@@ -506,7 +506,7 @@ describe("Entity", () => {
 			});
 
 			expect(() => new RawStateEntity("item-1" as ItemId, state)).toThrow(
-				HostileStateKeyError,
+				PrototypePollutionError,
 			);
 		});
 
@@ -525,7 +525,7 @@ describe("Entity", () => {
 			});
 
 			expect(() => new ListEntity("item-1" as ItemId, state)).toThrow(
-				HostileStateKeyError,
+				PrototypePollutionError,
 			);
 		});
 

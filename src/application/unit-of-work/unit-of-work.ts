@@ -9,8 +9,8 @@ import { abortReason } from "../../internal/async/abort";
 import type { ExecutionContext } from "../../internal/async/execution";
 import { findInCauseChain } from "../../internal/cause-chain";
 import {
+	applyCooperativeBrand,
 	hasCooperativeBrand,
-	stampCooperativeBrand,
 } from "../../internal/cooperative-brand";
 import type { EventBus } from "../../messaging/event-bus/ports";
 import type { OutboxWriter } from "../../messaging/outbox/ports";
@@ -101,7 +101,7 @@ export interface RepositoryDefinitionOptions<
 	 * reach; the static factories stay the only door.
 	 */
 	readonly aggregate: AggregateClass<TAggregate>;
-	/** Adapter-owned projection, baseline, and change-set policy. */
+	/** Adapter-owned capture, baseline, and change-set policy. */
 	readonly persistence: PersistenceModel<TAggregate, TBaseline, TChangeSet>;
 	/**
 	 * Creates the transaction-bound adapter for the port's non-lifecycle
@@ -493,7 +493,7 @@ export function defineRepository<
 		// non-enumerable members vanish silently. Without this check, the
 		// loss surfaces as a bare TypeError deep inside the first run().
 		assertRepositoryDefinitionMembers(branded as Record<PropertyKey, unknown>);
-		stampCooperativeBrand(branded, repositoryDefinitionBrand);
+		applyCooperativeBrand(branded, repositoryDefinitionBrand);
 		return Object.freeze(branded);
 	};
 	return builder as unknown as RepositoryDefinitionBuilder<TRepositoryPort>;
@@ -620,7 +620,7 @@ export interface UnitOfWorkDeps<
  * transaction and either persist completely or not at all.
  *
  * Built ON TOP of `withCommit` - the commit orchestration (event
- * harvest into the outbox inside the transaction, internal acknowledgement
+ * collection into the outbox inside the transaction, internal acknowledgement
  * after the commit, best-effort in-process publish last) is inherited,
  * not reimplemented. What this layer adds:
  *
@@ -691,7 +691,7 @@ export class UnitOfWork<
 	 * Execute one unit of work: open the transaction, hand the callback
 	 * tx-bound repositories, commit on resolve, roll back on throw,
 	 * run the post-commit lifecycle (acknowledge, observe, publish) for every
-	 * enrolled aggregate. Returns the callback's result.
+	 * registered aggregate. Returns the callback's result.
 	 */
 	public async run<R>(
 		work: (
@@ -737,15 +737,15 @@ export class UnitOfWork<
 					postCommitTimeoutMs: this.deps.postCommitTimeoutMs,
 					signal: options?.signal,
 				},
-				async (tx, enrollment) => {
+				async (tx, registration) => {
 					// Fresh state per scope invocation: a TransactionScope that
 					// retries its callback (serialization-failure retry wrappers)
 					// re-runs this fn, and state from the rolled-back attempt
-					// (enrollments, identity-map entries, error flags) must not
+					// (registrations, identity-map entries, error flags) must not
 					// leak into the retry. The previous attempt's session is
 					// closed so its leaked contexts turn loud.
 					session?.close();
-					const s = new Session<Evt>(enrollment);
+					const s = new Session<Evt>(registration);
 					session = s;
 					sessions.push(s);
 					const current = startAttempt();
@@ -767,7 +767,7 @@ export class UnitOfWork<
 						// register a write, fails the run here.
 						s.assertReadyToCommit();
 						current.workCompleted = true;
-						// The tokens below are what gets harvested; after close, any
+						// The tokens below are what gets collected; after close, any
 						// use of the session throws TransactionClosedError.
 						const commits = s.commitTokens;
 						s.close();
@@ -892,7 +892,7 @@ function startAttempt(): RunAttempt {
  *   {@link RollbackError}.
  * - `workCompleted`: the callback finished; the failure is post-completion.
  *   The checks run in this order. First, a wiring error in the rejection (a
- *   harvest-guard violation, or an aggregate that changed after its
+ *   collection-guard violation, or an aggregate that changed after its
  *   registration) is a deterministic programming bug and passes through; it
  *   does NOT extend `InfrastructureError`, so a retry-on-Infrastructure
  *   handler skips it. It is thrown inside `scope.transactional()`, so a

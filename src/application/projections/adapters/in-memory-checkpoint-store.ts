@@ -158,7 +158,7 @@ export class InMemoryProjectionCheckpointStore
 		const stored = this.checkpoints
 			.get(projection)
 			?.get(encodeAggregateIdentity(identity));
-		// Detached copy: a caller mutating the loaded receipt must not
+		// A copy: a caller mutating the loaded receipt must not
 		// move the stored watermark.
 		return stored === undefined
 			? undefined

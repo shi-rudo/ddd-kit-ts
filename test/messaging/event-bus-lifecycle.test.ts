@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { EventBusClosedError, EventBusImpl } from "../../src";
+import { EventBusClosedError, InProcessEventBus } from "../../src";
 import type { DomainEvent } from "../../src/domain/event/domain-event";
 
 type OrderCreated = DomainEvent<"OrderCreated", { orderId: string }>;
@@ -16,7 +16,7 @@ function countTimers(): number {
 
 describe("event bus close releases what it holds", () => {
 	it("clears the timer of a waiter it settles", async () => {
-		const bus = new EventBusImpl<OrderCreated>();
+		const bus = new InProcessEventBus<OrderCreated>();
 		const before = countTimers();
 		const waiting = bus.once("OrderCreated", { timeoutMs: 60_000 });
 
@@ -53,7 +53,7 @@ describe("event bus close releases what it holds", () => {
 				return typeof value === "function" ? value.bind(target) : value;
 			},
 		});
-		const bus = new EventBusImpl<OrderCreated>();
+		const bus = new InProcessEventBus<OrderCreated>();
 		const waiting = bus.once("OrderCreated", { signal });
 
 		expect(attached).toBe(1);

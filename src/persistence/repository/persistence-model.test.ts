@@ -4,12 +4,12 @@ import {
 	derivePersistenceChanges,
 	insertPersistenceBaseline,
 	type PersistenceModel,
-	persistenceProjectionDrifted,
+	persistenceCaptureDrifted,
 	recapturePersistenceBaseline,
 } from "./persistence-model";
 
 describe("adapter-owned persistence baselines", () => {
-	it("derives changes for a primitive persistence projection", () => {
+	it("derives changes for a primitive persistence capture", () => {
 		type Counter = { value: number };
 		const model: PersistenceModel<Counter, number, number | undefined> = {
 			capture: (counter) => counter.value,
@@ -78,22 +78,25 @@ describe("adapter-owned persistence baselines", () => {
 
 	it("supports full replacement instead of imposing a partial-diff model", () => {
 		type Profile = { name: string; tags: string[] };
-		type Projection = Readonly<{ name: string; tags: readonly string[] }>;
-		const project = (profile: Profile): Projection => ({
+		type ProfileCapture = Readonly<{ name: string; tags: readonly string[] }>;
+		const captureProfile = (profile: Profile): ProfileCapture => ({
 			name: profile.name,
 			tags: [...profile.tags],
 		});
-		const model: PersistenceModel<Profile, Projection, Projection | undefined> =
-			{
-				capture: project,
-				changes: (baseline, profile) => {
-					const current = project(profile);
-					return JSON.stringify(baseline) === JSON.stringify(current)
-						? undefined
-						: current;
-				},
-				isEmpty: (replacement) => replacement === undefined,
-			};
+		const model: PersistenceModel<
+			Profile,
+			ProfileCapture,
+			ProfileCapture | undefined
+		> = {
+			capture: captureProfile,
+			changes: (baseline, profile) => {
+				const current = captureProfile(profile);
+				return JSON.stringify(baseline) === JSON.stringify(current)
+					? undefined
+					: current;
+			},
+			isEmpty: (replacement) => replacement === undefined,
+		};
 		const profile = { name: "Ada", tags: ["admin"] };
 		const baseline = capturePersistenceBaseline(model, profile);
 
@@ -105,7 +108,7 @@ describe("adapter-owned persistence baselines", () => {
 		});
 	});
 
-	it("represents inserts explicitly and can seal the current projection", () => {
+	it("represents inserts explicitly and can seal the current capture", () => {
 		type RecordState = { value: string };
 		const model: PersistenceModel<RecordState, string, string | undefined> = {
 			capture: (state) => state.value,
@@ -144,7 +147,7 @@ describe("adapter-owned persistence baselines", () => {
 		expect(Object.keys(baseline)).toEqual([]);
 	});
 
-	it("detects projection drift structurally, not through the change set", () => {
+	it("detects capture drift structurally, not through the change set", () => {
 		const model: PersistenceModel<
 			{ value: number },
 			{ value: number },
@@ -158,11 +161,11 @@ describe("adapter-owned persistence baselines", () => {
 		const state = { value: 1 };
 		const baseline = capturePersistenceBaseline(model, state);
 
-		expect(persistenceProjectionDrifted(baseline, state)).toBe(false);
-		expect(persistenceProjectionDrifted(baseline, { value: 2 })).toBe(true);
+		expect(persistenceCaptureDrifted(baseline, state)).toBe(false);
+		expect(persistenceCaptureDrifted(baseline, { value: 2 })).toBe(true);
 		// A "new" baseline has no stored capture to drift from.
 		expect(
-			persistenceProjectionDrifted(insertPersistenceBaseline(model), state),
+			persistenceCaptureDrifted(insertPersistenceBaseline(model), state),
 		).toBe(false);
 	});
 
@@ -197,16 +200,16 @@ describe("adapter-owned persistence baselines", () => {
 
 		// The documented default trap: reference-matched Set members drift.
 		expect(
-			persistenceProjectionDrifted(
+			persistenceCaptureDrifted(
 				capturePersistenceBaseline(withoutEquality, cart),
 				cart,
 			),
 		).toBe(true);
 
 		const baseline = capturePersistenceBaseline(withEquality, cart);
-		expect(persistenceProjectionDrifted(baseline, cart)).toBe(false);
+		expect(persistenceCaptureDrifted(baseline, cart)).toBe(false);
 		expect(
-			persistenceProjectionDrifted(baseline, { skus: ["a", "changed"] }),
+			persistenceCaptureDrifted(baseline, { skus: ["a", "changed"] }),
 		).toBe(true);
 	});
 });

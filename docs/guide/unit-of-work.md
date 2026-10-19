@@ -49,7 +49,7 @@ A repository definition has six parts:
 - The application supplies a repository port to `defineRepository`.
 - The aggregate class is the identity-map key.
 - The adapter owns a `PersistenceModel`. It reads the aggregate through its
-  detached read DTO, `order.stateDto`; see
+  plain state, `order.plainState`; see
   [Aggregates -> Reading State from Outside](./aggregates.md#reading-state-from-outside).
 - `create` builds the transaction-bound read adapter.
 - `flush` performs the registered write.
@@ -83,12 +83,12 @@ const orderPersistence: PersistenceModel<
   OrderChange
 > = {
   capture: (order) => ({
-    state: order.stateDto,
+    state: order.plainState,
     version: order.version,
   }),
   changes: (baseline, order, lifecycle) => {
     const current = {
-      state: order.stateDto,
+      state: order.plainState,
       version: order.version,
     };
 
@@ -155,7 +155,7 @@ Property '"UnitOfWork: the outbox must accept the definition's aggregate events"
 ```
 
 This is deliberate. A write method cannot accidentally issue SQL before the
-rest of the operation is ready, forget event harvesting, or use a different
+rest of the operation is ready, forget event collection, or use a different
 transaction.
 
 `mapError` runs only when `flush` fails. It must preserve a deliberate kit
@@ -170,7 +170,7 @@ Creating and updating are intentionally different operations:
 ```ts
 const orderId = await new UnitOfWork(deps).run(async ({ repositories }) => {
   const order = Order.place(newOrderId(), customerId, items);
-  recordPendingEvents(order, domainEvents);
+  stampPendingEvents(order, domainEvents);
 
   repositories.orders.add(order);
   return order.id;
@@ -182,7 +182,7 @@ await new UnitOfWork(deps).run(async ({ repositories }) => {
   const order = await repositories.orders.getById(orderId);
 
   order.confirm();
-  recordPendingEvents(order, domainEvents);
+  stampPendingEvents(order, domainEvents);
 
   repositories.orders.update(order);
 });
@@ -194,12 +194,12 @@ The adapter and aggregate do not infer it from `version`.
 
 Call the registration method last. After a successful `add`, `update`, or
 `remove`, the aggregate is sealed for that run. A later version change, event
-change, or adapter-projection change throws `AggregateTrackingError` and rolls
+change, or adapter-capture change throws `AggregateTrackingError` and rolls
 the transaction back. The guard runs before the flush, after the flush, and
 after the outbox write, because an asynchronous adapter can yield to other
 work while the transaction is still open. The last run also covers a loaded
 aggregate without a write: if it changed, the commit fails with
-`UnenrolledChangesError`. A change of a registered aggregate always fails with
+`UnregisteredChangesError`. A change of a registered aggregate always fails with
 `AggregateTrackingError` and the reason `mutated_after_registration`, also
 while the outbox write runs.
 
@@ -278,7 +278,7 @@ A language probe such as `then` or `constructor` does not.
 Application code cannot access the raw transaction or the tracking capability.
 The `UnitOfWorkContext` contains only `repositories` and the optional
 cooperative-cancellation `signal`. That keeps infrastructure details out of
-the use case and removes the old enrollment escape hatch.
+the use case and removes the old registration escape hatch.
 
 ## What a flush receives
 
@@ -300,7 +300,7 @@ interface AggregatePersistenceWrite<TAggregate, TChangeSet> {
 
 The receipt object, its `changes` envelope, and its event array are frozen.
 `TChangeSet` remains adapter-owned, so `PersistenceModel.changes` must return a
-detached or immutable value rather than a mutable reference into the
+copied or immutable value rather than a mutable reference into the
 aggregate. The Unit of Work cannot safely deep-freeze arbitrary database
 driver values.
 
@@ -334,7 +334,7 @@ await new UnitOfWork(deps).run(async ({ repositories }) => {
   const booking = await repositories.bookings.getById(bookingId);
 
   booking.requestPayment(paymentId);
-  recordPendingEvents(booking, domainEvents);
+  stampPendingEvents(booking, domainEvents);
   repositories.bookings.update(booking);
 });
 ```
@@ -353,7 +353,7 @@ await new UnitOfWork(deps).run(
   async ({ repositories, signal }) => {
     const order = await repositories.orders.getById(orderId);
     order.confirm();
-    recordPendingEvents(order, domainEvents);
+    stampPendingEvents(order, domainEvents);
 
     if (signal?.aborted) throw signal.reason;
     repositories.orders.update(order);
@@ -375,7 +375,7 @@ The most useful failures are intentionally specific:
 | Error | Meaning |
 | --- | --- |
 | `AggregateTrackingError` | invalid add/update/remove lifecycle or mutation after registration |
-| `UnenrolledChangesError` | a loaded aggregate changed but the use case never called `update` |
+| `UnregisteredChangesError` | a loaded aggregate changed but the use case never called `update` |
 | `ConcurrencyConflictError` | the adapter's expected-version predicate lost a race |
 | `DuplicateAggregateError` | an `add` collided with an existing identity |
 | `InvalidRepositoryAdapterError` | a repository factory returned no adapter object, or an adapter that defines `add`, `update`, or `remove` |
@@ -500,7 +500,7 @@ describe("DrizzleOrderRepository", () => {
 
 The state-stored suite checks add/update routing, duplicate add, stale update
 and removal, identity mapping, no-op behavior, nested state, exact outbox
-harvest, and rollback. The event-sourced suite checks exact append batches,
+collection, and rollback. The event-sourced suite checks exact append batches,
 replay, OCC, identity mapping, and atomic stream-plus-outbox rollback.
 
 Optional capabilities produce visible skipped tests. A skip is an unproven

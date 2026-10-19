@@ -36,7 +36,7 @@ Most write-side code follows this shape:
 2. Call a domain method on it.
 3. The aggregate validates the move, changes state, and records events.
 4. The application service saves the aggregate.
-5. `withCommit` harvests events into the outbox and marks the aggregate
+5. `withCommit` collects events into the outbox and marks the aggregate
    persisted after the transaction commits.
 
 The aggregate is the consistency boundary. Application code asks it to do
@@ -49,7 +49,7 @@ import {
   StateStoredAggregate,
   createDomainEventFactory,
   DomainError,
-  recordPendingEvents,
+  stampPendingEvents,
   type DomainEvent,
   type Id,
 } from "@shirudo/ddd-kit";
@@ -116,7 +116,7 @@ const order = Order.draft("order-1" as OrderId, "customer-1");
 const domainEvents = createDomainEventFactory();
 
 order.confirm();
-recordPendingEvents(order, domainEvents);
+stampPendingEvents(order, domainEvents);
 
 order.status; // "confirmed"
 order.version; // 1
@@ -128,7 +128,7 @@ This example shows the core conventions:
 - `aggregateType` is required on every concrete aggregate. It is written onto
   events so outbox dispatchers and projections know where the event came from.
 - `createEvent(...)` fills `aggregateId` and `aggregateType` without reading a
-  clock or id generator. `recordPendingEvents(...)` adds the technical stamp in
+  clock or id generator. `stampPendingEvents(...)` adds the technical stamp in
   the application shell.
 - `setState(newState, events)` changes state first, records events after the
   state is valid, and bumps the aggregate version once.
@@ -137,8 +137,8 @@ This example shows the core conventions:
   them to HTTP responses, or let unknown failures propagate.
 - `pendingEvents` are not historical events yet. Before recording they are
   immutable domain decisions. After recording they carry their stable event id
-  and recording time. They remain unflushed until the transaction/outbox
-  boundary harvests them.
+  and stamp time. They remain unflushed until the transaction/outbox
+  boundary collects them.
 
 At this point, persistence has not occurred. Persistence is an adapter concern.
 The aggregate completed its domain work. A repository and `withCommit` still

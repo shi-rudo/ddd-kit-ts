@@ -6,13 +6,13 @@ Use events for facts other parts of the system may care about: an order was conf
 
 The kit represents a newly accepted fact in two deliberately separate forms:
 
-1. The aggregate creates an immutable `UncommittedDomainEvent`. It contains
+1. The aggregate creates an immutable `UnstampedDomainEvent`. It contains
    only what the domain owns: type, payload, source aggregate, and payload
    schema version.
-2. The application shell records that fact as a `DomainEvent` by attaching an
-   id, a recording time, and tracing metadata.
+2. The application shell stamps that fact as a `DomainEvent` by attaching an
+   id, a stamp time, and tracing metadata.
 
-A recorded domain event is plain, immutable data:
+A stamped domain event is plain, immutable data:
 
 - they have a stable `eventId`
 - they carry a `type` discriminator
@@ -70,7 +70,7 @@ Outside an aggregate, `createDomainEvent` is the short convenience form:
 ```ts
 import {
   createDomainEvent,
-  createDomainEventFromFacts,
+  createStampedDomainEvent,
   type DomainEvent,
 } from "@shirudo/ddd-kit";
 
@@ -95,12 +95,12 @@ const event = createDomainEvent(
 
 The returned event is deeply frozen. The payload and metadata are cloned before freezing, so the caller's original objects are not frozen and later mutations to them do not change the event.
 
-The kit marks every event its constructors return as minted. The aggregate
-recording paths (`apply`, `setState`, `addDomainEvent`) accept only minted
-events; a hand-rolled literal throws `UnmintedEventError` (code
-`UNMINTED_EVENT`). The mark has two tiers. A module-private tier covers the
+The kit marks every event its constructors return as kit-built. The aggregate
+recording paths (`apply`, `setState`, `addDomainEvent`) accept only kit-built
+events; a hand-rolled literal throws `HandBuiltEventError` (code
+`HAND_BUILT_EVENT`). The mark has two tiers. A module-private tier covers the
 events of this loaded copy of the kit. A cooperative `Symbol.for` brand
-covers events that a second loaded copy minted (a duplicate dependency, a
+covers events that a second loaded copy built (a duplicate dependency, a
 dual CJS/ESM load). The brand catches accidents, not adversaries: code in the
 same process can fake it. The gate is not a security boundary; validate
 untrusted input at the application edge.
@@ -109,10 +109,10 @@ Events are plain structured-cloneable data. The event constructors check the pay
 
 `createDomainEvent` reads the platform clock and Web Crypto when `occurredAt`
 or `eventId` is omitted. If the caller must provide every nondeterministic
-value, use `createDomainEventFromFacts`:
+value, use `createStampedDomainEvent`:
 
 ```ts
-const event = createDomainEventFromFacts(
+const event = createStampedDomainEvent(
   "OrderConfirmed",
   { orderId: "o-1" },
   {
@@ -127,7 +127,7 @@ const event = createDomainEventFromFacts(
 ## Inside aggregates: create the fact, not its envelope
 
 An aggregate method speaks the domain language. Event identifiers, tracing
-headers, and recording timestamps do not help an order decide whether it can be
+headers, and stamp times do not help an order decide whether it can be
 confirmed, so they do not belong in `confirm(...)`.
 
 ```ts
@@ -193,7 +193,7 @@ const domainEvents = createDomainEventFactory({
 });
 
 order.confirm(confirmedAt);
-recordPendingEvents(order, domainEvents, {
+stampPendingEvents(order, domainEvents, {
   occurredAt: confirmedAt,
   metadata: { correlationId: request.id },
 });
@@ -201,11 +201,11 @@ recordPendingEvents(order, domainEvents, {
 
 The third argument holds the stamp options that every decision of the
 recording shares. Pass a callback instead of the factory when the stamp
-depends on the concrete decision. The callback receives the uncommitted
+depends on the concrete decision. The callback receives the unstamped
 decision and its position in the batch:
 
 ```ts
-recordPendingEvents(order, (decision, index) =>
+stampPendingEvents(order, (decision, index) =>
   domainEvents.createStamp({
     metadata: {
       correlationId: request.id,
@@ -236,7 +236,7 @@ The aggregate does not hold a factory, a clock, or an id generator:
 ```ts
 const order = await loadOrder(orderId);
 order.confirm(confirmedAt);
-recordPendingEvents(order, domainEvents);
+stampPendingEvents(order, domainEvents);
 
 await snapshots.save(
   orderIdentity,
@@ -253,14 +253,14 @@ the producer owns: `this.createEvent("NameChanged", payload, { schemaVersion: 2 
 ## Deterministic tests
 
 ```ts
-it("keeps the decision deterministic and records it once", () => {
+it("keeps the decision deterministic and stamps it once", () => {
   const domainEvents = createDomainEventFactory({
     eventIdFactory: () => "evt-1",
     clock: () => new Date("2026-01-01T00:00:00.000Z"),
   });
   const order = Order.reconstitute(orderId, initialState);
   order.confirm();
-  const events = recordPendingEvents(order, domainEvents);
+  const events = stampPendingEvents(order, domainEvents);
 
   expect(events[0]?.eventId).toBe("evt-1");
 });
@@ -269,7 +269,7 @@ it("keeps the decision deterministic and records it once", () => {
 No `afterEach` reset is required because the test owns the factory instance and
 never changes module state. More importantly, the aggregate itself never sees
 that factory: two equal aggregates given the same domain input produce equal
-uncommitted facts. Recording policy can be tested separately.
+unstamped facts. Stamping policy can be tested separately.
 
 ## Custom id formats
 
@@ -308,7 +308,7 @@ interface EventMetadata {
 }
 ```
 
-The readonly surface prevents context changes in a recorded event. Constructors
+The readonly surface prevents context changes in a stamped event. Constructors
 still make a defensive copy. A caller can change the original input object
 without changing the event.
 
@@ -323,7 +323,7 @@ the metadata names its own `source`.
 
 The application shell attaches the actor on the stamp. `userId` says who caused
 the fact and `correlationId` says in which operation. That is the audit record.
-The kit does not require it: attach it on every stamp, and every recorded event
+The kit does not require it: attach it on every stamp, and every stamped event
 carries it. A fold must not read it. When a rule depends on the actor, for example
 "only the owner cancels", the method takes the actor as an argument. The
 payload then records the actor as a domain value.
@@ -401,7 +401,7 @@ interface CommittedDomainEvent<Evt extends AnyDomainEvent> {
 All finalized envelopes produced by one aggregate in one commit share
 `position.aggregateVersion`, `position.commitSize`, and
 `position.previousEventfulAggregateVersion`. `position.commitSequence` is the
-zero-based position inside that harvest batch. The predecessor is the aggregate
+zero-based position inside that collection batch. The predecessor is the aggregate
 version of the immediately preceding EVENTFUL commit. State-only saves do not
 advance it. Only the event source at the persistence boundary can construct the
 complete cursor. Neither `createDomainEvent` nor `withCommit` can infer it from
@@ -409,9 +409,9 @@ the aggregate's OCC baseline.
 
 Inside a committed envelope, `source` is the authoritative aggregate identity.
 If the bare event also carries optional `aggregateId` or `aggregateType`
-stamps, each present value must match `source`; a projector rejects a
+values, each present value must match `source`; a projector rejects a
 contradiction as `ForeignEventError` before applying or checkpointing anything.
-An event whose optional aggregate identity stamps are absent takes its aggregate identity
+An event whose optional aggregate identity fields are absent takes its aggregate identity
 from the envelope.
 
 Together the four fields form a gap-proof per-aggregate cursor. A projector can
@@ -455,7 +455,7 @@ codec continues to emit and require that canonical representation.
 The wire envelope retains `messageId`, the three relationship headers when
 present, an ISO `occurredAt`, the qualified aggregate source, and the complete
 commit position. Consumers that feed the kit's `Projector` can compose the
-validated message into a minted local event with
+validated message into a kit-built local event with
 `integrationMessageToCommittedEvent`. The relationship headers become local
 event metadata for downstream tracing; the event still uses the published type
 and JSON payload, and restoring the producer's private domain types is
@@ -486,10 +486,10 @@ On an `EventSourcedAggregate` there is no such path: `setState` throws
 
 Do not record first and mutate second. If the mutation throws, the aggregate would carry an event for a fact that never happened.
 The mutation must also advance the version before an already-persisted
-aggregate is harvested; otherwise two commits would share one projection
-position and `withCommit` rejects with `EventHarvestError`. An instance that
+aggregate is collected; otherwise two commits would share one projection
+position and `withCommit` rejects with `EventCollectionError`. An instance that
 this package did not construct (a repository DTO, a structural lookalike, or
-an aggregate from another package copy) is rejected at enrollment with
+an aggregate from another package copy) is rejected at registration with
 `UnmanagedInstanceError` (code `UNMANAGED_INSTANCE`).
 
 ## Naming Events

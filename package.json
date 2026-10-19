@@ -27,6 +27,10 @@
 			"types": "./dist/money.d.ts",
 			"import": "./dist/money.js"
 		},
+		"./state-machine": {
+			"types": "./dist/state-machine.d.ts",
+			"import": "./dist/state-machine.js"
+		},
 		"./testing": {
 			"types": "./dist/testing.d.ts",
 			"import": "./dist/testing.js"

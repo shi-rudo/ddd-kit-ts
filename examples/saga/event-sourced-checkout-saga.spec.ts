@@ -7,7 +7,7 @@ import {
 import { withCommit } from "../../src/application/cqrs/handler";
 import { InMemoryIdempotencyStore } from "../../src/application/idempotency/adapters/in-memory-idempotency-store";
 import { withIdempotentCommit } from "../../src/application/idempotency/idempotency";
-import { recordPendingEvents } from "../../src/application/unit-of-work/record-pending-events";
+import { stampPendingEvents } from "../../src/application/unit-of-work/stamp-pending-events";
 import {
 	createDomainEvent,
 	createDomainEventFactory,
@@ -110,8 +110,8 @@ async function commitProcessDecision(
 				checkoutCommandsFromProcessFact,
 			),
 		},
-		async (_ctx, enrollment) => {
-			const recorded = recordPendingEvents(saga, () =>
+		async (_ctx, registration) => {
+			const recorded = stampPendingEvents(saga, () =>
 				domainEvents.createStamp({
 					metadata: {
 						correlationId: trigger.correlationId,
@@ -129,7 +129,7 @@ async function commitProcessDecision(
 			await database.append(recorded);
 			return {
 				result: undefined,
-				commits: [enrollment.enrollSaved(saga)],
+				commits: [registration.registerSaved(saga)],
 			};
 		},
 	);
@@ -194,7 +194,7 @@ describe("Event-sourced checkout saga", () => {
 		const source = EventSourcedCheckoutSaga.start(orderId, total, paymentId);
 		source.advanceToShipping(shipmentId);
 		source.beginCompensationAfterShippingFailure("warehouse-unavailable");
-		const history = recordPendingEvents(source, eventRecorder);
+		const history = stampPendingEvents(source, eventRecorder);
 
 		const restored = EventSourcedCheckoutSaga.reconstitute(orderId);
 		const replayed = restored.replayHistory(history);
@@ -282,8 +282,8 @@ describe("Event-sourced checkout saga", () => {
 			}),
 		).rejects.toThrow("command outbox unavailable");
 
-		// The pending list is typed as the uncommitted union; the failed
-		// commit already recorded the decision, so narrow structurally.
+		// The pending list is typed as the unstamped union; the failed
+		// commit already stamped the decision, so narrow structurally.
 		const [retainedEvent] = saga.pendingEvents;
 		const retainedEventId =
 			retainedEvent !== undefined && "eventId" in retainedEvent
@@ -475,7 +475,7 @@ describe("Event-sourced checkout saga", () => {
 
 	it("rejects a saga command when the process fact has no conversation id", () => {
 		const saga = EventSourcedCheckoutSaga.start(orderId, total, paymentId);
-		const [event] = recordPendingEvents(saga, () =>
+		const [event] = stampPendingEvents(saga, () =>
 			eventRecorder.createStamp({
 				metadata: {
 					correlationId: "place-order-1",

@@ -21,8 +21,8 @@ import {
 	OVERLAPPING_CALLS_BOUND_MS,
 	overlappingCallsPreflight,
 	parkRunCall,
-	recordedPendingEventIds,
 	sortedCommittedEventIds,
+	stampedPendingEventIds,
 } from "./contract-assertions";
 
 /** Application-facing state-stored repository exercised by the suite. */
@@ -79,7 +79,7 @@ export interface RepositoryContractHarness<
 	mutateVersionOnly?(aggregate: TAggregate): void;
 	/** A decision that changes a nested collection. */
 	mutateChildCollection?(aggregate: TAggregate): void;
-	/** Round-trip-stable adapter persistence projection. */
+	/** Round-trip-stable adapter persistence capture. */
 	snapshotState?(aggregate: TAggregate): unknown;
 	/** Opt out only for an intentionally upserting add implementation. */
 	insertsAreDuplicateChecked?: boolean;
@@ -186,9 +186,9 @@ export function createRepositoryContractTests<
 	const pendingEventIds = (
 		events: ReadonlyArray<PendingDomainEvent<TEvent>>,
 	): string[] =>
-		recordedPendingEventIds(
+		stampedPendingEventIds(
 			events,
-			"the harness must record pending events before persistence",
+			"the harness must stamp pending events before persistence",
 		);
 
 	const tests: RepositoryContractTest[] = [
@@ -220,7 +220,7 @@ export function createRepositoryContractTests<
 							snapshotState.call(harness, reloaded),
 							snapshotState.call(harness, aggregate),
 						),
-						"add must store the adapter's complete persistence projection",
+						"add must store the adapter's complete persistence capture",
 					);
 				}
 				const outbox = await environment.committedOutboxEvents();

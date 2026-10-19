@@ -88,19 +88,19 @@ envelopes, and kit errors name an aggregate by this value, so a repository
 can pass it on as it is, for example `snapshots.delete(order.aggregateIdentity)`.
 
 Calling `createDomainEvent(...)` directly still works, but inside an aggregate
-`createEvent(...)` is the safer default. The application records the pending
-decision with `recordPendingEvents(...)` before persistence.
+`createEvent(...)` is the safer default. The application stamps the pending
+decision with `stampPendingEvents(...)` before persistence.
 
 Two wiring guards sit on the recording paths. An event that no kit
-constructor minted throws `UnmintedEventError` (code `UNMINTED_EVENT`). A
+constructor built throws `HandBuiltEventError` (code `HAND_BUILT_EVENT`). A
 state or payload root that carries an own `__proto__` key throws
-`HostileStateKeyError` (code `HOSTILE_STATE_KEY`). Both guard against
-accidents, not against code in the same process: the mint mark has a
-cooperative tier that another loaded copy of the kit can stamp, and the key
+`PrototypePollutionError` (code `PROTOTYPE_POLLUTION`). Both guard against
+accidents, not against code in the same process: the kit-built mark has a
+cooperative tier that another loaded copy of the kit can apply, and the key
 guard looks at the root object only. Validate and strip untrusted input at
 the application edge. See
 [Domain Events -> Shape](./domain-events.md#shape) for the two tiers of the
-mint mark.
+kit-built mark.
 
 `AggregateConfig.maxPendingEvents` limits the pending list. A recording that
 would grow the list past the limit throws `PendingEventLimitExceededError`
@@ -309,20 +309,20 @@ Changing aggregate state should normally move the version. If you deliberately n
 surfaces that the aggregate declares:
 
 - Domain queries such as `order.status`. Application code reads these.
-- One detached read DTO: an immutable copy of the state that shares nothing
+- A plain state: an immutable copy of the state that shares nothing
   with the live graph. A persistence adapter captures the aggregate through
   it.
 
 ```ts
-import { deepFreeze, detachState } from "@shirudo/ddd-kit";
+import { deepFreeze, copyPlainState } from "@shirudo/ddd-kit";
 
 class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   get status(): OrderState["status"] {
     return this.state.status;
   }
 
-  get stateDto(): Readonly<OrderState> {
-    return deepFreeze(detachState(this.state));
+  get plainState(): Readonly<OrderState> {
+    return deepFreeze(copyPlainState(this.state));
   }
 }
 ```
@@ -330,16 +330,16 @@ class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
 The getter walks and clones the whole state on every read. That cost belongs
 to the adapter. The unit of work reads the DTO several times per aggregate:
 at load, when it registers the write, and at commit. The snapshot model
-detaches the captured DTO once more, so a snapshot capture clones twice.
+copies the captured DTO once more, so a snapshot capture clones twice.
 Application code reads domain queries and never the DTO in a loop.
 
-`detachState` is a `structuredClone` behind a guard. A structured clone keeps
+`copyPlainState` is a `structuredClone` behind a guard. A structured clone keeps
 the data properties of a class instance and drops the methods on its
 prototype, without an error. The guard throws a `TypeError` that names the
 field path and the class instead:
 
 ```
-TypeError: detachState: state.items[0] is a class instance (OrderItem); map it to plain data
+TypeError: copyPlainState: state.items[0] is a class instance (OrderItem); map it to plain data
 ```
 
 The tell is a state field whose type carries behaviour. A type alias hides
@@ -349,7 +349,7 @@ plain data in place of the clone:
 
 ```ts
 // items hold OrderItem entities: map them, do not clone them
-get stateDto(): OrderStateDto {
+get plainState(): PlainOrderState {
   return deepFreeze({
     customerId: this.state.customerId,
     status: this.state.status,
@@ -363,11 +363,11 @@ get stateDto(): OrderStateDto {
 ```
 
 A subclass of a built-in (`class Tags extends Set`) is a class instance too.
-`detachState` also rejects a function, a symbol, an enumerable symbol-keyed
+`copyPlainState` also rejects a function, a symbol, an enumerable symbol-keyed
 property, a non-enumerable property on a record or an array, an accessor
 property, an expando on a built-in (also a non-enumerable one), an `Error`, a
 `Promise`, a `WeakMap`, a `WeakSet`, a `SharedArrayBuffer`, and a view over
-one. A `Proxy` fails in the walk or in the clone; `detachState` rethrows a
+one. A `Proxy` fails in the walk or in the clone; `copyPlainState` rethrows a
 failure of the clone as a `TypeError` that keeps the cause. The checks catch
 accidents, not a hostile `Proxy`. Plain objects, arrays, `Date`, `Map`, `Set`,
 `RegExp`, bigints, and typed arrays pass.
@@ -380,7 +380,7 @@ store needs a mapper from the DTO to JSON-safe data, with `moneyToDto` or
 
 The persistence examples in this guide, in
 [Repository](./repository.md#adapter-owned-persistence-models), and in
-[Unit of Work](./unit-of-work.md) read `order.stateDto`.
+[Unit of Work](./unit-of-work.md) read `order.plainState`.
 
 ## Where Invariants Live
 
@@ -598,7 +598,7 @@ import {
 const orderSnapshots = defineSnapshotModel({
   aggregateType: "Order",
   schemaVersion: 2,
-  capture: (order: Order) => order.stateDto,
+  capture: (order: Order) => order.plainState,
   reconstitute: (id: OrderId, state: OrderState, version: Version) =>
     Order.reconstitute(id, state, version),
   migrate: (stored, storedSchemaVersion) =>
@@ -627,7 +627,7 @@ const fresh = reconstituteAggregateFromSnapshot(
 ```
 
 `captureAggregateSnapshot` rejects an invalid application-supplied time. It also
-detaches the persistence DTO and deep-freezes the snapshot, its `state` and
+copies the persistence DTO and deep-freezes the snapshot, its `state` and
 `snapshotAt` included. A later change to the aggregate, or to the DTO that
 `capture` returned, cannot alter the snapshot. A write into the snapshot
 between capture and save throws a `TypeError`. The freeze cannot seal every
@@ -641,7 +641,7 @@ restore then throws `SnapshotVersionNotRestoredError` (code
 `SNAPSHOT_VERSION_NOT_RESTORED`).
 
 Live aggregate state remains `protected`. The model captures the aggregate
-through its detached read DTO (`order.stateDto`) or through domain queries,
+through its plain state (`order.plainState`) or through domain queries,
 never through a public state getter. See
 [Reading State from Outside](#reading-state-from-outside). For
 event-sourced aggregates, restore the
@@ -660,7 +660,7 @@ that the final version equals the stream head (see
 - a multi-step operation where you want exactly one version bump at the end
 
 When you do this, mutate state first and record events second. An
-already-persisted aggregate may not harvest events without advancing its
+already-persisted aggregate may not collect events without advancing its
 version: `withCommit` rejects that cursor collision.
 
 ::: warning Un-bumped mutations can lose concurrent writes
@@ -680,10 +680,10 @@ no synonyms.
 | create | A business factory makes a new aggregate and records its first facts. | `Order.place(...)`, `this.createEvent(...)` |
 | setState | A state-stored aggregate replaces its state, advances its version, and records the events of the change. | `setState(newState, events)` |
 | apply | An event-sourced aggregate folds a new fact into its state and records it. | `apply(event)` |
-| record | The application shell stamps identity and time on pending decisions. | `recordPendingEvents(aggregate, factory)` |
+| stamp | The application shell stamps the event id and the time on pending decisions. | `stampPendingEvents(aggregate, factory)` |
 | reconstitute | A factory builds an aggregate from persisted facts and yields it only on success. | `reconstituteAggregateFromHistory`, `reconstituteAggregateFromSnapshot`, `markReconstituted` |
 | replay | A built aggregate folds a later page of history into itself. | `replayHistory(history)` |
-| commit | The transaction that persists enrolled aggregates and publishes their events. | `withCommit`, `committedVersion`, `CommittedDomainEvent` |
+| commit | The transaction that persists registered aggregates and publishes their events. | `withCommit`, `committedVersion`, `CommittedDomainEvent` |
 | version | The optimistic-concurrency version of the aggregate. | `aggregate.version`, `expectedVersion` |
 | schemaVersion | The payload schema version of one event or snapshot. | `event.schemaVersion`, `SnapshotModel.schemaVersion` |
 

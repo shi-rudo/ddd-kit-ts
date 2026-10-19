@@ -376,7 +376,7 @@ describe("predicates and equality", () => {
 	});
 
 	it("Money is branded with a unique symbol: structural literals do not type-check", () => {
-		// @ts-expect-error only the module's constructors mint Money
+		// @ts-expect-error only the module's constructors create Money
 		const forged: Money = { amountMinor: 1n, currency: "EUR", scale: 2 };
 		expect(isMoney(forged)).toBe(true);
 	});
@@ -392,7 +392,7 @@ describe("predicates and equality", () => {
 		expect(isMoney(forged)).toBe(true);
 	});
 
-	it("moneyFromUnknown mints a fresh frozen value the input cannot reach", () => {
+	it("moneyFromUnknown creates a fresh frozen value the input cannot reach", () => {
 		const raw = { amountMinor: 100n, currency: "EUR", scale: 2 };
 		const money = moneyFromUnknown(raw);
 		raw.amountMinor = 999n;

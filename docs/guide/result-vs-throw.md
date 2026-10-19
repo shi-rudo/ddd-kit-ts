@@ -19,8 +19,8 @@ about boundaries:
 | Aggregate method | returns `void` or data | throws `DomainError` subclass |
 | `domainErrorToResult` | `Ok<T>` | listed `DomainError` subclass becomes `Err`; everything else throws |
 | Value object class constructor | instance | throws `DomainError` subclass |
-| `voWithValidation` | `Result<VO<T>, string>` | `Err<string>` |
-| `voValidated` | `Result<VO<T>, ValidationError>` | `Err<ValidationError>` |
+| `valueObjectOrError` | `Result<ValueObjectOf<T>, string>` | `Err<string>` |
+| `valueObjectOrIssues` | `Result<ValueObjectOf<T>, ValidationError>` | `Err<ValidationError>` |
 | `CommandHandler<C, R, E>` | `Ok<R>` | `Err<E>` or throw |
 | `CommandBus.execute` | `Result<R, E>` | passes through `Err<E>`; selectively maps a recognized throw, otherwise rethrows |
 | `QueryHandler<Q, R>` | `R` | throws |
@@ -139,7 +139,7 @@ const confirmOrder: CommandHandler<
         const order = await repositories.orders.getById(command.orderId);
 
         order.confirm();
-        recordPendingEvents(order, domainEvents);
+        stampPendingEvents(order, domainEvents);
         repositories.orders.update(order);
         return order.id;
       },
@@ -172,7 +172,7 @@ return uow.run(async ({ repositories }) => {
   const order = await repositories.orders.getById(command.orderId);
 
   order.confirm();
-  recordPendingEvents(order, domainEvents);
+  stampPendingEvents(order, domainEvents);
   repositories.orders.update(order);
   return ok(order.id);
 });
@@ -300,7 +300,7 @@ const orderId = await uow.run(async ({ repositories }) => {
   const order = await repositories.orders.getById(id);
 
   order.confirm();
-  recordPendingEvents(order, domainEvents);
+  stampPendingEvents(order, domainEvents);
   repositories.orders.update(order);
   return order.id;
 });
@@ -317,7 +317,7 @@ calls `UnitOfWork.run` directly, catch and map errors there.
 const orderId = await uow.run(async ({ repositories }) => {
   const order = await repositories.orders.getById(id);
   order.confirm();
-  recordPendingEvents(order, domainEvents);
+  stampPendingEvents(order, domainEvents);
   repositories.orders.update(order);
   return order.id;
 });
@@ -416,12 +416,12 @@ application uses another result type at its outer boundary, adapt there.
 
 Use validation helpers for untrusted input at the application edge.
 
-`voWithValidation` is fail-fast and returns a string error:
+`valueObjectOrError` is fail-fast and returns a string error:
 
 ```ts
-import { voWithValidation } from "@shirudo/ddd-kit";
+import { valueObjectOrError } from "@shirudo/ddd-kit";
 
-const parsed = voWithValidation(
+const parsed = valueObjectOrError(
   body,
   (value) => isEmail(value.email),
   "Email is invalid",
@@ -432,12 +432,12 @@ if (parsed.isErr()) {
 }
 ```
 
-`voValidated` collects all field issues into a `ValidationError`:
+`valueObjectOrIssues` collects all field issues into a `ValidationError`:
 
 ```ts
-import { voValidated } from "@shirudo/ddd-kit";
+import { valueObjectOrIssues } from "@shirudo/ddd-kit";
 
-const parsed = voValidated(
+const parsed = valueObjectOrIssues(
   { email, age },
   (issues, value) => {
     if (!isEmail(value.email)) {

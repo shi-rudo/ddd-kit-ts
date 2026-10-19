@@ -124,7 +124,7 @@ export interface EventBusObservers {
 }
 
 /** Marks the catch-all subscriptions in the reported-once set. */
-const CATCH_ALL = Symbol("EventBusImpl.subscribeAll");
+const CATCH_ALL = Symbol("InProcessEventBus.subscribeAll");
 
 /**
  * Subscriptions for one event type above which the bus reports a leak. A
@@ -132,7 +132,7 @@ const CATCH_ALL = Symbol("EventBusImpl.subscribeAll");
  */
 const DEFAULT_MAX_SUBSCRIPTIONS_PER_EVENT_TYPE = 32;
 
-/** Construction options for {@link EventBusImpl}. */
+/** Construction options for {@link InProcessEventBus}. */
 export interface EventBusOptions {
 	/**
 	 * Subscriptions for one event type above which the bus reports through
@@ -178,7 +178,7 @@ export interface EventBusOptions {
  *
  * @example
  * ```typescript
- * const bus = new EventBusImpl<OrderEvent>();
+ * const bus = new InProcessEventBus<OrderEvent>();
  *
  * bus.subscribe("OrderCreated", async (event) => {
  *   await sendEmail(event.payload.customerId);
@@ -238,7 +238,9 @@ export interface EventBusOptions {
  * the signal.
  *
  */
-export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
+export class InProcessEventBus<Evt extends AnyDomainEvent>
+	implements EventBus<Evt>
+{
 	private readonly handlers = new Map<string, EventHandler<Evt>[]>();
 	private readonly catchAllHandlers: EventHandler<Evt>[] = [];
 	private readonly maxPublishDepth: number;
@@ -264,14 +266,14 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 	constructor(options: EventBusOptions = {}) {
 		if (options.maxPublishDepth !== undefined) {
 			assertPositiveInteger(
-				"EventBusImpl",
+				"InProcessEventBus",
 				"maxPublishDepth",
 				options.maxPublishDepth,
 			);
 		}
 		if (options.maxSubscriptionsPerEventType !== undefined) {
 			assertPositiveInteger(
-				"EventBusImpl",
+				"InProcessEventBus",
 				"maxSubscriptionsPerEventType",
 				options.maxSubscriptionsPerEventType,
 			);
@@ -284,7 +286,7 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		this.observers =
 			options.observers === undefined
 				? undefined
-				: captureObserverFunctions("EventBusImpl", options.observers, [
+				: captureObserverFunctions("InProcessEventBus", options.observers, [
 						"onSubscriptionThresholdExceeded",
 						"onHandlerError",
 						"onPublishAborted",

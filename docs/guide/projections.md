@@ -715,7 +715,7 @@ update.
 ```ts
 import {
   CommandBus,
-  EventBusImpl,
+  InProcessEventBus,
   InMemoryOutbox,
   OutboxDispatcher,
   Projector,
@@ -725,7 +725,7 @@ import {
 import { ok } from "@shirudo/result";
 
 const outbox = new InMemoryOutbox<OrderEvent>();
-const bus = new EventBusImpl<OrderEvent>();
+const bus = new InProcessEventBus<OrderEvent>();
 const commands = new CommandBus<OrderCommands>();
 const queries = new QueryBus<OrderQueries>();
 

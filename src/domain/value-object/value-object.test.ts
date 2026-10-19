@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { deepFreeze, ValueObject, vo } from "./value-object";
+import { deepFreeze, ValueObject, valueObject } from "./value-object";
 
 const mutableBuiltInCases = [
 	{
@@ -296,7 +296,7 @@ describe("deepFreeze", () => {
 	});
 });
 
-describe("vo built-ins with data toStringTag overrides", () => {
+describe("valueObject built-ins with data toStringTag overrides", () => {
 	it.each(mutableBuiltInCases)(
 		"preserves $name with an own data toStringTag",
 		({ create, read, expected, mutate }) => {
@@ -306,7 +306,7 @@ describe("vo built-ins with data toStringTag overrides", () => {
 				value: "Object",
 			});
 
-			const frozen = vo({ value }).value;
+			const frozen = valueObject({ value }).value;
 
 			expect(read(frozen)).toEqual(expected);
 			expect(() => mutate(frozen)).toThrow(TypeError);
@@ -323,7 +323,7 @@ describe("vo built-ins with data toStringTag overrides", () => {
 			});
 			Object.setPrototypeOf(value, prototype);
 
-			const frozen = vo({ value }).value;
+			const frozen = valueObject({ value }).value;
 
 			expect(read(frozen)).toEqual(expected);
 			expect(() => mutate(frozen)).toThrow(TypeError);
@@ -333,7 +333,7 @@ describe("vo built-ins with data toStringTag overrides", () => {
 	it.each(atomicBuiltInCases)(
 		"preserves $name with an own data toStringTag",
 		({ create, read, expected }) => {
-			const frozen = vo({ value: maskWithOwnDataTag(create()) }).value;
+			const frozen = valueObject({ value: maskWithOwnDataTag(create()) }).value;
 
 			expect(read(frozen)).toEqual(expected);
 		},
@@ -342,7 +342,9 @@ describe("vo built-ins with data toStringTag overrides", () => {
 	it.each(atomicBuiltInCases)(
 		"preserves $name with an inherited data toStringTag",
 		({ create, read, expected }) => {
-			const frozen = vo({ value: maskWithInheritedDataTag(create()) }).value;
+			const frozen = valueObject({
+				value: maskWithInheritedDataTag(create()),
+			}).value;
 
 			expect(read(frozen)).toEqual(expected);
 		},
@@ -351,18 +353,18 @@ describe("vo built-ins with data toStringTag overrides", () => {
 	it.each(forbiddenBuiltInCases)(
 		"rejects $name with an own data toStringTag",
 		({ create }) => {
-			expect(() => vo({ value: maskWithOwnDataTag(create()) })).toThrow(
-				/(Value Objects are plain data|immutable value semantics)/,
-			);
+			expect(() =>
+				valueObject({ value: maskWithOwnDataTag(create()) }),
+			).toThrow(/(Value Objects are plain data|immutable value semantics)/);
 		},
 	);
 
 	it.each(forbiddenBuiltInCases)(
 		"rejects $name with an inherited data toStringTag",
 		({ create }) => {
-			expect(() => vo({ value: maskWithInheritedDataTag(create()) })).toThrow(
-				/(Value Objects are plain data|immutable value semantics)/,
-			);
+			expect(() =>
+				valueObject({ value: maskWithInheritedDataTag(create()) }),
+			).toThrow(/(Value Objects are plain data|immutable value semantics)/);
 		},
 	);
 });
@@ -451,11 +453,11 @@ describe("ValueObject Class", () => {
 			expect(Object.isFrozen(d)).toBe(false);
 			d.setTime(5);
 			expect(d.getTime()).toBe(5);
-			// The VO's own copy is still immutable.
+			// The value object's own copy is still immutable.
 			expect(() => bag.props.m.get("k")?.setTime(99)).toThrow(TypeError);
 		});
 
-		it("rejects function-valued props with a descriptive TypeError (aligned with vo())", () => {
+		it("rejects function-valued props with a descriptive TypeError (aligned with valueObject())", () => {
 			interface FnProps {
 				calc: () => number;
 			}
@@ -498,7 +500,7 @@ describe("ValueObject Class", () => {
 			expect(Object.isFrozen(props)).toBe(false);
 			expect(Object.isFrozen(meta)).toBe(false);
 			meta.tag = "changed";
-			// ...and later mutation must not bleed into the VO.
+			// ...and later mutation must not bleed into the value object.
 			expect(v.props.meta.tag).toBe("a");
 		});
 
@@ -694,7 +696,7 @@ describe("ValueObject Class", () => {
 				() =>
 					new Price({ amount: money, label: "list" } as unknown as PriceProps),
 			).toThrow(
-				"vo() cannot nest a value object with own fields outside props (cache, tags): keep the state of a value object in props",
+				"valueObject() cannot nest a value object with own fields outside props (cache, tags): keep the state of a value object in props",
 			);
 		});
 
@@ -793,7 +795,7 @@ describe("ValueObject Class", () => {
 				() =>
 					new Price({ amount: money, label: "list" } as unknown as PriceProps),
 			).toThrow(
-				"vo() cannot clone custom class instances: Value Objects are plain data. A value object is recognized only when a copy of this kit version built it and its props are frozen",
+				"valueObject() cannot clone custom class instances: Value Objects are plain data. A value object is recognized only when a copy of this kit version built it and its props are frozen",
 			);
 		});
 
@@ -824,7 +826,7 @@ describe("ValueObject Class", () => {
 						label: "list",
 					} as unknown as PriceProps),
 			).toThrow(
-				"vo() cannot clone custom class instances: Value Objects are plain data",
+				"valueObject() cannot clone custom class instances: Value Objects are plain data",
 			);
 		});
 

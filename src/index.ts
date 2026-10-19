@@ -31,8 +31,8 @@ export {
 // App orchestration: withCommit + Unit of Work
 export {
 	type AggregateCommitToken,
-	type CommitEnrollment,
-	type CommitEnrollmentOptions,
+	type CommitRegistration,
+	type CommitRegistrationOptions,
 	type WithCommitDeps,
 	type WithCommitWorkResult,
 	withCommit,
@@ -132,9 +132,9 @@ export type {
 export {
 	type DomainEventStampFactory,
 	type DomainEventStampProvider,
-	recordPendingEvents,
 	type SharedDomainEventStampOptions,
-} from "./application/unit-of-work/record-pending-events";
+	stampPendingEvents,
+} from "./application/unit-of-work/stamp-pending-events";
 export {
 	type AggregateWriteRegistration,
 	type AppendOnlyWriteRegistration,
@@ -179,7 +179,6 @@ export {
 	type EntityConfig,
 	entityIds,
 	findEntityById,
-	freezeShallow,
 	hasEntityId,
 	type Identifiable,
 	type IEntity,
@@ -192,17 +191,15 @@ export {
 // Domain events
 export {
 	type AnyDomainEvent,
-	type AnyUncommittedDomainEvent,
+	type AnyUnstampedDomainEvent,
 	type ClockFactory,
-	type CreateDomainEventFromFactsOptions,
 	type CreateDomainEventOptions,
 	type CreateDomainEventStampOptions,
-	type CreateUncommittedDomainEventOptions,
+	type CreateStampedDomainEventOptions,
 	copyMetadata,
 	createDomainEvent,
 	createDomainEventFactory,
-	createDomainEventFromFacts,
-	createUncommittedDomainEvent,
+	createStampedDomainEvent,
 	type DomainEvent,
 	type DomainEventFactory,
 	type DomainEventFactoryOptions,
@@ -212,9 +209,8 @@ export {
 	type EventMetadata,
 	mergeMetadata,
 	type PendingDomainEvent,
-	recordDomainEvent,
-	type UncommittedDomainEvent,
-	type UncommittedDomainEventOf,
+	type UnstampedDomainEvent,
+	type UnstampedDomainEventOf,
 } from "./domain/event/domain-event";
 export {
 	type DomainEventValidationCode,
@@ -230,49 +226,17 @@ export {
 	type SpecificationComposite,
 	specification,
 } from "./domain/specification/specification";
-// Domain State Machine
-export {
-	analyzeDomainMachineDefinition,
-	canTransitionDomainState,
-	createInitialDomainMachineSnapshot,
-	type DomainMachineDefinition,
-	type DomainMachineDefinitionAnalysis,
-	type DomainMachineDefinitionDiagnostic,
-	type DomainMachineInput,
-	type DomainMachineReadonly,
-	type DomainMachineSnapshot,
-	type DomainMachineTransitionDescription,
-	DomainStateMachine,
-	type DomainStateNode,
-	type DomainTransition,
-	DomainTransitionGuardRejectedError,
-	type DomainTransitionGuardResult,
-	type DomainTransitionOutcome,
-	type DomainTransitionResult,
-	InvalidDomainMachineContextError,
-	InvalidDomainMachineDefinitionError,
-	InvalidDomainMachineInputError,
-	InvalidDomainMachineSnapshotError,
-	InvalidDomainTransitionError,
-	InvalidDomainTransitionGuardResultError,
-	InvalidDomainTransitionResultError,
-	type PreparedDomainMachineDefinition,
-	prepareDomainMachineDefinition,
-	ReentrantDomainStateMachineEvaluationError,
-	transitionDomainState,
-} from "./domain/state-machine/domain-state-machine";
 // Value Objects
 export {
 	deepFreeze,
-	type IValueObject,
 	ValueObject,
-	type VO,
-	vo,
-	voEquals,
-	voEqualsExcept,
-	voWithValidation,
+	type ValueObjectOf,
+	valueObject,
+	valueObjectEquals,
+	valueObjectEqualsExcept,
+	valueObjectOrError,
 } from "./domain/value-object/value-object";
-export { voValidated } from "./domain/value-object/vo-validated";
+export { valueObjectOrIssues } from "./domain/value-object/value-object-or-issues";
 // Errors
 export {
 	AggregateDeletedError,
@@ -295,11 +259,11 @@ export {
 	type DuplicateHandlerRegistrationErrorOptions,
 	ErrorMapperFailedError,
 	type ErrorMapperFailedErrorOptions,
-	EventHarvestError,
+	EventCollectionError,
 	type EventStreamPageReason,
 	FoldReturnedNoStateError,
 	ForeignEventError,
-	HostileStateKeyError,
+	HandBuiltEventError,
 	IdempotencyClaimLostError,
 	type IdempotencyClaimLostErrorOptions,
 	IdempotencyCompletionWithoutClaimError,
@@ -334,6 +298,7 @@ export {
 	ProjectionIdentityViolationError,
 	ProjectionOrderViolationError,
 	ProjectionReceiptViolationError,
+	PrototypePollutionError,
 	ReentrantEventRecordingError,
 	type ReentrantEventRecordingErrorOptions,
 	ReplayRejectedError,
@@ -346,11 +311,10 @@ export {
 	type SnapshotSchemaMismatchErrorOptions,
 	SnapshotVersionNotRestoredError,
 	type SnapshotVersionNotRestoredErrorOptions,
-	UnenrolledChangesError,
-	type UnenrolledChangesErrorOptions,
 	UnmanagedInstanceError,
-	UnmintedEventError,
 	UnprojectableEventError,
+	UnregisteredChangesError,
+	type UnregisteredChangesErrorOptions,
 	UnregisteredHandlerError,
 	type UnregisteredHandlerErrorOptions,
 	UnreplayableAggregateError,
@@ -362,19 +326,15 @@ export type {
 	DeliveryFailureClassifier,
 	DeliveryFailureKind,
 } from "./internal/delivery-failure";
-// Structural equality and detachment
+export { copyPlainState } from "./internal/structural/copy-plain-state";
+// Structural equality and copies
 export { deepEqual } from "./internal/structural/deep-equal";
-export {
-	type DeepEqualExceptOptions,
-	deepEqualExcept,
-} from "./internal/structural/deep-equal-except";
 export {
 	type DeepOmitKey,
 	type DeepOmitOptions,
 	type DeepOmitPathSegment,
 	deepOmit,
 } from "./internal/structural/deep-omit";
-export { detachState } from "./internal/structural/detach-state";
 // Messaging: commit envelope, bus, outbox, dispatcher
 export type {
 	CommitPosition,
@@ -387,10 +347,10 @@ export {
 	PublishDepthExceededError,
 } from "./messaging/event-bus/errors";
 export {
-	EventBusImpl,
 	type EventBusObservers,
 	type EventBusOptions,
 	type HandlerFailureReport,
+	InProcessEventBus,
 	type PublishAbortedReport,
 	type SubscriptionThresholdReport,
 } from "./messaging/event-bus/event-bus";
@@ -472,16 +432,10 @@ export type {
 	InMemoryTransaction,
 	InMemoryTransactionParticipant,
 } from "./persistence/repository/in-memory-transaction";
-export {
-	capturePersistenceBaseline,
-	derivePersistenceChanges,
-	insertPersistenceBaseline,
-	type PersistenceBaseline,
-	type PersistenceChanges,
-	type PersistenceLifecycle,
-	type PersistenceModel,
-	persistenceProjectionDrifted,
-	recapturePersistenceBaseline,
+export type {
+	PersistenceChanges,
+	PersistenceLifecycle,
+	PersistenceModel,
 } from "./persistence/repository/persistence-model";
 export type {
 	AggregatePersistence,

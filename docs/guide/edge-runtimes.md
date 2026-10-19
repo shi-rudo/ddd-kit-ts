@@ -90,7 +90,7 @@ it("emits deterministic event ids", () => {
   const order = makeOrder();
 
   order.confirm();
-  recordPendingEvents(order, domainEvents);
+  stampPendingEvents(order, domainEvents);
 });
 ```
 
@@ -541,7 +541,7 @@ const confirmOrder = async (command: ConfirmOrder) => {
   const outcome = await withIdempotentCommit(
     { scope, outbox, idempotency, bus: eventBus },
     command.idempotency,
-    async (tx, enrollment) => {
+    async (tx, registration) => {
       const loaded = await loadOrderForDirectCommit(tx, command.orderId);
       const order = loaded.aggregate;
       if (!order.canBeConfirmedBy(command.requestedBy)) {
@@ -555,14 +555,14 @@ const confirmOrder = async (command: ConfirmOrder) => {
       }
 
       order.confirm();
-      recordPendingEvents(order, domainEvents);
+      stampPendingEvents(order, domainEvents);
       await updateOrderForDirectCommit(tx, order, loaded.expectedVersion);
       return {
         result: {
           status: "confirmed",
           orderId: order.id,
         } satisfies ConfirmOrderOutcome,
-        commits: [enrollment.enrollSaved(order)],
+        commits: [registration.registerSaved(order)],
       };
     },
   );

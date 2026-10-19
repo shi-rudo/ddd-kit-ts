@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+	applyCooperativeBrand,
 	hasCooperativeBrand,
-	stampCooperativeBrand,
 } from "./cooperative-brand";
 
 const BRAND = Symbol.for("@shirudo/ddd-kit/test-brand");
 
 describe("cooperative brand", () => {
-	it("recognizes a frozen carrier stamped by the kit", () => {
+	it("recognizes a frozen carrier that the kit branded", () => {
 		const carrier = { type: "Fact" };
-		stampCooperativeBrand(carrier, BRAND);
+		applyCooperativeBrand(carrier, BRAND);
 		Object.freeze(carrier);
 
 		expect(hasCooperativeBrand(carrier, BRAND)).toBe(true);
@@ -17,23 +17,23 @@ describe("cooperative brand", () => {
 
 	it("keeps the brand out of spreads, keys, and JSON", () => {
 		const carrier = { type: "Fact" };
-		stampCooperativeBrand(carrier, BRAND);
+		applyCooperativeBrand(carrier, BRAND);
 
 		expect(Object.keys({ ...carrier })).toEqual(["type"]);
 		expect(Object.getOwnPropertySymbols({ ...carrier })).toEqual([]);
 		expect(JSON.stringify(carrier)).toBe('{"type":"Fact"}');
 	});
 
-	it("rejects a stamped carrier that is still open", () => {
+	it("rejects a branded carrier that is still open", () => {
 		const carrier = { type: "Fact" };
-		stampCooperativeBrand(carrier, BRAND);
+		applyCooperativeBrand(carrier, BRAND);
 
 		expect(hasCooperativeBrand(carrier, BRAND)).toBe(false);
 	});
 
 	it("rejects a carrier that inherits the brand through its prototype", () => {
 		const branded = { type: "Fact" };
-		stampCooperativeBrand(branded, BRAND);
+		applyCooperativeBrand(branded, BRAND);
 		Object.freeze(branded);
 		const heir = Object.freeze(Object.create(branded) as object);
 
@@ -81,7 +81,7 @@ describe("cooperative brand", () => {
 
 	it("distinguishes brands by key", () => {
 		const carrier = { type: "Fact" };
-		stampCooperativeBrand(carrier, BRAND);
+		applyCooperativeBrand(carrier, BRAND);
 		Object.freeze(carrier);
 
 		expect(

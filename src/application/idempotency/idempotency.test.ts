@@ -8,7 +8,7 @@ import {
 import type { Id } from "../../domain/identity/id";
 import {
 	ConcurrencyConflictError,
-	EventHarvestError,
+	EventCollectionError,
 	IdempotencyCompletionWithoutClaimError,
 	IdempotencyInFlightError,
 	IdempotencyKeyReuseError,
@@ -21,7 +21,7 @@ import { RetryingTransactionScope } from "../../persistence/repository/retrying-
 import type { TransactionScope } from "../../persistence/repository/scope";
 import type {
 	AggregateCommitToken,
-	CommitEnrollment,
+	CommitRegistration,
 	WithCommitWorkResult,
 } from "../cqrs/handler";
 import { InMemoryIdempotencyStore } from "./adapters/in-memory-idempotency-store";
@@ -98,7 +98,7 @@ describe("withIdempotentCommit", () => {
 						aggregates: [order],
 					}) as unknown as WithCommitWorkResult<AnyDomainEvent, string>,
 			),
-		).rejects.toBeInstanceOf(EventHarvestError);
+		).rejects.toBeInstanceOf(EventCollectionError);
 		expect(order.pendingEvents).toHaveLength(1);
 		expect(await deps.outbox.getPending()).toEqual([]);
 
@@ -138,7 +138,7 @@ describe("withIdempotentCommit", () => {
 		expect(executions).toBe(2);
 	});
 
-	it("seals the user enrollment capability before idempotency completion", async () => {
+	it("seals the user registration capability before idempotency completion", async () => {
 		const deps = createDeps();
 		const originalComplete = deps.idempotency.complete.bind(deps.idempotency);
 		let signalCompleteStarted: () => void = () => {};
@@ -155,19 +155,19 @@ describe("withIdempotentCommit", () => {
 			await completeBlocked;
 		};
 
-		let leaked: CommitEnrollment<AnyDomainEvent> | undefined;
+		let leaked: CommitRegistration<AnyDomainEvent> | undefined;
 		const execution = withIdempotentCommit(
 			deps,
 			request,
-			async (_ctx, enrollment) => {
-				leaked = enrollment;
+			async (_ctx, registration) => {
+				leaked = registration;
 				return { result: "ok", commits: [] };
 			},
 		);
 		await completeStarted;
 
-		expect(() => leaked?.enrollSaved(new Order("o-late" as OrderId))).toThrow(
-			EventHarvestError,
+		expect(() => leaked?.registerSaved(new Order("o-late" as OrderId))).toThrow(
+			EventCollectionError,
 		);
 		releaseComplete();
 		await expect(execution).resolves.toEqual({ replayed: false, result: "ok" });
@@ -196,8 +196,8 @@ describe("withIdempotentCommit", () => {
 		const execution = withIdempotentCommit(
 			deps,
 			request,
-			async (_ctx, enrollment) => {
-				mutableCommits = [enrollment.enrollSaved(order)];
+			async (_ctx, registration) => {
+				mutableCommits = [registration.registerSaved(order)];
 				return { result: order.id, commits: mutableCommits };
 			},
 		);
@@ -213,18 +213,18 @@ describe("withIdempotentCommit", () => {
 		expect(await deps.outbox.getPending()).toHaveLength(1);
 	});
 
-	it("runs the work fresh, stores the outcome, and harvests events", async () => {
+	it("runs the work fresh, stores the outcome, and collects events", async () => {
 		const deps = createDeps();
 		const order = new Order("o-1" as OrderId);
 
 		const outcome = await withIdempotentCommit(
 			deps,
 			request,
-			async (_ctx, enrollment) => {
+			async (_ctx, registration) => {
 				order.confirm();
 				return {
 					result: { orderId: order.id },
-					commits: [enrollment.enrollSaved(order)],
+					commits: [registration.registerSaved(order)],
 				};
 			},
 		);
@@ -241,14 +241,14 @@ describe("withIdempotentCommit", () => {
 		let executions = 0;
 		const work = async (
 			_ctx: undefined,
-			enrollment: CommitEnrollment<AnyDomainEvent>,
+			registration: CommitRegistration<AnyDomainEvent>,
 		) => {
 			executions++;
 			const order = new Order("o-1" as OrderId);
 			order.confirm();
 			return {
 				result: { orderId: order.id },
-				commits: [enrollment.enrollSaved(order)],
+				commits: [registration.registerSaved(order)],
 			};
 		};
 
@@ -257,7 +257,7 @@ describe("withIdempotentCommit", () => {
 
 		expect(executions).toBe(1);
 		expect(replayed).toEqual({ replayed: true, result: { orderId: "o-1" } });
-		// No second harvest: the duplicate emitted no events.
+		// No second collection: the duplicate emitted no events.
 		expect(await deps.outbox.getPending()).toHaveLength(1);
 	});
 
@@ -355,14 +355,14 @@ describe("withIdempotentCommit", () => {
 		let executions = 0;
 		const work = async (
 			_ctx: undefined,
-			enrollment: CommitEnrollment<AnyDomainEvent>,
+			registration: CommitRegistration<AnyDomainEvent>,
 		) => {
 			executions++;
 			const order = new Order(`o-${executions}` as OrderId);
 			order.confirm();
 			return {
 				result: { orderId: order.id },
-				commits: [enrollment.enrollSaved(order)],
+				commits: [registration.registerSaved(order)],
 			};
 		};
 

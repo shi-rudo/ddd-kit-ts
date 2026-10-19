@@ -392,7 +392,7 @@ export class DirectStateMutationError extends KitWiringError<"DIRECT_STATE_MUTAT
 				"through apply(). Record the fact as an event and fold it in a " +
 				"handler instead of calling setState.",
 		);
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 	}
 }
 
@@ -574,15 +574,15 @@ export class InvalidCommandMessageError extends InfrastructureError<"INVALID_COM
  * input at the application edge; model genuinely arbitrary keys with a
  * `Map`, not a plain object.
  */
-export class HostileStateKeyError extends KitWiringError<"HOSTILE_STATE_KEY"> {
+export class PrototypePollutionError extends KitWiringError<"PROTOTYPE_POLLUTION"> {
 	constructor(
 		public readonly key: string,
 		subject: string = "Entity state",
 	) {
 		super(
-			"HOSTILE_STATE_KEY",
-			`${subject} carries a hostile own "${key}" key, which can never ` +
-				"be legitimate domain data. Validate and strip untrusted input " +
+			"PROTOTYPE_POLLUTION",
+			`${subject} carries an own "${key}" key, a prototype-pollution ` +
+				"payload that can never be legitimate domain data. Validate and strip untrusted input " +
 				"at the boundary, or model arbitrary keys with a Map.",
 		);
 	}
@@ -684,7 +684,7 @@ export class UnreplayableAggregateError extends KitWiringError<"UNREPLAYABLE_AGG
 				`${options.reason}. Reconstitute on a fresh instance ` +
 				"(no factory-recorded events, no unpersisted mutations).",
 		);
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 	}
 }
 
@@ -725,7 +725,7 @@ export function describeAggregateIdentity(identity: {
  * properties into the log. Kit modules only; not part of the package
  * entries.
  */
-export function detachAggregateIdentity(identity: {
+export function copyAggregateIdentity(identity: {
 	readonly aggregateType: string;
 	readonly aggregateId: string;
 }): { readonly aggregateType: string; readonly aggregateId: string } {
@@ -735,7 +735,7 @@ export function detachAggregateIdentity(identity: {
 	});
 }
 
-function detachPartialAggregateIdentity(
+function copyPartialAggregateIdentity(
 	identity: AggregateIdentityMismatchOptions["actual"],
 ): AggregateIdentityMismatchOptions["actual"] {
 	return Object.freeze({
@@ -786,8 +786,8 @@ export class MisattributedEventError extends KitWiringError<"MISATTRIBUTED_EVENT
 				`${describeAggregateIdentity(options.expected)}: ` +
 				"fix the call site (createEvent stamps the right identity).",
 		);
-		this.expected = detachAggregateIdentity(options.expected);
-		this.actual = detachPartialAggregateIdentity(options.actual);
+		this.expected = copyAggregateIdentity(options.expected);
+		this.actual = copyPartialAggregateIdentity(options.actual);
 		this.eventType = options.eventType;
 	}
 }
@@ -828,7 +828,7 @@ export class SnapshotVersionNotRestoredError extends KitWiringError<"SNAPSHOT_VE
 				"the persisted version; call markReconstituted(version) inside " +
 				"the aggregate factory.",
 		);
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 		this.snapshotVersion = options.snapshotVersion;
 		this.restoredVersion = options.restoredVersion;
 	}
@@ -852,26 +852,25 @@ export class SnapshotCorruptedError extends InfrastructureError<"SNAPSHOT_CORRUP
 
 /**
  * Thrown when an event reaches the aggregate's recording paths
- * (`apply`, `setState`, `addDomainEvent`) without having been minted by
- * the kit's constructors: `createDomainEvent`,
- * `createDomainEventFromFacts`, `createUncommittedDomainEvent`, or the
- * aggregate `createEvent` helper. Those constructors deep-freeze the
+ * (`apply`, `setState`, `addDomainEvent`) without having been built by
+ * the kit's constructors: `createDomainEvent`, `createStampedDomainEvent`, or
+ * the aggregate `createEvent` helper. Those constructors deep-freeze the
  * event, defensively copy payload and metadata, and mark the result as
- * minted. The mark has two tiers: a
+ * kit-built. The mark has two tiers: a
  * module-private one for events of this loaded copy of the kit, and a
- * cooperative `Symbol.for` brand that a second loaded copy stamps and
+ * cooperative `Symbol.for` brand that a second loaded copy applies and
  * recognizes. Anything else (a hand-rolled literal, a shallow-frozen
  * copy with mutable nested data) is rejected: a mutable event recorded
  * next to a state change can silently diverge from it afterwards. A
  * wiring error: deterministic bug at the call site, the remedy is
- * minting through the constructors. The gate catches accidents, not
+ * building through the constructors. The gate catches accidents, not
  * adversaries: code in the same process can fake the brand.
  */
-export class UnmintedEventError extends KitWiringError<"UNMINTED_EVENT"> {
+export class HandBuiltEventError extends KitWiringError<"HAND_BUILT_EVENT"> {
 	constructor(eventType: string) {
 		super(
-			"UNMINTED_EVENT",
-			`Event "${eventType}" was not minted by a domain-event constructor ` +
+			"HAND_BUILT_EVENT",
+			`Event "${eventType}" was not built by a domain-event constructor ` +
 				"or aggregate createEvent(...) helper. Those " +
 				"constructors deep-freeze the event " +
 				"and defensively copy payload and metadata; a mutable event " +
@@ -890,12 +889,12 @@ export interface ReentrantEventRecordingErrorOptions {
 }
 
 /**
- * Thrown by `recordPendingEvents` when the aggregate's pending-event list
+ * Thrown by `stampPendingEvents` when the aggregate's pending-event list
  * changes while its events are being stamped: a stamp provider that
  * directly or transitively triggers a new decision on the same aggregate
  * would otherwise have that decision silently discarded when recording
  * replaces the pending list. Recording is atomic: when this guard fires,
- * every decision (including the re-entrant one) remains unrecorded. A
+ * every decision (including the re-entrant one) remains unstamped. A
  * wiring error: deterministic bug at the call site, the remedy is keeping
  * stamp providers free of domain decisions.
  */
@@ -907,11 +906,11 @@ export class ReentrantEventRecordingError extends KitWiringError<"REENTRANT_EVEN
 			"REENTRANT_EVENT_RECORDING",
 			"Pending events of aggregate " +
 				`${describeAggregateIdentity(options.identity)} changed while ` +
-				"recordPendingEvents was stamping them. A stamp provider must not " +
+				"stampPendingEvents was stamping them. A stamp provider must not " +
 				"trigger new decisions on the aggregate being recorded; make every " +
-				"domain decision first, then record.",
+				"domain decision first, then stamp.",
 		);
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 	}
 }
 
@@ -928,10 +927,10 @@ export interface DuplicateEventIdErrorOptions {
 
 /**
  * Thrown when two facts of one aggregate would carry the same `eventId`.
- * Two causes, two sites: the aggregate rejects a recorded event that is
+ * Two causes, two sites: the aggregate rejects a stamped event that is
  * already pending at the append, before the state moves; and
- * `recordPendingEvents` rejects a stamp provider that returns one reused
- * stamp (or repeats an explicit id). Either would mint two distinct facts
+ * `stampPendingEvents` rejects a stamp provider that returns one reused
+ * stamp (or repeats an explicit id). Either would create two distinct facts
  * sharing one identity, and downstream idempotent consumers keyed on
  * `eventId` silently drop one of them. A wiring error: deterministic bug at
  * the append site or in the stamp provider, the remedy is one fresh
@@ -948,10 +947,10 @@ export class DuplicateEventIdError extends KitWiringError<"DUPLICATE_EVENT_ID"> 
 			"Two pending events of aggregate " +
 				`${describeAggregateIdentity(options.identity)} carry the same ` +
 				`eventId "${options.eventId}". Each fact needs its own event id: ` +
-				"append a recorded event once, and return a fresh stamp per " +
+				"append a stamped event once, and return a fresh stamp per " +
 				"decision from the stamp provider.",
 		);
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 		this.eventId = options.eventId;
 	}
 }
@@ -995,7 +994,7 @@ export class PendingEventLimitExceededError extends KitWiringError<"PENDING_EVEN
 				"A decision that emits this many facts points at a missing " +
 				"aggregate boundary.",
 		);
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 		this.limit = options.limit;
 		this.pending = options.pending;
 		this.added = options.added;
@@ -1022,7 +1021,7 @@ export interface PendingEventBatchMismatchErrorOptions {
  * pending event at the same position. Acknowledging such a batch would
  * drop decisions the commit never persisted or keep events it did. The
  * pending list stays untouched. A wiring error in application commit
- * orchestration: acknowledge exactly the batch that was enrolled, once.
+ * orchestration: acknowledge exactly the batch that was registered, once.
  */
 export class PendingEventBatchMismatchError extends KitWiringError<"PENDING_EVENT_BATCH_MISMATCH"> {
 	readonly identity: PendingEventBatchMismatchErrorOptions["identity"];
@@ -1035,9 +1034,9 @@ export class PendingEventBatchMismatchError extends KitWiringError<"PENDING_EVEN
 			`The committed batch of ${options.batchLength} event(s) is no longer ` +
 				"the pending prefix of aggregate " +
 				`${describeAggregateIdentity(options.identity)} (${options.pendingLength} ` +
-				"pending). Acknowledge exactly the batch that was enrolled, once.",
+				"pending). Acknowledge exactly the batch that was registered, once.",
 		);
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 		this.batchLength = options.batchLength;
 		this.pendingLength = options.pendingLength;
 	}
@@ -1076,8 +1075,8 @@ export class ForeignEventError extends InfrastructureError<"FOREIGN_EVENT"> {
 				`${describeAggregateIdentity(options.expected)}: ` +
 				"the stream row belongs to a different aggregate.",
 		});
-		this.expected = detachAggregateIdentity(options.expected);
-		this.actual = detachPartialAggregateIdentity(options.actual);
+		this.expected = copyAggregateIdentity(options.expected);
+		this.actual = copyPartialAggregateIdentity(options.actual);
 		this.eventType = options.eventType;
 	}
 }
@@ -1227,7 +1226,7 @@ export class InvalidEventStreamPageError extends InfrastructureError<"INVALID_EV
 			code: "INVALID_EVENT_STREAM_PAGE",
 			message: eventStreamPageReasonMessage(stream, options),
 		});
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 		this.reason = options.reason;
 		this.fromVersion = options.fromVersion;
 		this.targetVersion = options.targetVersion;
@@ -1315,7 +1314,7 @@ export class ReplayTargetMismatchError extends InfrastructureError<"REPLAY_TARGE
 		const stream = `${describeAggregateIdentity(options.identity)}`;
 		const message = replayTargetMismatchMessage(stream, options);
 		super({ code: "REPLAY_TARGET_MISMATCH", message });
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 		this.reason = options.reason;
 		this.fromVersion = options.fromVersion;
 		this.targetVersion = options.targetVersion;
@@ -1372,16 +1371,16 @@ export class ReplayRejectedError extends InfrastructureError<"REPLAY_REJECTED"> 
 						`(${options.fromVersion}, ${options.toVersion}] with ${rejected}`,
 			cause: options.cause,
 		});
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 		this.fromVersion = options.fromVersion;
 		this.toVersion = options.toVersion;
 	}
 }
 
 /**
- * Thrown when an event harvested from an aggregate cannot be safely composed
+ * Thrown when an event collected from an aggregate cannot be safely composed
  * into a commit envelope, or when an outbox can prove that accepting a
- * candidate would violate its event identity/source chain. Harvest failures
+ * candidate would violate its event identity/source chain. Collect failures
  * include missing `aggregateId` / `aggregateType` (downstream routing would
  * break), or an
  * eventful persisted aggregate did not advance its version (two commits
@@ -1397,13 +1396,13 @@ export class ReplayRejectedError extends InfrastructureError<"REPLAY_REJECTED"> 
  * `UnitOfWork.run` passes it through unchanged instead of wrapping it in
  * `CommitError`.
  */
-export class EventHarvestError extends KitWiringError<"EVENT_HARVEST_FAILED"> {
+export class EventCollectionError extends KitWiringError<"EVENT_COLLECTION_FAILED"> {
 	constructor(
 		message: string,
 		/** The `type` of the offending event, for programmatic routing. */
 		public readonly eventType?: string,
 	) {
-		super("EVENT_HARVEST_FAILED", message);
+		super("EVENT_COLLECTION_FAILED", message);
 	}
 }
 
@@ -1462,12 +1461,9 @@ export class UnmanagedInstanceError extends KitWiringError<"UNMANAGED_INSTANCE">
  * helpers. One implementation so the contract cannot drift.
  * Module-internal export; not part of the package entries.
  */
-export function assertNoHostileOwnProtoKey(
-	value: object,
-	subject: string,
-): void {
+export function assertNoOwnProtoKey(value: object, subject: string): void {
 	if (Object.hasOwn(value, "__proto__")) {
-		throw new HostileStateKeyError("__proto__", subject);
+		throw new PrototypePollutionError("__proto__", subject);
 	}
 }
 
@@ -1584,8 +1580,8 @@ export class ErrorMapperFailedError extends KitWiringError<"ERROR_MAPPER_FAILED"
 	}
 }
 
-/** Constructor options for {@link UnenrolledChangesError}. */
-export interface UnenrolledChangesErrorOptions {
+/** Constructor options for {@link UnregisteredChangesError}. */
+export interface UnregisteredChangesErrorOptions {
 	/** The aggregate the error names. */
 	readonly identity: {
 		readonly aggregateType: string;
@@ -1618,12 +1614,12 @@ export interface UnenrolledChangesErrorOptions {
  * message names the rule instead: a loaded append-only aggregate must not
  * change.
  */
-export class UnenrolledChangesError extends KitWiringError<"UNENROLLED_CHANGES"> {
-	readonly identity: UnenrolledChangesErrorOptions["identity"];
+export class UnregisteredChangesError extends KitWiringError<"UNREGISTERED_CHANGES"> {
+	readonly identity: UnregisteredChangesErrorOptions["identity"];
 
-	constructor(options: UnenrolledChangesErrorOptions) {
+	constructor(options: UnregisteredChangesErrorOptions) {
 		super(
-			"UNENROLLED_CHANGES",
+			"UNREGISTERED_CHANGES",
 			`Aggregate ${describeAggregateIdentity(options.identity)} was loaded and changed in this unit of work, ` +
 				(options.appendOnly
 					? "but its repository is append-only and installs no update. " +
@@ -1631,7 +1627,7 @@ export class UnenrolledChangesError extends KitWiringError<"UNENROLLED_CHANGES">
 					: "but no update intent was registered. Call repository.update(aggregate) " +
 						"after the final domain decision so state and events flush together."),
 		);
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 	}
 }
 
@@ -1666,7 +1662,7 @@ export class AggregateDeletedError extends KitWiringError<"AGGREGATE_DELETED"> {
 				"remove of the SAME instance is an accepted no-op; if the " +
 				"aggregate must remain, do not remove it.",
 		);
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 	}
 }
 
@@ -1702,7 +1698,7 @@ export class AggregateNotFoundError extends InfrastructureError<"AGGREGATE_NOT_F
 			message: `Aggregate not found: ${describeAggregateIdentity(options.identity)}`,
 			cause: options.cause,
 		});
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 	}
 }
 
@@ -1744,7 +1740,7 @@ export class DuplicateAggregateError extends InfrastructureError<"DUPLICATE_AGGR
 			message: `Duplicate aggregate: ${describeAggregateIdentity(options.identity)} already exists`,
 			cause: options.cause,
 		});
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 	}
 }
 
@@ -1788,7 +1784,7 @@ export class SnapshotSchemaMismatchError extends InfrastructureError<"SNAPSHOT_S
 				`the model's migrate function to upgrade old snapshots, or discard the snapshot ` +
 				`and refold from the full event stream.`,
 		});
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 		this.expectedSchemaVersion = options.expectedSchemaVersion;
 		this.actualSchemaVersion = options.actualSchemaVersion;
 	}
@@ -1862,7 +1858,7 @@ export type ConcurrencyConflictErrorOptions = {
  * **Retry means a FRESH unit of work** (a new `UnitOfWork.run()` /
  * `withCommit` invocation): reload, re-apply, and register `update` again. Do NOT catch this
  * inside the same `run()` callback and continue: the failed aggregate
- * is already enrolled (its events would be committed for a write that
+ * is already registered (its events would be committed for a write that
  * never happened) and the identity map still serves the same stale
  * instance to any in-place "reload".
  *
@@ -1894,7 +1890,7 @@ export class ConcurrencyConflictError extends InfrastructureError<"CONCURRENCY_C
 			// repeats it, so that one reason is not retryable.
 			retryable: options.reason !== "version_unchanged",
 		});
-		this.identity = detachAggregateIdentity(options.identity);
+		this.identity = copyAggregateIdentity(options.identity);
 		this.intent = options.intent ?? null;
 		this.expectedVersion = options.expectedVersion;
 		this.actualVersion = options.actualVersion ?? null;
@@ -2167,7 +2163,7 @@ export type KitErrorCode =
 	| "ERROR_MAPPER_FAILED"
 	| "EVENT_AGGREGATE_IDENTITY_INVALID"
 	| "EVENT_BUS_CLOSED"
-	| "EVENT_HARVEST_FAILED"
+	| "EVENT_COLLECTION_FAILED"
 	| "EVENT_ID_INVALID"
 	| "EVENT_ID_REQUIRED"
 	| "EVENT_OCCURRED_AT_INVALID"
@@ -2176,7 +2172,7 @@ export type KitErrorCode =
 	| "EVENT_TYPE_INVALID"
 	| "FOLD_RETURNED_NO_STATE"
 	| "FOREIGN_EVENT"
-	| "HOSTILE_STATE_KEY"
+	| "PROTOTYPE_POLLUTION"
 	| "IDEMPOTENCY_CLAIM_LOST"
 	| "IDEMPOTENCY_COMPLETED_WITHOUT_CLAIM"
 	| "IDEMPOTENCY_IN_FLIGHT"
@@ -2224,10 +2220,10 @@ export type KitErrorCode =
 	| "SNAPSHOT_TIME_INVALID"
 	| "SNAPSHOT_VERSION_NOT_RESTORED"
 	| "TRANSACTION_CLOSED"
-	| "UNENROLLED_CHANGES"
+	| "UNREGISTERED_CHANGES"
 	| "UNKNOWN_CURRENCY"
 	| "UNMANAGED_INSTANCE"
-	| "UNMINTED_EVENT"
+	| "HAND_BUILT_EVENT"
 	| "UNPROJECTABLE_EVENT"
 	| "UNREGISTERED_HANDLER"
 	| "UNREPLAYABLE_AGGREGATE";

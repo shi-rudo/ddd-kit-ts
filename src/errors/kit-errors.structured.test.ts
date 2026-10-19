@@ -27,10 +27,9 @@ import {
 	type DuplicateAggregateErrorOptions,
 	type DuplicateEventIdErrorOptions,
 	ErrorMapperFailedError,
-	EventHarvestError,
+	EventCollectionError,
 	FoldReturnedNoStateError,
 	ForeignEventError,
-	HostileStateKeyError,
 	InfrastructureError,
 	InMemoryCapacityExceededError,
 	InvalidCommandMessageError,
@@ -51,6 +50,7 @@ import {
 	ProjectionIdentityViolationError,
 	ProjectionOrderViolationError,
 	ProjectionReceiptViolationError,
+	PrototypePollutionError,
 	type ReentrantEventRecordingErrorOptions,
 	ReplayRejectedError,
 	type ReplayRejectedErrorOptions,
@@ -60,10 +60,10 @@ import {
 	type SnapshotSchemaMismatchErrorOptions,
 	SnapshotVersionNotRestoredError,
 	type SnapshotVersionNotRestoredErrorOptions,
-	UnenrolledChangesError,
-	type UnenrolledChangesErrorOptions,
 	UnmanagedInstanceError,
 	UnprojectableEventError,
+	UnregisteredChangesError,
+	type UnregisteredChangesErrorOptions,
 	UnregisteredHandlerError,
 	UnreplayableAggregateError,
 	type UnreplayableAggregateErrorOptions,
@@ -213,7 +213,7 @@ const concreteCases: ReadonlyArray<{
 	},
 	{
 		error: () =>
-			new UnmanagedInstanceError("recordPendingEvents", "aggregate", "order-1"),
+			new UnmanagedInstanceError("stampPendingEvents", "aggregate", "order-1"),
 		code: "UNMANAGED_INSTANCE",
 		category: "WIRING",
 		retryable: false,
@@ -367,8 +367,8 @@ const concreteCases: ReadonlyArray<{
 		retryable: false,
 	},
 	{
-		error: () => new HostileStateKeyError("__proto__"),
-		code: "HOSTILE_STATE_KEY",
+		error: () => new PrototypePollutionError("__proto__"),
+		code: "PROTOTYPE_POLLUTION",
 		category: "WIRING",
 		retryable: false,
 	},
@@ -417,13 +417,13 @@ describe("kit errors are StructuredErrors (code = name = the one identifier)", (
 
 	it("UnmanagedInstanceError appends the registry detail when given one", () => {
 		const withDetail = new UnmanagedInstanceError(
-			"recordPendingEvents",
+			"stampPendingEvents",
 			"aggregate",
 			"order-1",
 			"The registry is private.",
 		);
 		const withoutDetail = new UnmanagedInstanceError(
-			"recordPendingEvents",
+			"stampPendingEvents",
 			"aggregate",
 			"order-1",
 		);
@@ -435,13 +435,14 @@ describe("kit errors are StructuredErrors (code = name = the one identifier)", (
 
 	it("further structured kit errors carry their codes", () => {
 		expect(
-			new EventHarvestError("event without aggregateId", "OrderConfirmed").code,
-		).toBe("EVENT_HARVEST_FAILED");
+			new EventCollectionError("event without aggregateId", "OrderConfirmed")
+				.code,
+		).toBe("EVENT_COLLECTION_FAILED");
 		expect(
-			new UnenrolledChangesError({
+			new UnregisteredChangesError({
 				identity: { aggregateType: "Order", aggregateId: "o-1" },
 			}).code,
-		).toBe("UNENROLLED_CHANGES");
+		).toBe("UNREGISTERED_CHANGES");
 		expect(
 			new AggregateDeletedError({
 				identity: { aggregateType: "Order", aggregateId: "o-1" },
@@ -660,10 +661,10 @@ describe("KitErrorCode stays in sync with the classes", () => {
 			AssertKitCode<DirectStateMutationError["code"]>,
 			AssertKitCode<DuplicateAggregateError["code"]>,
 			AssertKitCode<ErrorMapperFailedError["code"]>,
-			AssertKitCode<EventHarvestError["code"]>,
+			AssertKitCode<EventCollectionError["code"]>,
 			AssertKitCode<FoldReturnedNoStateError["code"]>,
 			AssertKitCode<ForeignEventError["code"]>,
-			AssertKitCode<HostileStateKeyError["code"]>,
+			AssertKitCode<PrototypePollutionError["code"]>,
 			AssertKitCode<InMemoryCapacityExceededError["code"]>,
 			AssertKitCode<InvalidCommandMessageError["code"]>,
 			AssertKitCode<InvalidIntegrationMessageError["code"]>,
@@ -685,7 +686,7 @@ describe("KitErrorCode stays in sync with the classes", () => {
 			AssertKitCode<ProjectionReceiptViolationError["code"]>,
 			AssertKitCode<SnapshotSchemaMismatchError["code"]>,
 			AssertKitCode<SnapshotVersionNotRestoredError["code"]>,
-			AssertKitCode<UnenrolledChangesError["code"]>,
+			AssertKitCode<UnregisteredChangesError["code"]>,
 			AssertKitCode<UnmanagedInstanceError["code"]>,
 			AssertKitCode<UnprojectableEventError["code"]>,
 			AssertKitCode<UnregisteredHandlerError["code"]>,
@@ -883,7 +884,7 @@ const identityShapesMatchAggregateIdentity: [
 		PendingEventBatchMismatchErrorOptions["identity"],
 		AggregateIdentity
 	>,
-	SameType<UnenrolledChangesErrorOptions["identity"], AggregateIdentity>,
+	SameType<UnregisteredChangesErrorOptions["identity"], AggregateIdentity>,
 	SameType<AggregateDeletedErrorOptions["identity"], AggregateIdentity>,
 	SameType<ReentrantEventRecordingErrorOptions["identity"], AggregateIdentity>,
 	SameType<DuplicateEventIdErrorOptions["identity"], AggregateIdentity>,

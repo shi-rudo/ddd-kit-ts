@@ -44,7 +44,7 @@ export interface Money {
 	 * Type-level brand: a NON-EXPORTED unique symbol, never present at
 	 * runtime. A string key ("__brand") could be spelled out by any
 	 * caller; the module-private symbol cannot, so only the module's
-	 * constructors mint the type. Convert foreign plain shapes with
+	 * constructors create the type. Convert foreign plain shapes with
 	 * `moneyFromUnknown` (validates, copies, freezes) or `moneyFromDto`.
 	 */
 	readonly [MONEY_BRAND]: true;
@@ -133,7 +133,7 @@ export function assertValidCurrency(currency: unknown): void {
 }
 
 /**
- * Validates an unknown plain shape and mints a FRESH, frozen
+ * Validates an unknown plain shape and creates a FRESH, frozen
  * {@link Money} from it: the result shares no reference with the
  * input, so later mutation of the input cannot reach domain state.
  * The door for re-hydrating foreign minor-units data (rows already
@@ -233,7 +233,7 @@ export function moneyToDto(money: Money): MoneyDto {
  * Narrows an unknown value to the canonical {@link Money} shape. A
  * CHECK, not a door: narrowing neither copies nor freezes, so an
  * external alias can still mutate the underlying object after the
- * check. For anything entering domain state, mint a fresh frozen
+ * check. For anything entering domain state, create a fresh frozen
  * value with {@link moneyFromUnknown} instead.
  */
 export function isMoney(value: unknown): value is Money {

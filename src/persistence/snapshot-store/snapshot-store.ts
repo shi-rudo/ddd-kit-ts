@@ -27,7 +27,7 @@ import type { AggregateIdentity } from "../../domain/aggregate/aggregate-identit
  * `createSnapshotStoreContractTests` from `@shirudo/ddd-kit/testing`):
  * the snapshot round-trips verbatim (`state` as plain data,
  * `version`, `snapshotAt` with millisecond fidelity, `schemaVersion`
- * including its absence), loads return detached copies (never live
+ * including its absence), loads return copies (never live
  * internal state), and keys are isolated per aggregate type AND id
  * (one table may serve every aggregate type).
  *

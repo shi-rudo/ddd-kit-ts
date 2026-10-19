@@ -114,7 +114,7 @@ export function createPlaceOrderHandler<TContext>(
 			AnyDomainEvent,
 			PlaceOrderOutcome,
 			TContext
-		>(deps, command.idempotency, async (context, enrollment) => {
+		>(deps, command.idempotency, async (context, registration) => {
 			const orders = deps.makeOrderWriter(context);
 			const placement = await domainErrorToResult(
 				() => Order.place(deps.newOrderId(), command.customerId, command.items),
@@ -139,7 +139,7 @@ export function createPlaceOrderHandler<TContext>(
 					status: "placed",
 					orderId: order.id,
 				} satisfies PlaceOrderOutcome,
-				commits: [enrollment.enrollSaved(order)],
+				commits: [registration.registerSaved(order)],
 			};
 		});
 

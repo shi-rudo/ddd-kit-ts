@@ -5,7 +5,7 @@ import {
 	InMemoryEventStore,
 } from "../../src";
 
-describe("events that createDomainEvent mints", () => {
+describe("events that createDomainEvent builds", () => {
 	it("pass the plain-data rule of the in-memory event store", async () => {
 		const store = new InMemoryEventStore<AnyDomainEvent>();
 		const stream = { aggregateType: "Order", aggregateId: "o-1" };

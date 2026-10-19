@@ -11,7 +11,7 @@ import {
 	ConcurrencyConflictError,
 	DomainError,
 	DuplicateAggregateError,
-	EventHarvestError,
+	EventCollectionError,
 	ForeignEventError,
 	InfrastructureError,
 	InvalidEventStreamPageError,
@@ -19,7 +19,7 @@ import {
 	MissingFoldError,
 	MissingHandlerError,
 	ReplayRejectedError,
-	UnenrolledChangesError,
+	UnregisteredChangesError,
 	UnreplayableAggregateError,
 } from "./kit-errors";
 
@@ -555,23 +555,23 @@ describe("ConcurrencyConflictError", () => {
 	});
 });
 
-describe("EventHarvestError", () => {
+describe("EventCollectionError", () => {
 	it("is a BaseError but NOT an InfrastructureError (deterministic, not retryable)", () => {
-		const e = new EventHarvestError("bad event");
+		const e = new EventCollectionError("bad event");
 		expect(isBaseError(e)).toBe(true);
 		expect(e).not.toBeInstanceOf(InfrastructureError);
-		expect(e.name).toBe("EVENT_HARVEST_FAILED");
+		expect(e.name).toBe("EVENT_COLLECTION_FAILED");
 	});
 });
 
-describe("UnenrolledChangesError", () => {
+describe("UnregisteredChangesError", () => {
 	it("is a BaseError but NOT an InfrastructureError (crash-loud programming bug)", () => {
-		const e = new UnenrolledChangesError({
+		const e = new UnregisteredChangesError({
 			identity: { aggregateType: "Order", aggregateId: "order-1" },
 		});
 		expect(isBaseError(e)).toBe(true);
 		expect(e).not.toBeInstanceOf(InfrastructureError);
-		expect(e.name).toBe("UNENROLLED_CHANGES");
+		expect(e.name).toBe("UNREGISTERED_CHANGES");
 		expect(e.identity).toEqual({
 			aggregateType: "Order",
 			aggregateId: "order-1",

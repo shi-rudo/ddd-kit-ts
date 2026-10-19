@@ -26,8 +26,8 @@ import {
 	OVERLAPPING_CALLS_BOUND_MS,
 	overlappingCallsPreflight,
 	parkRunCall,
-	recordedPendingEventIds,
 	sortedCommittedEventIds,
+	stampedPendingEventIds,
 } from "./contract-assertions";
 
 /** Event-sourced repositories normally expose no physical removal. */
@@ -127,18 +127,18 @@ export function createEsRepositoryContractTests<
 			"the stream was not appended or replayed correctly",
 		);
 	const streamFor = (id: TAggregate["id"]) => harness.streamKeyFor(id);
-	// Pre-flush identities: the in-memory batch must be recorded before
+	// Pre-flush identities: the in-memory batch must be stamped before
 	// the adapter may flush it.
 	const recordedIds = (
 		events: ReadonlyArray<PendingDomainEvent<TEvent>>,
 	): string[] =>
-		recordedPendingEventIds(
+		stampedPendingEventIds(
 			events,
-			"pending events must be recorded before flush",
+			"pending events must be stamped before flush",
 		);
 	// Read-back identities: adapters may serialize committed events to rows
 	// and decode them on read. A decoded event does not carry the in-memory
-	// recorded brand, and no contract demands a re-mint on read, so only
+	// recorded brand, and no contract demands a rebuild on read, so only
 	// the persisted identity is asserted here.
 	const ids = (events: ReadonlyArray<TEvent>): string[] =>
 		events.map((event) => {
@@ -291,7 +291,7 @@ export function createEsRepositoryContractTests<
 				assertEqual(
 					reloaded.pendingEvents.length,
 					0,
-					"replay must not re-record historical events",
+					"replay must not re-stamp historical events",
 				);
 				if (snapshotState) {
 					assert(

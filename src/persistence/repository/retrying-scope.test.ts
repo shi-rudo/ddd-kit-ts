@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
 	ConcurrencyConflictError,
-	EventHarvestError,
+	EventCollectionError,
 } from "../../errors/kit-errors";
 import { computeBackoffDelay } from "../../internal/async/backoff";
 import { RetryingTransactionScope } from "./retrying-scope";
@@ -222,15 +222,15 @@ describe("RetryingTransactionScope", () => {
 	});
 
 	it("does NOT retry a non-retryable error and surfaces it unchanged", async () => {
-		const harvestError = new EventHarvestError("missing aggregateId");
-		const inner = flakyScope(1, () => harvestError);
+		const collectionError = new EventCollectionError("missing aggregateId");
+		const inner = flakyScope(1, () => collectionError);
 		const scope = new RetryingTransactionScope(inner, { sleep: instantSleep });
 
 		const rejection = await scope
 			.transactional(async () => "unreachable")
 			.catch((e) => e);
 
-		expect(rejection).toBe(harvestError);
+		expect(rejection).toBe(collectionError);
 		expect(inner.attempts).toBe(1);
 	});
 

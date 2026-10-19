@@ -1,9 +1,7 @@
 import { err, ok, type Result } from "@shirudo/result";
 import { deepEqual } from "../../internal/structural/deep-equal";
-import {
-	type DeepEqualExceptOptions,
-	deepEqualExcept,
-} from "../../internal/structural/deep-equal-except";
+import { deepEqualExcept } from "../../internal/structural/deep-equal-except";
+import type { DeepOmitOptions } from "../../internal/structural/deep-omit";
 import {
 	builtInTagWithoutInvokingAccessors,
 	hasIntrinsicPrototypeChain,
@@ -15,7 +13,7 @@ import { installMutatorShadows } from "../../internal/structural/shadowed-mutato
 // Functional Value Object API
 // ============================================================================
 
-export type VO<T> = Readonly<T>;
+export type ValueObjectOf<T> = Readonly<T>;
 
 const mapEntries = Map.prototype.entries;
 const setValues = Set.prototype.values;
@@ -120,7 +118,7 @@ function rejectValueObjectAsInput(input: unknown, entry: string): void {
  *
  * Note: `deepFreeze` mutates its argument in place; it sets `[[Frozen]]`
  * on the object you pass in. Callers that need to avoid touching the
- * input (e.g. `vo()`) should deep-clone first.
+ * input (e.g. `valueObject()`) should deep-clone first.
  *
  * Date/Map/Set keep internal-slot mutability under `Object.freeze`
  * (`setTime`, `set`, `add`, … still work on frozen instances), so their
@@ -265,14 +263,14 @@ function freezeDeep(obj: unknown, walk: FreezeWalk): boolean {
 }
 
 /**
- * Deep clone used by `vo()` and the `ValueObject` constructor.
+ * Deep clone used by `valueObject()` and the `ValueObject` constructor.
  *
  * Plain objects, arrays, and Map values are walked manually so
  * that symbol-keyed properties survive (which `structuredClone` silently
- * drops; they would otherwise be invisible to `voEquals`, whose
+ * drops; they would otherwise be invisible to `valueObjectEquals`, whose
  * `deepEqual` DOES consider symbol keys) and shared references / cycles
  * keep their identity across Map boundaries. Function values throw,
- * preserving `vo()`'s documented data-not-behaviour gate. Built-ins without
+ * preserving `valueObject()`'s documented data-not-behaviour gate. Built-ins without
  * immutable value semantics throw a descriptive `TypeError`. A kit
  * `ValueObject` instance is admitted by reference (see
  * `VALUE_OBJECT_CLASS`). Every other custom class instance and every
@@ -292,7 +290,7 @@ function cloneForVo(
 ): unknown {
 	if (typeof value === "function") {
 		throw new TypeError(
-			"vo() does not accept function values: Value Objects are data, not behaviour",
+			"valueObject() does not accept function values: Value Objects are data, not behaviour",
 		);
 	}
 	if (value === null || typeof value !== "object") {
@@ -345,7 +343,7 @@ function cloneForVo(
 			)) {
 				if (!isPrimitiveValue(key)) {
 					throw new TypeError(
-						"vo() Map keys must be primitive values to preserve value equality",
+						"valueObject() Map keys must be primitive values to preserve value equality",
 					);
 				}
 				clone.set(key, cloneForVo(entry, visited));
@@ -358,7 +356,7 @@ function cloneForVo(
 			for (const member of setValues.call(obj as Set<unknown>)) {
 				if (!isPrimitiveValue(member)) {
 					throw new TypeError(
-						"vo() Set members must be primitive values to preserve value equality",
+						"valueObject() Set members must be primitive values to preserve value equality",
 					);
 				}
 				clone.add(member);
@@ -371,7 +369,7 @@ function cloneForVo(
 			tag === "[object WeakSet]"
 		) {
 			throw new TypeError(
-				`vo() cannot clone a ${tag.slice(8, -1)}: Value Objects are plain data`,
+				`valueObject() cannot clone a ${tag.slice(8, -1)}: Value Objects are plain data`,
 			);
 		}
 		if (
@@ -391,11 +389,11 @@ function cloneForVo(
 			const regExp = obj as RegExp;
 			if (regExp.global || regExp.sticky) {
 				throw new TypeError(
-					"vo() cannot accept a global or sticky RegExp: its lastIndex is mutable scan state, not an immutable value",
+					"valueObject() cannot accept a global or sticky RegExp: its lastIndex is mutable scan state, not an immutable value",
 				);
 			}
 		}
-		// Atomic built-ins admitted by the VO contract: Date, RegExp and
+		// Atomic built-ins admitted by the value object contract: Date, RegExp and
 		// primitive wrappers all have stable value semantics in deepEqual.
 		const builtInClone = structuredClone(obj);
 		visited.set(obj, builtInClone);
@@ -443,26 +441,26 @@ function throwUnsupportedClassInstance(instance: object): never {
 		? ". A value object is recognized only when a copy of this kit version built it and its props are frozen"
 		: "";
 	throw new TypeError(
-		`vo() cannot clone custom class instances: Value Objects are plain data${valueObjectHint}`,
+		`valueObject() cannot clone custom class instances: Value Objects are plain data${valueObjectHint}`,
 	);
 }
 
 function throwOpenValueObjectFields(keys: readonly PropertyKey[]): never {
 	throw new TypeError(
-		`vo() cannot nest a value object with own fields outside props (${keys.map(String).join(", ")}): keep the state of a value object in props`,
+		`valueObject() cannot nest a value object with own fields outside props (${keys.map(String).join(", ")}): keep the state of a value object in props`,
 	);
 }
 
 function throwUnsupportedAccessorProperty(): never {
 	throw new TypeError(
-		"vo() cannot clone accessor properties: Value Objects are plain data",
+		"valueObject() cannot clone accessor properties: Value Objects are plain data",
 	);
 }
 
 function throwUnsupportedValueSemantics(tag: string): never {
 	const name = tag.startsWith("[object ") ? tag.slice(8, -1) : tag;
 	throw new TypeError(
-		`vo() cannot accept ${name} values: Value Objects require immutable value semantics`,
+		`valueObject() cannot accept ${name} values: Value Objects require immutable value semantics`,
 	);
 }
 
@@ -476,29 +474,29 @@ function isPrimitiveValue(value: unknown): boolean {
  * Creates a deeply immutable value object from the given data.
  *
  * The input is first deep-cloned, then the clone is frozen, so calling
- * `vo(input)` never freezes the caller's own object graph as a
- * side-effect. Mutating the input afterwards does not bleed into the VO.
- * Symbol-keyed properties are preserved (matching `voEquals`). A kit
+ * `valueObject(input)` never freezes the caller's own object graph as a
+ * side-effect. Mutating the input afterwards does not bleed into the value object.
+ * Symbol-keyed properties are preserved (matching `valueObjectEquals`). A kit
  * `ValueObject` instance nested in the input is kept by reference and
  * frozen in place; it must keep all of its state in `props`. A value
  * object as the input itself is rejected.
  * Function values and every other custom class instance are rejected
  * (Value Objects are plain data, not behaviour-bearing object graphs). Inputs must be trusted and
  * Proxy-free: ECMAScript provides no portable way to identify a transparent
- * Proxy without potentially executing its traps, so `vo()` is not a sandbox
+ * Proxy without potentially executing its traps, so `valueObject()` is not a sandbox
  * for hostile in-process objects. Built-ins that cannot provide immutable,
- * value-based semantics are rejected instead of weakening the VO contract.
+ * value-based semantics are rejected instead of weakening the value object contract.
  *
  * @example
  * ```typescript
  * const nested = { lat: 52.5, lng: 13.4 };
- * const address = vo({ street: "Main St", coordinates: nested });
+ * const address = valueObject({ street: "Main St", coordinates: nested });
  * address.coordinates.lat = 99; // ❌ Cannot assign to read-only property
  * nested.lat = 0;               // ✅ caller's input still mutable
  * ```
  */
-export function vo<T>(t: T): VO<T> {
-	rejectValueObjectAsInput(t, "vo()");
+export function valueObject<T>(t: T): ValueObjectOf<T> {
+	rejectValueObjectAsInput(t, "valueObject()");
 	return deepFreeze(cloneForVo(t, new WeakMap()) as T);
 }
 
@@ -517,22 +515,25 @@ export function vo<T>(t: T): VO<T> {
  *
  * @example
  * ```typescript
- * const money1 = vo({ amount: 100, currency: "USD" });
- * const money2 = vo({ amount: 100, currency: "USD" });
- * voEquals(money1, money2); // true
+ * const money1 = valueObject({ amount: 100, currency: "USD" });
+ * const money2 = valueObject({ amount: 100, currency: "USD" });
+ * valueObjectEquals(money1, money2); // true
  *
- * const address1 = vo({
+ * const address1 = valueObject({
  *   street: "Main St",
  *   coordinates: { lat: 52.5, lng: 13.4 }
  * });
- * const address2 = vo({
+ * const address2 = valueObject({
  *   street: "Main St",
  *   coordinates: { lat: 52.5, lng: 13.4 }
  * });
- * voEquals(address1, address2); // true
+ * valueObjectEquals(address1, address2); // true
  * ```
  */
-export function voEquals<T>(a: VO<T>, b: VO<T>): boolean {
+export function valueObjectEquals<T>(
+	a: ValueObjectOf<T>,
+	b: ValueObjectOf<T>,
+): boolean {
 	return deepEqual(a, b);
 }
 
@@ -554,43 +555,41 @@ export function voEquals<T>(a: VO<T>, b: VO<T>): boolean {
  * @example
  * ```typescript
  * // Value object with metadata
- * const address1 = vo({
+ * const address1 = valueObject({
  *   street: "Main St",
  *   city: "Berlin",
  *   metadata: { createdAt: "2024-01-01", updatedAt: "2024-01-02" }
  * });
  *
- * const address2 = vo({
+ * const address2 = valueObject({
  *   street: "Main St",
  *   city: "Berlin",
  *   metadata: { createdAt: "2024-01-01", updatedAt: "2024-01-03" }
  * });
  *
  * // Compare ignoring metadata timestamps
- * voEqualsExcept(address1, address2, {
+ * valueObjectEqualsExcept(address1, address2, {
  *   ignoreKeys: ["updatedAt"],
  *   ignoreKeyPredicate: (key, path) => path.includes("metadata")
  * }); // true
  *
  * // Compare ignoring all metadata
- * voEqualsExcept(address1, address2, {
+ * valueObjectEqualsExcept(address1, address2, {
  *   ignoreKeyPredicate: (key, path) => path.includes("metadata")
  * }); // true
  * ```
  */
-export function voEqualsExcept<T>(
-	a: VO<T>,
-	b: VO<T>,
-	options: DeepEqualExceptOptions,
+export function valueObjectEqualsExcept<T>(
+	a: ValueObjectOf<T>,
+	b: ValueObjectOf<T>,
+	options: DeepOmitOptions,
 ): boolean {
 	return deepEqualExcept(a, b, keepValueObjectClass(options));
 }
 
 // Without the class record two nested value objects of different classes
 // compare equal, so no option may ignore it.
-function keepValueObjectClass(
-	options: DeepEqualExceptOptions,
-): DeepEqualExceptOptions {
+function keepValueObjectClass(options: DeepOmitOptions): DeepOmitOptions {
 	const { ignoreKeys, ignoreKeyPredicate } = options;
 	return {
 		...options,
@@ -608,7 +607,7 @@ function keepValueObjectClass(
  *
  * Note: the Result covers VALIDATION failures only. Non-data values and
  * built-ins without immutable value semantics still throw a
- * `TypeError` from `vo()`; they cannot occur in parsed JSON and signal
+ * `TypeError` from `valueObject()`; they cannot occur in parsed JSON and signal
  * a programming error, not a validation failure.
  *
  * @param t - The data to convert into a value object
@@ -618,7 +617,7 @@ function keepValueObjectClass(
  *
  * @example
  * ```typescript
- * const result = voWithValidation(
+ * const result = valueObjectOrError(
  *   { amount: 100, currency: "USD" },
  *   (m) => m.amount >= 0 && m.currency.length === 3,
  *   "Invalid money: amount must be non-negative and currency must be 3 characters"
@@ -631,17 +630,17 @@ function keepValueObjectClass(
  * }
  * ```
  */
-export function voWithValidation<T>(
+export function valueObjectOrError<T>(
 	t: T,
 	validate: (value: T) => boolean,
 	errorMessage?: string,
-): Result<VO<T>, string> {
+): Result<ValueObjectOf<T>, string> {
 	if (!validate(t)) {
 		return err(
 			errorMessage ?? `Validation failed for value object: ${describeValue(t)}`,
 		);
 	}
-	return ok(vo(t));
+	return ok(valueObject(t));
 }
 
 /**
@@ -736,7 +735,7 @@ export abstract class ValueObject<T extends object> implements IValueObject<T> {
 	constructor(props: T) {
 		rejectValueObjectAsInput(props, "new ValueObject()");
 		this.validate(props);
-		// Same clone as vo(): Map/Set contents are walked (so the caller's
+		// Same clone as valueObject(): Map/Set contents are walked (so the caller's
 		// entries are never frozen or shadowed in place), nested value
 		// objects are kept by reference, and functions and other custom
 		// class instances are rejected. A shallow `{ ...props }` or

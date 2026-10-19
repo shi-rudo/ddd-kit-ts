@@ -5,12 +5,12 @@ import {
 import type { AnyDomainEvent } from "../../../domain/event/domain-event";
 import {
 	ConcurrencyConflictError,
+	copyAggregateIdentity,
 	describeAggregateIdentity,
-	detachAggregateIdentity,
 	InMemoryCapacityExceededError,
 } from "../../../errors/kit-errors";
 import { abortReason } from "../../../internal/async/abort";
-import { detachFreezableState } from "../../../internal/structural/detach-state";
+import { copyFreezableState } from "../../../internal/structural/copy-plain-state";
 import { assertPositiveSafeInteger } from "../../../internal/validate";
 import type {
 	InMemoryTransaction,
@@ -50,7 +50,7 @@ function copyForStorage<Evt>(
 	if (event === null || typeof event !== "object") {
 		throw new TypeError(`${subject} is not an event object`);
 	}
-	return detachFreezableState(event, subject);
+	return copyFreezableState(event, subject);
 }
 
 function assertStreamPosition(
@@ -144,7 +144,7 @@ export class InMemoryEventStore<Evt extends AnyDomainEvent>
 		// does not reach the checks, the write, or an error.
 		const batch = Array.from(events);
 		if (batch.length === 0) return;
-		const identity = detachAggregateIdentity(stream);
+		const identity = copyAggregateIdentity(stream);
 		const expectedVersion = options.expectedVersion;
 		const key = encodeAggregateIdentity(identity);
 		// A stale or oversized batch fails before the copy, without its cost.

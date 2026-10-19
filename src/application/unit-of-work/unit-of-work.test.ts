@@ -11,10 +11,10 @@ import type { Id } from "../../domain/identity/id";
 import {
 	AggregateDeletedError,
 	ConcurrencyConflictError,
-	EventHarvestError,
+	EventCollectionError,
 	InfrastructureError,
-	UnenrolledChangesError,
 	UnmanagedInstanceError,
+	UnregisteredChangesError,
 } from "../../errors/kit-errors";
 import type { EventCommitCandidate } from "../../messaging/committed-event";
 import type { EventBus } from "../../messaging/event-bus/ports";
@@ -25,7 +25,7 @@ import type { PersistenceModel } from "../../persistence/repository/persistence-
 import { RetryingTransactionScope } from "../../persistence/repository/retrying-scope";
 import type { TransactionScope } from "../../persistence/repository/scope";
 import { recordingOutbox } from "../../testing/recording-outbox";
-import { unstampedAggregate } from "../../testing/unstamped-aggregate";
+import { unattributedAggregate } from "../../testing/unattributed-aggregate";
 import {
 	AggregateTrackingError,
 	CommitError,
@@ -74,8 +74,8 @@ class MockAggregate extends StateStoredAggregate<
 		this.setState(this.state, event);
 	}
 
-	/** Records a decision the shell has NOT yet stamped via recordPendingEvents. */
-	public changeWithUnrecordedEvent(orderId: string): void {
+	/** Records a decision the shell has NOT yet stamped via stampPendingEvents. */
+	public changeWithUnstampedEvent(orderId: string): void {
 		this.setState(this.state, this.createEvent("OrderCreated", { orderId }));
 	}
 }
@@ -89,7 +89,7 @@ function createMockAggregate(
 
 /** A MockOrder as an instance from another package copy. */
 function unstampedOrder(events: TestEvent[]): MockAggregate {
-	return unstampedAggregate(
+	return unattributedAggregate(
 		"x" as TestId,
 		"MockOrder",
 		events,
@@ -283,7 +283,7 @@ function createUow(overrides?: {
 	return { uow, outbox, bus, scope };
 }
 
-/** Expected persistence envelope for one harvested event. */
+/** Expected persistence envelope for one collected event. */
 function stamped(
 	event: TestEvent,
 	aggregateVersion = 1,
@@ -436,14 +436,14 @@ describe("UnitOfWork", () => {
 			expect(Object.isFrozen(writes[0]?.events)).toBe(true);
 			expect(outbox.added).toEqual([[stamped(event, 2)]]);
 
-			const unenrolled = await uow
+			const unregistered = await uow
 				.run(async ({ repositories }) => {
 					repositories.projected.load(unregisteredState);
 					unregisteredState.changePersistenceOnly(2);
 				})
 				.catch((error: unknown) => error);
-			expect(unenrolled).toBeInstanceOf(UnenrolledChangesError);
-			expect(unenrolled).toMatchObject({
+			expect(unregistered).toBeInstanceOf(UnregisteredChangesError);
+			expect(unregistered).toMatchObject({
 				identity: unregisteredState.aggregateIdentity,
 			});
 		});
@@ -519,7 +519,7 @@ describe("UnitOfWork", () => {
 					aggregate.change();
 					return undefined;
 				}),
-			).rejects.toBeInstanceOf(UnenrolledChangesError);
+			).rejects.toBeInstanceOf(UnregisteredChangesError);
 		});
 
 		it("registers add and update intent without performing durable I/O", async () => {
@@ -697,7 +697,7 @@ describe("UnitOfWork", () => {
 						(error: unknown) => error,
 					);
 
-				expect(rejection).toBeInstanceOf(UnenrolledChangesError);
+				expect(rejection).toBeInstanceOf(UnregisteredChangesError);
 				expect((rejection as Error).message).toContain("append-only");
 				expect((rejection as Error).message).not.toContain("repository.update");
 			});
@@ -722,7 +722,7 @@ describe("UnitOfWork", () => {
 			});
 		});
 
-		it("does not flush when commit enrollment rejects and the caller catches it", async () => {
+		it("does not flush when commit registration rejects and the caller catches it", async () => {
 			const lookalike = {
 				id: "lookalike-1" as TestId,
 				version: 1 as Version,
@@ -1061,7 +1061,7 @@ describe("UnitOfWork", () => {
 			);
 		});
 
-		it("rejects unrecorded events at write registration, before any flush", async () => {
+		it("rejects unstamped events at write registration, before any flush", async () => {
 			let flushCalls = 0;
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
@@ -1086,15 +1086,15 @@ describe("UnitOfWork", () => {
 				uow.run(async ({ repositories }) => {
 					repositories.orders.trackLoaded(aggregate);
 					// A decision the shell forgot to stamp with
-					// recordPendingEvents: the rejection must land at update()
-					// registration. Waiting for the harvest guard would be too
+					// stampPendingEvents: the rejection must land at update()
+					// registration. Waiting for the collection guard would be too
 					// late for a non-transactional event store, whose flush
 					// append is already durable by then.
-					aggregate.changeWithUnrecordedEvent("o-1");
+					aggregate.changeWithUnstampedEvent("o-1");
 					repositories.orders.update(aggregate);
 					return undefined;
 				}),
-			).rejects.toThrow(/has not been recorded/);
+			).rejects.toThrow(/has not been stamped/);
 			expect(flushCalls).toBe(0);
 		});
 
@@ -1676,8 +1676,8 @@ describe("UnitOfWork", () => {
 		});
 	});
 
-	describe("enrollment + post-commit lifecycle", () => {
-		it("does not harvest or acknowledge a fresh aggregate that was never added", async () => {
+	describe("registration + post-commit lifecycle", () => {
+		it("does not collect or acknowledge a fresh aggregate that was never added", async () => {
 			const { uow, outbox } = createUow();
 			const event = testEvent("o-unsaved");
 			const aggregate = createMockAggregate("o-unsaved", [event]);
@@ -1701,7 +1701,7 @@ describe("UnitOfWork", () => {
 			expect(persistedVersionOf(aggregate)).toBeUndefined();
 		});
 
-		it("saved aggregates: events harvested, application observer after commit, publish last", async () => {
+		it("saved aggregates: events collected, application observer after commit, publish last", async () => {
 			const callOrder: string[] = [];
 			const scope: TransactionScope<undefined> = {
 				transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
@@ -1852,7 +1852,7 @@ describe("UnitOfWork", () => {
 			}
 		});
 
-		it("saving the same instance twice harvests its events once and markPersists once", async () => {
+		it("saving the same instance twice collects its events once and markPersists once", async () => {
 			const { uow, outbox } = createUow();
 			const event = testEvent("o-1");
 			const agg = createMockAggregate("o-1", [event]);
@@ -1873,7 +1873,7 @@ describe("UnitOfWork", () => {
 			expect(persistedVersionOf(agg)).toBe(agg.version);
 		});
 
-		it("deleted aggregates: recorded deletion events are harvested into the outbox", async () => {
+		it("deleted aggregates: recorded deletion events are collected into the outbox", async () => {
 			const { uow, outbox } = createUow();
 			const deletionEvent = testEvent("o-1");
 			const agg = createMockAggregate("o-1");
@@ -1988,25 +1988,25 @@ describe("UnitOfWork", () => {
 	describe("session seal + scope retries", () => {
 		it("adapter tracking is closed as soon as the callback resolves", async () => {
 			// A leaked adapter session must not accept registration after the
-			// callback settled. The harvest snapshot is already taken, so the
+			// callback settled. The collection snapshot is already taken, so the
 			// session is sealed at callback completion and fails loudly.
 			const lateAggregate = createMockAggregate("late-1", [
 				testEvent("late-1"),
 			]);
 			let leakedTracking!: RepositoryTracking<MockAggregate>;
-			let lateEnrollError: unknown;
+			let lateRegisterError: unknown;
 			const outbox = recordingOutbox<TestEvent>({
 				add: async () => {},
 			});
 			const scope: TransactionScope<undefined> = {
 				transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
 					const result = await fn(undefined);
-					// We are now past the callback (and past harvest), still
+					// We are now past the callback (and past collect), still
 					// inside the transaction - the window in question.
 					try {
 						leakedTracking.trackLoaded(lateAggregate);
 					} catch (e) {
-						lateEnrollError = e;
+						lateRegisterError = e;
 					}
 					return result;
 				},
@@ -2021,13 +2021,13 @@ describe("UnitOfWork", () => {
 
 			await uow.run(async () => undefined);
 
-			expect(lateEnrollError).toBeInstanceOf(TransactionClosedError);
+			expect(lateRegisterError).toBeInstanceOf(TransactionClosedError);
 		});
 
-		it("a retrying TransactionScope gets a FRESH session per attempt: rolled-back enrollments never reach the outbox", async () => {
+		it("a retrying TransactionScope gets a FRESH session per attempt: rolled-back registrations never reach the outbox", async () => {
 			// Serialization-retry wrappers (CockroachDB-style) re-invoke the
 			// transactional callback. State from the aborted attempt -
-			// enrollments, identity-map entries, error flags - must not leak
+			// registrations, identity-map entries, error flags - must not leak
 			// into the retry.
 			const retryableFailure = new Error("40001 serialization failure");
 			const scope: TransactionScope<undefined> = {
@@ -2061,8 +2061,8 @@ describe("UnitOfWork", () => {
 			});
 
 			expect(result).toBe("second-attempt");
-			// Only the committed attempt's events were harvested; the
-			// rolled-back attempt's enrollment did not leak into the retry.
+			// Only the committed attempt's events were collected; the
+			// rolled-back attempt's registration did not leak into the retry.
 			expect(outbox.added).toEqual([[stamped(event2)]]);
 			expect(persistedVersionOf(attempt1Aggregate)).toBeUndefined();
 			expect(persistedVersionOf(attempt2Aggregate)).toBe(
@@ -2379,7 +2379,7 @@ describe("UnitOfWork", () => {
 			});
 
 			expect(repos[0]?.hydrations).toBe(1);
-			// One instance → one harvest, one acknowledgement.
+			// One instance → one collect, one acknowledgement.
 			expect(outbox.added).toEqual([[stamped(event, 2)]]);
 		});
 
@@ -2596,7 +2596,7 @@ describe("UnitOfWork", () => {
 					// A DIFFERENT instance with the same logical identity, e.g.
 					// re-created via a static factory after the delete. The
 					// instance-keyed gate cannot see it; the class+id tombstone
-					// (recorded automatically by enrollDeleted) must.
+					// (recorded automatically by registerRemoved) must.
 					const resurrected = new OrderAggregate("o-1" as TestId);
 					repositories.orders.update(resurrected);
 					return undefined;
@@ -2604,7 +2604,7 @@ describe("UnitOfWork", () => {
 			).rejects.toBeInstanceOf(AggregateDeletedError);
 		});
 
-		it("a deleted aggregate's events are harvested without saved acknowledgement or observation", async () => {
+		it("a deleted aggregate's events are collected without saved acknowledgement or observation", async () => {
 			const event = testEvent("o-1");
 			const rows = new Map([["o-1", [event]]]);
 			const { uow, outbox } = createCachingUow(rows);
@@ -2677,7 +2677,7 @@ describe("UnitOfWork", () => {
 			expect((rejection as CommitError).cause).toBe(commitFailure);
 		});
 
-		it("a deterministic harvest-guard violation surfaces as EventHarvestError, not a retryable CommitError", async () => {
+		it("a deterministic collection-guard violation surfaces as EventCollectionError, not a retryable CommitError", async () => {
 			// An event missing aggregateId is a createDomainEvent misuse:
 			// deterministic, fails identically on every retry. It must NOT be
 			// wrapped in CommitError (an InfrastructureError a retry loop
@@ -2702,16 +2702,16 @@ describe("UnitOfWork", () => {
 					(e: unknown) => e,
 				);
 
-			expect(rejection).toBeInstanceOf(EventHarvestError);
+			expect(rejection).toBeInstanceOf(EventCollectionError);
 			expect(rejection).not.toBeInstanceOf(CommitError);
 			expect(rejection).not.toBeInstanceOf(InfrastructureError);
 			expect(persistedVersionOf(agg)).toBeUndefined();
 		});
 
-		it("a wrapping scope that nests the harvest-guard error still surfaces EventHarvestError, not CommitError", async () => {
-			// The harvest guard throws inside scope.transactional(), so a
+		it("a wrapping scope that nests the collection-guard error still surfaces EventCollectionError, not CommitError", async () => {
+			// The collection guard throws inside scope.transactional(), so a
 			// scope that wraps its callback's rejection nests the
-			// EventHarvestError in its cause chain. run() must still treat it
+			// EventCollectionError in its cause chain. run() must still treat it
 			// as the deterministic, non-retryable failure it is.
 			const scope: TransactionScope<undefined> = {
 				transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
@@ -2742,7 +2742,7 @@ describe("UnitOfWork", () => {
 					(e: unknown) => e,
 				);
 
-			expect(rejection).toBeInstanceOf(EventHarvestError);
+			expect(rejection).toBeInstanceOf(EventCollectionError);
 			expect(rejection).not.toBeInstanceOf(InfrastructureError);
 		});
 
@@ -3243,7 +3243,7 @@ describe("UnitOfWork", () => {
 					(error: unknown) => error,
 				);
 
-			expect(rejection).toBeInstanceOf(UnenrolledChangesError);
+			expect(rejection).toBeInstanceOf(UnregisteredChangesError);
 		});
 
 		it("fails an abandoned attempt that the scope still commits when a late write reaches it", async () => {
@@ -3552,7 +3552,7 @@ describe("UnitOfWork", () => {
 		});
 	});
 
-	describe("enrollment guard: events recorded after load but never enrolled", () => {
+	describe("registration guard: events recorded after load but never registered", () => {
 		/** A loadable state-stored aggregate with a test-only event recorder. */
 		function loadable(id: string, initialEvents: TestEvent[] = []) {
 			class LoadableAggregate extends StateStoredAggregate<
@@ -3600,7 +3600,7 @@ describe("UnitOfWork", () => {
 			});
 		}
 
-		it("throws UnenrolledChangesError when events are recorded after load and never enrolled", async () => {
+		it("throws UnregisteredChangesError when events are recorded after load and never registered", async () => {
 			const agg = loadable("o-1"); // loaded clean
 			const uow = createLoadableUow(agg);
 
@@ -3616,11 +3616,11 @@ describe("UnitOfWork", () => {
 					(e: unknown) => e,
 				);
 
-			expect(rejection).toBeInstanceOf(UnenrolledChangesError);
+			expect(rejection).toBeInstanceOf(UnregisteredChangesError);
 			expect(rejection).not.toBeInstanceOf(InfrastructureError);
 		});
 
-		it("throws UnenrolledChangesError when a decision is added after load without a version change", async () => {
+		it("throws UnregisteredChangesError when a decision is added after load without a version change", async () => {
 			// The version net cannot see this one: addDomainEvent alone leaves
 			// the version untouched, so only the pending-count net catches it.
 			const agg = loadable("o-1");
@@ -3638,10 +3638,10 @@ describe("UnitOfWork", () => {
 				);
 
 			expect(agg.version).toBe(1);
-			expect(rejection).toBeInstanceOf(UnenrolledChangesError);
+			expect(rejection).toBeInstanceOf(UnregisteredChangesError);
 		});
 
-		it("does not throw when the mutated aggregate was enrolled", async () => {
+		it("does not throw when the mutated aggregate was registered", async () => {
 			const agg = loadable("o-1");
 			const uow = createLoadableUow(agg);
 
@@ -3669,7 +3669,7 @@ describe("UnitOfWork", () => {
 
 		it("does not false-positive on a dirty reconstitution that already carried events but gained none", async () => {
 			// Reconstituted with events already in pendingEvents; the use case
-			// only reads it. No NEW events after load, so no enrollment is owed.
+			// only reads it. No NEW events after load, so no registration is owed.
 			const agg = loadable("o-1", [testEvent("o-1")]);
 			const uow = createLoadableUow(agg);
 
@@ -3800,8 +3800,8 @@ describe("UnitOfWork", () => {
 					(error: unknown) => error,
 				);
 
-			expect(rejection).toBeInstanceOf(EventHarvestError);
-			expect((rejection as EventHarvestError).message).toMatch(
+			expect(rejection).toBeInstanceOf(EventCollectionError);
+			expect((rejection as EventCollectionError).message).toMatch(
 				/event source ended/,
 			);
 			expect(persistedVersionOf(recreated)).toBeUndefined();
@@ -4157,7 +4157,7 @@ describe("UnitOfWork", () => {
 						(error: unknown) => error,
 					);
 
-				expect(rejection).toBeInstanceOf(UnenrolledChangesError);
+				expect(rejection).toBeInstanceOf(UnregisteredChangesError);
 				expect(rejection).toMatchObject({
 					identity: { aggregateType: "MockOrder", aggregateId: "o-2" },
 				});

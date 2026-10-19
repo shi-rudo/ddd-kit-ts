@@ -1,5 +1,5 @@
 /**
- * An aggregate double for the harvest guards. Internal to the testing
+ * An aggregate double for the collection guards. Internal to the testing
  * entry: not re-exported from `@shirudo/ddd-kit/testing`.
  */
 import type { Aggregate, Version } from "../domain/aggregate/aggregate";
@@ -9,11 +9,11 @@ import type { Id } from "../domain/identity/id";
 
 /**
  * An instance with the kit's lifecycle capability but without the aggregate
- * identity stamping of the aggregate base classes: the shape of an aggregate
- * from another package copy. Only such an instance can carry an unstamped event,
- * or an event of another aggregate, into the harvest.
+ * identity attribution of the aggregate base classes: the shape of an aggregate
+ * from another package copy. Only such an instance can carry an unattributed event,
+ * or an event of another aggregate, into the collection.
  */
-export function unstampedAggregate<
+export function unattributedAggregate<
 	TId extends Id<string>,
 	TEvent extends AnyDomainEvent,
 >(

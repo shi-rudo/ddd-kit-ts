@@ -39,7 +39,7 @@ export interface EventStoreContractHarness<Evt extends AnyDomainEvent> {
 /**
  * Reusable proof of an EventStore adapter's portable semantics: qualified
  * value identity, ordered reads and slicing, OCC error mapping and atomicity,
- * no-op empty appends, and detached return arrays. Physical-position
+ * no-op empty appends, and copied return arrays. Physical-position
  * corruption needs adapter-specific fixture support and is tested there.
  */
 export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
@@ -692,7 +692,7 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 				try {
 					callerOwned.push(harness.createEvent(firstKey, 41));
 				} catch {
-					// A detached frozen array is also valid: the contract forbids exposing
+					// A copied frozen array is also valid: the contract forbids exposing
 					// mutable live state, not defensive immutability.
 				}
 				const stored = await store.readStream({ ...firstKey }, fixtureRead);

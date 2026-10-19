@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
 	DuplicateEventIdError,
+	HandBuiltEventError,
 	InvalidVersionError,
 	MisattributedEventError,
 	MissingEntityIdError,
 	PendingEventBatchMismatchError,
 	PendingEventLimitExceededError,
-	UnmintedEventError,
 	UnreplayableAggregateError,
 } from "../../errors/kit-errors";
 import {
@@ -484,7 +484,7 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 
 			// Without the opt-in this push would silently mutate aggregate
 			// internals, bypass validateState, the version bump AND the
-			// adapter projection and Unit-of-Work mutation guards.
+			// adapter capture and Unit-of-Work mutation guards.
 			expect(() => {
 				(aggregate.state.items as Array<unknown>).push({
 					sku: "hacked",
@@ -578,10 +578,10 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 				value: 10,
 				status: "inactive",
 			});
-			const minted = agg.valueUpdated(42);
-			const literal = { ...minted, payload: { newValue: 42 } } as ValueUpdated;
+			const built = agg.valueUpdated(42);
+			const literal = { ...built, payload: { newValue: 42 } } as ValueUpdated;
 
-			expect(() => agg.update(42, literal)).toThrow(UnmintedEventError);
+			expect(() => agg.update(42, literal)).toThrow(HandBuiltEventError);
 			expect(agg.state.value).toBe(10);
 			expect(agg.version).toBe(0);
 			expect(agg.pendingEvents).toHaveLength(0);
@@ -686,7 +686,7 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 			}
 		}
 
-		it("stamps the aggregate identity and leaves identity and time to the shell", () => {
+		it("attributes the event to the aggregate and leaves the event id and time to the shell", () => {
 			const agg = new DecidingAggregate("r-1" as TestId, {
 				value: 0,
 				status: "inactive",
@@ -819,10 +819,10 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 				status: "inactive",
 			});
 			aggregate.addValueUpdated(1);
-			const enrolled = aggregate.pendingEvents;
+			const registered = aggregate.pendingEvents;
 			aggregate.addValueUpdated(2);
 
-			lifecycleOf(aggregate).acknowledge(enrolled, 1 as Version);
+			lifecycleOf(aggregate).acknowledge(registered, 1 as Version);
 
 			expect(aggregate.pendingEvents).toHaveLength(1);
 			expect(aggregate.pendingEvents[0]?.payload.newValue).toBe(2);
@@ -1120,7 +1120,7 @@ describe("createEvent options and pending-event bookkeeping", () => {
 				payload: { value: 1 },
 				schemaVersion: 1,
 			}),
-		).toThrow(UnmintedEventError);
+		).toThrow(HandBuiltEventError);
 
 		expect(aggregate.pendingEvents).toHaveLength(0);
 	});
@@ -1140,7 +1140,7 @@ describe("createEvent options and pending-event bookkeeping", () => {
 				eventId: `event-${index}`,
 				occurredAt: new Date("2027-04-05T06:07:08.000Z"),
 			})),
-		).toThrow(UnmintedEventError);
+		).toThrow(HandBuiltEventError);
 	});
 
 	it("reports the pending count across add, record, and acknowledge", () => {
@@ -1305,7 +1305,7 @@ describe("one identity per pending fact on the state-stored path", () => {
 			{ eventId, aggregateId: "test-1", aggregateType: "IdentityAggregate" },
 		);
 
-	it("rejects a recorded event appended twice in one batch before the state moves", () => {
+	it("rejects a stamped event appended twice in one batch before the state moves", () => {
 		const aggregate = fresh();
 		const recorded = noted("fact-1");
 
@@ -1313,7 +1313,7 @@ describe("one identity per pending fact on the state-stored path", () => {
 			DuplicateEventIdError,
 		);
 		expect(() => aggregate.commitWith(recorded, recorded)).toThrow(
-			/append a recorded event once/,
+			/append a stamped event once/,
 		);
 
 		expect(aggregate.state.value).toBe(0);
@@ -1321,7 +1321,7 @@ describe("one identity per pending fact on the state-stored path", () => {
 		expect(aggregate.pendingEvents).toHaveLength(0);
 	});
 
-	it("rejects a recorded event that is already pending before the state moves", () => {
+	it("rejects a stamped event that is already pending before the state moves", () => {
 		const aggregate = fresh();
 		const recorded = noted("fact-1");
 		aggregate.commitWith(recorded);
@@ -1335,7 +1335,7 @@ describe("one identity per pending fact on the state-stored path", () => {
 		expect(aggregate.pendingEvents).toHaveLength(1);
 	});
 
-	it("rejects a recorded event that is already pending on addDomainEvent", () => {
+	it("rejects a stamped event that is already pending on addDomainEvent", () => {
 		const aggregate = fresh();
 		const recorded = noted("fact-1");
 		aggregate.record(recorded);
@@ -1350,7 +1350,7 @@ describe("one identity per pending fact on the state-stored path", () => {
 		expect(aggregate.pendingEvents).toHaveLength(1);
 	});
 
-	it("accepts recorded events with distinct ids in one batch", () => {
+	it("accepts stamped events with distinct ids in one batch", () => {
 		const aggregate = fresh();
 
 		aggregate.commitWith(noted("fact-1"), noted("fact-2"));

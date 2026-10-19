@@ -10,7 +10,7 @@ The kit gives you five pieces:
 - `TransactionScope<TCtx>`: opens the storage transaction.
 - `UnitOfWork`: owns repository tracking, immutable write receipts, and the
   standard aggregate write protocol.
-- `withCommit`: runs the use case, harvests aggregate events, writes the
+- `withCommit`: runs the use case, collects aggregate events, writes the
   outbox row, commits, then publishes optional in-process notifications. The
   unit of work builds on it. Custom infrastructure can also use it directly.
 - `OutboxWriter<Evt>` / `Outbox<Evt>`: the durable queue boundary.
@@ -22,7 +22,7 @@ The main path looks like this:
 ```ts
 import {
   InMemoryOutbox,
-  recordPendingEvents,
+  stampPendingEvents,
   UnitOfWork,
 } from "@shirudo/ddd-kit";
 
@@ -36,7 +36,7 @@ const orderId = await new UnitOfWork({
   const order = await repositories.orders.getById(id);
 
   order.confirm();
-  recordPendingEvents(order, domainEvents);
+  stampPendingEvents(order, domainEvents);
   repositories.orders.update(order);
   return order.id;
 });
@@ -63,7 +63,7 @@ its events.
    and calls `outbox.add(events)` with the exact batches.
 5. The transaction commits.
 6. After commit, `withCommit` acknowledges every saved aggregate through a
-   non-exported capability and discards harvested events for deleted rows.
+   non-exported capability and discards collected events for deleted rows.
 7. The optional application observer
    `onPersisted(aggregate, version, context)` runs for successfully acknowledged
    saved aggregates only, after every commit record has completed its
@@ -143,14 +143,14 @@ class DrizzleScope implements TransactionScope<DrizzleTx> {
 ```
 
 Repository definitions bind their read adapter and flush callback to that
-transaction handle. Application code sees neither `tx` nor enrollment:
+transaction handle. Application code sees neither `tx` nor registration:
 
 ```ts
 await uow.run(async ({ repositories }) => {
   const order = await repositories.orders.getById(orderId);
 
   order.confirm();
-  recordPendingEvents(order, domainEvents);
+  stampPendingEvents(order, domainEvents);
   repositories.orders.update(order);
   return order.id;
 });
@@ -176,7 +176,7 @@ This scope has no rollback. For a test that rolls back or retries, use
 `TransactionScope` does not track aggregates, repository intent, or deletes.
 That lives in `UnitOfWork` above it. `withCommit` remains the lower-level commit
 lifecycle for custom infrastructure compositions.
-If you need transaction-bound repositories, enrollment, and an identity map,
+If you need transaction-bound repositories, registration, and an identity map,
 use `UnitOfWork`.
 
 ## The Outbox Ports
@@ -348,7 +348,7 @@ workloads need a durable adapter with an explicit source-head retention policy
 that keeps ended heads, and a transactional unique key on `eventId`.
 
 `add` reads each candidate once, before it reads its own state. It rejects a
-malformed candidate with `EventHarvestError`: a part that is not an object, an
+malformed candidate with `EventCollectionError`: a part that is not an object, an
 `eventId` or `type` that is not an own string data property of the event, a
 source field that is not a string, or a position that is not a valid commit
 position. A valid position has integer fields, an `aggregateVersion` of at
@@ -390,9 +390,9 @@ dedupes exact pending, dead-lettered, and recently dispatched re-adds by
 `eventId`, and implements dispatch tracking. A contradictory source or commit
 position rejects instead of being mistaken for a retry. Once a dispatched
 receipt is evicted, a candidate behind the current source head fails with
-`EventHarvestError` rather than rewinding the head. `endEventSources` marks the
+`EventCollectionError` rather than rewinding the head. `endEventSources` marks the
 cursor of a removed aggregate as ended, and a new event of that source fails
-with `EventHarvestError` too. A retry of an event at the
+with `EventCollectionError` too. A retry of an event at the
 current source head still dedupes, because the source cursor names it. This is
 intentionally fail-safe, not an unbounded idempotency promise. Durable outboxes keep the
 event-ID receipt in storage.
@@ -699,7 +699,7 @@ The converted event represents the published integration schema; it does not
 reconstruct the producer's private domain event or turn ISO strings back into
 domain `Date` objects. A receiving bounded context owns any further mapping to
 its own commands or model. The three relationship headers are copied into the
-minted local event metadata so tracing and process context survive the boundary.
+kit-built local event metadata so tracing and process context survive the boundary.
 
 The dispatcher preserves order up to the sink. After that, broker
 configuration decides what consumers observe. If the broker cannot preserve
@@ -753,11 +753,11 @@ There are two different ordering stories.
 
 Within one aggregate, event order is causal. If an aggregate emits
 `OrderPlaced` and then `OrderConfirmed`, subscribers must process those in
-that order. `withCommit` harvests events in the order the aggregate recorded
+that order. `withCommit` collects events in the order the aggregate recorded
 them, and a sequential outbox dispatcher preserves that order.
 
 Across aggregates, order is not a domain guarantee. Returning commit tokens
-for `[a, b]` creates a deterministic harvest order, but brokers, parallel
+for `[a, b]` creates a deterministic collection order, but brokers, parallel
 dispatchers, and separate processes may reorder events from `a` against events
 from `b`.
 

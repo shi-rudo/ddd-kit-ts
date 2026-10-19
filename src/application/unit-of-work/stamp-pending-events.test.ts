@@ -13,7 +13,7 @@ import {
 	ReentrantEventRecordingError,
 	UnmanagedInstanceError,
 } from "../../errors/kit-errors";
-import { recordPendingEvents } from "./record-pending-events";
+import { stampPendingEvents } from "./stamp-pending-events";
 
 type CounterId = Id<"CounterId">;
 type CounterChanged = DomainEvent<"CounterChanged", { value: number }>;
@@ -34,9 +34,9 @@ class Counter extends StateStoredAggregate<
 		this.setState({ value }, this.createEvent("CounterChanged", { value }));
 	}
 
-	/** A decision minted with its identity already, as a factory would. */
-	changeRecorded(value: number, eventId: string): void {
-		this.setState({ value }, this.recordedChange(value, eventId));
+	/** A decision built with its identity already, as a factory would. */
+	changeStamped(value: number, eventId: string): void {
+		this.setState({ value }, this.stampedChange(value, eventId));
 	}
 
 	/** One decision object appended twice in one state change. */
@@ -45,7 +45,7 @@ class Counter extends StateStoredAggregate<
 		this.setState({ value }, [decision, decision]);
 	}
 
-	private recordedChange(value: number, eventId: string): CounterChanged {
+	private stampedChange(value: number, eventId: string): CounterChanged {
 		return createDomainEvent(
 			"CounterChanged",
 			{ value },
@@ -60,7 +60,7 @@ class Counter extends StateStoredAggregate<
 
 const recordedAt = new Date("2027-04-05T06:07:08.000Z");
 
-describe("recordPendingEvents", () => {
+describe("stampPendingEvents", () => {
 	it("records each accepted decision exactly once", () => {
 		let id = 0;
 		let clockReads = 0;
@@ -75,8 +75,8 @@ describe("recordPendingEvents", () => {
 		aggregate.change(1);
 		aggregate.change(2);
 
-		const first = recordPendingEvents(aggregate, factory);
-		const second = recordPendingEvents(aggregate, factory);
+		const first = stampPendingEvents(aggregate, factory);
+		const second = stampPendingEvents(aggregate, factory);
 
 		expect(first.map(({ eventId }) => eventId)).toEqual(["event-1", "event-2"]);
 		expect(first.map(({ payload }) => payload.value)).toEqual([1, 2]);
@@ -87,14 +87,14 @@ describe("recordPendingEvents", () => {
 		expect(aggregate.pendingEvents).toEqual(first);
 	});
 
-	it("leaves every pending decision unrecorded when stamping fails", () => {
+	it("leaves every pending decision unstamped when stamping fails", () => {
 		const aggregate = new Counter("counter-1" as CounterId, { value: 0 });
 		aggregate.change(1);
 		aggregate.change(2);
 		let calls = 0;
 
 		expect(() =>
-			recordPendingEvents(aggregate, () => {
+			stampPendingEvents(aggregate, () => {
 				calls += 1;
 				if (calls === 2) throw new Error("clock unavailable");
 				return {
@@ -116,7 +116,7 @@ describe("recordPendingEvents", () => {
 		aggregate.change(1);
 
 		expect(() =>
-			recordPendingEvents(aggregate, (_event, index) => {
+			stampPendingEvents(aggregate, (_event, index) => {
 				// A decision made mid-recording grows the pending list the map
 				// never visits; silently replacing the list would discard it.
 				aggregate.change(99);
@@ -132,8 +132,8 @@ describe("recordPendingEvents", () => {
 			}),
 		);
 
-		// Recording stayed atomic: every decision, including the re-entrant
-		// one, remains pending and unrecorded.
+		// Stamping stayed atomic: every decision, including the re-entrant
+		// one, remains pending and unstamped.
 		expect(aggregate.pendingEvents).toHaveLength(2);
 		for (const event of aggregate.pendingEvents) {
 			expect(event).not.toHaveProperty("eventId");
@@ -146,7 +146,7 @@ describe("recordPendingEvents", () => {
 		aggregate.change(2);
 
 		expect(() =>
-			recordPendingEvents(aggregate, () => ({
+			stampPendingEvents(aggregate, () => ({
 				eventId: "event-reused",
 				occurredAt: new Date("2027-04-05T06:07:08.000Z"),
 			})),
@@ -158,7 +158,7 @@ describe("recordPendingEvents", () => {
 			}),
 		);
 
-		// Recording stayed atomic: both decisions remain unrecorded.
+		// Stamping stayed atomic: both decisions remain unstamped.
 		expect(aggregate.pendingEvents).toHaveLength(2);
 		for (const event of aggregate.pendingEvents) {
 			expect(event).not.toHaveProperty("eventId");
@@ -175,7 +175,7 @@ describe("recordPendingEvents", () => {
 		aggregate.change(1);
 		aggregate.change(2);
 
-		const recorded = recordPendingEvents(aggregate, factory, {
+		const recorded = stampPendingEvents(aggregate, factory, {
 			occurredAt: recordedAt,
 			metadata: { correlationId: "request-7" },
 		});
@@ -194,7 +194,7 @@ describe("recordPendingEvents", () => {
 		]);
 	});
 
-	it("mints a fresh eventId per decision when a wider options object carries one", () => {
+	it("creates a fresh eventId per decision when a wider options object carries one", () => {
 		let id = 0;
 		const factory = createDomainEventFactory({
 			eventIdFactory: () => `event-${++id}`,
@@ -208,7 +208,7 @@ describe("recordPendingEvents", () => {
 			metadata: { correlationId: "request-9" },
 		};
 
-		const recorded = recordPendingEvents(aggregate, factory, options);
+		const recorded = stampPendingEvents(aggregate, factory, options);
 
 		expect(recorded.map(({ eventId }) => eventId)).toEqual([
 			"event-1",
@@ -229,7 +229,7 @@ describe("recordPendingEvents", () => {
 		const aggregate = new Counter("counter-1" as CounterId, { value: 0 });
 		aggregate.changeAppendingTwice(1);
 
-		const recorded = recordPendingEvents(aggregate, factory);
+		const recorded = stampPendingEvents(aggregate, factory);
 
 		expect(recorded).toHaveLength(2);
 		expect(recorded.map(({ eventId }) => eventId)).toEqual([
@@ -251,12 +251,12 @@ describe("recordPendingEvents", () => {
 		aggregate.change(1);
 		const pendingPayload = aggregate.pendingEvents[0]?.payload;
 
-		const [recorded] = recordPendingEvents(aggregate, (_event, index) => ({
+		const [recorded] = stampPendingEvents(aggregate, (_event, index) => ({
 			eventId: `event-${index}`,
 			occurredAt: new Date("2027-04-05T06:07:08.000Z"),
 		}));
 
-		// The uncommitted constructor already cloned and deep-froze the
+		// The unstamped constructor already cloned and deep-froze the
 		// payload; recording must not pay a second deep copy per event.
 		expect(recorded?.payload).toBe(pendingPayload);
 		expect(Object.isFrozen(recorded?.payload)).toBe(true);
@@ -266,7 +266,7 @@ describe("recordPendingEvents", () => {
 		const aggregate = new Counter("counter-1" as CounterId, { value: 0 });
 		let stamps = 0;
 
-		const recorded = recordPendingEvents(aggregate, () => {
+		const recorded = stampPendingEvents(aggregate, () => {
 			stamps += 1;
 			return { eventId: "unused", occurredAt: recordedAt };
 		});
@@ -276,19 +276,19 @@ describe("recordPendingEvents", () => {
 		expect(stamps).toBe(0);
 	});
 
-	it("passes an already recorded event through and stamps only the decisions", () => {
+	it("passes an already stamped event through and stamps only the decisions", () => {
 		const aggregate = new Counter("counter-1" as CounterId, { value: 0 });
-		aggregate.changeRecorded(1, "pre-minted");
+		aggregate.changeStamped(1, "pre-stamped");
 		aggregate.change(2);
 		const stampedIndexes: number[] = [];
 
-		const recorded = recordPendingEvents(aggregate, (_event, index) => {
+		const recorded = stampPendingEvents(aggregate, (_event, index) => {
 			stampedIndexes.push(index);
 			return { eventId: `stamp-${index}`, occurredAt: recordedAt };
 		});
 
 		expect(recorded[0]).toBe(aggregate.pendingEvents[0]);
-		expect(recorded[0]?.eventId).toBe("pre-minted");
+		expect(recorded[0]?.eventId).toBe("pre-stamped");
 		expect(recorded[1]?.eventId).toBe("stamp-1");
 		// The index names the position in the pending list, not among the
 		// decisions that still need a stamp.
@@ -300,11 +300,11 @@ describe("recordPendingEvents", () => {
 		aggregate.change(1);
 
 		expect(() =>
-			recordPendingEvents(aggregate, (_event, index) => {
+			stampPendingEvents(aggregate, (_event, index) => {
 				// A nested recording replaces the pending list with a stamped
 				// copy of the same length; the outer recording must not
 				// overwrite it with its own stamps.
-				recordPendingEvents(aggregate, () => ({
+				stampPendingEvents(aggregate, () => ({
 					eventId: "inner",
 					occurredAt: recordedAt,
 				}));
@@ -330,7 +330,7 @@ describe("recordPendingEvents", () => {
 
 		let caught: unknown;
 		try {
-			recordPendingEvents(lookalike, () => ({
+			stampPendingEvents(lookalike, () => ({
 				eventId: "event-1",
 				occurredAt: new Date("2027-04-05T06:07:08.000Z"),
 			}));

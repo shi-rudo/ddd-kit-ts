@@ -1,11 +1,11 @@
 import {
 	CommandBus,
+	copyPlainState,
 	createDomainEvent,
 	createDomainEventFactory,
-	detachState,
 	InMemoryEventStore,
-	recordPendingEvents,
 	StateStoredAggregate,
+	stampPendingEvents,
 } from "@shirudo/ddd-kit";
 import { addMoney, moneyOfMinor, moneyToDto } from "@shirudo/ddd-kit/money";
 import { ok } from "@shirudo/result";
@@ -49,10 +49,10 @@ export async function runEdgeRuntimeSmoke(runtime) {
 
 	const order = new EdgeOrder();
 	order.confirm();
-	// The v3 flow: the aggregate produces the uncommitted decision, the
-	// application shell records it with the factory before persistence.
+	// The v3 flow: the aggregate produces the unstamped decision, the
+	// application shell stamps it with the factory before persistence.
 	const domainEvents = createDomainEventFactory();
-	recordPendingEvents(order, domainEvents);
+	stampPendingEvents(order, domainEvents);
 	const orderView = order.toView();
 	assert(orderView.status === "confirmed", "aggregate state did not change");
 	assert(orderView.version === 1, "aggregate version did not advance");
@@ -67,9 +67,9 @@ export async function runEdgeRuntimeSmoke(runtime) {
 
 	// A runtime can return a structured clone from another realm. The plain
 	// data check of the kit must accept it, and the event store must accept
-	// the event that the kit minted.
-	const detached = detachState(structuredClone({ line: { sku: "a", qty: 1 } }));
-	assert(detached.line.qty === 1, "detachState rejected a structured clone");
+	// the event that the kit built.
+	const copy = copyPlainState(structuredClone({ line: { sku: "a", qty: 1 } }));
+	assert(copy.line.qty === 1, "copyPlainState rejected a structured clone");
 	const events = new InMemoryEventStore();
 	const stream = { aggregateType: "EdgeOrder", aggregateId: order.id };
 	await events.append(stream, [orderView.pendingEvent], { expectedVersion: 0 });

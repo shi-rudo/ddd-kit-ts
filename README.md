@@ -111,7 +111,7 @@ That example is deliberately small, but it shows the core shape:
 - The domain throws an error when an invariant is broken.
 - `setState(...)` changes the state and records the event together.
 - `createEvent(...)` captures the immutable domain decision and aggregate source.
-- The application shell adds event identity, recording time, and trace metadata.
+- The application shell adds event identity, stamp time, and trace metadata.
 - Persistence stays outside the aggregate.
 
 In production, a repository and `withCommit` or `UnitOfWork` persist the state,
@@ -122,12 +122,13 @@ aggregate as persisted after the transaction commits.
 
 **Domain modeling**
 
-- value objects via `vo()` and `ValueObject<T>`
+- value objects via `valueObject()` and `ValueObject<T>`
 - exact Money helpers in `@shirudo/ddd-kit/money`
 - child entities with branded identity
 - state-stored and event-sourced aggregate roots
 - domain events with metadata, schema version, and commit stamps
-- a domain state machine for named lifecycle states
+- a domain state machine for named lifecycle states in
+  `@shirudo/ddd-kit/state-machine`
 
 **Application boundaries**
 
@@ -136,7 +137,7 @@ aggregate as persisted after the transaction commits.
   runtimes
 - a clear error split: domain code throws, command/query boundaries return
   `Result`
-- `voValidated` for collecting field-level validation issues
+- `valueObjectOrIssues` for collecting field-level validation issues
 - optional HTTP/RFC 9457 presentation helpers
 
 **Persistence and delivery**
@@ -144,8 +145,8 @@ aggregate as persisted after the transaction commits.
 - repository interfaces for id-based and filtered access
 - a per-operation Identity Map contract
 - optimistic concurrency errors and duplicate-insert errors
-- `withCommit` for transaction, outbox, event harvest, and post-commit cleanup
-- `UnitOfWork` for repository registration and enrollment
+- `withCommit` for transaction, outbox, event collection, and post-commit cleanup
+- `UnitOfWork` for repository registration and registration
 - outbox dispatcher, projection, event-store, and snapshot ports
 - contract tests for repository and outbox adapters
 
@@ -185,7 +186,7 @@ first adapter or aggregate.
 | Repository contracts and Identity Map | [Repository](./docs/guide/repository.md) |
 | Transaction-scoped repositories | [Unit of Work](./docs/guide/unit-of-work.md) |
 | Duplicate-safe commands and inbox handling | [Command Idempotency](./docs/guide/idempotency.md) |
-| Reliable event harvest and delivery | [Outbox & Transactions](./docs/guide/outbox.md) |
+| Reliable event collection and delivery | [Outbox & Transactions](./docs/guide/outbox.md) |
 | Read models and projectors | [Projections](./docs/guide/projections.md) |
 | Event schema changes | [Event Upcasting](./docs/guide/event-upcasting.md) |
 | Optimistic concurrency | [Concurrency](./docs/guide/concurrency.md) |

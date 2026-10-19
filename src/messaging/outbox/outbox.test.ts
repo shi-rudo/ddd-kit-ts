@@ -4,7 +4,7 @@ import {
 	type DomainEvent,
 } from "../../domain/event/domain-event";
 import {
-	EventHarvestError,
+	EventCollectionError,
 	InMemoryCapacityExceededError,
 } from "../../errors/kit-errors";
 import { InMemoryTransactionScope } from "../../persistence/repository/adapters/in-memory-transaction-scope";
@@ -134,10 +134,10 @@ describe("InMemoryOutbox and caller code in a candidate", () => {
 		};
 
 		await expect(outbox.add([badSource])).rejects.toBeInstanceOf(
-			EventHarvestError,
+			EventCollectionError,
 		);
 		await expect(outbox.add([badPosition])).rejects.toBeInstanceOf(
-			EventHarvestError,
+			EventCollectionError,
 		);
 		expect(await outbox.getPending()).toEqual([]);
 	});
@@ -156,7 +156,7 @@ describe("InMemoryOutbox and caller code in a candidate", () => {
 
 		await expect(
 			outbox.add([candidate(event as unknown as OrderCreated, 1)]),
-		).rejects.toBeInstanceOf(EventHarvestError);
+		).rejects.toBeInstanceOf(EventCollectionError);
 		expect(idReads).toBe(0);
 		expect(await outbox.getPending()).toEqual([]);
 	});
@@ -186,7 +186,7 @@ describe("InMemoryOutbox and caller code in a candidate", () => {
 		};
 
 		await expect(outbox.add([malformed])).rejects.toBeInstanceOf(
-			EventHarvestError,
+			EventCollectionError,
 		);
 		expect(await outbox.getPending()).toEqual([]);
 	});
@@ -201,7 +201,7 @@ describe("InMemoryOutbox and caller code in a candidate", () => {
 
 		await expect(
 			outbox.add([candidate(event as unknown as OrderCreated, 1)]),
-		).rejects.toBeInstanceOf(EventHarvestError);
+		).rejects.toBeInstanceOf(EventCollectionError);
 		expect(await outbox.getPending()).toEqual([]);
 	});
 
@@ -219,14 +219,14 @@ describe("InMemoryOutbox and caller code in a candidate", () => {
 			"a null position",
 			() => ({ ...candidate(orderEvent("evt-1")), position: null }),
 		],
-	])("rejects %s with EventHarvestError", async (_case, malformed) => {
+	])("rejects %s with EventCollectionError", async (_case, malformed) => {
 		const outbox = new InMemoryOutbox<OrderCreated>();
 
 		await expect(
 			outbox.add([
 				malformed() as unknown as EventCommitCandidate<OrderCreated>,
 			]),
-		).rejects.toBeInstanceOf(EventHarvestError);
+		).rejects.toBeInstanceOf(EventCollectionError);
 		expect(await outbox.getPending()).toEqual([]);
 	});
 
@@ -242,7 +242,7 @@ describe("InMemoryOutbox and caller code in a candidate", () => {
 		};
 
 		await expect(outbox.add([malformed])).rejects.toMatchObject({
-			code: "EVENT_HARVEST_FAILED",
+			code: "EVENT_COLLECTION_FAILED",
 			eventType: "OrderCreated",
 		});
 	});
@@ -725,7 +725,7 @@ describe("InMemoryOutbox", () => {
 
 			await expect(
 				outbox.add([candidate(collision, 1)]),
-			).rejects.toBeInstanceOf(EventHarvestError);
+			).rejects.toBeInstanceOf(EventCollectionError);
 
 			const foreignNext = eventFor("evt-invoice-next", "Invoice", "i-1");
 			await outbox.add([candidate(foreignNext, 2)]);
@@ -752,7 +752,7 @@ describe("InMemoryOutbox", () => {
 			await outbox.markFailed(original.eventId, new Error("poison"));
 
 			await expect(outbox.add([candidate(collision)])).rejects.toBeInstanceOf(
-				EventHarvestError,
+				EventCollectionError,
 			);
 
 			expect(await outbox.getPending()).toEqual([]);
@@ -772,7 +772,7 @@ describe("InMemoryOutbox", () => {
 			await outbox.markDispatched([original.eventId]);
 
 			await expect(outbox.add([candidate(collision)])).rejects.toBeInstanceOf(
-				EventHarvestError,
+				EventCollectionError,
 			);
 
 			expect(await outbox.getPending()).toEqual([]);
@@ -801,7 +801,7 @@ describe("InMemoryOutbox", () => {
 
 			await outbox.add([original]);
 			await expect(outbox.add([collision])).rejects.toBeInstanceOf(
-				EventHarvestError,
+				EventCollectionError,
 			);
 
 			const next = eventAt("evt-position-next", 2);
@@ -820,7 +820,7 @@ describe("InMemoryOutbox", () => {
 			const collision = eventAt("evt-intra-add-collision", 1);
 
 			await expect(outbox.add([original, collision])).rejects.toBeInstanceOf(
-				EventHarvestError,
+				EventCollectionError,
 			);
 			expect(await outbox.getPending()).toEqual([]);
 
@@ -849,7 +849,7 @@ describe("InMemoryOutbox", () => {
 						position: { ...original.position, commitSequence: 1 },
 					},
 				]),
-			).rejects.toBeInstanceOf(EventHarvestError);
+			).rejects.toBeInstanceOf(EventCollectionError);
 
 			const [record] = await outbox.getPending();
 			expect(record?.position.commitSequence).toBe(0);
@@ -941,7 +941,7 @@ describe("InMemoryOutbox", () => {
 		await outbox.markDispatched([event.eventId]);
 
 		await expect(outbox.add([candidate(event, 2)])).rejects.toBeInstanceOf(
-			EventHarvestError,
+			EventCollectionError,
 		);
 		expect(await outbox.getPending()).toEqual([]);
 	});
@@ -979,7 +979,7 @@ describe("InMemoryOutbox", () => {
 					},
 				},
 			]),
-		).rejects.toBeInstanceOf(EventHarvestError);
+		).rejects.toBeInstanceOf(EventCollectionError);
 
 		expect(await outbox.getPending()).toEqual([]);
 		const successor = event("evt-successor-after-rejection");
@@ -1015,7 +1015,7 @@ describe("InMemoryOutbox", () => {
 		};
 
 		await expect(outbox.add([first, reassigned])).rejects.toBeInstanceOf(
-			EventHarvestError,
+			EventCollectionError,
 		);
 		expect(await outbox.getPending()).toEqual([]);
 
@@ -1189,8 +1189,8 @@ describe("InMemoryOutbox", () => {
 				(error: unknown) => error,
 			);
 
-		expect(rejection).toBeInstanceOf(EventHarvestError);
-		expect((rejection as EventHarvestError).message).toMatch(
+		expect(rejection).toBeInstanceOf(EventCollectionError);
+		expect((rejection as EventCollectionError).message).toMatch(
 			/removed and created again under the same identity/,
 		);
 	});
@@ -1220,9 +1220,9 @@ describe("InMemoryOutbox", () => {
 			(error: unknown) => error,
 		);
 
-		expect(rejection).toBeInstanceOf(EventHarvestError);
-		expect((rejection as EventHarvestError).message).toMatch(/receipt/);
-		expect((rejection as EventHarvestError).message).toMatch(
+		expect(rejection).toBeInstanceOf(EventCollectionError);
+		expect((rejection as EventCollectionError).message).toMatch(/receipt/);
+		expect((rejection as EventCollectionError).message).toMatch(
 			/removed and created again/,
 		);
 	});
@@ -1249,8 +1249,8 @@ describe("InMemoryOutbox", () => {
 			(error: unknown) => error,
 		);
 
-		expect(rejection).toBeInstanceOf(EventHarvestError);
-		expect((rejection as EventHarvestError).message).toMatch(
+		expect(rejection).toBeInstanceOf(EventCollectionError);
+		expect((rejection as EventCollectionError).message).toMatch(
 			/removed and created again under the same identity/,
 		);
 	});
@@ -1274,11 +1274,11 @@ describe("InMemoryOutbox", () => {
 				(error: unknown) => error,
 			);
 
-		expect(rejection).toBeInstanceOf(EventHarvestError);
-		expect((rejection as EventHarvestError).message).toMatch(
+		expect(rejection).toBeInstanceOf(EventCollectionError);
+		expect((rejection as EventCollectionError).message).toMatch(
 			/removed and created again under the same identity/,
 		);
-		expect((rejection as EventHarvestError).message).toMatch(/new id/);
+		expect((rejection as EventCollectionError).message).toMatch(/new id/);
 	});
 
 	it("rejects an evicted stale candidate without changing the source head", async () => {
@@ -1300,7 +1300,7 @@ describe("InMemoryOutbox", () => {
 		await outbox.markDispatched([second.eventId]);
 
 		await expect(outbox.add([candidate(first, 1)])).rejects.toBeInstanceOf(
-			EventHarvestError,
+			EventCollectionError,
 		);
 		await outbox.add([candidate(third, 3)]);
 
@@ -1322,7 +1322,7 @@ describe("InMemoryOutbox", () => {
 		await outbox.add([candidate(pending, 3)]);
 
 		await expect(outbox.add([candidate(pending, 1)])).rejects.toBeInstanceOf(
-			EventHarvestError,
+			EventCollectionError,
 		);
 		await outbox.add([candidate(next, 4)]);
 
@@ -1520,7 +1520,7 @@ describe("InMemoryOutbox", () => {
 
 		it("re-adding a pending event refreshes the stored copy but keeps the delivery bookkeeping", async () => {
 			// A failed-commit-then-retry re-adds the same eventId with a NEWLY
-			// stamped aggregateVersion (withCommit stamps at harvest). The
+			// assigned aggregateVersion (withCommit assigns it at collection). The
 			// outbox must serve the latest copy, or dispatched events carry a
 			// version from a commit that never happened; the attempts count
 			// belongs to delivery, not to the payload, and survives.
@@ -1588,7 +1588,7 @@ describe("InMemoryOutbox", () => {
 			await outbox.markFailed(event.eventId, new Error("poison"));
 
 			await expect(outbox.add([candidate(event, 2)])).rejects.toBeInstanceOf(
-				EventHarvestError,
+				EventCollectionError,
 			);
 			expect(await outbox.getPending()).toEqual([]);
 			expect(await outbox.deadLetters()).toHaveLength(1);

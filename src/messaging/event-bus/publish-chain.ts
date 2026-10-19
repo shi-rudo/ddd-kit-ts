@@ -41,7 +41,7 @@ export interface PublishChainState {
  * ```ts
  * import { AsyncLocalStorage } from "node:async_hooks";
  *
- * const bus = new EventBusImpl<OrderEvent>({
+ * const bus = new InProcessEventBus<OrderEvent>({
  *   chainStore: new AsyncLocalStorage<PublishChainState>(),
  * });
  * ```
@@ -114,7 +114,7 @@ export class PublishChainTracker {
 			(typeof store.run !== "function" || typeof store.getStore !== "function")
 		) {
 			throw new TypeError(
-				"EventBusImpl.chainStore must provide run and getStore",
+				"InProcessEventBus.chainStore must provide run and getStore",
 			);
 		}
 		// Kept as the original object: the methods of AsyncLocalStorage need

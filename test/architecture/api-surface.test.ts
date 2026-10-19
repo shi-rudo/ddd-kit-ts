@@ -7,8 +7,10 @@ import type {
 	DeliveryFailureClassifier,
 	DomainErrorClass,
 	DurableCommandMessage,
+	ICommandBus,
 	Id,
 	IntegrationMessageRelationships,
+	IQueryBus,
 	OutboxDispatcherObservers,
 	Repository,
 	RepositoryTracking,
@@ -17,6 +19,7 @@ import type {
 	UnitOfWorkIdentityMap,
 } from "../../src";
 import * as index from "../../src";
+import * as stateMachine from "../../src/domain/state-machine";
 import * as money from "../../src/domain/value-object/money";
 import * as presentation from "../../src/presentation/errors";
 import * as http from "../../src/presentation/http/problem-details";
@@ -35,6 +38,26 @@ function assertReadonlyEventMetadata(metadata: PublicEventMetadata): void {
 	metadata.custom = "changed";
 }
 void assertReadonlyEventMetadata;
+
+// The buses have private fields, so an object literal cannot take the class
+// type. A test double or another bus implements the port interface.
+const fakeCommandBus: ICommandBus = {
+	execute: async () => {
+		throw new Error("not dispatched");
+	},
+	register: () => {},
+};
+const fakeQueryBus: IQueryBus = {
+	execute: async () => {
+		throw new Error("not dispatched");
+	},
+	executeUnsafe: async () => {
+		throw new Error("not dispatched");
+	},
+	register: () => {},
+};
+void fakeCommandBus;
+void fakeQueryBus;
 
 const publicStateValidator: StateValidator<{ value: number }> = (state) => {
 	void state.value;
@@ -78,13 +101,13 @@ type RemovedTrackingSession = PublicUnitOfWorkContext["session"];
 type PublicRepositoryTracking = RepositoryTracking<
 	Aggregate<Id<"TrackingSurface">>
 >;
-// @ts-expect-error legacy enrollment cannot bypass explicit add/update intent
-type RemovedEnrollSaved = PublicRepositoryTracking["enrollSaved"];
+// @ts-expect-error legacy registration cannot bypass explicit add/update intent
+type RemovedRegisterSaved = PublicRepositoryTracking["registerSaved"];
 // @ts-expect-error adapters cannot mutate the Unit-of-Work-owned identity map
 type RemovedIdentityMapSet = UnitOfWorkIdentityMap["set"];
 void (undefined as unknown as RemovedRawTransaction);
 void (undefined as unknown as RemovedTrackingSession);
-void (undefined as unknown as RemovedEnrollSaved);
+void (undefined as unknown as RemovedRegisterSaved);
 void (undefined as unknown as RemovedIdentityMapSet);
 
 const publicIntegrationRelationships: IntegrationMessageRelationships = {
@@ -122,20 +145,17 @@ const INDEX_SURFACE = [
 	"DirectStateMutationError",
 	"DomainError",
 	"DomainEventValidationError",
-	"DomainStateMachine",
-	"DomainTransitionGuardRejectedError",
 	"DuplicateAggregateError",
 	"DuplicateEventIdError",
 	"DuplicateHandlerRegistrationError",
 	"Entity",
 	"ErrorMapperFailedError",
 	"EventBusClosedError",
-	"EventBusImpl",
-	"EventHarvestError",
+	"EventCollectionError",
 	"EventSourcedAggregate",
 	"FoldReturnedNoStateError",
 	"ForeignEventError",
-	"HostileStateKeyError",
+	"HandBuiltEventError",
 	"IdempotencyClaimLostError",
 	"IdempotencyCompletionWithoutClaimError",
 	"IdempotencyInFlightError",
@@ -150,15 +170,9 @@ const INDEX_SURFACE = [
 	"InMemoryProjectionCheckpointStore",
 	"InMemorySnapshotStore",
 	"InMemoryTransactionScope",
+	"InProcessEventBus",
 	"InfrastructureError",
 	"InvalidCommandMessageError",
-	"InvalidDomainMachineContextError",
-	"InvalidDomainMachineDefinitionError",
-	"InvalidDomainMachineInputError",
-	"InvalidDomainMachineSnapshotError",
-	"InvalidDomainTransitionError",
-	"InvalidDomainTransitionGuardResultError",
-	"InvalidDomainTransitionResultError",
 	"InvalidEventStreamPageError",
 	"InvalidFlushStatementError",
 	"InvalidIntegrationMessageError",
@@ -178,9 +192,9 @@ const INDEX_SURFACE = [
 	"ProjectionOrderViolationError",
 	"ProjectionReceiptViolationError",
 	"Projector",
+	"PrototypePollutionError",
 	"PublishDepthExceededError",
 	"QueryBus",
-	"ReentrantDomainStateMachineEvaluationError",
 	"ReentrantEventRecordingError",
 	"ReplayRejectedError",
 	"ReplayTargetMismatchError",
@@ -194,45 +208,35 @@ const INDEX_SURFACE = [
 	"Specification",
 	"StateStoredAggregate",
 	"TransactionClosedError",
-	"UnenrolledChangesError",
 	"UnitOfWork",
 	"UnmanagedInstanceError",
-	"UnmintedEventError",
 	"UnprojectableEventError",
+	"UnregisteredChangesError",
 	"UnregisteredHandlerError",
 	"UnreplayableAggregateError",
 	"ValueObject",
-	"analyzeDomainMachineDefinition",
-	"canTransitionDomainState",
 	"captureAggregateSnapshot",
-	"capturePersistenceBaseline",
 	"classifyConcurrencyConflict",
 	"copyMetadata",
+	"copyPlainState",
 	"createDomainEvent",
 	"createDomainEventFactory",
-	"createDomainEventFromFacts",
-	"createInitialDomainMachineSnapshot",
 	"createIntegrationMessage",
-	"createUncommittedDomainEvent",
+	"createStampedDomainEvent",
 	"decodeIntegrationMessage",
 	"deepEqual",
-	"deepEqualExcept",
 	"deepFreeze",
 	"deepOmit",
 	"defaultDomainEventFactory",
 	"defineRepository",
 	"defineSnapshotModel",
-	"derivePersistenceChanges",
-	"detachState",
 	"domainErrorToResult",
 	"encodeIntegrationMessage",
 	"entityIds",
 	"eventBusSink",
 	"findEntityById",
-	"freezeShallow",
 	"hasEntityId",
 	"ignoreProjectionEvent",
-	"insertPersistenceBaseline",
 	"integrationMessageToCommittedEvent",
 	"isDomainErrorLike",
 	"isInfrastructureErrorLike",
@@ -240,32 +244,27 @@ const INDEX_SURFACE = [
 	"isWiringErrorLike",
 	"mergeMetadata",
 	"outboxWriterAcceptingEventLoss",
-	"persistenceProjectionDrifted",
 	"pinTargetVersion",
-	"prepareDomainMachineDefinition",
 	"projectionFromHandlers",
 	"readStreamPages",
-	"recapturePersistenceBaseline",
 	"reconstituteAggregateFromHistory",
 	"reconstituteAggregateFromSnapshot",
 	"reconstituteAggregateFromStreamPages",
-	"recordDomainEvent",
-	"recordPendingEvents",
 	"removeEntityById",
 	"replaceEntityById",
 	"routeEventsToCommandOutbox",
 	"sameEntity",
 	"sameVersion",
 	"specification",
+	"stampPendingEvents",
 	"toVersion",
-	"transitionDomainState",
 	"updateEntityById",
+	"valueObject",
+	"valueObjectEquals",
+	"valueObjectEqualsExcept",
+	"valueObjectOrError",
+	"valueObjectOrIssues",
 	"versionedFlush",
-	"vo",
-	"voEquals",
-	"voEqualsExcept",
-	"voValidated",
-	"voWithValidation",
 	"withCommit",
 	"withIdempotentCommit",
 ] as const;
@@ -290,6 +289,24 @@ const HTTP_SURFACE = ["toProblemDetails"] as const;
 const PRESENTATION_SURFACE = [
 	"createKitPublicErrors",
 	"toPublicErrorView",
+] as const;
+
+const STATE_MACHINE_SURFACE = [
+	"DomainStateMachine",
+	"DomainTransitionGuardRejectedError",
+	"InvalidDomainMachineContextError",
+	"InvalidDomainMachineDefinitionError",
+	"InvalidDomainMachineInputError",
+	"InvalidDomainMachineSnapshotError",
+	"InvalidDomainTransitionError",
+	"InvalidDomainTransitionGuardResultError",
+	"InvalidDomainTransitionResultError",
+	"ReentrantDomainStateMachineEvaluationError",
+	"analyzeDomainMachineDefinition",
+	"canTransitionDomainState",
+	"createInitialDomainMachineSnapshot",
+	"prepareDomainMachineDefinition",
+	"transitionDomainState",
 ] as const;
 
 const MONEY_SURFACE = [
@@ -344,5 +361,11 @@ describe("public API surface (runtime exports)", () => {
 
 	it("the money entry exports exactly the pinned names", () => {
 		expect(Object.keys(money).sort()).toEqual([...MONEY_SURFACE]);
+	});
+
+	it("the state machine entry exports exactly the pinned names", () => {
+		expect(Object.keys(stateMachine).sort()).toEqual([
+			...STATE_MACHINE_SURFACE,
+		]);
 	});
 });

@@ -13,23 +13,23 @@ instead of inventing another casual two-field shape.
 
 | Need | Use |
 | --- | --- |
-| A deeply immutable plain-data value | `vo()` |
-| One fail-fast validation error at the application edge | `voWithValidation()` |
-| All validation issues at once | `voValidated()` |
+| A deeply immutable plain-data value | `valueObject()` |
+| One fail-fast validation error at the application edge | `valueObjectOrError()` |
+| All validation issues at once | `valueObjectOrIssues()` |
 | Domain behavior or throwing invariants | `ValueObject<T>` |
-| Equality while ignoring selected metadata | `voEqualsExcept()` |
+| Equality while ignoring selected metadata | `valueObjectEqualsExcept()` |
 
 The split is intentional. Application input parsing is a `Result` flow. Domain
 construction is usually a throwing invariant flow. See
 [Result vs Throw](./result-vs-throw.md#validation-helpers) for the broader
 error-handling model.
 
-## Plain Values With `vo()`
+## Plain Values With `valueObject()`
 
-Use `vo()` when the value is plain data and does not need methods:
+Use `valueObject()` when the value is plain data and does not need methods:
 
 ```ts
-import { vo, voEquals } from "@shirudo/ddd-kit";
+import { valueObject, valueObjectEquals } from "@shirudo/ddd-kit";
 
 const input = {
   street: "Main St",
@@ -37,21 +37,21 @@ const input = {
   coordinates: { lat: 52.5, lng: 13.4 },
 };
 
-const address = vo(input);
+const address = valueObject(input);
 
 input.coordinates.lat = 0;
 address.coordinates.lat; // 52.5
 
-const sameAddress = vo({
+const sameAddress = valueObject({
   street: "Main St",
   city: "Berlin",
   coordinates: { lat: 52.5, lng: 13.4 },
 });
 
-voEquals(address, sameAddress); // true
+valueObjectEquals(address, sameAddress); // true
 ```
 
-`vo()` clones first and freezes the clone. That matters more than it sounds:
+`valueObject()` clones first and freezes the clone. That matters more than it sounds:
 the caller keeps ownership of the original object, and later mutations to the
 original cannot leak into the value object.
 
@@ -67,10 +67,10 @@ methods, make the value object a class instead of smuggling behavior through
 Use these helpers after you have converted untrusted input into an ordinary DTO.
 They are good for HTTP bodies, queue messages, forms, and file imports.
 
-`voWithValidation()` is fail-fast and returns `Result<VO<T>, string>`:
+`valueObjectOrError()` is fail-fast and returns `Result<ValueObjectOf<T>, string>`:
 
 ```ts
-import { voWithValidation } from "@shirudo/ddd-kit";
+import { valueObjectOrError } from "@shirudo/ddd-kit";
 
 type ShippingAddressInput = {
   street: string;
@@ -84,7 +84,7 @@ const dto: ShippingAddressInput = {
   postalCode: String(body.postalCode ?? ""),
 };
 
-const parsed = voWithValidation(
+const parsed = valueObjectOrError(
   dto,
   (address) =>
     address.street.trim() !== "" &&
@@ -100,12 +100,12 @@ if (parsed.isErr()) {
 const address = parsed.value;
 ```
 
-`voValidated()` collects every issue into one `ValidationError`:
+`valueObjectOrIssues()` collects every issue into one `ValidationError`:
 
 ```ts
-import { voValidated } from "@shirudo/ddd-kit";
+import { valueObjectOrIssues } from "@shirudo/ddd-kit";
 
-const parsed = voValidated(
+const parsed = valueObjectOrIssues(
   dto,
   (issues, address) => {
     if (address.street.trim() === "") {
@@ -133,7 +133,7 @@ if (parsed.isErr()) {
 }
 ```
 
-Both helpers return validation failures as values. They still call `vo()` on the
+Both helpers return validation failures as values. They still call `valueObject()` on the
 success path, so non-data JavaScript values can still throw `TypeError`. That is
 deliberate: a function or mutable buffer in a DTO is a programming error, not a
 user validation error.
@@ -193,7 +193,7 @@ The base class gives you:
 
 `equals()` checks the constructor as well as the props. A `DateRange` is not
 equal to another class with the same `{ from, to }` shape, because the type is
-part of the meaning. `voEquals()` and `deepEqual()` see the class too: every
+part of the meaning. `valueObjectEquals()` and `deepEqual()` see the class too: every
 instance records its class under an own symbol key, so two instances of
 different classes are not equal, and an instance is not equal to a plain
 `{ props }` record.
@@ -209,7 +209,7 @@ own fields only. It does not see a private `#field`, and such a field stays
 mutable after nesting. It does not see a field that the class assigns after
 construction; that assignment throws after nesting, because the instance is
 frozen. Keep derived values in getters that do not store their result.
-`equals()`, `voEquals()`, and `voEqualsExcept()` compare a nested value object
+`equals()`, `valueObjectEquals()`, and `valueObjectEqualsExcept()` compare a nested value object
 by class and by props. They do not call the `equals()` method of the nested
 instance. `JSON.stringify` calls `toJSON()` on the nested instance.
 
@@ -233,8 +233,8 @@ JSON.stringify(stay);
 // {"window":{"from":"2026-07-01T00:00:00.000Z","to":"2026-07-31T00:00:00.000Z"},"guests":2}
 ```
 
-The same rule applies to `vo()`: `vo({ window: bookingWindow })` keeps the
-`DateRange` instance. A value object is nested under a key. `vo()` and the
+The same rule applies to `valueObject()`: `valueObject({ window: bookingWindow })` keeps the
+`DateRange` instance. A value object is nested under a key. `valueObject()` and the
 constructor reject a value object as the input itself with a `TypeError`.
 
 The base `toJSON()` returns the props, so a nested value object serializes as
@@ -256,9 +256,9 @@ Most value objects should not carry metadata. If you do have metadata, be
 explicit about whether it belongs to equality.
 
 ```ts
-import { voEqualsExcept } from "@shirudo/ddd-kit";
+import { valueObjectEqualsExcept } from "@shirudo/ddd-kit";
 
-voEqualsExcept(firstAddress, secondAddress, {
+valueObjectEqualsExcept(firstAddress, secondAddress, {
   ignoreKeys: ["updatedAt"],
 });
 ```
@@ -300,12 +300,12 @@ are rejected. They are mutable, reference-oriented, or process state rather
 than stable value data. Convert binary data to an encoded string or a plain
 number array before constructing a value object.
 
-Do not pass hostile Proxy objects to `vo()`. JavaScript has no portable,
+Do not pass hostile Proxy objects to `valueObject()`. JavaScript has no portable,
 side-effect-free way to identify a transparent Proxy, so reflective cloning can
-trigger traps. Treat `vo()` as an immutable value constructor, not as a sandbox.
+trigger traps. Treat `valueObject()` as an immutable value constructor, not as a sandbox.
 
 The exported `deepFreeze()` helper freezes in place and is used by lower-level
-internals. Application code should usually prefer `vo()` or `ValueObject<T>`,
+internals. Application code should usually prefer `valueObject()` or `ValueObject<T>`,
 because they clone first and do not freeze caller-owned objects. A nested value
 object is the one exception: it is frozen in place.
 
@@ -323,7 +323,7 @@ Do not hide invalid states behind optional fields. If a date range always needs
 both dates, model both dates and reject invalid ranges at construction. A value
 object should make invalid combinations hard to express.
 
-Do not use `voWithValidation()` for domain invariants that must never be
+Do not use `valueObjectOrError()` for domain invariants that must never be
 ignored. The helper is useful at boundaries where callers expect `Result`.
 Inside the domain, prefer a constructor or factory that cannot produce an
 invalid value.

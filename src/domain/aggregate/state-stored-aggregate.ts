@@ -8,7 +8,7 @@ import { BaseAggregate } from "./base-aggregate";
  * The aggregate owns identity, valid domain state, behavior, its current
  * domain version, and pending domain events. It deliberately does not own a
  * database baseline or dirty-key bookkeeping. A repository adapter defines
- * its own persistence projection; the application shell retains that opaque
+ * its own persistence capture; the application shell retains that opaque
  * baseline and derives the adapter's change set at flush.
  */
 export abstract class StateStoredAggregate<
@@ -18,7 +18,7 @@ export abstract class StateStoredAggregate<
 > extends BaseAggregate<TState, TId, TEvent> {
 	/**
 	 * Replaces the state, advances the OCC version, and records the events
-	 * of the change, in that order. State validation, the event mint gate,
+	 * of the change, in that order. State validation, the kit-built check,
 	 * the aggregate identity check of the event, the pending event-id check,
 	 * and the pending event limit check run before the change becomes
 	 * observable, so a rejected decision records nothing and moves nothing.
@@ -35,9 +35,7 @@ export abstract class StateStoredAggregate<
 		)
 			? events
 			: [events as PendingDomainEvent<TEvent>];
-		const stamped = eventBatch.map((event) =>
-			this.stampNewEventIdentity(event),
-		);
+		const stamped = eventBatch.map((event) => this.attributeNewEvent(event));
 		this.assertEventIdsNotPending(stamped);
 		this.assertPendingEventLimit(stamped.length);
 		// The version number is validated before the state moves; the write

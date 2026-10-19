@@ -63,7 +63,7 @@ Creation and update are not synonyms:
 ```ts
 await new UnitOfWork(deps).run(async ({ repositories }) => {
   const order = Order.place(newOrderId(), customerId, items);
-  recordPendingEvents(order, domainEvents);
+  stampPendingEvents(order, domainEvents);
 
   repositories.orders.add(order);
 });
@@ -73,7 +73,7 @@ await new UnitOfWork(deps).run(async ({ repositories }) => {
 await new UnitOfWork(deps).run(async ({ repositories }) => {
   const order = await repositories.orders.getById(orderId);
   order.confirm();
-  recordPendingEvents(order, domainEvents);
+  stampPendingEvents(order, domainEvents);
 
   repositories.orders.update(order);
 });
@@ -180,20 +180,19 @@ interface PersistenceModel<TAggregate, TBaseline, TChangeSet> {
 }
 ```
 
-When an adapter loads an aggregate, `UnitOfWork` stores the model's baseline
-behind an opaque `PersistenceBaseline` token. The use case and aggregate
-cannot inspect it. At write registration, the same adapter capability derives
+When an adapter loads an aggregate, `UnitOfWork` keeps the model's baseline
+internally. The use case and the aggregate cannot inspect it. At write registration, the same adapter capability derives
 and seals the exact change set.
 
-A full-row model can be small. It reads the aggregate through its detached
-read DTO; see
+A full-row model can be small. It reads the aggregate through its
+plain state; see
 [Aggregates -> Reading State from Outside](./aggregates.md#reading-state-from-outside).
 The row holds a JSON-safe encoding of that DTO: `encodeOrderState` maps each
 `Money` field to a `MoneyDto`, and `decodeOrderState` maps it back on load.
 
 ```ts
 type OrderRow = {
-  readonly state: OrderStateDto;
+  readonly state: PlainOrderState;
   readonly version: number;
 };
 
@@ -203,12 +202,12 @@ const orderPersistence: PersistenceModel<
   OrderRow | undefined
 > = {
   capture: (order) => ({
-    state: encodeOrderState(order.stateDto),
+    state: encodeOrderState(order.plainState),
     version: order.version,
   }),
   changes: (baseline, order, lifecycle) => {
     const current = {
-      state: encodeOrderState(order.stateDto),
+      state: encodeOrderState(order.plainState),
       version: order.version,
     };
 
@@ -252,8 +251,8 @@ skipped. The reverse also holds: an empty change set with a bumped
 must still persist the new version. Skipping the write desyncs the stored
 version and produces false concurrency conflicts on later updates.
 
-Projection functions must use meaningful aggregate queries and return
-detached persistence DTOs. Both `capture` and `changes` must avoid mutable
+Capture functions must use meaningful aggregate queries and return
+copied persistence DTOs. Both `capture` and `changes` must avoid mutable
 references into the aggregate. The Unit of Work cannot safely clone or freeze
 an arbitrary adapter-native type. A baseline that aliases aggregate state can
 move when the aggregate moves. A change set that aliases it can change after
@@ -722,7 +721,7 @@ The complete recipe with the coded discard set is in
 [Event Sourcing -> Snapshots](./event-sourcing.md#snapshots).
 
 `captureAggregateSnapshot` supplies no hidden clock and performs no I/O. It
-detaches the DTO and rejects functions, promises, errors, symbol-keyed fields,
+copies the DTO and rejects functions, promises, errors, symbol-keyed fields,
 and class instances that cannot round-trip safely. Map child entities and
 value objects to persistence DTOs explicitly.
 
@@ -741,7 +740,7 @@ await new UnitOfWork(deps).run(async ({ repositories }) => {
   const order = await repositories.orders.getById(orderId);
 
   order.archive(reason, clock());
-  recordPendingEvents(order, domainEvents);
+  stampPendingEvents(order, domainEvents);
   repositories.orders.update(order);
 });
 ```
@@ -753,7 +752,7 @@ await new UnitOfWork(deps).run(async ({ repositories }) => {
   const order = await repositories.orders.getById(orderId);
 
   order.recordErasure(erasedAt);
-  recordPendingEvents(order, domainEvents);
+  stampPendingEvents(order, domainEvents);
   repositories.orders.remove(order);
 });
 ```

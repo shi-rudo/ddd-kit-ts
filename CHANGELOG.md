@@ -67,9 +67,10 @@ immutable. Run one kit version per process during a cutover.
   `SnapshotModel`. `createSnapshot`, `restoreFromSnapshot`,
   `restoreFromSnapshotWithEvents`, the snapshot schema members, and the
   `TSnapshotState` type parameter are gone.
-- `withCommit` takes commit tokens from its enrollment capability in place
+- `withCommit` takes commit tokens from its registration capability in place
   of the touched aggregates, and the `deleted` array is gone. See
-  [`withCommit` takes commit tokens](docs/guide/migrating-to-v3.md#withcommit-takes-commit-tokens).
+  [`withCommit` takes commit
+  tokens](docs/guide/migrating-to-v3.md#withcommit-takes-commit-tokens).
 - The `outbox` dependency of `withCommit` and `UnitOfWork` has the type
   `OutboxWriter`.
 - `IQueryableRepository` is gone. A query is a method of the consumer's own
@@ -95,15 +96,16 @@ immutable. Run one kit version per process during a cutover.
   event-sourced aggregate that calls `setState` throws
   `DirectStateMutationError`. The compiler does not flag a one-argument
   `setState` that now bumps; the guide says how to audit the call sites.
-- The aggregate decides, and the application shell records. A domain method
-  creates an uncommitted event with `createEvent`, and `recordPendingEvents`
+- The aggregate decides, and the application shell stamps. A domain method
+  creates an unstamped event with `createEvent`, and `stampPendingEvents`
   stamps the event id, the time, and the metadata before the registration.
-  `recordEvent` is gone, and `withCommit` rejects an unrecorded event. Event
+  `recordEvent` is gone, and `withCommit` rejects an unstamped event. Event
   ids and the clock come from an immutable `createDomainEventFactory` value;
-  the six module setters and scoped helpers are gone. See
-  [The aggregate decides; the shell records](docs/guide/migrating-to-v3.md#the-aggregate-decides-the-shell-records).
-- Events are readonly and minted. A recording path accepts only an event that
-  a kit constructor minted and throws `UnmintedEventError` for a hand-built
+  the six module setters and scoped helpers are gone. See [The aggregate
+  decides; the shell
+  stamps](docs/guide/migrating-to-v3.md#the-aggregate-decides-the-shell-stamps).
+- Events are readonly and kit-built. A recording path accepts only an event
+  that a kit constructor built and throws `HandBuiltEventError` for a hand-built
   object. `createDomainEvent` rejects binary buffers and a `RegExp`, because a
   freeze cannot make them immutable. It checks the payload and the metadata
   before and after it copies them, and `InMemoryEventStore.append` applies the
@@ -130,13 +132,14 @@ immutable. Run one kit version per process during a cutover.
   overridable method. A subclass member named `validateState` fails to
   compile. An event-sourced aggregate runs the validator on each `apply()`.
 - Replay trusts history: it runs no `validateEvent`. Both paths check the
-  aggregate identity of an event. `apply()`, `setState`, and
-  `addDomainEvent` stamp missing fields and throw `MisattributedEventError`
-  for an event of another aggregate. Replay throws `ForeignEventError`. A fold
-  that returns `undefined` throws `FoldReturnedNoStateError`, and an own
-  `"__proto__"` key in a fold result or a payload throws
-  `HostileStateKeyError`. See
-  [Replay trusts history, and events name their aggregate](docs/guide/migrating-to-v3.md#replay-trusts-history-and-events-name-their-aggregate).
+  aggregate identity of an event. `apply()`, `setState`, and `addDomainEvent`
+  attribute the event: they fill in missing fields and throw
+  `MisattributedEventError` for an event of another aggregate. Replay throws
+  `ForeignEventError`. A fold that returns `undefined` throws
+  `FoldReturnedNoStateError`, and an own `"__proto__"` key in a fold result or
+  a payload throws `PrototypePollutionError`. See [Replay trusts history, and
+  events name their
+  aggregate](docs/guide/migrating-to-v3.md#replay-trusts-history-and-events-name-their-aggregate).
 - The `Aggregate` interface has `aggregateIdentity`, the aggregate type and
   the id as one frozen `AggregateIdentity` value. A hand-written
   implementation adds it. An instance that the kit did not construct is
@@ -146,8 +149,9 @@ immutable. Run one kit version per process during a cutover.
   `deepFreeze` takes one argument. The `Entity` constructor rejects a blank
   id with `MissingEntityIdError`, and a version that is not a safe integer of
   at least zero throws `InvalidVersionError`.
-- `voEquals` and `deepEqual` compare the class of a value object instance.
-  Two instances of different classes with the same props are not equal.
+- `valueObjectEquals` and `deepEqual` compare the class of a value object
+  instance. Two instances of different classes with the same props are not
+  equal.
 
 #### Event store
 
@@ -223,6 +227,28 @@ immutable. Run one kit version per process during a cutover.
 - The repository contract suites are the v3 suites under the same names.
   Their failure messages start with "Contract violated:" and "Contract test
   skipped:".
+- The domain state machine has its own entry point,
+  `@shirudo/ddd-kit/state-machine`: `DomainStateMachine`,
+  `transitionDomainState`, `canTransitionDomainState`, its errors, and its
+  types. The root entry no longer exports them.
+- The root entry no longer exports `deepEqualExcept`, `freezeShallow`, and
+  `IValueObject`. Use `valueObjectEqualsExcept`, and type a value object with
+  `ValueObject`.
+
+#### Names
+
+- The kit uses the vocabulary of the established DDD and event-sourcing
+  libraries. See [Names](docs/guide/migrating-to-v3.md#names).
+- `vo`, `voEquals`, `voEqualsExcept`, and the type `VO<T>` are `valueObject`,
+  `valueObjectEquals`, `valueObjectEqualsExcept`, and `ValueObjectOf<T>`.
+- `voWithValidation` is `valueObjectOrError`, and `voValidated` is
+  `valueObjectOrIssues`. The names say what a failure returns: one error
+  message, or all issues in a `ValidationError`.
+- `EventBusImpl` is `InProcessEventBus`.
+- `EventHarvestError` is `EventCollectionError` with the code
+  `EVENT_COLLECTION_FAILED`, and `UnenrolledChangesError` is
+  `UnregisteredChangesError` with the code `UNREGISTERED_CHANGES`. A caller
+  that matches a code must change it.
 
 ### Added
 
@@ -304,13 +330,13 @@ immutable. Run one kit version per process during a cutover.
 #### Aggregates and events
 
 - `createDomainEventFactory({ eventIdFactory, clock, source })` and the frozen
-  `defaultDomainEventFactory`. `recordPendingEvents` accepts shared stamp
-  options for a batch. `createDomainEventFromFacts` builds an event whose
+  `defaultDomainEventFactory`. `stampPendingEvents` accepts shared stamp
+  options for a batch. `createStampedDomainEvent` builds an event whose
   identity and time the caller owns.
 - `AggregateConfig.maxPendingEvents` limits the pending list with
   `PendingEventLimitExceededError`. `DuplicateEventIdError` and
   `ReentrantEventRecordingError` protect the recording.
-- `EntityConfig.trustInitialState`, `detachState`, `toVersion`, and
+- `EntityConfig.trustInitialState`, `copyPlainState`, `toVersion`, and
   `reconstituteAggregateFromHistory`.
 - `DomainEventValidationError` and `SnapshotTimeValidationError` carry a
   `code` and a `field`.
@@ -344,7 +370,7 @@ immutable. Run one kit version per process during a cutover.
 - A process manager routes commands through a transactional command outbox:
   `PublishedCommand`, `CommandOutboxWriter`, `routeEventsToCommandOutbox`,
   and `createCommandOutboxContractTests`.
-- `EventBusImpl` reports handler failures, aborted publications, and
+- `InProcessEventBus` reports handler failures, aborted publications, and
   accumulating subscriptions through optional observers. It bounds one
   publish chain with `maxPublishDepth` and `PublishDepthExceededError`, and an
   optional `chainStore` follows a chain across async work.
@@ -402,7 +428,7 @@ immutable. Run one kit version per process during a cutover.
 
 ### Fixed
 
-- `detachState` and `InMemoryEventStore.append` check the copy with a second
+- `copyPlainState` and `InMemoryEventStore.append` check the copy with a second
   walk. Before, a `Map`, a `Set`, an `ArrayBuffer`, a `SharedArrayBuffer`, or
   a boxed bigint whose prototype was replaced passed the walk as a record,
   and the walk did not see its content. The copy then kept an `Error`, a
@@ -413,7 +439,7 @@ immutable. Run one kit version per process during a cutover.
   copy that differs throws, with the path. In rc.11, the walks compared only
   the number of data properties, and the content of the built-in could
   balance that number.
-- `detachState` and `InMemoryEventStore.append` reject every expando on a
+- `copyPlainState` and `InMemoryEventStore.append` reject every expando on a
   built-in that the copy would drop. This includes an index key and a
   non-enumerable data property or accessor. Before, the copy lost such a key
   without an error, for example `0` on a `Map` or a key after the last
@@ -431,13 +457,13 @@ immutable. Run one kit version per process during a cutover.
   getter in a payload, a checkpoint, an outcome, or a candidate can no
   longer run between a check and a write. It therefore cannot push a store
   past its capacity or revive an abandoned claim.
-- `InMemoryOutbox.add` rejects a malformed candidate with `EventHarvestError`:
-  a part that is not an object, an `eventId` or `type` that is not an own
-  string data property of the event, a source field that is not a string, or
-  a position that is not a valid commit position. The message names the
-  event, the field, and the value. Before, such a candidate could reach the
-  outbox state, and a `NaN` position broke the order of its source.
-- `detachState` and the other plain-data checks of the kit accept a
+- `InMemoryOutbox.add` rejects a malformed candidate with
+  `EventCollectionError`: a part that is not an object, an `eventId` or `type`
+  that is not an own string data property of the event, a source field that is
+  not a string, or a position that is not a valid commit position. The message
+  names the event, the field, and the value. Before, such a candidate could
+  reach the outbox state, and a `NaN` position broke the order of its source.
+- `copyPlainState` and the other plain-data checks of the kit accept a
   structured clone in the Vercel Edge runtime. That runtime replaces the
   global `Object`, so its source text no longer names `Object`, while a
   clone keeps the constructor of the host. Before, the checks took every
@@ -449,8 +475,8 @@ immutable. Run one kit version per process during a cutover.
   waits. A leaked write then gets `TransactionClosedError`. Before, it got
   `AggregateTrackingError` with the reason `registered_during_flush`.
 - `InMemoryEventStore.append` writes all of a batch or nothing, and it stores
-  only plain data. It copies each event with `detachState`, the state
-  detachment of the kit. An event with a value that the copy would lose or
+  only plain data. It copies each event with `copyPlainState`, the checked
+  state copy of the kit. An event with a value that the copy would lose or
   change rejects with a `TypeError` that names the event index and the stream.
   Examples are a function, a class instance, an accessor, an `Error`, and a
   hidden or symbol-keyed property. A batch entry that is not an object, for
@@ -458,12 +484,12 @@ immutable. Run one kit version per process during a cutover.
   Before, the store dropped the prototype of a class instance, ran accessors,
   and could keep part of a failed batch. It reads its arguments once, so a
   getter on them cannot bypass the version check.
-- `detachState` walks a Map or a Set with the built-in iteration and reads
+- `copyPlainState` walks a Map or a Set with the built-in iteration and reads
   class names through property descriptors, so no own iterator and no accessor
   of the state runs. A Proxy still runs its traps, and an accessor that a trap
   adds can run. Before, an own iterator could hide a class instance from the
-  check. This also covers the read DTO of an entity and the snapshot model. An
-  optional second argument names the state in the messages.
+  check. This also covers the plain state of an entity and the snapshot model.
+  An optional second argument names the state in the messages.
 - `UnitOfWork.run` reports a failed rollback as `RollbackError` also when a
   step after the work failed inside the transaction, for example the outbox
   write. Before, it reported a `CommitError` whose cause was the rollback
@@ -471,7 +497,7 @@ immutable. Run one kit version per process during a cutover.
   failure inside the transaction as its cause and the scope's error as
   `rollbackCause`.
 - An own `"__proto__"` key in an entity state, or in event metadata passed to
-  `mergeMetadata` or `copyMetadata`, throws `HostileStateKeyError`. Before,
+  `mergeMetadata` or `copyMetadata`, throws `PrototypePollutionError`. Before,
   the state copy replaced its prototype, and the key vanished.
 - A value object accepts a nested value object again. Version 2.2.0 rejected
   it as a class instance.

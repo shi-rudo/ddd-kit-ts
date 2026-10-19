@@ -17,7 +17,7 @@ entities, value objects, domain events, repositories, and the use-case boundary.
 <!-- TODO: list the concrete triggers, e.g.
 - Modeling a new aggregate root and its invariants
 - Wrapping a primitive in a value object at the boundary
-- Emitting and harvesting domain events with `withCommit`
+- Emitting and collecting domain events with `withCommit`
 - Defining a repository contract and running the testing suite against it
 -->
 
@@ -46,6 +46,7 @@ entities, value objects, domain events, repositories, and the use-case boundary.
 - `@shirudo/ddd-kit/public-errors` presentation-layer mapping
 - `@shirudo/ddd-kit/testing` repository contract suites
 - `@shirudo/ddd-kit/money` money contract and boundary module
+- `@shirudo/ddd-kit/state-machine` domain state machine (optional)
 
 ## Related
 

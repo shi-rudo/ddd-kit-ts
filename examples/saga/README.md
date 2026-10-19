@@ -89,7 +89,7 @@ domain events and are not published automatically. This example also keeps the
 state-stored aggregate's `TEvent = never`, so it records no progress events. If
 monitoring or downstream processes need `CheckoutStarted`, `AwaitingPayment`,
 or `ProcessCompleted`, declare an aggregate event union. Record those events
-via `createEvent` plus application-shell `recordPendingEvents`. Do not
+via `createEvent` plus application-shell `stampPendingEvents`. Do not
 reinterpret machine outputs as domain events.
 
 The event-sourced variant takes the durable form. It records completed process
@@ -189,7 +189,7 @@ lose a trigger between publication and the subscriber. The
 - A saga timeout is an input. Store the deadline in the same transaction as
   the wait. `DeadlineProcessor` later returns the deadline as an input. The
   state machine can reject a stale deadline after a state change.
-- `EventBusImpl.publish` collects subscriber errors and throws after the batch.
+- `InProcessEventBus.publish` collects subscriber errors and throws after the batch.
   One failed saga step does not stop its peers. The dispatcher uses bounded
   retries and dead-lettering.
 

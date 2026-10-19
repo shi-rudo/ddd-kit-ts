@@ -215,7 +215,7 @@ describe("clear() resets the pending-event baselines", () => {
 		// The instance was flushed elsewhere; a REUSED map must capture the
 		// new, lower baseline instead of keeping the stale count of 2,
 		// which would hide the next recorded event from the
-		// UnenrolledChangesError safety net.
+		// UnregisteredChangesError safety net.
 		aggregate.pendingEvents = [];
 		map.set(EventfulAggregate, aggregate);
 		aggregate.pendingEvents = [{}];

@@ -1,6 +1,6 @@
 import {
+	applyCooperativeBrand,
 	hasCooperativeBrand,
-	stampCooperativeBrand,
 } from "../cooperative-brand";
 import { type BuiltInTag, builtInTypeName } from "./is-built-in";
 
@@ -47,7 +47,7 @@ const mutatorsByTag: ReadonlyMap<BuiltInTag, readonly string[]> = new Map<
 const mutatorShadowBrand = Symbol.for("@shirudo/ddd-kit/mutator-shadow/v1");
 
 // One shadow per type and mutator for the lifetime of the module: a deep
-// freeze runs for every minted event, so a new closure per instance would
+// freeze runs for every kit-built event, so a new closure per instance would
 // be allocation churn on a hot path.
 const shadows = new Map<string, () => never>();
 
@@ -60,7 +60,7 @@ function shadowOf(typeName: string, method: string): () => never {
 				`Cannot call ${method}() on a ${typeName} inside a deeply frozen value`,
 			);
 		};
-		stampCooperativeBrand(shadow, mutatorShadowBrand);
+		applyCooperativeBrand(shadow, mutatorShadowBrand);
 		Object.freeze(shadow);
 		shadows.set(key, shadow);
 	}

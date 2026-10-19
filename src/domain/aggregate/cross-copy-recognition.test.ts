@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
 	createDomainEvent,
 	type DomainEvent,
-	isRecordedDomainEvent,
-	type UncommittedDomainEventOf,
+	isStampedDomainEvent,
+	type UnstampedDomainEventOf,
 } from "../event/domain-event";
 import type { Id } from "../identity/id";
 import { EventSourcedAggregate } from "./event-sourced-aggregate";
@@ -12,7 +12,7 @@ import { pendingEventRecordingCapabilityFor } from "./pending-event-recording";
 import { StateStoredAggregate } from "./state-stored-aggregate";
 
 // A duplicate npm dependency or a plugin bundle loads a second copy of the
-// kit. Its module-private state (the mint WeakSet, a private registry) is
+// kit. Its module-private state (the kit-built WeakSet, a private registry) is
 // invisible to this copy; only the shared Symbol.for brands and registry
 // keys connect the two. vi.resetModules() followed by a dynamic import
 // re-evaluates a module exactly like such a second copy would. The reset
@@ -45,7 +45,7 @@ class ApplyingAggregate extends EventSourcedAggregate<
 	protected readonly folds = {
 		ValueUpdated: (
 			state: TestState,
-			event: UncommittedDomainEventOf<ValueUpdated>,
+			event: UnstampedDomainEventOf<ValueUpdated>,
 		): TestState => ({ ...state, value: event.payload.newValue }),
 	};
 }
@@ -59,7 +59,7 @@ class NotingAggregate extends StateStoredAggregate<TestState, TestId> {
 }
 
 describe("recognition across package copies", () => {
-	it("apply accepts an event minted by a second copy of the kit", async () => {
+	it("apply accepts an event built by a second copy of the kit", async () => {
 		// The event carries the shared recorded brand instead of a WeakSet
 		// membership this copy could see; the gate accepts it. The brand is
 		// cooperative by design: the gate catches accidental literals, it is
@@ -77,7 +77,7 @@ describe("recognition across package copies", () => {
 		expect(aggregate.value).toBe(3);
 	});
 
-	it("a second copy of the kit recognizes the copy apply mints with the aggregate identity", async () => {
+	it("a second copy of the kit recognizes the copy apply builds with the aggregate identity", async () => {
 		const aggregate = new ApplyingAggregate("test-1" as TestId);
 		aggregate.applyEvent(
 			createDomainEvent("ValueUpdated", { newValue: 5 }) as ValueUpdated,
@@ -87,11 +87,9 @@ describe("recognition across package copies", () => {
 
 		vi.resetModules();
 		const secondCopy = await import("../event/domain-event");
-		expect(secondCopy.isRecordedDomainEvent).not.toBe(isRecordedDomainEvent);
+		expect(secondCopy.isStampedDomainEvent).not.toBe(isStampedDomainEvent);
 
-		expect(secondCopy.isRecordedDomainEvent(stamped as ValueUpdated)).toBe(
-			true,
-		);
+		expect(secondCopy.isStampedDomainEvent(stamped as ValueUpdated)).toBe(true);
 	});
 
 	it("a second copy of the lifecycle module resolves the capability this copy registered", async () => {

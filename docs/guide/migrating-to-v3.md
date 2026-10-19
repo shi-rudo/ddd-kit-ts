@@ -33,7 +33,7 @@ describes it.
 Value objects need no change when they keep their state in `props`. Version
 2.2.0 rejected a value object inside another value object; v3 accepts it again,
 kept by reference. A nested value object with an own field outside `props` is
-rejected; move such a field into `props` or into a getter. `voEquals` and
+rejected; move such a field into `props` or into a getter. `valueObjectEquals` and
 `deepEqual` now see the class of a value object instance: two instances of
 different classes are not equal, and an instance is not equal to a plain
 `{ props }` record.
@@ -53,7 +53,7 @@ await orders.save(order);
 ```
 
 The repository inspected aggregate persistence metadata to choose insert or
-update. Some repositories also enrolled events manually.
+update. Some repositories also registered events manually.
 
 The v3 flow is explicit:
 
@@ -62,7 +62,7 @@ await new UnitOfWork(deps).run(async ({ repositories }) => {
   const order = await repositories.orders.getById(orderId);
 
   order.confirm();
-  recordPendingEvents(order, domainEvents);
+  stampPendingEvents(order, domainEvents);
   repositories.orders.update(order);
 });
 ```
@@ -120,17 +120,17 @@ shows.
 
 `Entity.state` is `protected` in v3. Every `order.state.x` read outside the
 aggregate no longer compiles. Replace application reads with domain queries
-(`order.status`). Give the persistence adapter one detached read DTO:
+(`order.status`). Give the persistence adapter one plain state:
 
 ```ts
 class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
-  get stateDto(): Readonly<OrderState> {
-    return deepFreeze(detachState(this.state));
+  get plainState(): Readonly<OrderState> {
+    return deepFreeze(copyPlainState(this.state));
   }
 }
 ```
 
-`detachState` throws when the state carries a class instance, a function, a
+`copyPlainState` throws when the state carries a class instance, a function, a
 symbol, or another value a structured clone would lose, and names the field
 path. A state with class-based child entities
 needs an explicit mapper to plain data instead of the clone. See
@@ -191,7 +191,7 @@ Repository writes are valid only through the application-facing facade:
 await new UnitOfWork(deps).run(async ({ repositories }) => {
   const order = Order.create(newOrderId(), customerId);
   order.addItems(items);
-  recordPendingEvents(order, domainEvents);
+  stampPendingEvents(order, domainEvents);
 
   repositories.orders.add(order);
 });
@@ -201,7 +201,7 @@ await new UnitOfWork(deps).run(async ({ repositories }) => {
 await new UnitOfWork(deps).run(async ({ repositories }) => {
   const order = await repositories.orders.getById(orderId);
   order.addItems(items);
-  recordPendingEvents(order, domainEvents);
+  stampPendingEvents(order, domainEvents);
 
   repositories.orders.update(order);
 });
@@ -248,14 +248,14 @@ On every successful load:
 3. Reconstitute the aggregate.
 4. Return `tracking.trackLoaded(aggregate)`.
 
-Delete adapter-side manual enrollment. `UnitOfWorkSession` with its
+Delete adapter-side manual registration. `UnitOfWorkSession` with its
 `enrollSaved` and `enrollDeleted` is gone. Application code cannot see the
 tracking capability or raw transaction, and adapter `add`/`update`/`remove`
 methods are not the durable write path.
 
 ### 5. Define the adapter's baseline and change set
 
-Move persistence projection and dirty detection into a `PersistenceModel`:
+Move the persistence capture and dirty detection into a `PersistenceModel`:
 
 ```ts
 const orderPersistence: PersistenceModel<
@@ -263,9 +263,9 @@ const orderPersistence: PersistenceModel<
   OrderRow,
   OrderRow | undefined
 > = {
-  capture: (order) => ({ state: order.stateDto, version: order.version }),
+  capture: (order) => ({ state: order.plainState, version: order.version }),
   changes: (baseline, order, lifecycle) => {
-    const current = { state: order.stateDto, version: order.version };
+    const current = { state: order.plainState, version: order.version };
     return lifecycle === "loaded" && deepEqual(baseline, current)
       ? undefined
       : current;
@@ -451,7 +451,7 @@ that names one aggregate carries one `identity` field of the shape
 | `new AggregateNotFoundError({ aggregateType, id })` | `new AggregateNotFoundError({ identity })` |
 | `new DuplicateAggregateError({ aggregateType, aggregateId })` | `new DuplicateAggregateError({ identity })` |
 | `new AggregateDeletedError(aggregateId)` | `new AggregateDeletedError({ identity })` |
-| `new UnenrolledChangesError(aggregateId)` | `new UnenrolledChangesError({ identity })` |
+| `new UnenrolledChangesError(aggregateId)` | `new UnregisteredChangesError({ identity })` |
 | `new UnreplayableAggregateError(aggregateId, reason)` | `new UnreplayableAggregateError({ identity, reason })` |
 | `error.aggregateType`, `error.aggregateId` | `error.identity.aggregateType`, `error.identity.aggregateId` |
 | `error.id` on `AggregateNotFoundError` | `error.identity.aggregateId` |
@@ -596,12 +596,12 @@ cosmetic cache. `apply()` records only new facts; replay goes through
 `replayHistory`. An event-sourced aggregate that calls `setState` throws
 `DirectStateMutationError`, because its state changes only through `apply()`.
 
-#### The aggregate decides; the shell records
+#### The aggregate decides; the shell stamps
 
-A domain method creates an uncommitted event with `this.createEvent(type,
+A domain method creates an unstamped event with `this.createEvent(type,
 payload)`. The event carries the fact and the aggregate identity only. The
 application shell stamps the event id, the time, and the metadata with
-`recordPendingEvents`, before the repository registration.
+`stampPendingEvents`, before the repository registration.
 
 ```ts
 // before
@@ -617,7 +617,7 @@ confirm(): void {
 await new UnitOfWork(deps).run(async ({ repositories }) => {
   const order = await repositories.orders.getById(command.orderId);
   order.confirm();
-  recordPendingEvents(order, domainEvents, {
+  stampPendingEvents(order, domainEvents, {
     metadata: { correlationId: command.correlationId },
   });
   repositories.orders.update(order);
@@ -645,14 +645,14 @@ const event = domainEvents.create("OrderConfirmed", payload);
 ```
 
 The top-level `createDomainEvent` uses the frozen
-`defaultDomainEventFactory`. `createDomainEventFromFacts` builds an event
+`defaultDomainEventFactory`. `createStampedDomainEvent` builds an event
 whose caller owns the identity and the time, outside an aggregate.
 
-#### Events are readonly and minted
+#### Events are readonly and kit-built
 
 Every field of `DomainEvent` is `readonly`. The recording paths accept only
-events that the kit constructors minted. A hand-built object literal throws
-`UnmintedEventError` (code `UNMINTED_EVENT`) before the state moves. The
+events that the kit constructors built. A hand-built object literal throws
+`HandBuiltEventError` (code `HAND_BUILT_EVENT`) before the state moves. The
 compiler does not flag a literal, because a literal satisfies the readonly
 interface. Search for event objects built by hand.
 
@@ -689,7 +689,7 @@ absent: `null`, a string, a number, an array, or a `Map` throws a `TypeError`.
 
 `Entity.state` is `protected`, and `IEntity<TId, TState>` is `IEntity<TId>`.
 A public live state let a caller change nested state past every rule. Step 1
-shows the domain queries and the detached read DTO that replace it.
+shows the domain queries and the plain state that replace it.
 
 A subclass no longer sees `_state` and `freezeState`. Every write goes
 through `setState`, which validates and freezes.
@@ -785,7 +785,7 @@ events without the optional fields pass.
 Two more rules apply on both paths. A fold that returns `undefined` throws
 `FoldReturnedNoStateError`; model an absent state as `null` or as a status
 field. A fold result with an own `"__proto__"` key throws
-`HostileStateKeyError`, and `createDomainEvent` throws it for such a
+`PrototypePollutionError`, and `createDomainEvent` throws it for such a
 payload. Replay throws both errors after the rollback, instead of returning
 `Err`. Fix such folds before you load the streams that contain the events.
 
@@ -853,7 +853,7 @@ multi-result method a validated limit, one stable order, and a cursor.
 
 #### `withCommit` takes commit tokens
 
-A direct caller of `withCommit` returns tokens from the enrollment
+A direct caller of `withCommit` returns tokens from the registration
 capability, not the aggregates it touched. A touched aggregate is no proof
 that its write joined the transaction.
 
@@ -867,17 +867,17 @@ await withCommit({ scope, outbox, bus }, async (tx) => {
 });
 
 // after
-await withCommit({ scope, outbox, bus }, async (tx, enrollment) => {
+await withCommit({ scope, outbox, bus }, async (tx, registration) => {
   const order = await orders(tx).getById(orderId);
   order.confirm();
-  recordPendingEvents(order, domainEvents);
+  stampPendingEvents(order, domainEvents);
   await orders(tx).save(order);
-  return { result: order.id, commits: [enrollment.enrollSaved(order)] };
+  return { result: order.id, commits: [registration.registerSaved(order)] };
 });
 ```
 
-For a physical removal, return `enrollment.enrollDeleted(aggregate)`. The
-`deleted` array is gone. Every token that the callback mints must be in
+For a physical removal, return `registration.registerRemoved(aggregate)`. The
+`deleted` array is gone. Every token that the callback receives must be in
 `commits`. A `UnitOfWork` use case keeps returning its result directly.
 
 #### The outbox dependency is the write half
@@ -957,7 +957,7 @@ the cause. An adapter implements `readStream` and passes
 
 A hand-written `EventBus` implements `subscribeAll`, `subscribeMany`, and
 `close`, and `publish` accepts `PublishOptions`. An `EventHandler` receives
-an `ExecutionContext` with a `signal` as its second argument. `EventBusImpl`
+an `ExecutionContext` with a `signal` as its second argument. `InProcessEventBus`
 users need no change.
 
 ```ts
@@ -1053,6 +1053,10 @@ default `Record<string, unknown>` map.
 | `computeBackoffDelay` | not exported; the retry behavior is unchanged |
 | `engines.node` `>=20` | `>=22` |
 | peer `@shirudo/base-error` `^7.1.1` | `^8.3.0` |
+| `import { DomainStateMachine } from "@shirudo/ddd-kit"` | `import { DomainStateMachine } from "@shirudo/ddd-kit/state-machine"` |
+| `deepEqualExcept` | not exported; use `valueObjectEqualsExcept` |
+| `freezeShallow` | not exported |
+| `IValueObject` | not exported; type a value object with `ValueObject` |
 
 The `utils` entry point duplicated the root, so only the import path
 changes. `@shirudo/ddd-kit/money` is a new entry point. Node 20 reached its
@@ -1060,6 +1064,24 @@ end of life on 2026-04-30. `@shirudo/base-error` before 8.1.0 does not mask
 the fields that a kit error adds when you log it with `redactAllow`. Follow
 the migration notes of `@shirudo/base-error` 8 where you use its API
 directly.
+
+### Names
+
+The kit uses the words of the established DDD and event-sourcing libraries,
+so a reader who knows Axon, EventSauce, Marten, or Python eventsourcing
+reads the API as they expect. Each 2.2.0 name below changes:
+
+| 2.2.0 | 3.0.0 |
+| --- | --- |
+| `vo`, `voEquals`, `voEqualsExcept` | `valueObject`, `valueObjectEquals`, `valueObjectEqualsExcept` |
+| `voValidated`, `voWithValidation` | `valueObjectOrIssues`, `valueObjectOrError` |
+| type `VO<T>` | `ValueObjectOf<T>` |
+| `EventBusImpl` | `InProcessEventBus` |
+| `EventHarvestError` | `EventCollectionError`, code `EVENT_COLLECTION_FAILED` |
+| `UnenrolledChangesError` | `UnregisteredChangesError`, code `UNREGISTERED_CHANGES` |
+
+The renames are mechanical: an editor rename or a search and replace on the
+whole word is enough. A caller that matches an error code must change it.
 
 ## Production cutover: one coordinated switch
 
@@ -1387,14 +1409,39 @@ Behavior that a use case or an adapter can notice:
 
 **3.0.0.**
 
-- `detachState` rejects an index key and a non-enumerable data property or
+The names follow the established vocabulary, and the root entry is
+slimmer. Replace the rc.12 names:
+
+| rc.12 | 3.0.0 |
+| --- | --- |
+| `recordPendingEvents` | `stampPendingEvents` |
+| `createDomainEventFromFacts`, `CreateDomainEventFromFactsOptions` | `createStampedDomainEvent`, `CreateStampedDomainEventOptions` |
+| `UncommittedDomainEvent`, `AnyUncommittedDomainEvent`, `UncommittedDomainEventOf` | `UnstampedDomainEvent`, `AnyUnstampedDomainEvent`, `UnstampedDomainEventOf` |
+| protected `stampNewEventIdentity(event)` | protected `attributeNewEvent(event)` |
+| `detachState` | `copyPlainState` |
+| `CommitEnrollment`, `enrollSaved`, `enrollDeleted` | `CommitRegistration`, `registerSaved`, `registerRemoved` |
+| `UnenrolledChangesError` (code `UNENROLLED_CHANGES`) | `UnregisteredChangesError` (code `UNREGISTERED_CHANGES`) |
+| `EventHarvestError` (code `EVENT_HARVEST_FAILED`) | `EventCollectionError` (code `EVENT_COLLECTION_FAILED`) |
+| `UnmintedEventError` (code `UNMINTED_EVENT`) | `HandBuiltEventError` (code `HAND_BUILT_EVENT`) |
+| `HostileStateKeyError` (code `HOSTILE_STATE_KEY`) | `PrototypePollutionError` (code `PROTOTYPE_POLLUTION`) |
+| `EventBusImpl` | `InProcessEventBus` |
+| `vo`, `voEquals`, `voEqualsExcept`, `voValidated`, `voWithValidation`, type `VO<T>` | `valueObject`, `valueObjectEquals`, `valueObjectEqualsExcept`, `valueObjectOrIssues`, `valueObjectOrError`, `ValueObjectOf<T>` |
+| the state machine from `@shirudo/ddd-kit` | from `@shirudo/ddd-kit/state-machine` |
+
+The root entry no longer exports `capturePersistenceBaseline`,
+`derivePersistenceChanges`, `insertPersistenceBaseline`,
+`recapturePersistenceBaseline`, `persistenceProjectionDrifted`,
+`PersistenceBaseline`, `freezeShallow`, `deepEqualExcept`,
+`recordDomainEvent`, `createUncommittedDomainEvent`, and `IValueObject`.
+
+- `copyPlainState` rejects an index key and a non-enumerable data property or
   accessor on a built-in, for example `0` on a `Map` or a key after the last
   character of a boxed `String`. Before, the copy dropped such a key without
   an error. The `lastIndex` of a `RegExp`, the `length` of a boxed `String`,
   and the mutator shadows of a frozen `Date`, `Map`, or `Set` still pass.
   Entity read views, the snapshot model, and `InMemoryEventStore.append` use
   the same check.
-- `detachState` rejects a built-in whose prototype was replaced, for example
+- `copyPlainState` rejects a built-in whose prototype was replaced, for example
   a `Map` with `Object.prototype` as its prototype, also when it has no own
   property: the copy is a `Map` again. In rc.11 such a value passed when it
   had no own property, and also when the records in it had as many keys as

@@ -1,11 +1,11 @@
 # Structural Comparison
 
-Functions that compare, reshape, and detach a value structure in depth: equality, equality with exclusions, key removal, and a guarded structured clone. They work over objects, arrays, Maps, Sets and TypedArrays.
+Functions that compare, reshape, and copy a value structure in depth: equality, equality with exclusions, key removal, and a guarded structured clone. They work over objects, arrays, Maps, Sets and TypedArrays.
 
 ## Installation
 
 ```ts
-import { deepEqual, deepOmit, deepEqualExcept, detachState } from '@shirudo/ddd-kit';
+import { deepEqual, deepOmit, copyPlainState } from '@shirudo/ddd-kit';
 ```
 
 ## Functions
@@ -110,9 +110,9 @@ const result2 = deepOmit(obj, {
 
 ---
 
-### `detachState(state, subject?)`
+### `copyPlainState(state, subject?)`
 
-Returns a copy of `state` that shares no object with the original. The copy is a `structuredClone`, taken after a walk that rejects every value the clone would lose or silently degrade. A class instance keeps its data properties in a clone and loses the methods on its prototype; the walk throws a `TypeError` that names the path and the class instead. The optional `subject` replaces `detachState: state` at the start of every message.
+Returns a copy of `state` that shares no object with the original. The copy is a `structuredClone`, taken after a walk that rejects every value the clone would lose or silently degrade. A class instance keeps its data properties in a clone and loses the methods on its prototype; the walk throws a `TypeError` that names the path and the class instead. The optional `subject` replaces `copyPlainState: state` at the start of every message.
 
 The walk reads the graph through property descriptors and walks a `Map` or a `Set` with the built-in iteration. No accessor and no own iterator of the state runs. A `Proxy` runs its traps during the walk. A trap can change the graph, and an accessor that a trap adds runs during the clone. A second walk checks the clone, so a value that a trap swapped in and the content of a built-in whose prototype was replaced are rejected too. The second walk also follows the steps of the first walk: the kind of each object and the key of each data property, in walk order. A clone that differs throws, with the path: a built-in whose prototype was replaced is a built-in again in the clone and loses its own properties.
 
@@ -126,43 +126,44 @@ The walk reads the graph through property descriptors and walks a `Map` or a `Se
 - An expando on a built-in such as a `Map` or a `Date`, also at an index key (the clone drops it)
 - An `Error`, a `Promise`, a `WeakMap`, or a `WeakSet`
 - A `SharedArrayBuffer` or a view over one (the copy would share its memory)
-- A `Proxy`: the walk or the clone fails; `detachState` rethrows a failure of the clone as a `TypeError` that keeps the cause
+- A `Proxy`: the walk or the clone fails; `copyPlainState` rethrows a failure of the clone as a `TypeError` that keeps the cause
 
 Plain objects from any realm, arrays, `Date`, `Map`, `Set`, `RegExp`, bigints, and typed arrays pass. Circular references are preserved.
 
 #### Example
 
 ```ts
-import { deepFreeze, detachState } from '@shirudo/ddd-kit';
+import { deepFreeze, copyPlainState } from '@shirudo/ddd-kit';
 
 class Order extends StateStoredAggregate<OrderState, OrderId> {
-  /** A detached, immutable copy of the state. Never the live graph. */
-  get stateDto(): Readonly<OrderState> {
-    return deepFreeze(detachState(this.state));
+  /** An immutable copy of the state. Never the live graph. */
+  get plainState(): Readonly<OrderState> {
+    return deepFreeze(copyPlainState(this.state));
   }
 }
 
-detachState({ review: new OwnerReview() });
-// TypeError: detachState: state.review is a class instance (OwnerReview); map it to plain data
+copyPlainState({ review: new OwnerReview() });
+// TypeError: copyPlainState: state.review is a class instance (OwnerReview); map it to plain data
 ```
 
 #### Notes
 
-- The snapshot model detaches the captured DTO and the restored state with the same function
+- The snapshot model copies the captured DTO and the restored state with the same function
 - A state that carries a class-based child entity is mapped to plain data first; the walk names the field to map
 
 ---
 
-### `deepEqualExcept(a, b, options)`
+### Equality with exclusions
 
-Performs a deep equality comparison between two values after omitting specified keys.
-
-This function first removes the specified keys from both values using `deepOmit`, then performs a deep equality check using `deepEqual`.
+Compares two values after omitting specified keys: `deepOmit` removes the keys from both values, then `deepEqual` compares the results. The kit implements this as the kit-internal `deepEqualExcept`; the public entry exports `valueObjectEqualsExcept` for value objects and `deepEqual` and `deepOmit` for everything else. Each example below defines the composition as `equalExcept`.
 
 #### Example
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit';
+import { deepEqual, deepOmit, type DeepOmitOptions } from '@shirudo/ddd-kit';
+
+const equalExcept = (a: unknown, b: unknown, options: DeepOmitOptions) =>
+  deepEqual(deepOmit(a, options), deepOmit(b, options));
 
 const obj1 = {
   id: 1,
@@ -177,12 +178,12 @@ const obj2 = {
 };
 
 // Compare ignoring 'id' and 'updatedAt'
-deepEqualExcept(obj1, obj2, {
+equalExcept(obj1, obj2, {
   ignoreKeys: ["id", "updatedAt"]
 }); // true (only 'name' is compared)
 
 // Use predicate for conditional ignoring
-deepEqualExcept(obj1, obj2, {
+equalExcept(obj1, obj2, {
   ignoreKeyPredicate: (key, path) => {
     // Ignore timestamps in nested objects
     return key === 'updatedAt' || key === 'createdAt';
@@ -208,33 +209,33 @@ Value Objects should be compared by their attributes, not identity:
 
 ```ts
 import { deepEqual } from '@shirudo/ddd-kit';
-import { vo, type VO } from '@shirudo/ddd-kit';
+import { valueObject, type ValueObjectOf } from '@shirudo/ddd-kit';
 
-type Money = VO<{
+type Money = ValueObjectOf<{
   amount: number;
   currency: string;
 }>;
 
-const price1 = vo({ amount: 100, currency: "USD" });
-const price2 = vo({ amount: 100, currency: "USD" });
+const price1 = valueObject({ amount: 100, currency: "USD" });
+const price2 = valueObject({ amount: 100, currency: "USD" });
 
 // Compare value objects by their attributes
 deepEqual(price1, price2); // true
 
 // Works with nested value objects
-type Address = VO<{
+type Address = ValueObjectOf<{
   street: string;
   city: string;
   country: string;
 }>;
 
-const address1 = vo({
+const address1 = valueObject({
   street: "123 Main St",
   city: "New York",
   country: "USA"
 });
 
-const address2 = vo({
+const address2 = valueObject({
   street: "123 Main St",
   city: "New York",
   country: "USA"
@@ -248,7 +249,10 @@ deepEqual(address1, address2); // true
 When comparing entities or aggregates, you often want to ignore infrastructure fields like IDs, versions, timestamps, and metadata:
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit';
+import { deepEqual, deepOmit, type DeepOmitOptions } from '@shirudo/ddd-kit';
+
+const equalExcept = (a: unknown, b: unknown, options: DeepOmitOptions) =>
+  deepEqual(deepOmit(a, options), deepOmit(b, options));
 
 // Compare entities ignoring ID and version
 const entity1 = {
@@ -274,7 +278,7 @@ const entity2 = {
 };
 
 // Compare domain attributes only
-deepEqualExcept(entity1, entity2, {
+equalExcept(entity1, entity2, {
   ignoreKeys: ["id", "version", "createdAt", "updatedAt"]
 }); // true (domain attributes match)
 ```
@@ -284,7 +288,10 @@ deepEqualExcept(entity1, entity2, {
 Aggregates contain entities and value objects. Compare them while ignoring infrastructure concerns:
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit';
+import { deepEqual, deepOmit, type DeepOmitOptions } from '@shirudo/ddd-kit';
+
+const equalExcept = (a: unknown, b: unknown, options: DeepOmitOptions) =>
+  deepEqual(deepOmit(a, options), deepOmit(b, options));
 
 type OrderState = {
   id: OrderId;
@@ -324,7 +331,7 @@ const order2: OrderState = {
 };
 
 // Compare domain state, ignoring infrastructure fields
-deepEqualExcept(order1, order2, {
+equalExcept(order1, order2, {
   ignoreKeys: ["id", "version", "createdAt", "updatedAt"],
   ignoreKeyPredicate: (key, path) => {
     // Ignore IDs in nested entities (items)
@@ -338,7 +345,10 @@ deepEqualExcept(order1, order2, {
 When testing domain logic, compare expected vs actual results while ignoring non-deterministic fields:
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit';
+import { deepEqual, deepOmit, type DeepOmitOptions } from '@shirudo/ddd-kit';
+
+const equalExcept = (a: unknown, b: unknown, options: DeepOmitOptions) =>
+  deepEqual(deepOmit(a, options), deepOmit(b, options));
 import { describe, it, expect } from 'vitest';
 
 describe("Order aggregate", () => {
@@ -356,7 +366,7 @@ describe("Order aggregate", () => {
     
     // Compare domain state, ignoring IDs and timestamps
     expect(
-      deepEqualExcept(actualState, expectedState, {
+      equalExcept(actualState, expectedState, {
         ignoreKeys: ["id", "version", "createdAt", "updatedAt"],
         ignoreKeyPredicate: (key, path) => {
           return key === "id" && path.includes("items");
@@ -372,7 +382,10 @@ describe("Order aggregate", () => {
 Domain events often have metadata that should be ignored when comparing:
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit';
+import { deepEqual, deepOmit, type DeepOmitOptions } from '@shirudo/ddd-kit';
+
+const equalExcept = (a: unknown, b: unknown, options: DeepOmitOptions) =>
+  deepEqual(deepOmit(a, options), deepOmit(b, options));
 
 type OrderCreatedEvent = {
   type: "OrderCreated";
@@ -412,7 +425,7 @@ const event2: OrderCreatedEvent = {
 };
 
 // Compare event payloads, ignoring metadata and timestamps
-deepEqualExcept(event1, event2, {
+equalExcept(event1, event2, {
   ignoreKeys: ["timestamp"],
   ignoreKeyPredicate: (key, path) => {
     return path.includes("metadata");
@@ -422,11 +435,14 @@ deepEqualExcept(event1, event2, {
 
 ### Persistence Projection Tests
 
-When testing an adapter projection, compare its domain data while ignoring
+When testing an adapter capture, compare its domain data while ignoring
 adapter-owned metadata:
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit';
+import { deepEqual, deepOmit, type DeepOmitOptions } from '@shirudo/ddd-kit';
+
+const equalExcept = (a: unknown, b: unknown, options: DeepOmitOptions) =>
+  deepEqual(deepOmit(a, options), deepOmit(b, options));
 
 describe("orderPersistence", () => {
   it("projects and reconstitutes domain state", async () => {
@@ -438,7 +454,7 @@ describe("orderPersistence", () => {
 
     // Compare domain state, ignoring adapter metadata
     expect(
-      deepEqualExcept(order.getState(), loaded.getState(), {
+      equalExcept(order.getState(), loaded.getState(), {
         ignoreKeys: ["version", "updatedAt"]
       })
     ).toBe(true);
@@ -451,7 +467,10 @@ describe("orderPersistence", () => {
 When comparing aggregate snapshots, ignore snapshot-specific metadata:
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit';
+import { deepEqual, deepOmit, type DeepOmitOptions } from '@shirudo/ddd-kit';
+
+const equalExcept = (a: unknown, b: unknown, options: DeepOmitOptions) =>
+  deepEqual(deepOmit(a, options), deepOmit(b, options));
 
 type AggregateSnapshot = {
   aggregateId: string;
@@ -478,7 +497,7 @@ const snapshot2: AggregateSnapshot = {
 };
 
 // Compare aggregate state, ignoring snapshot metadata
-deepEqualExcept(snapshot1, snapshot2, {
+equalExcept(snapshot1, snapshot2, {
   ignoreKeys: ["snapshotVersion", "createdAt"]
 }); // true if state matches
 ```
@@ -488,7 +507,10 @@ deepEqualExcept(snapshot1, snapshot2, {
 When testing specifications, compare query results while ignoring order or metadata:
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit';
+import { deepEqual, deepOmit, type DeepOmitOptions } from '@shirudo/ddd-kit';
+
+const equalExcept = (a: unknown, b: unknown, options: DeepOmitOptions) =>
+  deepEqual(deepOmit(a, options), deepOmit(b, options));
 
 describe("ActiveOrdersSpecification", () => {
   it("should return only active orders", async () => {
@@ -503,7 +525,7 @@ describe("ActiveOrdersSpecification", () => {
     // Compare results, ignoring IDs and order
     results.forEach((result, index) => {
       expect(
-        deepEqualExcept(result.getState(), expected[index], {
+        equalExcept(result.getState(), expected[index], {
           ignoreKeys: ["id", "version", "createdAt", "updatedAt"]
         })
       ).toBe(true);

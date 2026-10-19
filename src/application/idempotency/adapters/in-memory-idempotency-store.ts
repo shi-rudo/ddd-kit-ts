@@ -74,7 +74,7 @@ function positiveSafeInteger(value: number): boolean {
  *
  * On its own, the store is the reference for the leased family: it cannot
  * see commits or rollbacks. Claims and staged outcomes carry bounded leases,
- * while every mutation compares the store-minted token. An expired pending
+ * while every mutation compares the store-issued token. An expired pending
  * claim may be replaced; an expired staged outcome cannot be guessed away and
  * instead returns `reconciliation-required`. Only an authoritative
  * `committed` / `not-committed` decision can settle it.

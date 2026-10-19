@@ -5,16 +5,16 @@ import { deepEqual } from "../../internal/structural/deep-equal";
 export type PersistenceLifecycle = "loaded" | "new";
 
 /**
- * Adapter-owned projection and change derivation for one aggregate type.
+ * Adapter-owned capture and change derivation for one aggregate type.
  *
  * The domain model does not implement this contract. A repository adapter
- * chooses what it persists, how that projection is captured at load, and
+ * chooses what it persists, how it captures the aggregate at load, and
  * whether a change set is a partial diff or a full replacement.
  */
 export interface PersistenceModel<TAggregate, TBaseline, TChangeSet> {
 	/**
-	 * Captures the adapter's persistence projection at the current moment.
-	 * Return a detached value or an immutable value object: the Unit of Work
+	 * Captures the aggregate for the adapter at the current moment.
+	 * Return a copied value or an immutable value object: the Unit of Work
 	 * retains it as a baseline and cannot make an arbitrary adapter type safe.
 	 *
 	 * Capture must be deterministic for an unchanged aggregate: the Unit of
@@ -34,7 +34,7 @@ export interface PersistenceModel<TAggregate, TBaseline, TChangeSet> {
 	capture(aggregate: TAggregate): TBaseline;
 
 	/**
-	 * Adapter-owned equality for two captures of the persistence projection.
+	 * Adapter-owned equality for two captures.
 	 * Optional: the default is the package's structural deep equality (Set
 	 * members and Map keys by reference). Supply it when the capture shape
 	 * needs domain-specific comparison, for example rebuilt value-object Set
@@ -110,7 +110,7 @@ export function insertPersistenceBaseline<TAggregate, TBaseline, TChangeSet>(
 }
 
 /**
- * Captures the aggregate's current adapter projection using the capability
+ * Captures the aggregate's current adapter capture using the capability
  * carried by an existing baseline. Used to seal persistence-last registration.
  */
 export function recapturePersistenceBaseline<TAggregate, TChangeSet>(
@@ -126,7 +126,7 @@ export function recapturePersistenceBaseline<TAggregate, TChangeSet>(
 }
 
 /**
- * Recaptures the adapter projection and reports whether it drifted from the
+ * Recaptures the adapter capture and reports whether it drifted from the
  * baseline's stored capture, using the model's `captureEquals` when supplied
  * and structural deep equality otherwise.
  *
@@ -137,11 +137,11 @@ export function recapturePersistenceBaseline<TAggregate, TChangeSet>(
  * question independent of the model's diffing strategy. A `"new"` lifecycle
  * baseline has no stored capture and never reports drift.
  */
-export function persistenceProjectionDrifted<TAggregate, TChangeSet>(
+export function persistenceCaptureDrifted<TAggregate, TChangeSet>(
 	baseline: PersistenceBaseline<TAggregate, TChangeSet>,
 	aggregate: TAggregate,
 ): boolean {
-	const capability = capabilityFor(baseline, "persistenceProjectionDrifted");
+	const capability = capabilityFor(baseline, "persistenceCaptureDrifted");
 	if (capability.lifecycle === "new") return false;
 	return !capability.captureEquals(
 		capability.baseline,

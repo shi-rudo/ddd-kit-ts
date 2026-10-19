@@ -8,7 +8,7 @@ The kit ships small in-process buses for those two flows:
 
 - `CommandBus` dispatches commands to `CommandHandler`s.
 - `QueryBus` dispatches queries to `QueryHandler`s.
-- `EventBusImpl` dispatches domain events to in-process subscribers.
+- `InProcessEventBus` dispatches domain events to in-process subscribers.
 
 The important boundary: these buses are dispatchers, not brokers. They do not replace RabbitMQ, Kafka, SQS, NATS, or a workflow engine. They give your application a typed handler contract and a simple in-process dispatcher. If you later move a handler behind a queue, keep the handler type and replace the transport.
 
@@ -40,7 +40,7 @@ or updating a cache are all side effects. This work can be slow, fail, or wait
 forever. The imperative shell is the part of the application that invokes the
 handler and supervises the I/O it starts.
 
-`EventBusImpl` therefore bounds the execution of every handler. For each call
+`InProcessEventBus` therefore bounds the execution of every handler. For each call
 to `publish`, it creates one `ExecutionContext` and passes it to every handler
 for the event type, including handlers registered through `subscribeAll`. The
 context gives all of those handlers the same cancellation signal and time
@@ -600,7 +600,7 @@ Both variants throw `UnregisteredHandlerError` for missing handlers. Missing que
 
 As with commands, a concrete query type map owns the result of both execution styles. Explicit `<Query, Result>` arguments are available only with the default untyped map shape; they cannot override `Queries[query.type]`.
 
-In a CQRS application, query handlers return DTOs shaped for their use case. They may read materialized projections, but a simple management or setup flow can query the authoritative write store on demand through a consumer-owned query port when a separate projection would add synchronization and rebuild cost without earning it. The query port may use the same database and tables as the write side; it still returns a detached DTO rather than a live aggregate. Load an aggregate through its repository when the application needs it for a command or domain decision, not merely to render display data. See [Read-Side Projections](./projections.md).
+In a CQRS application, query handlers return DTOs shaped for their use case. They may read materialized projections, but a simple management or setup flow can query the authoritative write store on demand through a consumer-owned query port when a separate projection would add synchronization and rebuild cost without earning it. The query port may use the same database and tables as the write side; it still returns a DTO copy rather than a live aggregate. Load an aggregate through its repository when the application needs it for a command or domain decision, not merely to render display data. See [Read-Side Projections](./projections.md).
 
 ## `UnitOfWork`: The Write-Side Boundary
 
@@ -609,7 +609,7 @@ The bus dispatches the command. The command handler owns the use case.
 post-commit orchestration to `withCommit`.
 
 ```ts
-import { recordPendingEvents, UnitOfWork } from "@shirudo/ddd-kit";
+import { stampPendingEvents, UnitOfWork } from "@shirudo/ddd-kit";
 
 const result = await new UnitOfWork(
   {
@@ -623,7 +623,7 @@ const result = await new UnitOfWork(
   async ({ repositories }) => {
     const order = await repositories.orders.getById(orderId);
     order.confirm();
-    recordPendingEvents(order, domainEvents);
+    stampPendingEvents(order, domainEvents);
     repositories.orders.update(order);
     return order.id;
   },
@@ -709,9 +709,9 @@ const shipmentRequested = createDomainEvent(
 ```
 
 Inside aggregate methods, prefer `this.createEvent(...)`. Attach correlation
-metadata when the application records pending events with `createStamp()`.
+metadata when the application stamps pending events with `createStamp()`.
 Outside aggregates, `createDomainEvent(...)` is the convenient primitive,
-while `createDomainEventFromFacts(...)` is the explicit legacy constructor.
+while `createStampedDomainEvent(...)` is the explicit legacy constructor.
 
 ### Wrap Handlers for Ambient Context
 
@@ -779,7 +779,7 @@ for (const test of tests) {
 ```
 
 The suite covers the port. It does not cover the construction options of
-`EventBusImpl`, so your own implementation is free to omit them.
+`InProcessEventBus`, so your own implementation is free to omit them.
 
 ## How to Choose
 
@@ -790,7 +790,7 @@ Use this as the default split:
 | Run one write use case in-process | `CommandBus` + `CommandHandler` |
 | Read data for a screen or API response | `QueryBus` + read model |
 | Persist aggregate changes and events atomically | `withCommit` or `UnitOfWork` |
-| Notify in-process subscribers after commit | `EventBusImpl` passed to `withCommit` |
+| Notify in-process subscribers after commit | `InProcessEventBus` passed to `withCommit` |
 | Deliver events across processes | `Outbox` + dispatcher |
 | Coordinate long-running cross-aggregate workflows | Process manager / saga built from events and commands |
 

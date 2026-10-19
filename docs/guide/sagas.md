@@ -179,7 +179,7 @@ async function reactToOrderPlaced(event: OrderPlaced): Promise<void> {
     // consumer of the same event keeps its own inbox entry. The
     // fingerprint is a tripwire (see below); any stable content hash works.
     { key: `checkout-saga:${event.eventId}`, fingerprint: stableHash(event.payload) },
-    async (tx, enrollment) => {
+    async (tx, registration) => {
       const deadlines = makeDeadlineStore(tx);
 
       const saga = CheckoutSaga.start(event.aggregateId as OrderId, event.payload.total);
@@ -196,7 +196,7 @@ async function reactToOrderPlaced(event: OrderPlaced): Promise<void> {
 
       return {
         result: saga.id,
-        commits: [enrollment.enrollSaved(saga)],
+        commits: [registration.registerSaved(saga)],
       };
     },
   );
@@ -255,7 +255,7 @@ not the past-tense spelling by itself. The failure is hidden point-to-point
 intent behind publish/subscribe semantics.
 
 The event-sourced example uses a dedicated command outbox. The aggregate first
-accepts a private fact. `recordPendingEvents` gives that fact its recording
+accepts a private fact. `stampPendingEvents` gives that fact its recording
 identity and trace metadata. Still inside the same transaction,
 `routeEventsToCommandOutbox` maps it to the exact addressed command that must
 survive the commit:
@@ -272,9 +272,9 @@ await withCommit(
     outbox: processCommandWriter,
     // Deliberately no bus: these process facts are private history.
   },
-  async (tx, enrollment) => {
+  async (tx, registration) => {
     saga.advanceToShipping(shipmentId);
-    const recorded = recordPendingEvents(saga, () =>
+    const recorded = stampPendingEvents(saga, () =>
       domainEvents.createStamp({
         metadata: {
           correlationId: paymentReceived.metadata?.correlationId,
@@ -287,7 +287,7 @@ await withCommit(
     await makeCheckoutEventStore(tx).append(recorded);
     return {
       result: saga.id,
-      commits: [enrollment.enrollSaved(saga)],
+      commits: [registration.registerSaved(saga)],
     };
   },
 );

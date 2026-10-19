@@ -1,13 +1,13 @@
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import {
-	EventHarvestError,
+	EventCollectionError,
 	IdempotencyReconciliationRequiredError,
 } from "../../errors/kit-errors";
 import { reportToObserver } from "../../internal/observer";
 import { MAX_TIMER_DELAY_MS } from "../../internal/validate";
 import type { TransactionScope } from "../../persistence/repository/scope";
 import {
-	type CommitEnrollment,
+	type CommitRegistration,
 	type WithCommitDeps,
 	type WithCommitWorkResult,
 	withCommit,
@@ -32,7 +32,7 @@ export interface IdempotencyLease {
 	readonly renewAfterMs: number;
 }
 
-/** Store-minted ownership receipt for one successful claim. */
+/** Store-issued ownership receipt for one successful claim. */
 export interface IdempotencyClaimHandle {
 	readonly key: string;
 	/** Unique across ownership generations for this key; treat as opaque. */
@@ -95,7 +95,7 @@ export type IdempotencyClaim =
  *
  * A NON-transactional store (the in-memory reference on its own, a separate
  * durable store) cannot see commits or rollbacks. Every fresh claim
- * therefore returns a store-minted token and bounded lease. The wrapper
+ * therefore returns a store-issued token and bounded lease. The wrapper
  * renews it while the transaction runs; `complete`, `renew`, `confirm`,
  * `abandon`, and `reconcile` compare the token so a stale owner cannot
  * mutate a successor claim. An expired PENDING claim may be replaced. An
@@ -322,14 +322,14 @@ function startLeaseHeartbeat<TCtx>(
 	};
 }
 
-function scopeWorkEnrollment<Evt extends AnyDomainEvent>(
-	parent: CommitEnrollment<Evt>,
-): { readonly enrollment: CommitEnrollment<Evt>; close(): void } {
+function scopeWorkRegistration<Evt extends AnyDomainEvent>(
+	parent: CommitRegistration<Evt>,
+): { readonly registration: CommitRegistration<Evt>; close(): void } {
 	let open = true;
 	const assertOpen = (): void => {
 		if (!open) {
-			throw new EventHarvestError(
-				"withIdempotentCommit: commit enrollment was used after the " +
+			throw new EventCollectionError(
+				"withIdempotentCommit: commit registration was used after the " +
 					"user work callback settled. Await every repository write before " +
 					"returning from the callback.",
 			);
@@ -337,18 +337,18 @@ function scopeWorkEnrollment<Evt extends AnyDomainEvent>(
 	};
 
 	return {
-		enrollment: Object.freeze({
-			enrollSaved: (
-				aggregate: Parameters<CommitEnrollment<Evt>["enrollSaved"]>[0],
+		registration: Object.freeze({
+			registerSaved: (
+				aggregate: Parameters<CommitRegistration<Evt>["registerSaved"]>[0],
 			) => {
 				assertOpen();
-				return parent.enrollSaved(aggregate);
+				return parent.registerSaved(aggregate);
 			},
-			enrollDeleted: (
-				aggregate: Parameters<CommitEnrollment<Evt>["enrollDeleted"]>[0],
+			registerRemoved: (
+				aggregate: Parameters<CommitRegistration<Evt>["registerRemoved"]>[0],
 			) => {
 				assertOpen();
-				return parent.enrollDeleted(aggregate);
+				return parent.registerRemoved(aggregate);
 			},
 		}),
 		close: () => {
@@ -372,12 +372,12 @@ function scopeWorkEnrollment<Evt extends AnyDomainEvent>(
  *  2. A fresh claim carries an opaque ownership token. For a leased store the
  *     wrapper renews it at `renewAfterMs` until the transaction callback is
  *     ready to commit. A renewal failure rejects before commit and releases
- *     the claim. `fn(ctx, enrollment, execution)` receives the same token so a
+ *     the claim. `fn(ctx, registration, execution)` receives the same token so a
  *     source-side marker can make later reconciliation conclusive.
  *  3. `store.complete(ctx, claim, fn's result)` stages or completes the outcome
- *     in the same transaction as aggregate writes and outbox. The enrollment
+ *     in the same transaction as aggregate writes and outbox. The registration
  *     capability is sealed and its token array copied before `complete` can
- *     yield, so leaked callback state cannot change the harvest receipt.
+ *     yield, so leaked callback state cannot change the collection receipt.
  *  4. After commit, `store.confirm(claim)` finalizes a leased store's staged
  *     outcome; it is a no-op for transactional stores. A failure cannot reject
  *     an already committed write, so it is sent to `onIdempotencyError` and the
@@ -405,7 +405,7 @@ export async function withIdempotentCommit<Evt extends AnyDomainEvent, R, TCtx>(
 	request: IdempotentCommitRequest,
 	fn: (
 		ctx: TCtx,
-		enrollment: CommitEnrollment<Evt>,
+		registration: CommitRegistration<Evt>,
 		execution: IdempotentExecution,
 	) => Promise<WithCommitWorkResult<Evt, R>>,
 ): Promise<IdempotentCommitResult<R>> {
@@ -418,7 +418,7 @@ export async function withIdempotentCommit<Evt extends AnyDomainEvent, R, TCtx>(
 	// Decorator around the caller's scope: releases the current
 	// attempt's claim before an error leaves the transactional region.
 	// This is the only place that sees EVERY failure point of one
-	// attempt (the work, withCommit's harvest guards, the outbox write),
+	// attempt (the work, withCommit's collection guards, the outbox write),
 	// including the ones outside this module's own callback, and it runs
 	// INSIDE a retrying scope's loop, so the next attempt starts clean.
 	const scope: TransactionScope<TCtx> = {
@@ -515,7 +515,7 @@ export async function withIdempotentCommit<Evt extends AnyDomainEvent, R, TCtx>(
 
 	const outcome = await withCommit<Evt, IdempotentCommitResult<R>, TCtx>(
 		{ ...deps, scope },
-		async (ctx, enrollment) => {
+		async (ctx, registration) => {
 			let claim = await store.claim(ctx, request.key, request.fingerprint);
 			if (claim.status === "reconciliation-required") {
 				const decision = deps.reconcileIdempotency
@@ -547,16 +547,16 @@ export async function withIdempotentCommit<Evt extends AnyDomainEvent, R, TCtx>(
 			}
 			attempt.claim = claim.claim;
 			attempt.heartbeat = startLeaseHeartbeat(store, claim.claim);
-			const workEnrollment = scopeWorkEnrollment(enrollment);
+			const workRegistration = scopeWorkRegistration(registration);
 			let work: WithCommitWorkResult<Evt, R>;
 			try {
-				work = await fn(ctx, workEnrollment.enrollment, {
+				work = await fn(ctx, workRegistration.registration, {
 					key: request.key,
 					fingerprint: request.fingerprint,
 					claimToken: claim.claim.token,
 				});
 			} finally {
-				workEnrollment.close();
+				workRegistration.close();
 			}
 			// Snapshot the user-controlled receipt before complete() yields. A
 			// leaked mutable array must not be able to add or remove aggregate
@@ -582,7 +582,7 @@ export async function withIdempotentCommit<Evt extends AnyDomainEvent, R, TCtx>(
 		// authoritative reconciliation decision.
 		const committedClaim = attempt.claim as IdempotencyClaimHandle | undefined;
 		if (!committedClaim) {
-			throw new EventHarvestError(
+			throw new EventCollectionError(
 				"withIdempotentCommit: a fresh result committed without its claim receipt.",
 			);
 		}

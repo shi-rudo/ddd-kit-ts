@@ -60,7 +60,7 @@
  * ```
  */
 import {
-	assertNoHostileOwnProtoKey,
+	assertNoOwnProtoKey,
 	MissingEntityIdError,
 	UnmanagedInstanceError,
 } from "../../errors/kit-errors";
@@ -245,7 +245,7 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 * `TState` publicly would expose the aggregate's live object graph and
 	 * let nested mutation bypass behavior, validation, versioning, and
 	 * dirty tracking. Concrete entities should expose business-meaningful queries or
-	 * detached immutable DTOs (`deepFreeze(detachState(this.state))` for a
+	 * immutable DTOs (`deepFreeze(copyPlainState(this.state))` for a
 	 * plain-data state). Snapshot projection belongs to the persistence
 	 * adapter, which captures the aggregate from outside through those
 	 * queries and DTOs rather than asking the entity to create its own
@@ -294,7 +294,7 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 * widens to the whole graph: NESTED objects are frozen in place too.
 	 *
 	 * @throws MissingEntityIdError when `id` is not a non-blank string.
-	 * @throws HostileStateKeyError when a plain-object, null-prototype,
+	 * @throws PrototypePollutionError when a plain-object, null-prototype,
 	 * or array state carries an own `"__proto__"` data key; validate and
 	 * strip untrusted input at the boundary.
 	 */
@@ -340,7 +340,7 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 * ownership transfer and is frozen in place; see the constructor.
 	 *
 	 * @param newState - The new state
-	 * @throws HostileStateKeyError when the state carries an own
+	 * @throws PrototypePollutionError when the state carries an own
 	 * `"__proto__"` data key; the previous state is kept.
 	 */
 	protected setState(newState: TState): void {
@@ -430,18 +430,18 @@ export function freezeShallow<T>(value: T): T {
  * @internal Shared by the kit's own entity subclasses; not part of the
  * public API.
  */
-export function assertStateHasNoHostileOwnKey(
+export function assertStateHasNoOwnProtoKey(
 	state: unknown,
 	subject: string,
 ): void {
 	if (state === null || typeof state !== "object") return;
 	if (Array.isArray(state)) {
-		assertNoHostileOwnProtoKey(state, subject);
+		assertNoOwnProtoKey(state, subject);
 		return;
 	}
 	const proto = Object.getPrototypeOf(state);
 	if (proto !== Object.prototype && proto !== null) return;
-	assertNoHostileOwnProtoKey(state, subject);
+	assertNoOwnProtoKey(state, subject);
 }
 
 /**
@@ -454,7 +454,7 @@ export function assertStateHasNoHostileOwnKey(
  */
 function shallowCopyOwned<T>(value: T): T {
 	if (value === null || typeof value !== "object") return value;
-	assertStateHasNoHostileOwnKey(value, "Entity state");
+	assertStateHasNoOwnProtoKey(value, "Entity state");
 	if (Array.isArray(value)) {
 		// Spread copies only iterated index elements; transfer own
 		// enumerable NON-INDEX keys (items.total = 5 style annotations) as
@@ -592,7 +592,7 @@ export function removeEntityById<
 /**
  * Updates an entity with the given ID in the collection.
  * Returns a new array with the updated entity.
- * Structural sharing for adapter-owned persistence projections: returns
+ * Structural sharing for adapter-owned persistence captures: returns
  * the ORIGINAL array when nothing changed (no match, or the element kept
  * its reference), so a partial-write adapter can skip the untouched
  * collection; a new array only when an
@@ -639,7 +639,7 @@ export function updateEntityById<
 /**
  * Replaces an entity with the given ID in the collection.
  * Returns a new array with the replaced entity.
- * Structural sharing for adapter-owned persistence projections: returns
+ * Structural sharing for adapter-owned persistence captures: returns
  * the ORIGINAL array when nothing changed (no match, or the element kept
  * its reference), so a partial-write adapter can skip the untouched
  * collection; a new array only when an

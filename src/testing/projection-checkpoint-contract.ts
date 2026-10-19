@@ -313,7 +313,7 @@ export function createProjectionCheckpointStoreContractTests<TCtx>(
 			}),
 		},
 		{
-			name: "a loaded position is a detached copy; mutating it must not move the watermark",
+			name: "a loaded position is a copy; mutating it must not move the watermark",
 			run: inEnv(async (env) => {
 				await env.run((ctx) =>
 					env.store.save(
