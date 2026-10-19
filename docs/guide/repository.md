@@ -180,9 +180,8 @@ interface PersistenceModel<TAggregate, TBaseline, TChangeSet> {
 }
 ```
 
-When an adapter loads an aggregate, `UnitOfWork` stores the model's baseline
-behind an opaque `PersistenceBaseline` token. The use case and aggregate
-cannot inspect it. At write registration, the same adapter capability derives
+When an adapter loads an aggregate, `UnitOfWork` keeps the model's baseline
+internally. The use case and the aggregate cannot inspect it. At write registration, the same adapter capability derives
 and seals the exact change set.
 
 A full-row model can be small. It reads the aggregate through its detached

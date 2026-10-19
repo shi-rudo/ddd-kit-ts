@@ -16,7 +16,6 @@ export type {
 export {
 	CommandBus,
 	type CommandBusOptions,
-	type ICommandBus,
 } from "./application/cqrs/command/command-bus";
 export {
 	type CommandCommitOriginCandidate,
@@ -39,7 +38,6 @@ export {
 } from "./application/cqrs/handler";
 export type { Query, QueryHandler } from "./application/cqrs/query/query";
 export {
-	type IQueryBus,
 	QueryBus,
 	type QueryBusOptions,
 } from "./application/cqrs/query/query-bus";
@@ -179,7 +177,6 @@ export {
 	type EntityConfig,
 	entityIds,
 	findEntityById,
-	freezeShallow,
 	hasEntityId,
 	type Identifiable,
 	type IEntity,
@@ -197,12 +194,10 @@ export {
 	type CreateDomainEventFromFactsOptions,
 	type CreateDomainEventOptions,
 	type CreateDomainEventStampOptions,
-	type CreateUncommittedDomainEventOptions,
 	copyMetadata,
 	createDomainEvent,
 	createDomainEventFactory,
 	createDomainEventFromFacts,
-	createUncommittedDomainEvent,
 	type DomainEvent,
 	type DomainEventFactory,
 	type DomainEventFactoryOptions,
@@ -212,7 +207,6 @@ export {
 	type EventMetadata,
 	mergeMetadata,
 	type PendingDomainEvent,
-	recordDomainEvent,
 	type UncommittedDomainEvent,
 	type UncommittedDomainEventOf,
 } from "./domain/event/domain-event";
@@ -264,7 +258,6 @@ export {
 // Value Objects
 export {
 	deepFreeze,
-	type IValueObject,
 	ValueObject,
 	type VO,
 	vo,
@@ -365,8 +358,6 @@ export type {
 // Structural equality and detachment
 export { deepEqual } from "./internal/structural/deep-equal";
 export {
-	type DeepEqualExceptOptions,
-	deepEqualExcept,
 } from "./internal/structural/deep-equal-except";
 export {
 	type DeepOmitKey,
@@ -472,16 +463,10 @@ export type {
 	InMemoryTransaction,
 	InMemoryTransactionParticipant,
 } from "./persistence/repository/in-memory-transaction";
-export {
-	capturePersistenceBaseline,
-	derivePersistenceChanges,
-	insertPersistenceBaseline,
-	type PersistenceBaseline,
-	type PersistenceChanges,
-	type PersistenceLifecycle,
-	type PersistenceModel,
-	persistenceProjectionDrifted,
-	recapturePersistenceBaseline,
+export type {
+	PersistenceChanges,
+	PersistenceLifecycle,
+	PersistenceModel,
 } from "./persistence/repository/persistence-model";
 export type {
 	AggregatePersistence,
