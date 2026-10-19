@@ -69,7 +69,8 @@ immutable. Run one kit version per process during a cutover.
   `TSnapshotState` type parameter are gone.
 - `withCommit` takes commit tokens from its registration capability in place
   of the touched aggregates, and the `deleted` array is gone. See
-  [`withCommit` takes commit tokens](docs/guide/migrating-to-v3.md#withcommit-takes-commit-tokens).
+  [`withCommit` takes commit
+  tokens](docs/guide/migrating-to-v3.md#withcommit-takes-commit-tokens).
 - The `outbox` dependency of `withCommit` and `UnitOfWork` has the type
   `OutboxWriter`.
 - `IQueryableRepository` is gone. A query is a method of the consumer's own
@@ -100,8 +101,9 @@ immutable. Run one kit version per process during a cutover.
   stamps the event id, the time, and the metadata before the registration.
   `recordEvent` is gone, and `withCommit` rejects an unstamped event. Event
   ids and the clock come from an immutable `createDomainEventFactory` value;
-  the six module setters and scoped helpers are gone. See
-  [The aggregate decides; the shell stamps](docs/guide/migrating-to-v3.md#the-aggregate-decides-the-shell-stamps).
+  the six module setters and scoped helpers are gone. See [The aggregate
+  decides; the shell
+  stamps](docs/guide/migrating-to-v3.md#the-aggregate-decides-the-shell-stamps).
 - Events are readonly and kit-built. A recording path accepts only an event
   that a kit constructor built and throws `HandBuiltEventError` for a hand-built
   object. `createDomainEvent` rejects binary buffers and a `RegExp`, because a
@@ -130,13 +132,14 @@ immutable. Run one kit version per process during a cutover.
   overridable method. A subclass member named `validateState` fails to
   compile. An event-sourced aggregate runs the validator on each `apply()`.
 - Replay trusts history: it runs no `validateEvent`. Both paths check the
-  aggregate identity of an event. `apply()`, `setState`, and
-  `addDomainEvent` attribute the event: they fill in missing fields and throw `MisattributedEventError`
-  for an event of another aggregate. Replay throws `ForeignEventError`. A fold
-  that returns `undefined` throws `FoldReturnedNoStateError`, and an own
-  `"__proto__"` key in a fold result or a payload throws
-  `PrototypePollutionError`. See
-  [Replay trusts history, and events name their aggregate](docs/guide/migrating-to-v3.md#replay-trusts-history-and-events-name-their-aggregate).
+  aggregate identity of an event. `apply()`, `setState`, and `addDomainEvent`
+  attribute the event: they fill in missing fields and throw
+  `MisattributedEventError` for an event of another aggregate. Replay throws
+  `ForeignEventError`. A fold that returns `undefined` throws
+  `FoldReturnedNoStateError`, and an own `"__proto__"` key in a fold result or
+  a payload throws `PrototypePollutionError`. See [Replay trusts history, and
+  events name their
+  aggregate](docs/guide/migrating-to-v3.md#replay-trusts-history-and-events-name-their-aggregate).
 - The `Aggregate` interface has `aggregateIdentity`, the aggregate type and
   the id as one frozen `AggregateIdentity` value. A hand-written
   implementation adds it. An instance that the kit did not construct is
@@ -146,8 +149,9 @@ immutable. Run one kit version per process during a cutover.
   `deepFreeze` takes one argument. The `Entity` constructor rejects a blank
   id with `MissingEntityIdError`, and a version that is not a safe integer of
   at least zero throws `InvalidVersionError`.
-- `valueObjectEquals` and `deepEqual` compare the class of a value object instance.
-  Two instances of different classes with the same props are not equal.
+- `valueObjectEquals` and `deepEqual` compare the class of a value object
+  instance. Two instances of different classes with the same props are not
+  equal.
 
 #### Event store
 
@@ -223,6 +227,27 @@ immutable. Run one kit version per process during a cutover.
 - The repository contract suites are the v3 suites under the same names.
   Their failure messages start with "Contract violated:" and "Contract test
   skipped:".
+- The domain state machine has its own entry point,
+  `@shirudo/ddd-kit/state-machine`: `DomainStateMachine`,
+  `transitionDomainState`, `canTransitionDomainState`, its errors, and its
+  types. The root entry no longer exports them.
+- The root entry no longer exports `deepEqualExcept`, `freezeShallow`,
+  `IValueObject`, `ICommandBus`, and `IQueryBus`. Use
+  `valueObjectEqualsExcept`, and type a value with the class.
+
+#### Names
+
+- The kit uses the vocabulary of the established DDD and event-sourcing
+  libraries. See [Names](docs/guide/migrating-to-v3.md#names).
+- `vo`, `voEquals`, `voEqualsExcept`, `voValidated`, `voWithValidation`, and
+  the type `VO<T>` are `valueObject`, `valueObjectEquals`,
+  `valueObjectEqualsExcept`, `valueObjectValidated`,
+  `valueObjectWithValidation`, and `ValueObjectOf<T>`.
+- `EventBusImpl` is `InProcessEventBus`.
+- `EventHarvestError` is `EventCollectionError` with the code
+  `EVENT_COLLECTION_FAILED`, and `UnenrolledChangesError` is
+  `UnregisteredChangesError` with the code `UNREGISTERED_CHANGES`. A caller
+  that matches a code must change it.
 
 ### Added
 
@@ -431,12 +456,12 @@ immutable. Run one kit version per process during a cutover.
   getter in a payload, a checkpoint, an outcome, or a candidate can no
   longer run between a check and a write. It therefore cannot push a store
   past its capacity or revive an abandoned claim.
-- `InMemoryOutbox.add` rejects a malformed candidate with `EventCollectionError`:
-  a part that is not an object, an `eventId` or `type` that is not an own
-  string data property of the event, a source field that is not a string, or
-  a position that is not a valid commit position. The message names the
-  event, the field, and the value. Before, such a candidate could reach the
-  outbox state, and a `NaN` position broke the order of its source.
+- `InMemoryOutbox.add` rejects a malformed candidate with
+  `EventCollectionError`: a part that is not an object, an `eventId` or `type`
+  that is not an own string data property of the event, a source field that is
+  not a string, or a position that is not a valid commit position. The message
+  names the event, the field, and the value. Before, such a candidate could
+  reach the outbox state, and a `NaN` position broke the order of its source.
 - `copyPlainState` and the other plain-data checks of the kit accept a
   structured clone in the Vercel Edge runtime. That runtime replaces the
   global `Object`, so its source text no longer names `Object`, while a
@@ -449,8 +474,8 @@ immutable. Run one kit version per process during a cutover.
   waits. A leaked write then gets `TransactionClosedError`. Before, it got
   `AggregateTrackingError` with the reason `registered_during_flush`.
 - `InMemoryEventStore.append` writes all of a batch or nothing, and it stores
-  only plain data. It copies each event with `copyPlainState`, the
-  checked state copy of the kit. An event with a value that the copy would lose or
+  only plain data. It copies each event with `copyPlainState`, the checked
+  state copy of the kit. An event with a value that the copy would lose or
   change rejects with a `TypeError` that names the event index and the stream.
   Examples are a function, a class instance, an accessor, an `Error`, and a
   hidden or symbol-keyed property. A batch entry that is not an object, for
@@ -462,8 +487,8 @@ immutable. Run one kit version per process during a cutover.
   class names through property descriptors, so no own iterator and no accessor
   of the state runs. A Proxy still runs its traps, and an accessor that a trap
   adds can run. Before, an own iterator could hide a class instance from the
-  check. This also covers the plain state of an entity and the snapshot model. An
-  optional second argument names the state in the messages.
+  check. This also covers the plain state of an entity and the snapshot model.
+  An optional second argument names the state in the messages.
 - `UnitOfWork.run` reports a failed rollback as `RollbackError` also when a
   step after the work failed inside the transaction, for example the outbox
   write. Before, it reported a `CommitError` whose cause was the rollback

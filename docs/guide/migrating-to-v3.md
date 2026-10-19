@@ -1053,6 +1053,10 @@ default `Record<string, unknown>` map.
 | `computeBackoffDelay` | not exported; the retry behavior is unchanged |
 | `engines.node` `>=20` | `>=22` |
 | peer `@shirudo/base-error` `^7.1.1` | `^8.3.0` |
+| `import { DomainStateMachine } from "@shirudo/ddd-kit"` | `import { DomainStateMachine } from "@shirudo/ddd-kit/state-machine"` |
+| `deepEqualExcept` | not exported; use `valueObjectEqualsExcept` |
+| `freezeShallow` | not exported |
+| `IValueObject`, `ICommandBus`, `IQueryBus` | not exported; type a value with `ValueObject`, `CommandBus`, or `QueryBus` |
 
 The `utils` entry point duplicated the root, so only the import path
 changes. `@shirudo/ddd-kit/money` is a new entry point. Node 20 reached its
@@ -1060,6 +1064,24 @@ end of life on 2026-04-30. `@shirudo/base-error` before 8.1.0 does not mask
 the fields that a kit error adds when you log it with `redactAllow`. Follow
 the migration notes of `@shirudo/base-error` 8 where you use its API
 directly.
+
+### Names
+
+The kit uses the words of the established DDD and event-sourcing libraries,
+so a reader who knows Axon, EventSauce, Marten, or Python eventsourcing
+reads the API as they expect. Each 2.2.0 name below changes:
+
+| 2.2.0 | 3.0.0 |
+| --- | --- |
+| `vo`, `voEquals`, `voEqualsExcept` | `valueObject`, `valueObjectEquals`, `valueObjectEqualsExcept` |
+| `voValidated`, `voWithValidation` | `valueObjectValidated`, `valueObjectWithValidation` |
+| type `VO<T>` | `ValueObjectOf<T>` |
+| `EventBusImpl` | `InProcessEventBus` |
+| `EventHarvestError` | `EventCollectionError`, code `EVENT_COLLECTION_FAILED` |
+| `UnenrolledChangesError` | `UnregisteredChangesError`, code `UNREGISTERED_CHANGES` |
+
+The renames are mechanical: an editor rename or a search and replace on the
+whole word is enough. A caller that matches an error code must change it.
 
 ## Production cutover: one coordinated switch
 
@@ -1386,6 +1408,33 @@ Behavior that a use case or an adapter can notice:
   `providesRolledBackEnds`.
 
 **3.0.0.**
+
+The names follow the established vocabulary, and the root entry is
+slimmer. Replace the rc.12 names:
+
+| rc.12 | 3.0.0 |
+| --- | --- |
+| `recordPendingEvents` | `stampPendingEvents` |
+| `createDomainEventFromFacts`, `CreateDomainEventFromFactsOptions` | `createStampedDomainEvent`, `CreateStampedDomainEventOptions` |
+| `UncommittedDomainEvent`, `AnyUncommittedDomainEvent`, `UncommittedDomainEventOf` | `UnstampedDomainEvent`, `AnyUnstampedDomainEvent`, `UnstampedDomainEventOf` |
+| protected `stampNewEventIdentity(event)` | protected `attributeNewEvent(event)` |
+| `detachState` | `copyPlainState` |
+| `CommitEnrollment`, `enrollSaved`, `enrollDeleted` | `CommitRegistration`, `registerSaved`, `registerDeleted` |
+| `UnenrolledChangesError` (code `UNENROLLED_CHANGES`) | `UnregisteredChangesError` (code `UNREGISTERED_CHANGES`) |
+| `EventHarvestError` (code `EVENT_HARVEST_FAILED`) | `EventCollectionError` (code `EVENT_COLLECTION_FAILED`) |
+| `UnmintedEventError` (code `UNMINTED_EVENT`) | `HandBuiltEventError` (code `HAND_BUILT_EVENT`) |
+| `HostileStateKeyError` (code `HOSTILE_STATE_KEY`) | `PrototypePollutionError` (code `PROTOTYPE_POLLUTION`) |
+| `EventBusImpl` | `InProcessEventBus` |
+| `vo`, `voEquals`, `voEqualsExcept`, `voValidated`, `voWithValidation`, type `VO<T>` | `valueObject`, `valueObjectEquals`, `valueObjectEqualsExcept`, `valueObjectValidated`, `valueObjectWithValidation`, `ValueObjectOf<T>` |
+| the state machine from `@shirudo/ddd-kit` | from `@shirudo/ddd-kit/state-machine` |
+
+The root entry no longer exports `capturePersistenceBaseline`,
+`derivePersistenceChanges`, `insertPersistenceBaseline`,
+`recapturePersistenceBaseline`, `persistenceProjectionDrifted`,
+`PersistenceBaseline`, `freezeShallow`, `deepEqualExcept`,
+`recordDomainEvent`, `createUncommittedDomainEvent`, `IValueObject`,
+`ICommandBus`, and `IQueryBus`. The cooperative brand keys of events
+changed, so run one kit version per process.
 
 - `copyPlainState` rejects an index key and a non-enumerable data property or
   accessor on a built-in, for example `0` on a `Map` or a key after the last
