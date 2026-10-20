@@ -5,6 +5,7 @@ import { StateStoredAggregate } from "../../domain/aggregate/state-stored-aggreg
 import {
 	type AnyDomainEvent,
 	createDomainEvent,
+	createDomainEventFactory,
 	type DomainEvent,
 } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
@@ -1061,17 +1062,22 @@ describe("UnitOfWork", () => {
 			);
 		});
 
-		it("rejects unstamped events at write registration, before any flush", async () => {
-			let flushCalls = 0;
+		it("stamps the pending events at write registration, before the flush receives them", async () => {
+			let flushedEventIds: ReadonlyArray<string> = [];
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
 				outbox: recordingOutbox<TestEvent>(),
+				eventStampFactory: createDomainEventFactory({
+					eventIdFactory: () => "evt-1",
+				}),
 				repositories: {
 					orders: defineTestRepository({
 						aggregate: MockAggregate,
 						persistence: versionPersistenceModel<MockAggregate>(),
-						flush: async () => {
-							flushCalls += 1;
+						flush: async (_tx: undefined, write) => {
+							flushedEventIds = write.events.map((event) =>
+								"eventId" in event ? event.eventId : "unstamped",
+							);
 						},
 						create: (_tx: undefined, tracking) => ({
 							trackLoaded: (loaded: MockAggregate) =>
@@ -1082,20 +1088,101 @@ describe("UnitOfWork", () => {
 			});
 			const aggregate = createMockAggregate("o-1");
 
-			await expect(
-				uow.run(async ({ repositories }) => {
+			await uow.run(async ({ repositories }) => {
+				repositories.orders.trackLoaded(aggregate);
+				aggregate.changeWithUnstampedEvent("o-1");
+				repositories.orders.update(aggregate);
+				return undefined;
+			});
+
+			expect(flushedEventIds).toEqual(["evt-1"]);
+		});
+
+		it("stamps with the default factory when the dependencies name none", async () => {
+			const outbox = recordingOutbox<TestEvent>();
+			const { uow } = createUow({ outbox });
+			const aggregate = createMockAggregate("o-1");
+
+			await uow.run(async ({ repositories }) => {
+				repositories.orders.trackLoaded(aggregate);
+				aggregate.changeWithUnstampedEvent("o-1");
+				repositories.orders.update(aggregate);
+				return undefined;
+			});
+
+			expect(outbox.added[0]?.[0]?.event.eventId).toMatch(
+				/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+			);
+		});
+
+		it("stamps with the shared stamp options of the run", async () => {
+			const outbox = recordingOutbox<TestEvent>();
+			const { uow } = createUow({ outbox });
+			const aggregate = createMockAggregate("o-1");
+
+			await uow.run(
+				async ({ repositories }) => {
 					repositories.orders.trackLoaded(aggregate);
-					// A decision the shell forgot to stamp with
-					// stampPendingEvents: the rejection must land at update()
-					// registration. Waiting for the collection guard would be too
-					// late for a non-transactional event store, whose flush
-					// append is already durable by then.
 					aggregate.changeWithUnstampedEvent("o-1");
 					repositories.orders.update(aggregate);
 					return undefined;
+				},
+				{ stampOptions: { metadata: { correlationId: "corr-1" } } },
+			);
+
+			expect(outbox.added[0]?.[0]?.event.metadata?.correlationId).toBe(
+				"corr-1",
+			);
+		});
+
+		it("keeps the stamps of an instance that the retried attempt registers again", async () => {
+			const commitFailure = new Error("attempt one fails at COMMIT");
+			let attempts = 0;
+			const inner: TransactionScope<undefined> = {
+				transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
+					attempts += 1;
+					const result = await fn(undefined);
+					if (attempts === 1) throw commitFailure;
+					return result;
+				},
+			};
+			const scope = new RetryingTransactionScope(inner, {
+				maxAttempts: 2,
+				isRetryable: (error) => error === commitFailure,
+				sleep: async () => {},
+			});
+			let issued = 0;
+			const outbox = recordingOutbox<TestEvent>();
+			const uow = new UnitOfWork({
+				scope,
+				outbox,
+				eventStampFactory: createDomainEventFactory({
+					eventIdFactory: () => {
+						issued += 1;
+						return `evt-${issued}`;
+					},
 				}),
-			).rejects.toThrow(/has not been stamped/);
-			expect(flushCalls).toBe(0);
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						flush: async () => {},
+						create: (_tx: undefined) => ({}),
+					}),
+				},
+			});
+			const aggregate = createMockAggregate("o-1");
+			aggregate.changeWithUnstampedEvent("o-1");
+
+			await uow.run(async ({ repositories }) => {
+				repositories.orders.add(aggregate);
+				return undefined;
+			});
+
+			expect(attempts).toBe(2);
+			expect(
+				outbox.added.map((batch) => batch.map((entry) => entry.event.eventId)),
+			).toEqual([["evt-1"], ["evt-1"]]);
 		});
 
 		it("rejects domain mutation after write intent was registered", async () => {

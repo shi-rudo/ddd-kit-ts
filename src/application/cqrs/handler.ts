@@ -6,7 +6,6 @@ import {
 import {
 	type AnyDomainEvent,
 	isStampedDomainEvent,
-	type PendingDomainEvent,
 } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
 import {
@@ -26,6 +25,12 @@ import type { EventCommitCandidate } from "../../messaging/committed-event";
 import type { EventBus } from "../../messaging/event-bus/ports";
 import type { OutboxWriter } from "../../messaging/outbox/ports";
 import type { TransactionScope } from "../../persistence/repository/scope";
+import {
+	type DomainEventStampFactory,
+	defaultEventStampFactory,
+	type SharedDomainEventStampOptions,
+	stampAtRegistration,
+} from "../unit-of-work/stamp-pending-events";
 
 /** Dependencies for {@link withCommit}. */
 export interface WithCommitDeps<Evt extends AnyDomainEvent, TCtx> {
@@ -96,6 +101,19 @@ export interface WithCommitDeps<Evt extends AnyDomainEvent, TCtx> {
 	 * unless the scope honors the signal.
 	 */
 	signal?: AbortSignal;
+	/**
+	 * Stamps every pending event that is still unstamped when its aggregate is
+	 * registered: the event id, the stamp time, and the metadata. Defaults to
+	 * `createDomainEventFactory()`, a random UUID from Web Crypto and the
+	 * system clock. An event that is already stamped, for example by an
+	 * explicit `stampPendingEvents` call, keeps its stamp.
+	 */
+	eventStampFactory?: DomainEventStampFactory;
+	/**
+	 * Stamp options that every event stamped in this commit shares, for
+	 * example the correlation id of the request.
+	 */
+	stampOptions?: SharedDomainEventStampOptions;
 }
 
 declare const aggregateCommitTokenBrand: unique symbol;
@@ -170,7 +188,7 @@ interface AggregateCommitRecord<Evt extends AnyDomainEvent> {
 	 * never persisted, so any single eventful commit cursor is unique.
 	 */
 	readonly persistedVersion: Version | undefined;
-	readonly events: ReadonlyArray<PendingDomainEvent<Evt>>;
+	readonly events: ReadonlyArray<Evt>;
 	disposition: CommitDisposition;
 }
 
@@ -197,10 +215,15 @@ interface CommitTokenScope<Evt extends AnyDomainEvent> {
 	resolve(tokens: unknown): ReadonlyArray<AggregateCommitRecord<Evt>>;
 }
 
+/** Stamps the still-unstamped pending events of one registered aggregate. */
+export type StampAtRegistration = (
+	aggregate: Aggregate<Id<string>, AnyDomainEvent>,
+) => void;
+
 /** One token registry per transactional callback attempt. */
-function createCommitTokenScope<
-	Evt extends AnyDomainEvent,
->(): CommitTokenScope<Evt> {
+function createCommitTokenScope<Evt extends AnyDomainEvent>(
+	stamp: StampAtRegistration,
+): CommitTokenScope<Evt> {
 	const recordsByToken = new WeakMap<object, AggregateCommitRecord<Evt>>();
 	const tokensByAggregate = new WeakMap<
 		Aggregate<Id<string>, Evt>,
@@ -274,21 +297,19 @@ function createCommitTokenScope<
 		const token = Object.freeze(
 			Object.create(null),
 		) as AggregateCommitToken<Evt>;
+		// Stamped before the batch is recorded: the registration records the
+		// exact event objects, and the collection-time recheck compares them by
+		// reference.
+		stamp(aggregate);
 		// The pendingEvents getter already returns a frozen copy;
 		// re-copying and re-freezing it here would only duplicate the work.
 		const events = aggregate.pendingEvents;
-		// Stamped-before-persistence is checked HERE, not only at collection:
-		// the UnitOfWork registers at write registration, so this rejection
-		// lands before any adapter flush. The collection guard alone fires after
-		// flush, and a non-transactional event store would already have
-		// appended the unstamped batch durably.
 		for (const event of events) {
 			if (!isStampedDomainEvent(event)) {
 				throw new EventCollectionError(
 					`withCommit: event "${(event as { readonly type: string }).type}" ` +
-						"has not been stamped. Call stampPendingEvents(aggregate, " +
-						"createStamp) in the application shell before persistence or " +
-						"outbox collection.",
+						"is still unstamped after the commit stamped its aggregate. The " +
+						"recording capability of the aggregate did not stamp it.",
 					(event as { readonly type: string }).type,
 				);
 			}
@@ -307,7 +328,7 @@ function createCommitTokenScope<
 			version: aggregate.version,
 			expectedVersion: options?.expectedVersion,
 			persistedVersion,
-			events,
+			events: events as ReadonlyArray<Evt>,
 		});
 		issuedTokenCount += 1;
 		return token;
@@ -539,13 +560,16 @@ export interface CheckedWorkResult<Evt extends AnyDomainEvent, R>
 
 /**
  * {@link withCommit} with a check per attempt before the commit. The scope
- * receives `onAttemptStart` in its transactional options.
+ * receives `onAttemptStart` in its transactional options. The callback also
+ * receives the stamping step of the registration, so that a caller that
+ * records the batch before it registers can stamp first.
  */
 export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 	deps: WithCommitDeps<Evt, TCtx>,
 	fn: (
 		ctx: TCtx,
 		registration: CommitRegistration<Evt>,
+		stamp: StampAtRegistration,
 	) => Promise<CheckedWorkResult<Evt, R>>,
 	onAttemptStart: (() => void) | undefined,
 ): Promise<R> {
@@ -564,12 +588,21 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 		);
 	}
 
+	const eventStampFactory = deps.eventStampFactory ?? defaultEventStampFactory;
+	const stamp: StampAtRegistration = (aggregate) =>
+		stampAtRegistration(
+			aggregate,
+			eventStampFactory,
+			deps.stampOptions,
+			"withCommit registration",
+		);
+
 	const { result, commitRecords, events } = await deps.scope.transactional(
 		async (ctx) => {
-			const tokenScope = createCommitTokenScope<Evt>();
+			const tokenScope = createCommitTokenScope<Evt>(stamp);
 			let fnResult: CheckedWorkResult<Evt, R>;
 			try {
-				fnResult = await fn(ctx, tokenScope.registration);
+				fnResult = await fn(ctx, tokenScope.registration, stamp);
 			} finally {
 				// A callback can leak the capability into delayed work. Seal it as
 				// soon as the callback settles so a late registration fails loudly
@@ -599,31 +632,22 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 					const registeredId = registered.aggregateId;
 					const registeredType = registered.aggregateType;
 					return record.events.map((event, index) => {
-						if (!isStampedDomainEvent(event)) {
-							throw new EventCollectionError(
-								`withCommit: event "${event.type}" has not been stamped. ` +
-									"Call stampPendingEvents(aggregate, createStamp) in the " +
-									"application shell before persistence or outbox collection.",
-								event.type,
-							);
-						}
-						const recordedEvent = event as Evt;
 						const commitSize = record.events.length;
-						const aggregateId = recordedEvent.aggregateId;
-						const aggregateType = recordedEvent.aggregateType;
+						const aggregateId = event.aggregateId;
+						const aggregateType = event.aggregateType;
 						const missing: string[] = [];
 						if (!aggregateId) missing.push("aggregateId");
 						if (!aggregateType) missing.push("aggregateType");
 						if (!aggregateId || !aggregateType) {
 							throw new EventCollectionError(
-								`withCommit: event "${recordedEvent.type}" is missing ${missing.join(
+								`withCommit: event "${event.type}" is missing ${missing.join(
 									" and ",
 								)}. ` +
 									`Use this.createEvent(type, payload) inside aggregate methods ` +
 									`instead of createDomainEvent(...); createEvent auto-injects ` +
 									`aggregateId and aggregateType. Outbox dispatchers and ` +
 									`projection handlers rely on the envelope source.`,
-								recordedEvent.type,
+								event.type,
 							);
 						}
 						// Backstop behind the aggregate identity check of the aggregate
@@ -634,7 +658,7 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 							aggregateType !== registeredType
 						) {
 							throw new EventCollectionError(
-								`withCommit: event "${recordedEvent.type}" belongs to ` +
+								`withCommit: event "${event.type}" belongs to ` +
 									`${describeAggregateIdentity({ aggregateType, aggregateId })} but ` +
 									"was registered under " +
 									`${describeAggregateIdentity({ aggregateType: registeredType, aggregateId: registeredId })}. ` +
@@ -642,11 +666,11 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 									"classes attribute every event to the aggregate on every recording path; an " +
 									"instance from another package copy must stamp it the " +
 									"same way.",
-								recordedEvent.type,
+								event.type,
 							);
 						}
 						return Object.freeze({
-							event: recordedEvent,
+							event,
 							source: Object.freeze({ aggregateId, aggregateType }),
 							position: Object.freeze({
 								aggregateVersion: record.version as number,

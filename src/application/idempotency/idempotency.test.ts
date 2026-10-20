@@ -4,6 +4,7 @@ import { StateStoredAggregate } from "../../domain/aggregate/state-stored-aggreg
 import {
 	type AnyDomainEvent,
 	createDomainEvent,
+	createDomainEventFactory,
 	type DomainEvent,
 } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
@@ -38,6 +39,14 @@ class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
 
 	constructor(id: OrderId) {
 		super(id, { status: "open" });
+	}
+
+	/** Records the decision unstamped, as a domain method does. */
+	decideConfirmation(): void {
+		this.setState(
+			{ ...this.state, status: "confirmed" },
+			this.createEvent("OrderConfirmed", { orderId: this.id }),
+		);
 	}
 
 	confirm(): void {
@@ -256,6 +265,27 @@ describe("withIdempotentCommit", () => {
 
 		await expect(execution).rejects.toBeInstanceOf(EventCollectionError);
 		expect(await deps.outbox.getPending()).toHaveLength(0);
+	});
+
+	it("stamps with the factory and the shared stamp options of its dependencies", async () => {
+		const deps = {
+			...createDeps(),
+			eventStampFactory: createDomainEventFactory({
+				eventIdFactory: () => "evt-1",
+			}),
+			stampOptions: { metadata: { correlationId: "corr-1" } },
+		};
+		const order = new Order("o-1" as OrderId);
+		order.decideConfirmation();
+
+		await withIdempotentCommit(deps, request, async (_ctx, registration) => ({
+			result: order.id,
+			commits: [registration.registerSaved(order)],
+		}));
+
+		const [record] = await deps.outbox.getPending();
+		expect(record?.event.eventId).toBe("evt-1");
+		expect(record?.event.metadata?.correlationId).toBe("corr-1");
 	});
 
 	it("replays the stored outcome on a duplicate without re-running the work", async () => {

@@ -128,7 +128,7 @@ export interface DomainEvent<T extends string, P = void> {
 	readonly payload: P;
 
 	/**
-	 * Timestamp when the accepted fact was recorded by the application shell.
+	 * Timestamp when the application shell stamped the accepted fact.
 	 * Put business-relevant time in the payload under a domain name.
 	 */
 	readonly occurredAt: Date;
@@ -314,7 +314,7 @@ export interface DomainEventFactory {
  * The supplied functions are read once and captured by value. The returned
  * object is frozen, so another request, test, or library cannot replace its
  * policy. Its {@link DomainEventFactory.createStamp} method is the
- * application-shell bridge that records an accepted aggregate decision.
+ * application-shell bridge that stamps an accepted aggregate decision.
  * Passing the factory through `AggregateConfig`
  * enables the explicitly named convenience methods, whose defaults read time
  * and randomness.
@@ -325,8 +325,7 @@ export interface DomainEventFactory {
  *   eventIdFactory: () => uuidv7(),
  *   clock: () => new Date(),
  * });
- * order.confirm();
- * stampPendingEvents(order, domainEvents);
+ * const uow = new UnitOfWork({ ...deps, eventStampFactory: domainEvents });
  * ```
  */
 export function createDomainEventFactory(
