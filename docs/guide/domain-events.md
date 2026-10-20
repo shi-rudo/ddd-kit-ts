@@ -184,25 +184,38 @@ Create a factory for one application composition, request, tenant, or test when
 the immutable default is not the right policy:
 
 ```ts
-import { createDomainEventFactory } from "@shirudo/ddd-kit";
+import { createDomainEventFactory, UnitOfWork } from "@shirudo/ddd-kit";
 import { v7 as uuidv7 } from "uuid";
 
 const domainEvents = createDomainEventFactory({
   eventIdFactory: () => uuidv7(),
   clock: () => new Date(),
 });
+const uow = new UnitOfWork({ ...deps, eventStampFactory: domainEvents });
 
-order.confirm(confirmedAt);
-stampPendingEvents(order, domainEvents, {
-  occurredAt: confirmedAt,
-  metadata: { correlationId: request.id },
-});
+await uow.run(
+  async ({ repositories }) => {
+    const order = await repositories.orders.getById(orderId);
+    order.confirm(confirmedAt);
+    repositories.orders.update(order);
+  },
+  {
+    stampOptions: {
+      occurredAt: confirmedAt,
+      metadata: { correlationId: request.id },
+    },
+  },
+);
 ```
 
-The third argument holds the stamp options that every decision of the
-recording shares. Pass a callback instead of the factory when the stamp
-depends on the concrete decision. The callback receives the unstamped
-decision and its position in the batch:
+The commit stamps every still-unstamped pending event when `update` registers
+the aggregate. `stampOptions` holds the options that every event of the run
+shares. `withCommit` takes the same two fields, `eventStampFactory` and
+`stampOptions`, in its dependencies.
+
+If the stamp depends on the concrete decision, stamp before the write with
+`stampPendingEvents`. The callback receives the unstamped decision and its
+position in the batch. The commit keeps these stamps:
 
 ```ts
 stampPendingEvents(order, (decision, index) =>
@@ -236,7 +249,6 @@ The aggregate does not hold a factory, a clock, or an id generator:
 ```ts
 const order = await loadOrder(orderId);
 order.confirm(confirmedAt);
-stampPendingEvents(order, domainEvents);
 
 await snapshots.save(
   orderIdentity,

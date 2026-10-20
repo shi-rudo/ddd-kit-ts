@@ -15,7 +15,8 @@ One successful `run()` follows this order:
 
 1. Open `TransactionScope.transactional(...)`.
 2. Build the transaction-bound read adapters and a fresh identity map.
-3. Run the use case.
+3. Run the use case. Each `add`, `update`, or `remove` stamps the pending
+   events of its aggregate and registers the write.
 4. Make sure that every tracked aggregate is valid. Freeze each write receipt.
 5. Call each repository definition's `flush` in registration order.
 6. Write the exact registered event batches to the outbox in the same
@@ -170,7 +171,6 @@ Creating and updating are intentionally different operations:
 ```ts
 const orderId = await new UnitOfWork(deps).run(async ({ repositories }) => {
   const order = Order.place(newOrderId(), customerId, items);
-  stampPendingEvents(order, domainEvents);
 
   repositories.orders.add(order);
   return order.id;
@@ -182,7 +182,6 @@ await new UnitOfWork(deps).run(async ({ repositories }) => {
   const order = await repositories.orders.getById(orderId);
 
   order.confirm();
-  stampPendingEvents(order, domainEvents);
 
   repositories.orders.update(order);
 });
@@ -212,6 +211,41 @@ already registered for the same, unchanged instance stays a no-op. After the
 last check, a call throws `TransactionClosedError`: the transaction can no
 longer take the write, and a caller that swallows the error loses it. Await
 every repository call inside the `run()` callback.
+
+## Event stamps
+
+`add`, `update`, and `remove` stamp the pending events of their aggregate
+before they register the write. A stamp is the event id, the stamp time, and
+the metadata. The flush and the outbox therefore receive stamped events. The
+unit of work stamps an event once and keeps a stamp that the event already
+has.
+
+Without `eventStampFactory`, the unit of work uses `createDomainEventFactory()`:
+a random UUID from Web Crypto and the system clock. Name your own factory once
+in the dependencies, and pass the metadata of the request with the run:
+
+```ts
+const uow = new UnitOfWork({
+  ...deps,
+  eventStampFactory: createDomainEventFactory({
+    eventIdFactory: () => uuidv7(),
+  }),
+});
+
+await uow.run(
+  async ({ repositories }) => {
+    const order = await repositories.orders.getById(orderId);
+    order.confirm();
+    repositories.orders.update(order);
+  },
+  { stampOptions: { metadata: { correlationId: request.correlationId } } },
+);
+```
+
+Call `stampPendingEvents(aggregate, factory)` before the write only when the
+metadata depends on the concrete event, for an import, or for a test that
+needs fixed ids. See
+[Aggregates decide and the commit stamps](/guide/design-decisions#aggregates-decide-and-the-commit-stamps).
 
 ## Read adapters and the identity map
 
@@ -334,7 +368,6 @@ await new UnitOfWork(deps).run(async ({ repositories }) => {
   const booking = await repositories.bookings.getById(bookingId);
 
   booking.requestPayment(paymentId);
-  stampPendingEvents(booking, domainEvents);
   repositories.bookings.update(booking);
 });
 ```
@@ -353,7 +386,6 @@ await new UnitOfWork(deps).run(
   async ({ repositories, signal }) => {
     const order = await repositories.orders.getById(orderId);
     order.confirm();
-    stampPendingEvents(order, domainEvents);
 
     if (signal?.aborted) throw signal.reason;
     repositories.orders.update(order);

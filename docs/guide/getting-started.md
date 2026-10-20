@@ -47,9 +47,7 @@ domain work. It must not mutate child state or event lists from the outside.
 ```ts
 import {
   StateStoredAggregate,
-  createDomainEventFactory,
   DomainError,
-  stampPendingEvents,
   type DomainEvent,
   type Id,
 } from "@shirudo/ddd-kit";
@@ -113,10 +111,8 @@ class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
 }
 
 const order = Order.draft("order-1" as OrderId, "customer-1");
-const domainEvents = createDomainEventFactory();
 
 order.confirm();
-stampPendingEvents(order, domainEvents);
 
 order.status; // "confirmed"
 order.version; // 1
@@ -128,17 +124,16 @@ This example shows the core conventions:
 - `aggregateType` is required on every concrete aggregate. It is written onto
   events so outbox dispatchers and projections know where the event came from.
 - `createEvent(...)` fills `aggregateId` and `aggregateType` without reading a
-  clock or id generator. `stampPendingEvents(...)` adds the technical stamp in
-  the application shell.
+  clock or id generator. The commit adds the technical stamp when it registers
+  the aggregate for persistence.
 - `setState(newState, events)` changes state first, records events after the
   state is valid, and bumps the aggregate version once.
 - Domain rules throw `DomainError` subclasses. Application boundaries decide
   whether to turn selected errors into `Result` with `domainErrorToResult`, map
   them to HTTP responses, or let unknown failures propagate.
-- `pendingEvents` are not historical events yet. Before recording they are
-  immutable domain decisions. After recording they carry their stable event id
-  and stamp time. They remain unflushed until the transaction/outbox
-  boundary collects them.
+- `pendingEvents` are not historical events yet. They are immutable domain
+  decisions. The commit stamps them with a stable event id and a stamp time,
+  and the transaction/outbox boundary collects them.
 
 At this point, persistence has not occurred. Persistence is an adapter concern.
 The aggregate completed its domain work. A repository and `withCommit` still

@@ -52,8 +52,9 @@ const domainEvents = createDomainEventFactory({
 
 The factory is frozen and has no setter. It can live at module scope when the
 policy is genuinely process-wide, or be created inside `fetch()` when the
-policy is request- or tenant-specific. In either case, call `createStamp()` in
-the application shell after the aggregate accepts the domain operation.
+policy is request- or tenant-specific. In either case, pass it to `UnitOfWork`
+or `withCommit` as `eventStampFactory`. The commit then stamps every pending
+event with it.
 
 ULID is the same shape:
 
@@ -90,7 +91,9 @@ it("emits deterministic event ids", () => {
   const order = makeOrder();
 
   order.confirm();
-  stampPendingEvents(order, domainEvents);
+  const [event] = stampPendingEvents(order, domainEvents);
+
+  expect(event?.eventId).toBe("evt-1");
 });
 ```
 
@@ -555,7 +558,6 @@ const confirmOrder = async (command: ConfirmOrder) => {
       }
 
       order.confirm();
-      stampPendingEvents(order, domainEvents);
       await updateOrderForDirectCommit(tx, order, loaded.expectedVersion);
       return {
         result: {

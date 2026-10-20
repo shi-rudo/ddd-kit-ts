@@ -6,7 +6,6 @@ import type {
 } from "../../src/application/cqrs/command/command";
 import { CommandBus } from "../../src/application/cqrs/command/command-bus";
 import { withCommit } from "../../src/application/cqrs/handler";
-import { stampPendingEvents } from "../../src/application/unit-of-work/stamp-pending-events";
 import type { Aggregate } from "../../src/domain/aggregate/aggregate";
 import {
 	type AnyDomainEvent,
@@ -143,11 +142,16 @@ interface AppDeps {
 
 function registerCommandHandlers(deps: AppDeps): void {
 	const { commandBus, eventBus, outbox, scope } = deps;
+	const commitDeps = {
+		outbox,
+		bus: eventBus,
+		scope,
+		eventStampFactory: deps.domainEvents,
+	};
 
 	const placeOrder: CommandHandler<PlaceOrderCommand, OrderId> = async (cmd) =>
-		withCommit({ outbox, bus: eventBus, scope }, async (_tx, registration) => {
+		withCommit(commitDeps, async (_tx, registration) => {
 			const order = Order.place(cmd.orderId, cmd.customerId, cmd.total);
-			stampPendingEvents(order, deps.domainEvents);
 			await deps.orderRepository.insert(order);
 			return {
 				result: ok(order.id),
@@ -159,9 +163,8 @@ function registerCommandHandlers(deps: AppDeps): void {
 		RequestPaymentCommand,
 		PaymentId
 	> = async (cmd) =>
-		withCommit({ outbox, bus: eventBus, scope }, async (_tx, registration) => {
+		withCommit(commitDeps, async (_tx, registration) => {
 			const payment = Payment.request(cmd.paymentId, cmd.orderId, cmd.amount);
-			stampPendingEvents(payment, deps.domainEvents);
 			await deps.paymentRepository.insert(payment);
 			return {
 				result: ok(payment.id),
@@ -173,9 +176,8 @@ function registerCommandHandlers(deps: AppDeps): void {
 		RequestShippingCommand,
 		ShipmentId
 	> = async (cmd) =>
-		withCommit({ outbox, bus: eventBus, scope }, async (_tx, registration) => {
+		withCommit(commitDeps, async (_tx, registration) => {
 			const shipment = Shipment.request(cmd.shipmentId, cmd.orderId);
-			stampPendingEvents(shipment, deps.domainEvents);
 			await deps.shipmentRepository.insert(shipment);
 			return {
 				result: ok(shipment.id),
@@ -183,26 +185,28 @@ function registerCommandHandlers(deps: AppDeps): void {
 			};
 		});
 
-	const confirmOrder: CommandHandler<ConfirmOrderCommand, void> = async (cmd) =>
-		withCommit({ outbox, bus: eventBus, scope }, async (_tx, registration) => {
-			const order = await deps.orderRepository.getById(cmd.orderId);
-			const confirmedAt = deps.clock();
-			order.confirm(confirmedAt);
-			stampPendingEvents(order, () =>
-				deps.domainEvents.createStamp({ occurredAt: confirmedAt }),
-			);
-			await deps.orderRepository.update(order);
-			return {
-				result: ok(undefined as void),
-				commits: [registration.registerSaved(order)],
-			};
-		});
+	const confirmOrder: CommandHandler<ConfirmOrderCommand, void> = async (
+		cmd,
+	) => {
+		const confirmedAt = deps.clock();
+		return withCommit(
+			{ ...commitDeps, stampOptions: { occurredAt: confirmedAt } },
+			async (_tx, registration) => {
+				const order = await deps.orderRepository.getById(cmd.orderId);
+				order.confirm(confirmedAt);
+				await deps.orderRepository.update(order);
+				return {
+					result: ok(undefined as void),
+					commits: [registration.registerSaved(order)],
+				};
+			},
+		);
+	};
 
 	const cancelOrder: CommandHandler<CancelOrderCommand, void> = async (cmd) =>
-		withCommit({ outbox, bus: eventBus, scope }, async (_tx, registration) => {
+		withCommit(commitDeps, async (_tx, registration) => {
 			const order = await deps.orderRepository.getById(cmd.orderId);
 			order.cancel(cmd.reason);
-			stampPendingEvents(order, deps.domainEvents);
 			await deps.orderRepository.update(order);
 			return {
 				result: ok(undefined as void),
@@ -213,10 +217,9 @@ function registerCommandHandlers(deps: AppDeps): void {
 	const refundPayment: CommandHandler<RefundPaymentCommand, void> = async (
 		cmd,
 	) =>
-		withCommit({ outbox, bus: eventBus, scope }, async (_tx, registration) => {
+		withCommit(commitDeps, async (_tx, registration) => {
 			const payment = await deps.paymentRepository.getById(cmd.paymentId);
 			payment.refund();
-			stampPendingEvents(payment, deps.domainEvents);
 			await deps.paymentRepository.update(payment);
 			return {
 				result: ok(undefined as void),
@@ -339,12 +342,11 @@ async function simulatePaymentResult(
 ): Promise<void> {
 	const { outbox, eventBus, scope, paymentRepository } = deps;
 	await withCommit(
-		{ outbox, bus: eventBus, scope },
+		{ outbox, bus: eventBus, scope, eventStampFactory: deps.domainEvents },
 		async (_tx, registration) => {
 			const payment = await paymentRepository.getById(paymentId);
 			if (outcome.kind === "received") payment.receive();
 			else payment.fail(outcome.reason);
-			stampPendingEvents(payment, deps.domainEvents);
 			await paymentRepository.update(payment);
 			return {
 				result: ok(undefined as void),
@@ -363,7 +365,7 @@ async function simulateShippingResult(
 ): Promise<void> {
 	const { outbox, eventBus, scope, shipmentRepository } = deps;
 	await withCommit(
-		{ outbox, bus: eventBus, scope },
+		{ outbox, bus: eventBus, scope, eventStampFactory: deps.domainEvents },
 		async (_tx, registration) => {
 			const shipment = await shipmentRepository.getById(shipmentId);
 			if (outcome.kind === "completed") {
@@ -371,7 +373,6 @@ async function simulateShippingResult(
 			} else {
 				shipment.fail(outcome.reason);
 			}
-			stampPendingEvents(shipment, deps.domainEvents);
 			await shipmentRepository.update(shipment);
 			return {
 				result: ok(undefined as void),

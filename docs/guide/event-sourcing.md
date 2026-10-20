@@ -235,10 +235,9 @@ unit of work and replays the command from fresh history.
 
 ### Stream events and outbox events
 
-The event store receives the recorded pending events. The outbox receives
-envelopes that reference those same immutable objects. Calling
-`stampPendingEvents` again during a retry does not generate another identity
-or timestamp.
+The event store receives the stamped pending events. The outbox receives
+envelopes that reference those same immutable objects. An instance that a
+retried attempt registers again keeps its stamps.
 
 The outbox source finalizes those envelopes with the full cursor under `position`:
 `aggregateVersion`, `commitSequence`, `commitSize`, and

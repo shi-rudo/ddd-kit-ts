@@ -34,7 +34,6 @@ const outcome = await withIdempotentCommit(
     const loaded = await loadOrderForDirectCommit(tx, command.orderId);
     const order = loaded.aggregate;
     order.confirm();
-    stampPendingEvents(order, domainEvents);
     await updateOrderForDirectCommit(tx, order, loaded.expectedVersion);
 
     return {
@@ -118,7 +117,6 @@ const outcome = await withIdempotentCommit(
     const loaded = await loadOrderForDirectCommit(tx, command.orderId);
     const order = loaded.aggregate;
     order.confirm();
-    stampPendingEvents(order, domainEvents);
     await updateOrderForDirectCommit(tx, order, loaded.expectedVersion);
 
     // Persist this marker in the SAME transaction as the command effect.

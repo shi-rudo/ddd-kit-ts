@@ -49,8 +49,9 @@ export async function runEdgeRuntimeSmoke(runtime) {
 
 	const order = new EdgeOrder();
 	order.confirm();
-	// The v3 flow: the aggregate produces the unstamped decision, the
-	// application shell stamps it with the factory before persistence.
+	// The aggregate produces the unstamped decision. The direct event store
+	// append below runs without a commit, so the decision needs its stamp
+	// first.
 	const domainEvents = createDomainEventFactory();
 	stampPendingEvents(order, domainEvents);
 	const orderView = order.toView();
