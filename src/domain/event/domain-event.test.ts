@@ -215,6 +215,19 @@ describe("DomainEvent", () => {
 			expect(event.eventId.length).toBeGreaterThan(0);
 		});
 
+		it("generates a time-ordered UUID v7 by default", () => {
+			const event = createDomainEvent("Demo", { x: 1 });
+			const factoryEvent = createDomainEventFactory().create("Demo", { x: 1 });
+
+			expect(event.eventId).toMatch(
+				/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+			);
+			expect(factoryEvent.eventId).toMatch(
+				/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+			);
+			expect(factoryEvent.eventId > event.eventId).toBe(true);
+		});
+
 		it("produces a different eventId for each invocation", () => {
 			const a = createDomainEvent("Demo", { x: 1 });
 			const b = createDomainEvent("Demo", { x: 1 });

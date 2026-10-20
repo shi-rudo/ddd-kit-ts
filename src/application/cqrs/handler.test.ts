@@ -304,7 +304,7 @@ describe("withCommit", () => {
 
 			const collected = outbox.added[0]?.[0]?.event;
 			expect(collected?.eventId).toMatch(
-				/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+				/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
 			);
 			expect(collected?.occurredAt).toBeInstanceOf(Date);
 			expect(aggregate.pendingEvents).toHaveLength(0);

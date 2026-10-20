@@ -104,8 +104,8 @@ export interface WithCommitDeps<Evt extends AnyDomainEvent, TCtx> {
 	/**
 	 * Stamps every pending event that is still unstamped when its aggregate is
 	 * registered: the event id, the stamp time, and the metadata. Defaults to
-	 * `createDomainEventFactory()`, a random UUID from Web Crypto and the
-	 * system clock. An event that is already stamped, for example by an
+	 * `createDomainEventFactory()`, a UUID v7 from Web Crypto random bits and
+	 * the system clock. An event that is already stamped, for example by an
 	 * explicit `stampPendingEvents` call, keeps its stamp.
 	 */
 	eventStampFactory?: DomainEventStampFactory;

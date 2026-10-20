@@ -88,7 +88,7 @@ export function stampPendingEvents<
 
 /**
  * The factory that the commit stamps with when its dependencies name none:
- * a random UUID from Web Crypto and the system clock.
+ * a UUID v7 from Web Crypto random bits and the system clock.
  */
 export const defaultEventStampFactory: DomainEventStampFactory =
 	createDomainEventFactory();

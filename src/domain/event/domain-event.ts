@@ -5,6 +5,7 @@ import {
 } from "../../internal/cooperative-brand";
 import { copyFreezableState } from "../../internal/structural/copy-plain-state";
 import { isIntrinsicConstructorPrototype } from "../../internal/structural/is-built-in";
+import { uuidV7 } from "../../internal/uuid-v7";
 import { deepFreeze } from "../value-object/value-object";
 import { type ClockFactory, defaultClockFactory, readClock } from "./clock";
 import { DomainEventValidationError } from "./domain-event-errors";
@@ -14,19 +15,18 @@ export type { ClockFactory } from "./clock";
 /**
  * Factory function producing a fresh, unique event identifier for each call.
  *
- * The library ships a default that uses Web Crypto `crypto.randomUUID()`
- * (works on Node 19+, modern browsers in secure contexts, Deno, Bun,
- * Cloudflare Workers, Vercel Edge, and any runtime that implements Web
- * Crypto). Note that `crypto.randomUUID()` returns **UUID v4** (purely
- * random); for production event stores prefer a **time-ordered** id
- * format (UUID v7 / ULID / KSUID) so B-tree indexes on the eventId
- * column stay clustered and `ORDER BY eventId` matches creation order.
- * Supply one to {@link createDomainEventFactory} to use UUID v7, ULID,
- * KSUID, or another collision-safe format without mutating module state.
+ * The library ships a default that creates a time-ordered **UUID v7** from
+ * Web Crypto random bits (works on Node 19+, modern browsers in secure
+ * contexts, Deno, Bun, Cloudflare Workers, Vercel Edge, and any runtime that
+ * implements Web Crypto). A B-tree index on the eventId column stays
+ * clustered, and `ORDER BY eventId` matches the creation order of one
+ * process. Supply another generator to {@link createDomainEventFactory} to
+ * use ULID, KSUID, or another collision-safe format without mutating module
+ * state.
  */
 export type EventIdFactory = () => string;
 
-const defaultEventIdFactory: EventIdFactory = () => crypto.randomUUID();
+const defaultEventIdFactory: EventIdFactory = uuidV7;
 
 /**
  * Metadata associated with a domain event for traceability and correlation.
@@ -98,8 +98,8 @@ export interface DomainEvent<T extends string, P = void> {
 	/**
 	 * Unique identifier for this specific event instance. Used by idempotent
 	 * consumers, outbox dispatch tracking, and as the target of
-	 * `metadata.causationId`. Convenience constructors default to
-	 * `crypto.randomUUID()`; strict construction requires the caller to supply it.
+	 * `metadata.causationId`. Convenience constructors default to a UUID v7;
+	 * strict construction requires the caller to supply it.
 	 */
 	readonly eventId: string;
 
@@ -206,7 +206,7 @@ export interface CreateDomainEventOptions {
 	/**
 	 * Override for the auto-generated `eventId`. Pass an existing id (for
 	 * replay, tests, or deterministic event sourcing) instead of letting the
-	 * factory call `crypto.randomUUID()`.
+	 * factory generate a UUID v7.
 	 */
 	eventId?: string;
 
@@ -262,7 +262,7 @@ export interface CreateDomainEventStampOptions {
 
 /** Dependencies captured by one immutable domain-event factory instance. */
 export interface DomainEventFactoryOptions {
-	/** Event-id generator. Defaults to Web Crypto `crypto.randomUUID()`. */
+	/** Event-id generator. Defaults to a UUID v7 from Web Crypto random bits. */
 	readonly eventIdFactory?: EventIdFactory;
 	/** Event-recording clock. Defaults to `() => new Date()`. */
 	readonly clock?: ClockFactory;

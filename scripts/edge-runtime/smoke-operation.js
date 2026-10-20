@@ -62,6 +62,12 @@ export async function runEdgeRuntimeSmoke(runtime) {
 		"aggregate did not record its domain event",
 	);
 	assert(
+		/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+			orderView.pendingEvent.eventId,
+		),
+		"the default event id is not a UUID v7",
+	);
+	assert(
 		Object.isFrozen(orderView.pendingEvent.payload),
 		"domain-event payload is not frozen",
 	);

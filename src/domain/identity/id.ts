@@ -23,7 +23,7 @@ export type Id<Tag extends string> = string & { readonly __brand: Tag };
  * The kit makes no attempt to dedupe or detect collisions: a collision
  * silently overwrites earlier rows (under unique-key constraints) or
  * silently aliases two different entities (without them). Safe choices:
- * `crypto.randomUUID()` (UUIDv4, the default for events), ULID, UUIDv7,
+ * UUIDv7 (the default for events), `crypto.randomUUID()` (UUIDv4), ULID,
  * KSUID: all collision-resistant by design. Unsafe choices: `Date.now()`
  * alone (duplicates within the same millisecond), a process-local
  * counter without persistence (resets to 1 on restart, collides with
