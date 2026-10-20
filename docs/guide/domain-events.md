@@ -166,7 +166,7 @@ common fields when you omit them:
 
 | Field | Default | Override |
 | --- | --- | --- |
-| `eventId` | `crypto.randomUUID()` | `options.eventId` or an instance factory |
+| `eventId` | a UUID v7 | `options.eventId` or an instance factory |
 | `occurredAt` | current clock time | `options.occurredAt` or an instance factory |
 | `schemaVersion` | `1` | `options.schemaVersion` |
 | `metadata` | `undefined` | `options.metadata` |
@@ -176,7 +176,10 @@ appropriate in an application shell or for a one-off system event. Aggregate
 behavior must use `createEvent`. Its result depends only on visible domain
 inputs and current aggregate state.
 
-The default event id is UUID v4 because it comes from Web Crypto's `crypto.randomUUID()`. That is portable and safe for uniqueness, but it is not time-ordered. For large event stores, prefer UUID v7, ULID, or KSUID so indexes stay clustered and ids sort roughly by creation time.
+The default event id is a UUID v7 (RFC 9562). The kit builds it from Web
+Crypto random bits, so it needs no package. The id starts with its creation
+time in milliseconds. Indexes on the event id therefore stay clustered, and
+the ids of one process sort in creation order.
 
 ## Instance-bound factories
 
@@ -185,10 +188,10 @@ the immutable default is not the right policy:
 
 ```ts
 import { createDomainEventFactory, UnitOfWork } from "@shirudo/ddd-kit";
-import { v7 as uuidv7 } from "uuid";
+import { ulid } from "ulid";
 
 const domainEvents = createDomainEventFactory({
-  eventIdFactory: () => uuidv7(),
+  eventIdFactory: () => ulid(),
   clock: () => new Date(),
 });
 const uow = new UnitOfWork({ ...deps, eventStampFactory: domainEvents });
@@ -285,15 +288,10 @@ unstamped facts. Stamping policy can be tested separately.
 
 ## Custom id formats
 
-Choose the id function when constructing the instance:
+The default is a UUID v7. Choose another id function when constructing the
+instance:
 
 ```ts
-// UUID v7: time-ordered and standards-track
-import { v7 as uuidv7 } from "uuid";
-const uuidEvents = createDomainEventFactory({
-  eventIdFactory: () => uuidv7(),
-});
-
 // ULID: compact, URL-safe, time-ordered
 import { ulid } from "ulid";
 const ulidEvents = createDomainEventFactory({

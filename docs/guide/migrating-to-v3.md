@@ -626,7 +626,8 @@ await uow.run(
 
 Without `eventStampFactory`, the commit uses `createDomainEventFactory()`. If
 the metadata depends on the concrete event, stamp before the registration with
-`stampPendingEvents`. The commit keeps that stamp. Event ids and the clock
+`stampPendingEvents`. The commit keeps that stamp. The default event id is a
+time-ordered UUID v7; in 2.2.0 it was a UUID v4. Event ids and the clock
 come from an immutable factory value. The six module setters are gone:
 `setEventIdFactory`, `resetEventIdFactory`, `withEventIdFactory`,
 `setClockFactory`, `resetClockFactory`, and `withClockFactory`.
@@ -1477,3 +1478,6 @@ The root entry no longer exports `capturePersistenceBaseline`,
   `createDomainEventFactory()`. An event that is already stamped keeps its
   stamp, so a remaining call still works. In rc.13, `withCommit` rejected an
   unstamped event with `EventCollectionError`.
+- The default event id is a time-ordered UUID v7 from Web Crypto random bits.
+  In rc.13 it was a UUID v4 from `crypto.randomUUID()`. Pass your own
+  `eventIdFactory` if a consumer expects version 4.

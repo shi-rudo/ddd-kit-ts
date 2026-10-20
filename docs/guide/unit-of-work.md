@@ -221,15 +221,14 @@ unit of work stamps an event once and keeps a stamp that the event already
 has.
 
 Without `eventStampFactory`, the unit of work uses `createDomainEventFactory()`:
-a random UUID from Web Crypto and the system clock. Name your own factory once
-in the dependencies, and pass the metadata of the request with the run:
+a time-ordered UUID v7 from Web Crypto random bits and the system clock. Name
+your own factory once in the dependencies, and pass the metadata of the
+request with the run:
 
 ```ts
 const uow = new UnitOfWork({
   ...deps,
-  eventStampFactory: createDomainEventFactory({
-    eventIdFactory: () => uuidv7(),
-  }),
+  eventStampFactory: createDomainEventFactory({ clock: requestClock }),
 });
 
 await uow.run(

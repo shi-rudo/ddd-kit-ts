@@ -133,8 +133,8 @@ The kit provides event id and clock factories because events need ids and timest
 ## Event identity and time cross the application boundary explicitly
 
 The top-level `createDomainEvent(...)` uses one immutable
-`defaultDomainEventFactory`: Web Crypto UUID v4 plus the platform clock. It is
-not replaceable. Consumers that need another policy call
+`defaultDomainEventFactory`: a UUID v7 from Web Crypto random bits plus the
+platform clock. It is not replaceable. Consumers that need another policy call
 `createDomainEventFactory({ eventIdFactory, clock })` and receive a frozen
 factory object that permanently captures those dependencies.
 
@@ -164,10 +164,7 @@ stamps each event once, with the factory of the unit of work:
 ```ts
 const uow = new UnitOfWork({
   ...deps,
-  eventStampFactory: createDomainEventFactory({
-    eventIdFactory: () => uuidv7(),
-    clock: requestClock,
-  }),
+  eventStampFactory: createDomainEventFactory({ clock: requestClock }),
 });
 
 await uow.run(
@@ -184,8 +181,8 @@ Inside the aggregate, `createEvent(type, payload, { version })` adds the
 aggregate identity and payload schema version but does not read the factory,
 clock, or Web Crypto. Equal aggregate state and command data therefore produce
 equal decisions. Without `eventStampFactory`, the commit uses
-`createDomainEventFactory()`: a random UUID from Web Crypto and the system
-clock.
+`createDomainEventFactory()`: a time-ordered UUID v7 from Web Crypto random
+bits and the system clock.
 
 The established event-sourcing libraries draw the same line. Marten,
 EventSauce, Eventuous, Commanded, and Emmett stamp in the infrastructure. They
