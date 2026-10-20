@@ -123,12 +123,12 @@ aggregate as persisted after the transaction commits.
 **Domain modeling**
 
 - value objects via `valueObject()` and `ValueObject<T>`
-- exact Money helpers in `@shirudo/ddd-kit/money`
+- exact Money helpers in `@shirudo/ddd-kit/money` (experimental)
 - child entities with branded identity
 - state-stored and event-sourced aggregate roots
 - domain events with metadata, schema version, and commit stamps
 - a domain state machine for named lifecycle states in
-  `@shirudo/ddd-kit/state-machine`
+  `@shirudo/ddd-kit/state-machine` (experimental)
 
 **Application boundaries**
 
@@ -213,6 +213,10 @@ packages side by side until those API-based tools support TypeScript 7.
 
 Tests and package builds run through Vite+ (`pnpm test`, `pnpm build`). Biome
 remains the repository's lint and format policy.
+
+A change of the public API follows the [stability policy](./STABILITY.md):
+breaking changes only in a major version, a deprecation before a removal, and
+a pull request description that says whether a change is breaking.
 
 Bug reports, questions, and pull requests are welcome on
 [GitHub](https://github.com/shi-rudo/ddd-kit-ts). Please open pull requests

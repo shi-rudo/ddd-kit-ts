@@ -1,5 +1,11 @@
 # Money
 
+::: warning Experimental entry point
+`@shirudo/ddd-kit/money` is experimental: a minor release can change it in a
+breaking way. Pin the minor version if you depend on it. See the
+[stability policy](https://github.com/shi-rudo/ddd-kit-ts/blob/main/STABILITY.md).
+:::
+
 Money is one of the places where "close enough" becomes a production bug.
 The kit therefore treats money as an exact domain value:
 

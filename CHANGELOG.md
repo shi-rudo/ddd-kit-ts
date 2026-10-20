@@ -414,6 +414,11 @@ immutable. Run one kit version per process during a cutover.
 
 #### Documentation and tooling
 
+- `STABILITY.md` states the stability policy from 3.0.0: what the stable API
+  is, what counts as a breaking change, the deprecation rule, the runtime
+  support, and that only the newest major version gets releases.
+  `@shirudo/ddd-kit/state-machine` and `@shirudo/ddd-kit/money` are
+  experimental: a minor release can change them in a breaking way.
 - New guides: command idempotency, deadlines, money, sagas, and the v3
   migration guide.
 - CI runs the package in Cloudflare `workerd` and in the Vercel Edge Runtime,
