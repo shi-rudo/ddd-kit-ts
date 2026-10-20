@@ -339,16 +339,16 @@ function scopeWorkRegistration<Evt extends AnyDomainEvent>(
 	return {
 		registration: Object.freeze({
 			registerSaved: (
-				aggregate: Parameters<CommitRegistration<Evt>["registerSaved"]>[0],
+				...args: Parameters<CommitRegistration<Evt>["registerSaved"]>
 			) => {
 				assertOpen();
-				return parent.registerSaved(aggregate);
+				return parent.registerSaved(...args);
 			},
 			registerRemoved: (
-				aggregate: Parameters<CommitRegistration<Evt>["registerRemoved"]>[0],
+				...args: Parameters<CommitRegistration<Evt>["registerRemoved"]>
 			) => {
 				assertOpen();
-				return parent.registerRemoved(aggregate);
+				return parent.registerRemoved(...args);
 			},
 		}),
 		close: () => {

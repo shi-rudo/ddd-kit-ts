@@ -428,6 +428,10 @@ immutable. Run one kit version per process during a cutover.
 
 ### Fixed
 
+- `withIdempotentCommit` passes the options of `registerSaved` and
+  `registerRemoved` to `withCommit`. Before, it dropped `expectedVersion`, so
+  a second registration of the same aggregate with a contradicting OCC
+  baseline passed without an error.
 - `copyPlainState` and `InMemoryEventStore.append` check the copy with a second
   walk. Before, a `Map`, a `Set`, an `ArrayBuffer`, a `SharedArrayBuffer`, or
   a boxed bigint whose prototype was replaced passed the walk as a record,
