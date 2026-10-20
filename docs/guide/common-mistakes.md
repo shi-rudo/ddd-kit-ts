@@ -73,8 +73,11 @@ They are a short-lived queue owned by the aggregate until `UnitOfWork`
 collects and acknowledges the exact registered batch through an internal
 capability.
 
-Review signal: application code does not stamp events, because the commit
-stamps them. It must not persist a manually read `pendingEvents` array. Repository `flush` receives the
+Review signal: application code does not need to stamp events, because the
+commit stamps them when a write registers the aggregate. Stamp first with
+`stampPendingEvents` only when a write before the registration stores the
+events, for example an event store append in a direct `withCommit` callback.
+Application code must not persist a manually read `pendingEvents` array. Repository `flush` receives the
 immutable batch as `write.events`.
 
 ### Calling a repository `save`
