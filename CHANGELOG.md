@@ -171,6 +171,11 @@ immutable. Run one kit version per process during a cutover.
 - `readStream` returns a `StreamReadResult`, which reports whether the stream
   exists and the real head. Its options object and `limit` are required. An
   invalid option rejects with `RangeError` before the store is read.
+- `EventStore.append` rejects an event without an `eventId` with
+  `TypeError`, before any write. `InMemoryEventStore` does, and the event
+  store contract suite checks it. A direct `withCommit` callback that
+  appends before its registration therefore fails instead of storing
+  unstamped events.
 
 #### Errors
 

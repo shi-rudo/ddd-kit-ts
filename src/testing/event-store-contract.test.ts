@@ -35,6 +35,7 @@ describe("event-store adapter contract", () => {
 		expect(contractTests.map(({ name }) => name)).toEqual([
 			"absent stream: read reports explicit absence at version zero",
 			"empty append: no version check and no stream creation",
+			"unstamped event: an append rejects an event without an eventId with TypeError and writes nothing",
 			"qualified stream key: equal aggregate ids remain isolated by aggregate type",
 			"append/read: event order and fromVersion slicing are preserved",
 			"paged read: limit bounds every page and fromVersion continues without gaps or duplicates",

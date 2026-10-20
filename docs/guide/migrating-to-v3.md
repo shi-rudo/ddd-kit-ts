@@ -1481,3 +1481,7 @@ The root entry no longer exports `capturePersistenceBaseline`,
 - The default event id is a time-ordered UUID v7 from Web Crypto random bits.
   In rc.13 it was a UUID v4 from `crypto.randomUUID()`. Pass your own
   `eventIdFactory` if a consumer expects version 4.
+- An event store rejects an event without an `eventId` with `TypeError`,
+  before any write. A custom adapter must do the same; the event store
+  contract suite checks it. Stamp first with `stampPendingEvents` if a direct
+  `withCommit` callback appends before its registration.
