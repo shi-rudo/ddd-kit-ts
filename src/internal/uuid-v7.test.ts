@@ -45,15 +45,17 @@ describe("uuidV7", () => {
 		expect([...ids].sort()).toEqual(ids);
 	});
 
-	it("keeps the creation order when one millisecond needs more ids than the counter holds", async () => {
+	it("keeps the time field on the clock when one millisecond needs many ids", async () => {
 		const uuidV7 = await freshGenerator();
-		vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2033, 0, 1));
+		const now = Date.UTC(2033, 0, 1);
+		vi.spyOn(Date, "now").mockReturnValue(now);
 
 		const ids = Array.from({ length: 10_000 }, () => uuidV7());
 
 		expect(new Set(ids).size).toBe(ids.length);
 		expect([...ids].sort()).toEqual(ids);
 		expect(ids.every((id) => UUID_V7.test(id))).toBe(true);
+		expect(ids.every((id) => millisecondsOf(id) === now)).toBe(true);
 	});
 
 	it("does not sort a later id first when the clock goes back", async () => {

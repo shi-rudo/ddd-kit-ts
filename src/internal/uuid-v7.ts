@@ -1,4 +1,4 @@
-const MAX_COUNTER = 0xfff;
+const COUNTER_LIMIT = 2 ** 42;
 
 let lastMilliseconds = Number.NEGATIVE_INFINITY;
 let counter = 0;
@@ -10,22 +10,25 @@ let counter = 0;
  *
  * The ids of one process sort in creation order. Ids from several processes
  * interleave within one millisecond and depend on their clocks. Within one
- * millisecond of one process, the 12-bit `rand_a` field holds a counter that
- * starts at a random value with its top bit clear and increases by one per
- * id. When the counter runs out,
- * the time field moves one millisecond ahead. A clock that goes back does not
- * move the time field back. This is method 1 of RFC 9562, section 6.2.
+ * millisecond of one process, a 42-bit counter increases by one per id: the
+ * 12 bits of `rand_a` and the first 30 bits of `rand_b`. It starts at a random
+ * value with its top bit clear, so it does not run out in practice, also not
+ * on a runtime that stops the clock during a request. If it runs out, the time
+ * field moves one millisecond ahead. A clock that goes back does not move the
+ * time field back. This is method 1 of RFC 9562, section 6.2.
  */
 export function uuidV7(): string {
 	const bytes = new Uint8Array(16);
 	globalThis.crypto.getRandomValues(bytes);
 	const view = new DataView(bytes.buffer);
-	const seed = view.getUint16(6) & 0x07ff;
+	// The time field below overwrites bytes 0 to 5, so their random bits
+	// seed the counter without taking bits from the rest of the id.
+	const seed = (view.getUint16(0) & 0x01ff) * 2 ** 32 + view.getUint32(2);
 	const now = Date.now();
 	if (now > lastMilliseconds) {
 		lastMilliseconds = now;
 		counter = seed;
-	} else if (counter < MAX_COUNTER) {
+	} else if (counter + 1 < COUNTER_LIMIT) {
 		counter += 1;
 	} else {
 		lastMilliseconds += 1;
@@ -38,8 +41,12 @@ export function uuidV7(): string {
 		bytes[index] = time % 0x100;
 		time = Math.floor(time / 0x100);
 	}
-	view.setUint16(6, 0x7000 | counter);
-	view.setUint8(8, 0x80 | (view.getUint8(8) & 0x3f));
+	const counterHigh = Math.floor(counter / 2 ** 24);
+	const counterLow = counter % 2 ** 24;
+	view.setUint16(6, 0x7000 | (counterHigh >>> 6));
+	view.setUint8(8, 0x80 | (counterHigh & 0x3f));
+	view.setUint8(9, counterLow >>> 16);
+	view.setUint16(10, counterLow & 0xffff);
 
 	let hex = "";
 	for (const byte of bytes) hex += byte.toString(16).padStart(2, "0");
