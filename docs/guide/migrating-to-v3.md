@@ -1407,32 +1407,7 @@ Behavior that a use case or an adapter can notice:
   `endEventSourcesCommitted`, and `endEventSourcesRolledBack` with
   `providesRolledBackEnds`.
 
-**3.0.0.**
-
-The names follow the established vocabulary, and the root entry is
-slimmer. Replace the rc.12 names:
-
-| rc.12 | 3.0.0 |
-| --- | --- |
-| `recordPendingEvents` | `stampPendingEvents` |
-| `createDomainEventFromFacts`, `CreateDomainEventFromFactsOptions` | `createStampedDomainEvent`, `CreateStampedDomainEventOptions` |
-| `UncommittedDomainEvent`, `AnyUncommittedDomainEvent`, `UncommittedDomainEventOf` | `UnstampedDomainEvent`, `AnyUnstampedDomainEvent`, `UnstampedDomainEventOf` |
-| protected `stampNewEventIdentity(event)` | protected `attributeNewEvent(event)` |
-| `detachState` | `copyPlainState` |
-| `CommitEnrollment`, `enrollSaved`, `enrollDeleted` | `CommitRegistration`, `registerSaved`, `registerRemoved` |
-| `UnenrolledChangesError` (code `UNENROLLED_CHANGES`) | `UnregisteredChangesError` (code `UNREGISTERED_CHANGES`) |
-| `EventHarvestError` (code `EVENT_HARVEST_FAILED`) | `EventCollectionError` (code `EVENT_COLLECTION_FAILED`) |
-| `UnmintedEventError` (code `UNMINTED_EVENT`) | `HandBuiltEventError` (code `HAND_BUILT_EVENT`) |
-| `HostileStateKeyError` (code `HOSTILE_STATE_KEY`) | `PrototypePollutionError` (code `PROTOTYPE_POLLUTION`) |
-| `EventBusImpl` | `InProcessEventBus` |
-| `vo`, `voEquals`, `voEqualsExcept`, `voValidated`, `voWithValidation`, type `VO<T>` | `valueObject`, `valueObjectEquals`, `valueObjectEqualsExcept`, `valueObjectOrIssues`, `valueObjectOrError`, `ValueObjectOf<T>` |
-| the state machine from `@shirudo/ddd-kit` | from `@shirudo/ddd-kit/state-machine` |
-
-The root entry no longer exports `capturePersistenceBaseline`,
-`derivePersistenceChanges`, `insertPersistenceBaseline`,
-`recapturePersistenceBaseline`, `persistenceProjectionDrifted`,
-`PersistenceBaseline`, `freezeShallow`, `deepEqualExcept`,
-`recordDomainEvent`, `createUncommittedDomainEvent`, and `IValueObject`.
+**rc.12.**
 
 - `copyPlainState` rejects an index key and a non-enumerable data property or
   accessor on a built-in, for example `0` on a `Map` or a key after the last
@@ -1457,3 +1432,36 @@ The root entry no longer exports `capturePersistenceBaseline`,
   the caller unchanged; in rc.11 the clone failed first with a `TypeError`.
   The checks catch accidents, not a hostile `Proxy`. Creating an event costs
   about 40 percent more.
+
+**rc.13.**
+
+The names follow the established vocabulary, and the root entry is
+slimmer. Replace the rc.12 names:
+
+| rc.12 | rc.13 |
+| --- | --- |
+| `recordPendingEvents` | `stampPendingEvents` |
+| `createDomainEventFromFacts`, `CreateDomainEventFromFactsOptions` | `createStampedDomainEvent`, `CreateStampedDomainEventOptions` |
+| `UncommittedDomainEvent`, `AnyUncommittedDomainEvent`, `UncommittedDomainEventOf` | `UnstampedDomainEvent`, `AnyUnstampedDomainEvent`, `UnstampedDomainEventOf` |
+| protected `stampNewEventIdentity(event)` | protected `attributeNewEvent(event)` |
+| `detachState` | `copyPlainState` |
+| `CommitEnrollment`, `enrollSaved`, `enrollDeleted` | `CommitRegistration`, `registerSaved`, `registerRemoved` |
+| `UnenrolledChangesError` (code `UNENROLLED_CHANGES`) | `UnregisteredChangesError` (code `UNREGISTERED_CHANGES`) |
+| `EventHarvestError` (code `EVENT_HARVEST_FAILED`) | `EventCollectionError` (code `EVENT_COLLECTION_FAILED`) |
+| `UnmintedEventError` (code `UNMINTED_EVENT`) | `HandBuiltEventError` (code `HAND_BUILT_EVENT`) |
+| `HostileStateKeyError` (code `HOSTILE_STATE_KEY`) | `PrototypePollutionError` (code `PROTOTYPE_POLLUTION`) |
+| `EventBusImpl` | `InProcessEventBus` |
+| `vo`, `voEquals`, `voEqualsExcept`, `voValidated`, `voWithValidation`, type `VO<T>` | `valueObject`, `valueObjectEquals`, `valueObjectEqualsExcept`, `valueObjectOrIssues`, `valueObjectOrError`, `ValueObjectOf<T>` |
+| the state machine from `@shirudo/ddd-kit` | from `@shirudo/ddd-kit/state-machine` |
+
+The root entry no longer exports `capturePersistenceBaseline`,
+`derivePersistenceChanges`, `insertPersistenceBaseline`,
+`recapturePersistenceBaseline`, `persistenceProjectionDrifted`,
+`PersistenceBaseline`, `freezeShallow`, `deepEqualExcept`,
+`recordDomainEvent`, `createUncommittedDomainEvent`, and `IValueObject`.
+
+- Inside `withIdempotentCommit`, `registerSaved` and `registerRemoved` pass
+  their options to `withCommit`. A second registration of the same aggregate
+  with a contradicting `expectedVersion` now rejects with
+  `EventCollectionError`, as it does in `withCommit`. In rc.12 it passed
+  without an error.
