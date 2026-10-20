@@ -5,7 +5,7 @@ import {
 } from "../../domain/aggregate/pending-event-lifecycle";
 import {
 	type AnyDomainEvent,
-	isStampedDomainEvent,
+	defaultDomainEventFactory,
 } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
 import {
@@ -27,7 +27,6 @@ import type { OutboxWriter } from "../../messaging/outbox/ports";
 import type { TransactionScope } from "../../persistence/repository/scope";
 import {
 	type DomainEventStampFactory,
-	defaultEventStampFactory,
 	type SharedDomainEventStampOptions,
 	stampAtRegistration,
 } from "../unit-of-work/stamp-pending-events";
@@ -215,9 +214,13 @@ interface CommitTokenScope<Evt extends AnyDomainEvent> {
 	resolve(tokens: unknown): ReadonlyArray<AggregateCommitRecord<Evt>>;
 }
 
-/** Stamps the still-unstamped pending events of one registered aggregate. */
+/**
+ * Stamps the still-unstamped pending events of one registered aggregate.
+ * `operation` names the registering call in an error.
+ */
 export type StampAtRegistration = (
 	aggregate: Aggregate<Id<string>, AnyDomainEvent>,
+	operation: string,
 ) => void;
 
 /** One token registry per transactional callback attempt. */
@@ -300,20 +303,11 @@ function createCommitTokenScope<Evt extends AnyDomainEvent>(
 		// Stamped before the batch is recorded: the registration records the
 		// exact event objects, and the collection-time recheck compares them by
 		// reference.
-		stamp(aggregate);
+		stamp(aggregate, "withCommit registration");
 		// The pendingEvents getter already returns a frozen copy;
 		// re-copying and re-freezing it here would only duplicate the work.
-		const events = aggregate.pendingEvents;
-		for (const event of events) {
-			if (!isStampedDomainEvent(event)) {
-				throw new EventCollectionError(
-					`withCommit: event "${(event as { readonly type: string }).type}" ` +
-						"is still unstamped after the commit stamped its aggregate. The " +
-						"recording capability of the aggregate did not stamp it.",
-					(event as { readonly type: string }).type,
-				);
-			}
-		}
+		// The stamp above left no unstamped event in it.
+		const events = aggregate.pendingEvents as ReadonlyArray<Evt>;
 		// The kit-maintained marker, not the registration-supplied
 		// expectedVersion, grounds the unique-cursor guard: it survives
 		// callers who omit registration options (the documented
@@ -328,7 +322,7 @@ function createCommitTokenScope<Evt extends AnyDomainEvent>(
 			version: aggregate.version,
 			expectedVersion: options?.expectedVersion,
 			persistedVersion,
-			events: events as ReadonlyArray<Evt>,
+			events,
 		});
 		issuedTokenCount += 1;
 		return token;
@@ -588,13 +582,13 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 		);
 	}
 
-	const eventStampFactory = deps.eventStampFactory ?? defaultEventStampFactory;
-	const stamp: StampAtRegistration = (aggregate) =>
+	const eventStampFactory = deps.eventStampFactory ?? defaultDomainEventFactory;
+	const stamp: StampAtRegistration = (aggregate, operation) =>
 		stampAtRegistration(
 			aggregate,
 			eventStampFactory,
 			deps.stampOptions,
-			"withCommit registration",
+			operation,
 		);
 
 	const { result, commitRecords, events } = await deps.scope.transactional(

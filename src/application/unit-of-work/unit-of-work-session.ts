@@ -324,7 +324,9 @@ export class Session<Evt extends AnyDomainEvent> {
 	): void {
 		// The intent records the event batch that the flush receives, so the
 		// batch is stamped first.
-		if (entry.registration === undefined) this.stamp(entry.aggregate);
+		if (entry.registration === undefined) {
+			this.stamp(entry.aggregate, `repository.${intent}`);
+		}
 		const newlyRegistered = this.registerIntent(entry, intent);
 		try {
 			if (intent === "remove") {

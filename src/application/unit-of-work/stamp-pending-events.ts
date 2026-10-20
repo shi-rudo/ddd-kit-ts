@@ -6,7 +6,6 @@ import {
 import {
 	type AnyDomainEvent,
 	type CreateDomainEventStampOptions,
-	createDomainEventFactory,
 	type DomainEventFactory,
 	type DomainEventStamp,
 	isStampedDomainEvent,
@@ -85,13 +84,6 @@ export function stampPendingEvents<
 	);
 	return recordWith(capability, source, stampOptions);
 }
-
-/**
- * The factory that the commit stamps with when its dependencies name none:
- * a UUID v7 from Web Crypto random bits and the system clock.
- */
-export const defaultEventStampFactory: DomainEventStampFactory =
-	createDomainEventFactory();
 
 /**
  * Stamps the pending events that are still unstamped when the commit

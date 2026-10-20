@@ -4,6 +4,7 @@ import { pendingEventLifecycleReadViewFor } from "../../domain/aggregate/pending
 import { StateStoredAggregate } from "../../domain/aggregate/state-stored-aggregate";
 import {
 	type AnyDomainEvent,
+	buildUnstampedDomainEvent,
 	createDomainEvent,
 	createDomainEventFactory,
 	type DomainEvent,
@@ -1133,6 +1134,30 @@ describe("UnitOfWork", () => {
 			expect(outbox.added[0]?.[0]?.event.metadata?.correlationId).toBe(
 				"corr-1",
 			);
+		});
+
+		it("names the repository operation when an instance without the recording capability needs a stamp", async () => {
+			const decision = buildUnstampedDomainEvent(
+				"OrderCreated",
+				{ orderId: "x" },
+				{ aggregateId: "x", aggregateType: "MockOrder" },
+				"test",
+			) as unknown as TestEvent;
+			const foreign = unstampedOrder([decision]);
+			const { uow } = createUow();
+
+			const rejection = await uow
+				.run(async ({ repositories }) => {
+					repositories.orders.add(foreign);
+					return undefined;
+				})
+				.then(
+					() => "committed",
+					(error: unknown) => error,
+				);
+
+			expect(rejection).toBeInstanceOf(UnmanagedInstanceError);
+			expect(rejection).toMatchObject({ operation: "repository.add" });
 		});
 
 		it("keeps the stamps of an instance that the retried attempt registers again", async () => {
