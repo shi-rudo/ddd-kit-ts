@@ -96,14 +96,17 @@ immutable. Run one kit version per process during a cutover.
   event-sourced aggregate that calls `setState` throws
   `DirectStateMutationError`. The compiler does not flag a one-argument
   `setState` that now bumps; the guide says how to audit the call sites.
-- The aggregate decides, and the application shell stamps. A domain method
-  creates an unstamped event with `createEvent`, and `stampPendingEvents`
-  stamps the event id, the time, and the metadata before the registration.
-  `recordEvent` is gone, and `withCommit` rejects an unstamped event. Event
-  ids and the clock come from an immutable `createDomainEventFactory` value;
-  the six module setters and scoped helpers are gone. See [The aggregate
-  decides; the shell
-  stamps](docs/guide/migrating-to-v3.md#the-aggregate-decides-the-shell-stamps).
+- The aggregate decides, and the commit stamps. A domain method creates an
+  unstamped event with `createEvent`. When a repository write registers the
+  aggregate, the commit stamps the event id, the time, and the metadata.
+  `eventStampFactory` in the dependencies of `withCommit` and `UnitOfWork`
+  names the factory and defaults to `createDomainEventFactory()`.
+  `stampOptions` carries the metadata of a run. `stampPendingEvents` stamps
+  before the registration when the metadata depends on the event, and the
+  commit keeps that stamp. `recordEvent` is gone. Event ids and the clock come
+  from an immutable `createDomainEventFactory` value; the six module setters
+  and scoped helpers are gone. See [The aggregate decides; the commit
+  stamps](docs/guide/migrating-to-v3.md#the-aggregate-decides-the-commit-stamps).
 - Events are readonly and kit-built. A recording path accepts only an event
   that a kit constructor built and throws `HandBuiltEventError` for a hand-built
   object. `createDomainEvent` rejects binary buffers and a `RegExp`, because a
@@ -330,7 +333,8 @@ immutable. Run one kit version per process during a cutover.
 #### Aggregates and events
 
 - `createDomainEventFactory({ eventIdFactory, clock, source })` and the frozen
-  `defaultDomainEventFactory`. `stampPendingEvents` accepts shared stamp
+  `defaultDomainEventFactory`. `eventStampFactory` and `stampOptions` let the
+  commit stamp the pending events. `stampPendingEvents` accepts shared stamp
   options for a batch. `createStampedDomainEvent` builds an event whose
   identity and time the caller owns.
 - `AggregateConfig.maxPendingEvents` limits the pending list with

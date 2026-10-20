@@ -62,7 +62,6 @@ await new UnitOfWork(deps).run(async ({ repositories }) => {
   const order = await repositories.orders.getById(orderId);
 
   order.confirm();
-  stampPendingEvents(order, domainEvents);
   repositories.orders.update(order);
 });
 ```
@@ -191,7 +190,6 @@ Repository writes are valid only through the application-facing facade:
 await new UnitOfWork(deps).run(async ({ repositories }) => {
   const order = Order.create(newOrderId(), customerId);
   order.addItems(items);
-  stampPendingEvents(order, domainEvents);
 
   repositories.orders.add(order);
 });
@@ -201,7 +199,6 @@ await new UnitOfWork(deps).run(async ({ repositories }) => {
 await new UnitOfWork(deps).run(async ({ repositories }) => {
   const order = await repositories.orders.getById(orderId);
   order.addItems(items);
-  stampPendingEvents(order, domainEvents);
 
   repositories.orders.update(order);
 });
@@ -596,12 +593,13 @@ cosmetic cache. `apply()` records only new facts; replay goes through
 `replayHistory`. An event-sourced aggregate that calls `setState` throws
 `DirectStateMutationError`, because its state changes only through `apply()`.
 
-#### The aggregate decides; the shell stamps
+#### The aggregate decides; the commit stamps
 
 A domain method creates an unstamped event with `this.createEvent(type,
 payload)`. The event carries the fact and the aggregate identity only. The
-application shell stamps the event id, the time, and the metadata with
-`stampPendingEvents`, before the repository registration.
+commit stamps the event id, the time, and the metadata when the repository
+write registers the aggregate. `eventStampFactory` in the dependencies names
+the factory. `stampOptions` of the run carries the metadata of the request.
 
 ```ts
 // before
@@ -614,17 +612,21 @@ confirm(): void {
   this.setState(nextState, this.createEvent("OrderConfirmed", payload));
 }
 
-await new UnitOfWork(deps).run(async ({ repositories }) => {
-  const order = await repositories.orders.getById(command.orderId);
-  order.confirm();
-  stampPendingEvents(order, domainEvents, {
-    metadata: { correlationId: command.correlationId },
-  });
-  repositories.orders.update(order);
-});
+const uow = new UnitOfWork({ ...deps, eventStampFactory: domainEvents });
+
+await uow.run(
+  async ({ repositories }) => {
+    const order = await repositories.orders.getById(command.orderId);
+    order.confirm();
+    repositories.orders.update(order);
+  },
+  { stampOptions: { metadata: { correlationId: command.correlationId } } },
+);
 ```
 
-`withCommit` rejects an event that was not recorded. Event ids and the clock
+Without `eventStampFactory`, the commit uses `createDomainEventFactory()`. If
+the metadata depends on the concrete event, stamp before the registration with
+`stampPendingEvents`. The commit keeps that stamp. Event ids and the clock
 come from an immutable factory value. The six module setters are gone:
 `setEventIdFactory`, `resetEventIdFactory`, `withEventIdFactory`,
 `setClockFactory`, `resetClockFactory`, and `withClockFactory`.
@@ -870,7 +872,6 @@ await withCommit({ scope, outbox, bus }, async (tx) => {
 await withCommit({ scope, outbox, bus }, async (tx, registration) => {
   const order = await orders(tx).getById(orderId);
   order.confirm();
-  stampPendingEvents(order, domainEvents);
   await orders(tx).save(order);
   return { result: order.id, commits: [registration.registerSaved(order)] };
 });
@@ -1465,3 +1466,14 @@ The root entry no longer exports `capturePersistenceBaseline`,
   with a contradicting `expectedVersion` now rejects with
   `EventCollectionError`, as it does in `withCommit`. In rc.12 it passed
   without an error.
+
+**rc.14.**
+
+- The commit stamps every still-unstamped pending event when a repository
+  write registers its aggregate. Remove the `stampPendingEvents` call before
+  `add`, `update`, `remove`, or `registerSaved`. Pass the factory once as
+  `eventStampFactory` to `UnitOfWork` or `withCommit`, and the metadata of the
+  request as `stampOptions` of the run. Without a factory, the commit uses
+  `createDomainEventFactory()`. An event that is already stamped keeps its
+  stamp, so a remaining call still works. In rc.13, `withCommit` rejected an
+  unstamped event with `EventCollectionError`.
