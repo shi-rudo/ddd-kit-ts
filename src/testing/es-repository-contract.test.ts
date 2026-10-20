@@ -12,7 +12,6 @@ import type { AggregateIdentity } from "../domain/aggregate/aggregate-identity";
 import type { AggregateConfig } from "../domain/aggregate/base-aggregate";
 import { EventSourcedAggregate } from "../domain/aggregate/event-sourced-aggregate";
 import {
-	createDomainEvent,
 	type DomainEvent,
 	isStampedDomainEvent,
 	type UnstampedDomainEventOf,
@@ -86,18 +85,7 @@ class ContractEsOrder extends EventSourcedAggregate<
 	/** Fresh aggregate: applies exactly ONE creation event (version 1). */
 	static create(id: EsOrderId): ContractEsOrder {
 		const order = new ContractEsOrder(id);
-		order.apply(
-			createDomainEvent(
-				"EsOrderCreated",
-				{
-					name: "initial",
-				},
-				{
-					aggregateId: order.id,
-					aggregateType: order.aggregateType,
-				},
-			) as EsOrderCreated,
-		);
+		order.apply(order.createEvent("EsOrderCreated", { name: "initial" }));
 		return order;
 	}
 
@@ -126,29 +114,11 @@ class ContractEsOrder extends EventSourcedAggregate<
 	}
 
 	rename(name: string): void {
-		this.apply(
-			createDomainEvent(
-				"EsOrderRenamed",
-				{ name },
-				{
-					aggregateId: this.id,
-					aggregateType: this.aggregateType,
-				},
-			) as EsOrderRenamed,
-		);
+		this.apply(this.createEvent("EsOrderRenamed", { name }));
 	}
 
 	addItem(item: string): void {
-		this.apply(
-			createDomainEvent(
-				"EsItemAdded",
-				{ item },
-				{
-					aggregateId: this.id,
-					aggregateType: this.aggregateType,
-				},
-			) as EsItemAdded,
-		);
+		this.apply(this.createEvent("EsItemAdded", { item }));
 	}
 
 	protected readonly folds = {

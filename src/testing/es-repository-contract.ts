@@ -127,14 +127,15 @@ export function createEsRepositoryContractTests<
 			"the stream was not appended or replayed correctly",
 		);
 	const streamFor = (id: TAggregate["id"]) => harness.streamKeyFor(id);
-	// Pre-flush identities: the in-memory batch must be stamped before
-	// the adapter may flush it.
-	const recordedIds = (
+	// Identities of the registered batch. The unit of work stamps it when
+	// add or update registers it, before the flush, so the suite reads the
+	// batch after that call, inside the run.
+	const registeredIds = (
 		events: ReadonlyArray<PendingDomainEvent<TEvent>>,
 	): string[] =>
 		stampedPendingEventIds(
 			events,
-			"pending events must be stamped before flush",
+			"the unit of work must stamp the batch that add registers",
 		);
 	// Read-back identities: adapters may serialize committed events to rows
 	// and decode them on read. A decoded event does not carry the in-memory
@@ -170,14 +171,15 @@ export function createEsRepositoryContractTests<
 			name: "add appends the exact creation batch to stream and outbox",
 			run: inEnvironment(async (environment) => {
 				const aggregate = harness.createAggregate();
-				const expectedIds = recordedIds(aggregate.pendingEvents);
 				assertEqual(
-					expectedIds.length,
+					aggregate.pendingEvents.length,
 					1,
 					"createAggregate must record exactly one creation event",
 				);
+				let expectedIds: string[] = [];
 				await environment.run(async ({ repository }) => {
 					repository.add(aggregate);
+					expectedIds = registeredIds(aggregate.pendingEvents);
 				});
 				const stream = await environment.committedStreamEvents(
 					streamFor(aggregate.id),
@@ -276,9 +278,10 @@ export function createEsRepositoryContractTests<
 				const aggregate = harness.createAggregate();
 				harness.mutate(aggregate);
 				harness.mutate(aggregate);
-				const expectedIds = recordedIds(aggregate.pendingEvents);
+				let expectedIds: string[] = [];
 				await environment.run(async ({ repository }) => {
 					repository.add(aggregate);
+					expectedIds = registeredIds(aggregate.pendingEvents);
 				});
 				const reloaded = await environment.run(({ repository }) =>
 					load(repository, aggregate.id),
@@ -317,10 +320,11 @@ export function createEsRepositoryContractTests<
 			run: inEnvironment(async (environment) => {
 				const aggregate = harness.createAggregate();
 				harness.mutate(aggregate);
-				const pending = [...aggregate.pendingEvents];
+				let pending: ReadonlyArray<PendingDomainEvent<TEvent>> = [];
 				await captureRejection(
 					environment.run(async ({ repository }) => {
 						repository.add(aggregate);
+						pending = [...aggregate.pendingEvents];
 						throw new Error("rollback probe");
 					}),
 				);
@@ -345,10 +349,11 @@ export function createEsRepositoryContractTests<
 			run: inEnvironment(async (environment) => {
 				const aggregate = harness.createAggregate();
 				harness.mutate(aggregate);
-				const expectedIds = recordedIds(aggregate.pendingEvents);
+				let expectedIds: string[] = [];
 				await captureRejection(
 					environment.run(async ({ repository }) => {
 						repository.add(aggregate);
+						expectedIds = registeredIds(aggregate.pendingEvents);
 						throw new Error("rollback probe");
 					}),
 				);
@@ -377,11 +382,12 @@ export function createEsRepositoryContractTests<
 			name: "outbox failure rolls the already-appended stream batch back",
 			run: inEnvironment(async (environment) => {
 				const aggregate = harness.createAggregate();
-				const pending = [...aggregate.pendingEvents];
+				let pending: ReadonlyArray<PendingDomainEvent<TEvent>> = [];
 				environment.failNextOutboxWrite(new Error("outbox failure probe"));
 				const rejection = await captureRejection(
 					environment.run(async ({ repository }) => {
 						repository.add(aggregate);
+						pending = [...aggregate.pendingEvents];
 					}),
 				);
 				assert(rejection !== undefined, "the outbox failure must reject");
