@@ -1485,3 +1485,5 @@ The root entry no longer exports `capturePersistenceBaseline`,
   before any write. A custom adapter must do the same; the event store
   contract suite checks it. Stamp first with `stampPendingEvents` if a direct
   `withCommit` callback appends before its registration.
+- The repository contract suites accept a harness that records unstamped
+  events. They read the registered batch after `add`, inside the run.
