@@ -255,8 +255,10 @@ not the past-tense spelling by itself. The failure is hidden point-to-point
 intent behind publish/subscribe semantics.
 
 The event-sourced example uses a dedicated command outbox. The aggregate first
-accepts a private fact. `stampPendingEvents` gives that fact its recording
-identity and trace metadata. Still inside the same transaction,
+accepts a private fact. `stampPendingEvents` stamps that fact with its
+identity and trace metadata. The event store append runs before the
+registration, so the fact needs its stamp first. Still inside the same
+transaction,
 `routeEventsToCommandOutbox` maps it to the exact addressed command that must
 survive the commit:
 

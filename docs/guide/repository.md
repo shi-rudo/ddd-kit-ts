@@ -63,7 +63,6 @@ Creation and update are not synonyms:
 ```ts
 await new UnitOfWork(deps).run(async ({ repositories }) => {
   const order = Order.place(newOrderId(), customerId, items);
-  stampPendingEvents(order, domainEvents);
 
   repositories.orders.add(order);
 });
@@ -73,7 +72,6 @@ await new UnitOfWork(deps).run(async ({ repositories }) => {
 await new UnitOfWork(deps).run(async ({ repositories }) => {
   const order = await repositories.orders.getById(orderId);
   order.confirm();
-  stampPendingEvents(order, domainEvents);
 
   repositories.orders.update(order);
 });
@@ -740,7 +738,6 @@ await new UnitOfWork(deps).run(async ({ repositories }) => {
   const order = await repositories.orders.getById(orderId);
 
   order.archive(reason, clock());
-  stampPendingEvents(order, domainEvents);
   repositories.orders.update(order);
 });
 ```
@@ -752,7 +749,6 @@ await new UnitOfWork(deps).run(async ({ repositories }) => {
   const order = await repositories.orders.getById(orderId);
 
   order.recordErasure(erasedAt);
-  stampPendingEvents(order, domainEvents);
   repositories.orders.remove(order);
 });
 ```

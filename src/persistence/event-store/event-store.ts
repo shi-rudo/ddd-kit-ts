@@ -218,6 +218,10 @@ export interface EventStore<Evt extends AnyDomainEvent>
 	 *     proves the duplicate/gap rejection. The repository then calls
 	 *     `replayHistory`, whose replay guard rejects any event carrying an
 	 *     aggregate type or id that contradicts this stream key.
+	 *  7. **Stamped events only:** reject an event without an `eventId` with
+	 *     a `TypeError`, before any write. A direct `withCommit` callback can
+	 *     append before its registration stamps the events; this check makes
+	 *     that mistake fail instead of storing ids that the outbox never sees.
 	 *
 	 * An empty `events` array is a no-op; implementations resolve without
 	 * touching the store (an ES repository skips `append` for aggregates

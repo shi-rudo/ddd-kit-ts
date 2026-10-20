@@ -21,7 +21,7 @@ Projects using CommonJS need a bundler or an ESM migration.
 The runtime surface is intentionally small:
 
 - no required `process`, `fs`, or `Buffer` usage in the package runtime
-- default event ids use Web Crypto's `crypto.randomUUID()`
+- default event ids are UUID v7 from Web Crypto's `crypto.getRandomValues()`
 - event and snapshot timestamps use `new Date()`
 - aggregate snapshots and value-object cloning use `structuredClone`
 - `EventBus` uses `Promise.allSettled`
@@ -33,29 +33,12 @@ hide a runtime polyfill inside an aggregate or value object.
 
 ## Scope ids and clocks explicitly
 
-The default event id is UUID v4 from `crypto.randomUUID()`. It is unique and
-portable, but it is not time-ordered. For larger event stores, prefer UUID v7,
-ULID, or another sortable id format so indexes stay clustered and ids roughly
-sort by creation time.
+The default event id is a UUID v7. It is unique, portable, and time-ordered,
+so indexes stay clustered. Order events by aggregate version or stream
+position, not by event id: ids from several instances interleave.
 
-Create an immutable factory for the scope that owns the policy:
-
-```ts
-import { createDomainEventFactory } from "@shirudo/ddd-kit";
-import { v7 as uuidv7 } from "uuid";
-
-const domainEvents = createDomainEventFactory({
-  eventIdFactory: () => uuidv7(),
-  clock: () => new Date(),
-});
-```
-
-The factory is frozen and has no setter. It can live at module scope when the
-policy is genuinely process-wide, or be created inside `fetch()` when the
-policy is request- or tenant-specific. In either case, call `createStamp()` in
-the application shell after the aggregate accepts the domain operation.
-
-ULID is the same shape:
+Create an immutable factory for the scope that owns another policy, for
+example ULID:
 
 ```ts
 import { createDomainEventFactory } from "@shirudo/ddd-kit";
@@ -63,8 +46,15 @@ import { ulid } from "ulid";
 
 const domainEvents = createDomainEventFactory({
   eventIdFactory: () => ulid(),
+  clock: () => new Date(),
 });
 ```
+
+The factory is frozen and has no setter. It can live at module scope when the
+policy is genuinely process-wide, or be created inside `fetch()` when the
+policy is request- or tenant-specific. In either case, pass it to `UnitOfWork`
+or `withCommit` as `eventStampFactory`. The commit then stamps every pending
+event with it.
 
 Per-event options remain useful for a single exceptional value:
 
@@ -90,7 +80,9 @@ it("emits deterministic event ids", () => {
   const order = makeOrder();
 
   order.confirm();
-  stampPendingEvents(order, domainEvents);
+  const [event] = stampPendingEvents(order, domainEvents);
+
+  expect(event?.eventId).toBe("evt-1");
 });
 ```
 
@@ -555,7 +547,6 @@ const confirmOrder = async (command: ConfirmOrder) => {
       }
 
       order.confirm();
-      stampPendingEvents(order, domainEvents);
       await updateOrderForDirectCommit(tx, order, loaded.expectedVersion);
       return {
         result: {

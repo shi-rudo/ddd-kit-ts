@@ -32,6 +32,10 @@ import type {
 	RuntimePersistenceDefinition,
 } from "./persistence-contract";
 import { bindRepositoryWrites } from "./repository-facade";
+import type {
+	DomainEventStampFactory,
+	SharedDomainEventStampOptions,
+} from "./stamp-pending-events";
 import { Session } from "./unit-of-work-session";
 
 interface RuntimeRepositoryDefinition<Evt extends AnyDomainEvent, TCtx>
@@ -73,6 +77,11 @@ export interface RunOptions {
 	 * `TransactionScope`. Use `AbortSignal.timeout(ms)` for a deadline.
 	 */
 	readonly signal?: AbortSignal;
+	/**
+	 * Stamp options that every event stamped in this run shares, for example
+	 * the correlation id of the request.
+	 */
+	readonly stampOptions?: SharedDomainEventStampOptions;
 }
 
 // Shared across package copies like every other kit brand: a definition
@@ -611,6 +620,12 @@ export interface UnitOfWorkDeps<
 	 * application phase. Default `30000`ms.
 	 */
 	postCommitTimeoutMs?: number;
+	/**
+	 * See `withCommit`: stamps every pending event that is still unstamped
+	 * when `add`, `update`, or `remove` registers its aggregate. Defaults to
+	 * `createDomainEventFactory()`.
+	 */
+	eventStampFactory?: DomainEventStampFactory;
 	repositories: CompatibleRepositoryDefinitions<Evt, TCtx, TDefinitions>;
 }
 
@@ -736,8 +751,10 @@ export class UnitOfWork<
 					onPersistError: this.deps.onPersistError,
 					postCommitTimeoutMs: this.deps.postCommitTimeoutMs,
 					signal: options?.signal,
+					eventStampFactory: this.deps.eventStampFactory,
+					stampOptions: options?.stampOptions,
 				},
-				async (tx, registration) => {
+				async (tx, registration, stamp) => {
 					// Fresh state per scope invocation: a TransactionScope that
 					// retries its callback (serialization-failure retry wrappers)
 					// re-runs this fn, and state from the rolled-back attempt
@@ -745,7 +762,7 @@ export class UnitOfWork<
 					// leak into the retry. The previous attempt's session is
 					// closed so its leaked contexts turn loud.
 					session?.close();
-					const s = new Session<Evt>(registration);
+					const s = new Session<Evt>(registration, stamp);
 					session = s;
 					sessions.push(s);
 					const current = startAttempt();

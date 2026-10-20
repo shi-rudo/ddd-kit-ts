@@ -133,8 +133,8 @@ The kit provides event id and clock factories because events need ids and timest
 ## Event identity and time cross the application boundary explicitly
 
 The top-level `createDomainEvent(...)` uses one immutable
-`defaultDomainEventFactory`: Web Crypto UUID v4 plus the platform clock. It is
-not replaceable. Consumers that need another policy call
+`defaultDomainEventFactory`: a UUID v7 from Web Crypto random bits plus the
+platform clock. It is not replaceable. Consumers that need another policy call
 `createDomainEventFactory({ eventIdFactory, clock })` and receive a frozen
 factory object that permanently captures those dependencies.
 
@@ -150,35 +150,55 @@ last caller. A synchronous scoped helper can restore a global with
 `try/finally`, but it cannot make that global request-local across overlapping
 async work. The correct fix is to remove the shared write location.
 
-### Aggregates decide and the application stamps
+### Aggregates decide and the commit stamps
 
 An aggregate first produces an immutable, unstamped domain event. The value
 is already a domain fact. The aggregate accepted the type and payload after its
 state changed. The value is not yet a technical event record. It has no
 generated identifier, stamp time, or trace metadata.
 
+The commit adds them. When `add`, `update`, or `remove` registers an
+aggregate, the commit stamps every pending event that is still unstamped. It
+stamps each event once, with the factory of the unit of work:
+
 ```ts
-const domainEvents = createDomainEventFactory({
-  eventIdFactory: () => uuidv7(),
-  clock: requestClock,
+const uow = new UnitOfWork({
+  ...deps,
+  eventStampFactory: createDomainEventFactory({ clock: requestClock }),
 });
 
-await uow.run(async ({ repositories }) => {
-  const order = await repositories.orders.getById(command.orderId);
-  order.confirm();
-  stampPendingEvents(order, domainEvents, {
-    metadata: { correlationId: command.correlationId },
-  });
-  repositories.orders.update(order);
-});
+await uow.run(
+  async ({ repositories }) => {
+    const order = await repositories.orders.getById(command.orderId);
+    order.confirm();
+    repositories.orders.update(order);
+  },
+  { stampOptions: { metadata: { correlationId: command.correlationId } } },
+);
 ```
 
 Inside the aggregate, `createEvent(type, payload, { version })` adds the
-aggregate address and payload schema version but does not read the factory,
+aggregate identity and payload schema version but does not read the factory,
 clock, or Web Crypto. Equal aggregate state and command data therefore produce
-equal decisions. `stampPendingEvents` is the application-shell step that
-attaches a `DomainEventStamp` exactly once. A retry sees the already stamped
-events and reuses their identities.
+equal decisions. Without `eventStampFactory`, the commit uses
+`createDomainEventFactory()`: a time-ordered UUID v7 from Web Crypto random
+bits and the system clock.
+
+The established event-sourcing libraries draw the same line. Marten,
+EventSauce, Eventuous, Commanded, and Emmett stamp in the infrastructure. They
+fill only what is still unset, and they take the correlation data from a
+context that the application sets once per run. No use case calls a stamping
+step.
+
+An explicit `stampPendingEvents(aggregate, factory)` call before the write
+stays possible, and the commit keeps the stamps that it set. Use it when the
+metadata depends on the concrete decision, for an import, or for a test that
+needs fixed ids.
+
+A retry that runs the work again loads the aggregate again. Its decisions are
+new, so they get new identities. The rolled-back attempt stored nothing. An
+instance that a retried attempt registers again keeps the stamps of the first
+attempt.
 
 Snapshot creation follows the same boundary. The application supplies a time
 to `captureAggregateSnapshot(snapshotModel, aggregate, snapshotAt)`, while the

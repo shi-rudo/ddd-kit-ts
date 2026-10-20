@@ -177,7 +177,7 @@ There is no `setState(...)` helper on `EventSourcedAggregate`. `apply(...)`
 already ties the event and the state transition together.
 
 A fold must derive state from `type` and `payload` only. A live `apply(...)`
-folds the event before the shell stamps it, so `eventId` and
+folds the event before the commit stamps it, so `eventId` and
 `occurredAt` do not exist yet. Replay folds stamped events through the
 same map, so those fields are present there at runtime. The fold
 parameter type declares the unstamped shape to keep them out of reach, but
@@ -235,10 +235,9 @@ unit of work and replays the command from fresh history.
 
 ### Stream events and outbox events
 
-The event store receives the recorded pending events. The outbox receives
-envelopes that reference those same immutable objects. Calling
-`stampPendingEvents` again during a retry does not generate another identity
-or timestamp.
+The event store receives the stamped pending events. The outbox receives
+envelopes that reference those same immutable objects. An instance that a
+retried attempt registers again keeps its stamps.
 
 The outbox source finalizes those envelopes with the full cursor under `position`:
 `aggregateVersion`, `commitSequence`, `commitSize`, and
@@ -304,6 +303,7 @@ contexts with the same domain name share storage, qualify it at the source
   `DuplicateAggregateError` when it can distinguish that case
 - rejected appends must leave the stream unchanged
 - equal raw ids under different aggregate types must remain isolated
+- an event without an `eventId` rejects with `TypeError`, before any write
 
 `readStream(stream, options)` reports both stream state and one bounded event
 page. `limit` is mandatory, so no port call can accidentally materialize an

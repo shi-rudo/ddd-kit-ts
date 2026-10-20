@@ -10,10 +10,7 @@ import {
 import { versionedFlush } from "../application/unit-of-work/versioned-flush";
 import type { Version } from "../domain/aggregate/aggregate";
 import { StateStoredAggregate } from "../domain/aggregate/state-stored-aggregate";
-import {
-	createDomainEvent,
-	type DomainEvent,
-} from "../domain/event/domain-event";
+import type { DomainEvent } from "../domain/event/domain-event";
 import type { Id } from "../domain/identity/id";
 import { InfrastructureError } from "../errors/kit-errors";
 import { deepEqual } from "../internal/structural/deep-equal";
@@ -92,28 +89,14 @@ class ContractOrder extends StateStoredAggregate<
 	rename(name: string): void {
 		this.setState(
 			{ ...this.state, name },
-			createDomainEvent(
-				"OrderRenamed",
-				{ name },
-				{
-					aggregateId: this.id,
-					aggregateType: this.aggregateType,
-				},
-			),
+			this.createEvent("OrderRenamed", { name }),
 		);
 	}
 
 	addItem(item: string): void {
 		this.setState(
 			{ ...this.state, items: [...this.state.items, item] },
-			createDomainEvent(
-				"ItemAdded",
-				{ item },
-				{
-					aggregateId: this.id,
-					aggregateType: this.aggregateType,
-				},
-			),
+			this.createEvent("ItemAdded", { item }),
 		);
 	}
 

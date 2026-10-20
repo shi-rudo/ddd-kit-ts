@@ -1,5 +1,8 @@
 import type { AggregateIdentity } from "../domain/aggregate/aggregate-identity";
-import type { AnyDomainEvent } from "../domain/event/domain-event";
+import {
+	type AnyDomainEvent,
+	buildUnstampedDomainEvent,
+} from "../domain/event/domain-event";
 import type {
 	EventStore,
 	ReadStreamOptions,
@@ -47,6 +50,18 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 ): EventStoreContractTest[] {
 	const inEnv = bindContractEnvironment(() => harness.createEnvironment());
 	const fixtureRead = { limit: 100 } as const;
+	/** The decision of `event` without its stamp: no event id and no time. */
+	const unstampedTwin = (event: Evt): Evt =>
+		buildUnstampedDomainEvent(
+			event.type,
+			event.payload,
+			{
+				aggregateId: event.aggregateId,
+				aggregateType: event.aggregateType,
+				schemaVersion: event.schemaVersion,
+			},
+			"createEventStoreContractTests",
+		) as unknown as Evt;
 	const hasSameEventIds = (
 		actual: ReadonlyArray<Evt>,
 		expected: ReadonlyArray<Evt>,
@@ -82,6 +97,27 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 						stored.events.length === 1 &&
 						stored.events[0]?.eventId === event.eventId,
 					"an empty append must not check OCC or create an empty stream",
+				);
+			}),
+		},
+		{
+			name: "unstamped event: an append rejects an event without an eventId with TypeError and writes nothing",
+			run: inEnv(async ({ store }) => {
+				const [firstKey] = harness.createCollidingStreamKeys();
+				const stamped = harness.createEvent(firstKey, 50);
+				const unstamped = unstampedTwin(harness.createEvent(firstKey, 51));
+
+				const rejection = await captureRejection(
+					store.append(firstKey, [stamped, unstamped], { expectedVersion: 0 }),
+				);
+				assert(
+					rejection instanceof TypeError,
+					"an append must reject an event without an eventId with TypeError",
+				);
+				const stored = await store.readStream(firstKey, fixtureRead);
+				assert(
+					!stored.exists && stored.lastVersion === 0,
+					"an append with an unstamped event must write none of the batch",
 				);
 			}),
 		},

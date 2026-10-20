@@ -166,7 +166,7 @@ common fields when you omit them:
 
 | Field | Default | Override |
 | --- | --- | --- |
-| `eventId` | `crypto.randomUUID()` | `options.eventId` or an instance factory |
+| `eventId` | a UUID v7 | `options.eventId` or an instance factory |
 | `occurredAt` | current clock time | `options.occurredAt` or an instance factory |
 | `schemaVersion` | `1` | `options.schemaVersion` |
 | `metadata` | `undefined` | `options.metadata` |
@@ -176,7 +176,12 @@ appropriate in an application shell or for a one-off system event. Aggregate
 behavior must use `createEvent`. Its result depends only on visible domain
 inputs and current aggregate state.
 
-The default event id is UUID v4 because it comes from Web Crypto's `crypto.randomUUID()`. That is portable and safe for uniqueness, but it is not time-ordered. For large event stores, prefer UUID v7, ULID, or KSUID so indexes stay clustered and ids sort roughly by creation time.
+The default event id is a UUID v7 (RFC 9562). The kit builds it from Web
+Crypto random bits, so it needs no package. The id starts with its creation
+time in milliseconds, so indexes on the event id stay clustered. The id is no
+ordering authority. The ids of one process sort in creation order, but ids
+from several processes interleave within one millisecond, and clock skew can
+invert them. Order events by aggregate version or stream position.
 
 ## Instance-bound factories
 
@@ -184,25 +189,38 @@ Create a factory for one application composition, request, tenant, or test when
 the immutable default is not the right policy:
 
 ```ts
-import { createDomainEventFactory } from "@shirudo/ddd-kit";
-import { v7 as uuidv7 } from "uuid";
+import { createDomainEventFactory, UnitOfWork } from "@shirudo/ddd-kit";
+import { ulid } from "ulid";
 
 const domainEvents = createDomainEventFactory({
-  eventIdFactory: () => uuidv7(),
+  eventIdFactory: () => ulid(),
   clock: () => new Date(),
 });
+const uow = new UnitOfWork({ ...deps, eventStampFactory: domainEvents });
 
-order.confirm(confirmedAt);
-stampPendingEvents(order, domainEvents, {
-  occurredAt: confirmedAt,
-  metadata: { correlationId: request.id },
-});
+await uow.run(
+  async ({ repositories }) => {
+    const order = await repositories.orders.getById(orderId);
+    order.confirm(confirmedAt);
+    repositories.orders.update(order);
+  },
+  {
+    stampOptions: {
+      occurredAt: confirmedAt,
+      metadata: { correlationId: request.id },
+    },
+  },
+);
 ```
 
-The third argument holds the stamp options that every decision of the
-recording shares. Pass a callback instead of the factory when the stamp
-depends on the concrete decision. The callback receives the unstamped
-decision and its position in the batch:
+The commit stamps every still-unstamped pending event when `update` registers
+the aggregate. `stampOptions` holds the options that every event of the run
+shares. `withCommit` takes the same two fields, `eventStampFactory` and
+`stampOptions`, in its dependencies.
+
+If the stamp depends on the concrete decision, stamp before the write with
+`stampPendingEvents`. The callback receives the unstamped decision and its
+position in the batch. The commit keeps these stamps:
 
 ```ts
 stampPendingEvents(order, (decision, index) =>
@@ -236,7 +254,6 @@ The aggregate does not hold a factory, a clock, or an id generator:
 ```ts
 const order = await loadOrder(orderId);
 order.confirm(confirmedAt);
-stampPendingEvents(order, domainEvents);
 
 await snapshots.save(
   orderIdentity,
@@ -273,15 +290,10 @@ unstamped facts. Stamping policy can be tested separately.
 
 ## Custom id formats
 
-Choose the id function when constructing the instance:
+The default is a UUID v7. Choose another id function when constructing the
+instance:
 
 ```ts
-// UUID v7: time-ordered and standards-track
-import { v7 as uuidv7 } from "uuid";
-const uuidEvents = createDomainEventFactory({
-  eventIdFactory: () => uuidv7(),
-});
-
 // ULID: compact, URL-safe, time-ordered
 import { ulid } from "ulid";
 const ulidEvents = createDomainEventFactory({

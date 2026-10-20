@@ -89,7 +89,7 @@ domain events and are not published automatically. This example also keeps the
 state-stored aggregate's `TEvent = never`, so it records no progress events. If
 monitoring or downstream processes need `CheckoutStarted`, `AwaitingPayment`,
 or `ProcessCompleted`, declare an aggregate event union. Record those events
-via `createEvent` plus application-shell `stampPendingEvents`. Do not
+via `createEvent`; the commit stamps them. Do not
 reinterpret machine outputs as domain events.
 
 The event-sourced variant takes the durable form. It records completed process

@@ -20,11 +20,7 @@ The kit gives you five pieces:
 The main path looks like this:
 
 ```ts
-import {
-  InMemoryOutbox,
-  stampPendingEvents,
-  UnitOfWork,
-} from "@shirudo/ddd-kit";
+import { InMemoryOutbox, UnitOfWork } from "@shirudo/ddd-kit";
 
 const outbox = new InMemoryOutbox<OrderEvent>();
 
@@ -36,7 +32,6 @@ const orderId = await new UnitOfWork({
   const order = await repositories.orders.getById(id);
 
   order.confirm();
-  stampPendingEvents(order, domainEvents);
   repositories.orders.update(order);
   return order.id;
 });
@@ -57,7 +52,9 @@ its events.
 1. It calls `scope.transactional(...)`.
 2. The unit of work builds transaction-bound read adapters and tracking.
 3. Your callback loads aggregates, makes domain decisions, and registers
-   explicit writes.
+   explicit writes. Each registration stamps the pending events of its
+   aggregate that are still unstamped, with `eventStampFactory` and
+   `stampOptions` from the dependencies.
 4. Still inside the transaction, the unit of work freezes and flushes the
    registered receipts. `withCommit` rejects invalid internal commit tokens
    and calls `outbox.add(events)` with the exact batches.
@@ -74,6 +71,10 @@ its events.
 
 If the transaction rolls back, step 5 never happens. The aggregate still has
 its pending events, so the caller can retry or discard the instance.
+
+A direct `withCommit` callback writes before it registers. If that write
+stores the events themselves, for example an event store append, stamp them
+first with `stampPendingEvents`. The registration keeps those stamps.
 
 `onPersisted` can run asynchronously. `withCommit` waits for it, but it is not a
 delivery guarantee. All invocations and the optional bus publication share one
@@ -150,7 +151,6 @@ await uow.run(async ({ repositories }) => {
   const order = await repositories.orders.getById(orderId);
 
   order.confirm();
-  stampPendingEvents(order, domainEvents);
   repositories.orders.update(order);
   return order.id;
 });

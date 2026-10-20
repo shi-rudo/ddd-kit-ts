@@ -1,11 +1,15 @@
 import type { Aggregate } from "../../domain/aggregate/aggregate";
-import { requirePendingEventRecordingCapability } from "../../domain/aggregate/pending-event-recording";
-import type {
-	AnyDomainEvent,
-	CreateDomainEventStampOptions,
-	DomainEventFactory,
-	DomainEventStamp,
-	UnstampedDomainEventOf,
+import {
+	type PendingEventRecordingCapability,
+	requirePendingEventRecordingCapability,
+} from "../../domain/aggregate/pending-event-recording";
+import {
+	type AnyDomainEvent,
+	type CreateDomainEventStampOptions,
+	type DomainEventFactory,
+	type DomainEventStamp,
+	isStampedDomainEvent,
+	type UnstampedDomainEventOf,
 } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
 
@@ -29,16 +33,22 @@ export type SharedDomainEventStampOptions = Omit<
 >;
 
 /**
- * Records every still-unstamped event accepted by an aggregate.
+ * Stamps every still-unstamped event accepted by an aggregate.
  *
- * The function is a command that also returns the recorded batch, a
+ * The commit stamps every still-unstamped event when it registers the
+ * aggregate, so a use case does not need this function. Call it first when
+ * the metadata depends on the concrete decision, for an import, or for a test
+ * that needs fixed ids. The commit keeps the stamps that this function set.
+ *
+ * The function is a command that also returns the stamped batch, a
  * deliberate exception to command-query separation: the caller hands the
  * batch on to persistence and needs no second read of `pendingEvents`.
  *
- * Recording is atomic with respect to the aggregate's pending list: if stamp
+ * Stamping is atomic with respect to the aggregate's pending list: if stamp
  * creation or validation fails, every decision remains unstamped. A
  * successful second call returns the same event objects and does not read the
- * factory again, which keeps event identity stable across transaction retries.
+ * factory again, so an instance that a retried attempt registers again keeps
+ * its event identities.
  *
  * Pass a `DomainEventFactory` (only its `createStamp` role is required) for one
  * uniform stamping policy. Add `stampOptions` for metadata that every
@@ -72,6 +82,35 @@ export function stampPendingEvents<
 		aggregate,
 		"stampPendingEvents",
 	);
+	return recordWith(capability, source, stampOptions);
+}
+
+/**
+ * Stamps the pending events that are still unstamped when the commit
+ * registers an aggregate. An aggregate whose pending events all carry a
+ * stamp stays untouched: an explicit {@link stampPendingEvents} call keeps
+ * its stamps, and an instance without the recording capability passes when
+ * it has nothing to stamp.
+ */
+export function stampAtRegistration(
+	aggregate: Aggregate<Id<string>, AnyDomainEvent>,
+	factory: DomainEventStampFactory,
+	stampOptions: SharedDomainEventStampOptions | undefined,
+	operation: string,
+): void {
+	if (aggregate.pendingEvents.every(isStampedDomainEvent)) return;
+	recordWith(
+		requirePendingEventRecordingCapability(aggregate, operation),
+		factory,
+		stampOptions,
+	);
+}
+
+function recordWith<TEvent extends AnyDomainEvent>(
+	capability: PendingEventRecordingCapability,
+	source: DomainEventStampFactory | DomainEventStampProvider<TEvent>,
+	stampOptions: SharedDomainEventStampOptions | undefined,
+): ReadonlyArray<TEvent> {
 	// Only the two shared fields reach the factory. The type omits eventId,
 	// but a wider options object passes the structural check with one at
 	// runtime, and one fixed id on every decision would collide.

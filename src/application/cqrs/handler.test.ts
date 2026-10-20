@@ -268,7 +268,7 @@ describe("withCommit", () => {
 		expect(bus.published).toEqual([]);
 	});
 
-	it("rejects an unstamped aggregate decision before writing the outbox", async () => {
+	describe("stamping at registration", () => {
 		class DecisionAggregate extends StateStoredAggregate<
 			Readonly<Record<string, never>>,
 			TestId,
@@ -280,28 +280,146 @@ describe("withCommit", () => {
 				super(id, {});
 			}
 
-			decide(): void {
-				this.setState(
-					{},
-					this.createEvent("OrderCreated", { orderId: "order-1" }),
-				);
+			decide(orderId = "order-1"): void {
+				this.setState({}, this.createEvent("OrderCreated", { orderId }));
 			}
 		}
-		const outbox = recordingOutbox<TestEvent>();
-		const aggregate = new DecisionAggregate("agg-1" as TestId);
-		aggregate.decide();
 
-		await expect(
-			withCommit(
+		const fixedStamps = (eventId: string) =>
+			createDomainEventFactory({
+				eventIdFactory: () => eventId,
+				clock: () => new Date("2027-01-01T00:00:00.000Z"),
+			});
+
+		it("stamps an unstamped decision with the default factory", async () => {
+			const outbox = recordingOutbox<TestEvent>();
+			const aggregate = new DecisionAggregate("agg-1" as TestId);
+			aggregate.decide();
+
+			await withCommit(
 				{ outbox, scope: createMockScope() },
 				async (_ctx, registration) =>
 					registeredResult(registration, "ok", [aggregate]),
-			),
-		).rejects.toBeInstanceOf(EventCollectionError);
+			);
 
-		expect(outbox.added).toHaveLength(0);
-		expect(aggregate.pendingEvents).toHaveLength(1);
-		expect(aggregate.pendingEvents[0]).not.toHaveProperty("eventId");
+			const collected = outbox.added[0]?.[0]?.event;
+			expect(collected?.eventId).toMatch(
+				/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+			);
+			expect(collected?.occurredAt).toBeInstanceOf(Date);
+			expect(aggregate.pendingEvents).toHaveLength(0);
+		});
+
+		it("stamps with the factory and the shared stamp options of the dependencies", async () => {
+			const outbox = recordingOutbox<TestEvent>();
+			const aggregate = new DecisionAggregate("agg-1" as TestId);
+			aggregate.decide();
+
+			await withCommit(
+				{
+					outbox,
+					scope: createMockScope(),
+					eventStampFactory: fixedStamps("evt-1"),
+					stampOptions: { metadata: { correlationId: "corr-1" } },
+				},
+				async (_ctx, registration) =>
+					registeredResult(registration, "ok", [aggregate]),
+			);
+
+			const collected = outbox.added[0]?.[0]?.event;
+			expect(collected?.eventId).toBe("evt-1");
+			expect(collected?.occurredAt.toISOString()).toBe(
+				"2027-01-01T00:00:00.000Z",
+			);
+			expect(collected?.metadata?.correlationId).toBe("corr-1");
+		});
+
+		it("keeps the stamp of an event that stampPendingEvents stamped first", async () => {
+			const outbox = recordingOutbox<TestEvent>();
+			const aggregate = new DecisionAggregate("agg-1" as TestId);
+			aggregate.decide();
+			stampPendingEvents(aggregate, fixedStamps("evt-explicit"));
+			const commitIds = vi.fn(() => "evt-commit");
+
+			await withCommit(
+				{
+					outbox,
+					scope: createMockScope(),
+					eventStampFactory: createDomainEventFactory({
+						eventIdFactory: commitIds,
+					}),
+				},
+				async (_ctx, registration) =>
+					registeredResult(registration, "ok", [aggregate]),
+			);
+
+			expect(outbox.added[0]?.[0]?.event.eventId).toBe("evt-explicit");
+			expect(commitIds).not.toHaveBeenCalled();
+		});
+
+		it("stamps before the registration records the batch, so a repeated registration passes", async () => {
+			const outbox = recordingOutbox<TestEvent>();
+			const aggregate = new DecisionAggregate("agg-1" as TestId);
+			aggregate.decide();
+
+			await withCommit(
+				{ outbox, scope: createMockScope() },
+				async (_ctx, registration) => {
+					const first = registration.registerSaved(aggregate);
+					const second = registration.registerSaved(aggregate);
+					return { result: "ok", commits: [first, second] };
+				},
+			);
+
+			expect(outbox.added).toHaveLength(1);
+			expect(outbox.added[0]).toHaveLength(1);
+		});
+
+		it("passes an error of the stamp factory through and leaves every decision unstamped", async () => {
+			const outbox = recordingOutbox<TestEvent>();
+			const aggregate = new DecisionAggregate("agg-1" as TestId);
+			aggregate.decide();
+			const failure = new Error("no id source");
+
+			const rejection = await withCommit(
+				{
+					outbox,
+					scope: createMockScope(),
+					eventStampFactory: createDomainEventFactory({
+						eventIdFactory: () => {
+							throw failure;
+						},
+					}),
+				},
+				async (_ctx, registration) =>
+					registeredResult(registration, "ok", [aggregate]),
+			).then(
+				() => "committed",
+				(error: unknown) => error,
+			);
+
+			expect(rejection).toBe(failure);
+			expect(outbox.added).toEqual([]);
+			expect(aggregate.pendingEvents[0]).not.toHaveProperty("eventId");
+		});
+
+		it("stamps the events of a removed aggregate at its registration", async () => {
+			const outbox = recordingOutbox<TestEvent>();
+			const aggregate = new DecisionAggregate("agg-1" as TestId);
+			aggregate.decide();
+
+			await withCommit(
+				{
+					outbox,
+					scope: createMockScope(),
+					eventStampFactory: fixedStamps("evt-removed"),
+				},
+				async (_ctx, registration) =>
+					registeredResult(registration, "ok", [aggregate], [aggregate]),
+			);
+
+			expect(outbox.added[0]?.[0]?.event.eventId).toBe("evt-removed");
+		});
 	});
 
 	it("rejects structural aggregate lookalikes before the transaction can commit", async () => {

@@ -50,7 +50,17 @@ function copyForStorage<Evt>(
 	if (event === null || typeof event !== "object") {
 		throw new TypeError(`${subject} is not an event object`);
 	}
-	return copyFreezableState(event, subject);
+	// Checked on the copy: a Proxy in the batch runs its traps only once.
+	const copy = copyFreezableState(event, subject);
+	const eventId = (copy as { readonly eventId?: unknown }).eventId;
+	if (typeof eventId !== "string" || eventId === "") {
+		throw new TypeError(
+			`${subject} has no eventId. Stamp the event before the append: the ` +
+				"commit stamps it when a write registers its aggregate, and " +
+				"stampPendingEvents stamps it before that.",
+		);
+	}
+	return copy;
 }
 
 function assertStreamPosition(

@@ -27,7 +27,11 @@ import {
 	persistenceCaptureDrifted,
 	recapturePersistenceBaseline,
 } from "../../persistence/repository/persistence-model";
-import type { AggregateCommitToken, CommitRegistration } from "../cqrs/handler";
+import type {
+	AggregateCommitToken,
+	CommitRegistration,
+	StampAtRegistration,
+} from "../cqrs/handler";
 import {
 	AggregateTrackingError,
 	attributeFlushStatementIntent,
@@ -118,7 +122,10 @@ export class Session<Evt extends AnyDomainEvent> {
 	private _lateRegistrationsFailAttempt = false;
 	private _registrationDuringFlush: AggregateTrackingError | undefined;
 
-	constructor(private readonly commitRegistration: CommitRegistration<Evt>) {}
+	constructor(
+		private readonly commitRegistration: CommitRegistration<Evt>,
+		private readonly stamp: StampAtRegistration,
+	) {}
 
 	public get identityMap(): UnitOfWorkIdentityMap {
 		this.assertOpen("tracking.identityMap");
@@ -315,6 +322,11 @@ export class Session<Evt extends AnyDomainEvent> {
 		intent: AggregateWriteIntent,
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void {
+		// The intent records the event batch that the flush receives, so the
+		// batch is stamped first.
+		if (entry.registration === undefined) {
+			this.stamp(entry.aggregate, `repository.${intent}`);
+		}
 		const newlyRegistered = this.registerIntent(entry, intent);
 		try {
 			if (intent === "remove") {

@@ -193,6 +193,25 @@ describe("InMemoryEventStore", () => {
 		});
 	});
 
+	it("rejects an event without an eventId and writes none of the batch", async () => {
+		const store = new InMemoryEventStore<OrderEvent>();
+		const unstamped = {
+			...renamed("unstamped"),
+			eventId: undefined,
+		} as unknown as OrderEvent;
+
+		const rejection = await store
+			.append(streamA, [renamed("stamped"), unstamped], { expectedVersion: 0 })
+			.catch((error: unknown) => error);
+
+		expect(rejection).toBeInstanceOf(TypeError);
+		expect(await store.readStream(streamA, allEvents)).toEqual({
+			exists: false,
+			lastVersion: 0,
+			events: [],
+		});
+	});
+
 	it("keeps streams independent", async () => {
 		const store = new InMemoryEventStore<OrderEvent>();
 		await store.append(streamA, [renamed("a")], { expectedVersion: 0 });

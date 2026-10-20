@@ -609,7 +609,7 @@ The bus dispatches the command. The command handler owns the use case.
 post-commit orchestration to `withCommit`.
 
 ```ts
-import { stampPendingEvents, UnitOfWork } from "@shirudo/ddd-kit";
+import { UnitOfWork } from "@shirudo/ddd-kit";
 
 const result = await new UnitOfWork(
   {
@@ -623,7 +623,6 @@ const result = await new UnitOfWork(
   async ({ repositories }) => {
     const order = await repositories.orders.getById(orderId);
     order.confirm();
-    stampPendingEvents(order, domainEvents);
     repositories.orders.update(order);
     return order.id;
   },
@@ -708,8 +707,9 @@ const shipmentRequested = createDomainEvent(
 );
 ```
 
-Inside aggregate methods, prefer `this.createEvent(...)`. Attach correlation
-metadata when the application stamps pending events with `createStamp()`.
+Inside aggregate methods, prefer `this.createEvent(...)`. Pass correlation
+metadata in the `stampOptions` of the run. The commit adds it when it stamps
+the pending events.
 Outside aggregates, `createDomainEvent(...)` is the convenient primitive,
 while `createStampedDomainEvent(...)` is the explicit legacy constructor.
 

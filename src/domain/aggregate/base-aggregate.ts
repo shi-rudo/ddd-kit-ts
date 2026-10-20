@@ -54,8 +54,8 @@ export interface AggregateConfig<TState = unknown>
  * tracking, the kit-internal post-commit acknowledgement capability,
  * the `markReconstituted` post-load marker, and the `createEvent` helper
  * that auto-injects `aggregateId` + `aggregateType` on every event the
- * aggregate emits. The application shell stamps the pending decisions
- * with `stampPendingEvents` before persistence.
+ * aggregate emits. The commit stamps the pending decisions when it
+ * registers the aggregate, before persistence.
  *
  * Consumers do NOT extend this class directly; extend
  * `StateStoredAggregate` for state-stored aggregates or
@@ -514,8 +514,8 @@ export abstract class BaseAggregate<
 	 * Creates the immutable business fact accepted by this aggregate without
 	 * reading a clock, generating an id, or attaching tracing metadata.
 	 *
-	 * The application shell stamps pending events after the domain operation
-	 * and before persistence. Payload schema version stays here, next to the
+	 * The commit stamps pending events when it registers the aggregate,
+	 * before persistence. Payload schema version stays here, next to the
 	 * concrete event producer, rather than in shell-owned stamp data.
 	 */
 	protected createEvent<E extends TEvent>(

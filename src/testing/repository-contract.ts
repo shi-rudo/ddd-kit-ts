@@ -183,12 +183,14 @@ export function createRepositoryContractTests<
 	const eventIds = (
 		events: ReadonlyArray<CommittedDomainEvent<TEvent>>,
 	): string[] => sortedCommittedEventIds(events);
+	// The unit of work stamps the batch when add or update registers it, so
+	// the suite reads the batch after that call, inside the run.
 	const pendingEventIds = (
 		events: ReadonlyArray<PendingDomainEvent<TEvent>>,
 	): string[] =>
 		stampedPendingEventIds(
 			events,
-			"the harness must stamp pending events before persistence",
+			"the unit of work must stamp the batch that add registers",
 		);
 
 	const tests: RepositoryContractTest[] = [
@@ -202,10 +204,11 @@ export function createRepositoryContractTests<
 			run: inEnvironment(async (environment) => {
 				const aggregate = harness.createAggregate();
 				harness.mutate(aggregate);
-				const registeredEvents = [...aggregate.pendingEvents];
+				let registeredEvents: ReadonlyArray<PendingDomainEvent<TEvent>> = [];
 
 				await environment.run(async ({ repository }) => {
 					repository.add(aggregate);
+					registeredEvents = [...aggregate.pendingEvents];
 				});
 
 				const reloaded = await reload(environment, aggregate.id);
@@ -346,10 +349,11 @@ export function createRepositoryContractTests<
 			run: inEnvironment(async (environment) => {
 				const aggregate = harness.createAggregate();
 				harness.mutate(aggregate);
-				const pending = [...aggregate.pendingEvents];
+				let pending: ReadonlyArray<PendingDomainEvent<TEvent>> = [];
 				await captureRejection(
 					environment.run(async ({ repository }) => {
 						repository.add(aggregate);
+						pending = [...aggregate.pendingEvents];
 						throw new Error("rollback probe");
 					}),
 				);
@@ -373,11 +377,12 @@ export function createRepositoryContractTests<
 			run: inEnvironment(async (environment) => {
 				const aggregate = harness.createAggregate();
 				harness.mutate(aggregate);
-				const pending = [...aggregate.pendingEvents];
+				let pending: ReadonlyArray<PendingDomainEvent<TEvent>> = [];
 				environment.failNextOutboxWrite(new Error("outbox failure probe"));
 				const rejection = await captureRejection(
 					environment.run(async ({ repository }) => {
 						repository.add(aggregate);
+						pending = [...aggregate.pendingEvents];
 					}),
 				);
 				assert(rejection !== undefined, "the outbox failure must reject");

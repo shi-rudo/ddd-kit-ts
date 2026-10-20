@@ -73,8 +73,11 @@ They are a short-lived queue owned by the aggregate until `UnitOfWork`
 collects and acknowledges the exact registered batch through an internal
 capability.
 
-Review signal: application code can call `stampPendingEvents`. It must not
-persist a manually read `pendingEvents` array. Repository `flush` receives the
+Review signal: application code does not need to stamp events, because the
+commit stamps them when a write registers the aggregate. Stamp first with
+`stampPendingEvents` only when a write before the registration stores the
+events, for example an event store append in a direct `withCommit` callback.
+Application code must not persist a manually read `pendingEvents` array. Repository `flush` receives the
 immutable batch as `write.events`.
 
 ### Calling a repository `save`
@@ -86,7 +89,6 @@ decision first and then register its lifecycle explicitly:
 await uow.run(async ({ repositories }) => {
   const order = await repositories.orders.getById(orderId);
   order.confirm();
-  stampPendingEvents(order, domainEvents);
   repositories.orders.update(order);
 });
 ```
@@ -120,7 +122,7 @@ The callback's job is to provide commit evidence for repository writes that part
 
 Manual collection is tempting because it looks explicit. The problem is timing. If every caller decides when to read events, clear events, or publish events, the transaction boundary stops being a boundary. Some callers will collect before the repository flush, some after it, and some after an error. The whole point of `withCommit` is to centralize that order:
 
-1. Run the application work.
+1. Run the application work. Each registration stamps the pending events.
 2. Flush every registered aggregate write.
 3. Collect pending events.
 4. Write the outbox in the same transaction.

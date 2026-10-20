@@ -889,11 +889,11 @@ export interface ReentrantEventRecordingErrorOptions {
 }
 
 /**
- * Thrown by `stampPendingEvents` when the aggregate's pending-event list
- * changes while its events are being stamped: a stamp provider that
- * directly or transitively triggers a new decision on the same aggregate
- * would otherwise have that decision silently discarded when recording
- * replaces the pending list. Recording is atomic: when this guard fires,
+ * Thrown when the aggregate's pending-event list changes while its events
+ * are stamped, by the commit or by `stampPendingEvents`: a stamp provider
+ * that directly or transitively triggers a new decision on the same
+ * aggregate would otherwise have that decision silently discarded when
+ * stamping replaces the pending list. Stamping is atomic: when this guard fires,
  * every decision (including the re-entrant one) remains unstamped. A
  * wiring error: deterministic bug at the call site, the remedy is keeping
  * stamp providers free of domain decisions.
@@ -906,8 +906,8 @@ export class ReentrantEventRecordingError extends KitWiringError<"REENTRANT_EVEN
 			"REENTRANT_EVENT_RECORDING",
 			"Pending events of aggregate " +
 				`${describeAggregateIdentity(options.identity)} changed while ` +
-				"stampPendingEvents was stamping them. A stamp provider must not " +
-				"trigger new decisions on the aggregate being recorded; make every " +
+				"they were stamped. A stamp provider must not trigger new " +
+				"decisions on the aggregate that it stamps; make every " +
 				"domain decision first, then stamp.",
 		);
 		this.identity = copyAggregateIdentity(options.identity);
@@ -928,8 +928,8 @@ export interface DuplicateEventIdErrorOptions {
 /**
  * Thrown when two facts of one aggregate would carry the same `eventId`.
  * Two causes, two sites: the aggregate rejects a stamped event that is
- * already pending at the append, before the state moves; and
- * `stampPendingEvents` rejects a stamp provider that returns one reused
+ * already pending at the append, before the state moves; and stamping
+ * rejects a stamp provider that returns one reused
  * stamp (or repeats an explicit id). Either would create two distinct facts
  * sharing one identity, and downstream idempotent consumers keyed on
  * `eventId` silently drop one of them. A wiring error: deterministic bug at

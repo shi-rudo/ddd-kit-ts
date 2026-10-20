@@ -88,8 +88,8 @@ envelopes, and kit errors name an aggregate by this value, so a repository
 can pass it on as it is, for example `snapshots.delete(order.aggregateIdentity)`.
 
 Calling `createDomainEvent(...)` directly still works, but inside an aggregate
-`createEvent(...)` is the safer default. The application stamps the pending
-decision with `stampPendingEvents(...)` before persistence.
+`createEvent(...)` is the safer default. The commit stamps the pending
+decision when it registers the aggregate for persistence.
 
 Two wiring guards sit on the recording paths. An event that no kit
 constructor built throws `HandBuiltEventError` (code `HAND_BUILT_EVENT`). A
@@ -680,7 +680,7 @@ no synonyms.
 | create | A business factory makes a new aggregate and records its first facts. | `Order.place(...)`, `this.createEvent(...)` |
 | setState | A state-stored aggregate replaces its state, advances its version, and records the events of the change. | `setState(newState, events)` |
 | apply | An event-sourced aggregate folds a new fact into its state and records it. | `apply(event)` |
-| stamp | The application shell stamps the event id and the time on pending decisions. | `stampPendingEvents(aggregate, factory)` |
+| stamp | The commit stamps the event id, the time, and the metadata on pending decisions when it registers the aggregate. | `eventStampFactory`, `stampOptions`, `stampPendingEvents(aggregate, factory)` |
 | reconstitute | A factory builds an aggregate from persisted facts and yields it only on success. | `reconstituteAggregateFromHistory`, `reconstituteAggregateFromSnapshot`, `markReconstituted` |
 | replay | A built aggregate folds a later page of history into itself. | `replayHistory(history)` |
 | commit | The transaction that persists registered aggregates and publishes their events. | `withCommit`, `committedVersion`, `CommittedDomainEvent` |

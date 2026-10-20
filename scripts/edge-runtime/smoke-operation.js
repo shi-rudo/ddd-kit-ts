@@ -49,8 +49,9 @@ export async function runEdgeRuntimeSmoke(runtime) {
 
 	const order = new EdgeOrder();
 	order.confirm();
-	// The v3 flow: the aggregate produces the unstamped decision, the
-	// application shell stamps it with the factory before persistence.
+	// The aggregate produces the unstamped decision. The direct event store
+	// append below runs without a commit, so the decision needs its stamp
+	// first.
 	const domainEvents = createDomainEventFactory();
 	stampPendingEvents(order, domainEvents);
 	const orderView = order.toView();
@@ -59,6 +60,12 @@ export async function runEdgeRuntimeSmoke(runtime) {
 	assert(
 		orderView.pendingEvent?.type === "EdgeOrderConfirmed",
 		"aggregate did not record its domain event",
+	);
+	assert(
+		/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+			orderView.pendingEvent.eventId,
+		),
+		"the default event id is not a UUID v7",
 	);
 	assert(
 		Object.isFrozen(orderView.pendingEvent.payload),

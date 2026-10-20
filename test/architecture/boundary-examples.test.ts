@@ -239,9 +239,10 @@ describe("untrusted-boundary examples", () => {
 		expect(useCase).not.toContain("result: ok(");
 		expectBefore(
 			useCase,
-			"stampPendingEvents(order, domainEvents);",
+			"order.confirm();",
 			"commits: [registration.registerSaved(order)]",
 		);
+		expect(useCase).not.toContain("stampPendingEvents");
 		expect(useCase).toContain('outcome.result.status === "confirmed"');
 		expect(useCase).toContain("return ok(outcome.result.orderId)");
 		expect(edgeGuide).toContain("receives the stored outcome");
