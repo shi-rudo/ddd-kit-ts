@@ -109,7 +109,8 @@ immutable. Run one kit version per process during a cutover.
   stamps](docs/guide/migrating-to-v3.md#the-aggregate-decides-the-commit-stamps).
 - The default event id is a time-ordered UUID v7 (RFC 9562) from Web Crypto
   random bits, no longer a UUID v4 from `crypto.randomUUID()`. An index on the
-  event id stays clustered, and the ids of one process sort in creation order.
+  event id stays clustered. The id is no ordering authority across processes;
+  order events by aggregate version or stream position.
   Code that expects version 4 in the id must pass its own `eventIdFactory`.
 - Events are readonly and kit-built. A recording path accepts only an event
   that a kit constructor built and throws `HandBuiltEventError` for a hand-built

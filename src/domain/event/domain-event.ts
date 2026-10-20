@@ -19,8 +19,10 @@ export type { ClockFactory } from "./clock";
  * Web Crypto random bits (works on Node 19+, modern browsers in secure
  * contexts, Deno, Bun, Cloudflare Workers, Vercel Edge, and any runtime that
  * implements Web Crypto). A B-tree index on the eventId column stays
- * clustered, and `ORDER BY eventId` matches the creation order of one
- * process. Supply another generator to {@link createDomainEventFactory} to
+ * clustered. The id is no ordering authority: ids from several processes
+ * interleave within one millisecond, and clock skew can invert them. Order
+ * events by aggregate version or stream position. Supply another generator
+ * to {@link createDomainEventFactory} to
  * use ULID, KSUID, or another collision-safe format without mutating module
  * state.
  */

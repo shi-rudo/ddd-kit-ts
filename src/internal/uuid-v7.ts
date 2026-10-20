@@ -6,11 +6,13 @@ let counter = 0;
 /**
  * RFC 9562 UUID version 7: the Unix time in milliseconds in the first 48 bits,
  * then random bits from Web Crypto. A B-tree index on such ids stays
- * clustered, and the ids sort by creation time.
+ * clustered.
  *
- * The ids of one process sort in creation order. Within one millisecond, the
- * 12-bit `rand_a` field holds a counter that starts at a random value with
- * its top bit clear and increases by one per id. When the counter runs out,
+ * The ids of one process sort in creation order. Ids from several processes
+ * interleave within one millisecond and depend on their clocks. Within one
+ * millisecond of one process, the 12-bit `rand_a` field holds a counter that
+ * starts at a random value with its top bit clear and increases by one per
+ * id. When the counter runs out,
  * the time field moves one millisecond ahead. A clock that goes back does not
  * move the time field back. This is method 1 of RFC 9562, section 6.2.
  */

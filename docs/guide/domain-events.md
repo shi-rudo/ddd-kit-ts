@@ -178,8 +178,10 @@ inputs and current aggregate state.
 
 The default event id is a UUID v7 (RFC 9562). The kit builds it from Web
 Crypto random bits, so it needs no package. The id starts with its creation
-time in milliseconds. Indexes on the event id therefore stay clustered, and
-the ids of one process sort in creation order.
+time in milliseconds, so indexes on the event id stay clustered. The id is no
+ordering authority. The ids of one process sort in creation order, but ids
+from several processes interleave within one millisecond, and clock skew can
+invert them. Order events by aggregate version or stream position.
 
 ## Instance-bound factories
 

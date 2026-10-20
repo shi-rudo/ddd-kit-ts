@@ -34,7 +34,8 @@ hide a runtime polyfill inside an aggregate or value object.
 ## Scope ids and clocks explicitly
 
 The default event id is a UUID v7. It is unique, portable, and time-ordered,
-so indexes stay clustered and the ids sort by creation time.
+so indexes stay clustered. Order events by aggregate version or stream
+position, not by event id: ids from several instances interleave.
 
 Create an immutable factory for the scope that owns another policy, for
 example ULID:
