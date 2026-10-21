@@ -195,6 +195,8 @@ export interface OutboxDispatcherOptions<Evt extends AnyDomainEvent> {
 	/**
 	 * Maximum time to await one sink publication. The sink receives the same
 	 * deadline as an AbortSignal and an absolute `deadlineAt`. Default `30000`ms.
+	 * With a tracking outbox, the expiry consumes an attempt, whatever
+	 * {@link classifyFailure} says.
 	 */
 	deliveryTimeoutMs?: number;
 
@@ -255,9 +257,10 @@ export interface OutboxDispatcherOptions<Evt extends AnyDomainEvent> {
  * - **Bounded retries only with tracking.** With a
  *   {@link DispatchTrackingOutbox}, permanent and unknown delivery failures
  *   are reported via `markFailed`; transient failures back off without
- *   consuming the poison ceiling. The shared default recognizes native
- *   timeouts and `retryable` markers, and consumers can override it through
- *   {@link OutboxDispatcherOptions.classifyFailure};
+ *   consuming the poison ceiling. The expiry of the dispatcher's own
+ *   delivery budget always consumes an attempt. The shared default
+ *   recognizes native timeouts and `retryable` markers, and consumers can
+ *   override it through {@link OutboxDispatcherOptions.classifyFailure};
  *   the store owns the ceiling and the dead-letter set (wire
  *   `deadLetters()` to alerting). An ack failure
  *   (`markDispatched` throwing) is NOT reported as a delivery failure:
@@ -396,13 +399,18 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 		const delivered: string[] = [];
 		let failedRecord: OutboxRecord<Evt> | undefined;
 		let failure: unknown;
+		let ownBudgetExpired = false;
 		for (const record of batch) {
 			if (signal?.aborted) break;
+			let boundedContext: ExecutionContext | undefined;
 			try {
 				await runBoundedExecution(
 					"OutboxDispatcher.publish",
 					{ signal, timeoutMs: this.deliveryTimeoutMs },
-					(context) => this.sink.publish(record, context),
+					(context) => {
+						boundedContext = context;
+						return this.sink.publish(record, context);
+					},
 				);
 				delivered.push(record.dispatchId);
 			} catch (error) {
@@ -411,6 +419,7 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 				}
 				failedRecord = record;
 				failure = error;
+				ownBudgetExpired = boundedContext?.signal.aborted === true;
 				break;
 			}
 		}
@@ -460,8 +469,14 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 			reportToObserver(() =>
 				this.observers.onDispatchError(error, record, assessment),
 			);
+			// The expiry of the dispatcher's own delivery budget is evidence
+			// against this record, not a transient fault: without an attempt,
+			// a sink that hangs on it would block the outbox forever.
 			const tracking = this.trackingOutbox;
-			if (tracking !== undefined && assessment.kind !== "transient") {
+			if (
+				tracking !== undefined &&
+				(assessment.kind !== "transient" || ownBudgetExpired)
+			) {
 				try {
 					const deadLetter = await runBoundedExecution(
 						"OutboxDispatcher.markFailed",

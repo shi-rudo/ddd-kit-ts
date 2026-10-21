@@ -473,6 +473,11 @@ immutable. Run one kit version per process during a cutover.
 
 ### Fixed
 
+- `OutboxDispatcher` counts the expiry of its own `deliveryTimeoutMs` as a
+  failed attempt, as `DeadlineProcessor` already did. Before, the default
+  classifier called the timeout transient. A record that made the sink hang
+  then never reached the dead letter, and it blocked every later record. The
+  deadlines guide now states the rule of the processor correctly.
 - `withIdempotentCommit` keeps a staged outcome when the commit itself fails.
   Before, it released the outcome on a leased store, and the retry ran the
   command a second time, although the failed commit could have written its

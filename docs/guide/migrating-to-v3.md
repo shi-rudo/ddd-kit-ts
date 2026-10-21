@@ -1527,6 +1527,10 @@ The root entry no longer exports `capturePersistenceBaseline`,
 
 **rc.16.**
 
+- With a tracking outbox, a record whose publication runs past
+  `deliveryTimeoutMs` consumes an attempt and can reach the dead letter. In
+  rc.15 it stayed pending without an attempt. Raise `maxDeliveryAttempts` of
+  your adapter if a slow sink reaches the dead letter too early.
 - On a leased idempotency store, a failure at commit time keeps the staged
   outcome. A retry of the same key rejects with `IdempotencyInFlightError`
   until the lease expires. After that, `reconcileIdempotency` decides. In

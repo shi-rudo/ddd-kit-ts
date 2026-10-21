@@ -516,9 +516,9 @@ describe("OutboxDispatcher", () => {
 		expect(await cronPass).toBe("drained");
 	});
 
-	it("times out a never-settling sink without consuming the poison ceiling", async () => {
+	it("dead-letters a record whose delivery keeps running past the delivery budget", async () => {
 		vi.useFakeTimers();
-		const outbox = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 99 });
+		const outbox = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 1 });
 		await outbox.add([makeCommitted(1)]);
 		let context: ExecutionContext | undefined;
 		let sinkStarted!: () => void;
@@ -555,8 +555,10 @@ describe("OutboxDispatcher", () => {
 			expect(context?.deadlineAt).toBeTypeOf("number");
 			expect(errors).toHaveLength(1);
 			expect(errors[0]).toMatchObject({ name: "TimeoutError" });
-			const [pending] = await outbox.getPending();
-			expect(pending).toMatchObject({ dispatchId: "evt-1", attempts: 0 });
+			expect(await outbox.getPending()).toEqual([]);
+			expect(await outbox.deadLetters()).toMatchObject([
+				{ dispatchId: "evt-1", attempts: 1 },
+			]);
 		} finally {
 			vi.useRealTimers();
 		}
