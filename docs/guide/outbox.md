@@ -542,9 +542,9 @@ const dispatcher = new OutboxDispatcher({
 
 `transient` failures back off but do not consume the poison-message budget.
 `permanent` and safely conservative `unknown` failures do. The shared default
-walks the error cause chain: native `TimeoutError` and `retryable: true` are
-transient, while `retryable: false` is permanent. Unmapped errors remain
-unknown. The expiry of the dispatcher's own `deliveryTimeoutMs` consumes an
+walks the error cause chain, and the nearest marker decides: native
+`TimeoutError` and `retryable: true` are transient, while `retryable: false`
+is permanent. Unmapped errors remain unknown. The expiry of the dispatcher's own `deliveryTimeoutMs` consumes an
 attempt in every case. A `TimeoutError` that the sink raises before that
 budget expires follows the classifier. If a custom classifier throws or returns an invalid value, the
 original delivery error remains the primary error, the failure counts as

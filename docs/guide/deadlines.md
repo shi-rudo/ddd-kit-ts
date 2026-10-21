@@ -136,9 +136,9 @@ deadline pending, and does not consume the poison-message ceiling.
 
 `classifyFailure` uses the same policy as the outbox dispatcher. Return
 `"transient"`, `"permanent"`, or `"unknown"`; permanent and unknown failures
-consume attempts. Without a custom classifier, native `TimeoutError` and a
-`retryable: true` marker anywhere in the cause chain are transient,
-`retryable: false` is permanent, and unmapped errors are unknown. A broken
+consume attempts. Without a custom classifier, the nearest marker in the
+cause chain decides: native `TimeoutError` and `retryable: true` are
+transient, `retryable: false` is permanent, and unmapped errors are unknown. A broken
 classifier cannot break the worker: the original handler error is preserved,
 the assessment falls back to unknown, and `onDeliveryError` receives the
 classifier failure in its optional third argument.

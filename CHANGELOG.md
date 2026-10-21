@@ -473,6 +473,10 @@ immutable. Run one kit version per process during a cutover.
 
 ### Fixed
 
+- The default delivery classifier of `OutboxDispatcher` and
+  `DeadlineProcessor` takes the nearest `retryable` marker in the cause chain.
+  Before, a deeper `retryable: true` won over an outer `retryable: false`, so
+  a wrapper that marked a failure permanent was retried instead.
 - `OutboxDispatcher` counts the expiry of its own `deliveryTimeoutMs` as a
   failed attempt, as `DeadlineProcessor` already did. Before, the default
   classifier called the timeout transient. A record that made the sink hang

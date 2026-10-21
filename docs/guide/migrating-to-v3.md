@@ -1531,6 +1531,9 @@ The root entry no longer exports `capturePersistenceBaseline`,
   `deliveryTimeoutMs` consumes an attempt and can reach the dead letter. In
   rc.15 it stayed pending without an attempt. Raise `maxDeliveryAttempts` of
   your adapter if a slow sink reaches the dead letter too early.
+- The default delivery classifier takes the nearest `retryable` marker in the
+  cause chain. An outer `retryable: false` over a retryable cause now counts
+  as permanent. In rc.15 the deeper `retryable: true` won.
 - On a leased idempotency store, a failure at commit time keeps the staged
   outcome. A retry of the same key rejects with `IdempotencyInFlightError`
   until the lease expires. After that, `reconcileIdempotency` decides. In
