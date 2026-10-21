@@ -149,6 +149,9 @@ interface OrderRepository
 
 If physical removal is part of this persistence boundary, use
 `Repository<Order, OrderId>`. It extends `AggregatePersistence` with `remove`.
+Its definition sets `physicalRemoval: true`; only then does the Unit of Work
+install `remove` on the facade. A port that declares `remove` without that
+flag does not compile against `defineRepository`.
 
 A secondary-key finder like `findByNumber` reads the storage state from
 before the run: durable I/O happens at flush, after the use case returned,
@@ -213,6 +216,11 @@ Make all domain decisions before the final registration call. Mutating the
 aggregate after `add`, `update`, or `remove` is now a deterministic wiring
 error.
 
+Registration closes when the flush starts. Until the last check before the
+commit, a later `add`, `update`, or `remove` throws `AggregateTrackingError`
+with the reason `registered_during_flush` and fails the run, also when the
+caller swallows the error. Await every repository call inside `run()`.
+
 The work context of `run` no longer carries `rawTransaction` or `session`.
 A use case sees its repositories and the cancellation `signal`. The
 transaction and the tracking capability go to the repository definition
@@ -245,10 +253,22 @@ On every successful load:
 3. Reconstitute the aggregate.
 4. Return `tracking.trackLoaded(aggregate)`.
 
+Return the instance that `trackLoaded` returns, not your own. When two loads
+of one id overlap, both pass the identity-map check, and the first tracked
+instance wins: `trackLoaded` returns it to the second load too and discards
+the second hydration.
+
 Delete adapter-side manual registration. `UnitOfWorkSession` with its
 `enrollSaved` and `enrollDeleted` is gone. Application code cannot see the
 tracking capability or raw transaction, and adapter `add`/`update`/`remove`
 methods are not the durable write path.
+
+The Unit of Work installs `add` and `update`, and `remove` with
+`physicalRemoval: true`, on the facade. An adapter that still defines one of
+them does not compile against `defineRepository`. At runtime, it fails with
+`InvalidRepositoryAdapterError` when the run builds it. A member of the
+adapter that returns the adapter itself, for example a fluent finder,
+returns the facade, so a chained call keeps the writes of the Unit of Work.
 
 ### 5. Define the adapter's baseline and change set
 
@@ -873,10 +893,13 @@ await withCommit({ scope, outbox, bus }, async (tx) => {
 await withCommit({ scope, outbox, bus }, async (tx, registration) => {
   const order = await orders(tx).getById(orderId);
   order.confirm();
-  await orders(tx).save(order);
+  await persistOrder(tx, order);
   return { result: order.id, commits: [registration.registerSaved(order)] };
 });
 ```
+
+`persistOrder` stands for the state write of your own adapter: a v3
+repository has no `save`.
 
 For a physical removal, return `registration.registerRemoved(aggregate)`. The
 `deleted` array is gone. Every token that the callback receives must be in
@@ -922,10 +945,19 @@ constraint on `(aggregate_type, aggregate_id, position)`. Backfill the
 aggregate type before the switch. A later rename of an aggregate type is a
 stream-key migration.
 
+`append` rejects an event without an `eventId` with a `TypeError`, before any
+write. The commit stamps every event at its registration, so the flush of a
+repository definition receives stamped events. A direct `withCommit` callback
+that appends before its registration stamps first with `stampPendingEvents`.
+A custom adapter makes the same check; `createEventStoreContractTests`
+proves it.
+
 #### Reads report the stream state and come in bounded pages
 
 `readStream` returns a `StreamReadResult` in place of an event array, and
-its options object with `limit` is required. A missing stream is
+its options object with `limit` is required. An invalid `limit`,
+`fromVersion`, or `toVersion` rejects with `RangeError` before the store is
+read. A missing stream is
 `{ exists: false }`, and `lastVersion` reports the real head. A loader
 does not page by hand. It uses the kit read and the kit replay:
 
@@ -989,7 +1021,8 @@ implementation.
 #### The outbox stores committed events
 
 `OutboxWriter.add` takes `EventCommitCandidate` values from `withCommit`,
-not bare events. An `OutboxRecord` is a `CommittedDomainEvent` with a
+not bare events. The array is frozen: an adapter reads it and does not
+change it. An `OutboxRecord` is a `CommittedDomainEvent` with a
 `dispatchId`: it carries `event`, the `source` identity, and the commit
 `position`. `DispatchTrackingOutbox.markFailed` returns the dead-letter record
 on the call that crosses the attempt ceiling, and `undefined` otherwise. The
@@ -1036,6 +1069,10 @@ const bus = new CommandBus<Commands, AppError>({
 
 `undefined` means "not mine" and rethrows the original. Do not rename a
 total mapper mechanically: it rebuilds the old catch-all.
+
+If the mapper throws or returns an invalid decision, the call fails with
+`ErrorMapperFailedError`. Its `cause` is the original handler error, and
+`mapperCause` holds the failure of the mapper.
 
 #### A typed bus map owns the result type
 

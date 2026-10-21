@@ -9,8 +9,9 @@ The kit represents a newly accepted fact in two deliberately separate forms:
 1. The aggregate creates an immutable `UnstampedDomainEvent`. It contains
    only what the domain owns: type, payload, source aggregate, and payload
    schema version.
-2. The application shell stamps that fact as a `DomainEvent` by attaching an
-   id, a stamp time, and tracing metadata.
+2. The commit stamps that fact as a `DomainEvent` when a repository write
+   registers the aggregate. It attaches an id, a stamp time, and tracing
+   metadata.
 
 A stamped domain event is plain, immutable data:
 

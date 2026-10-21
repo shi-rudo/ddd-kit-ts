@@ -492,7 +492,7 @@ export function isUnstampedDomainEvent(
 
 /**
  * Creates an unstamped domain event: the event that an aggregate method
- * returns before the application shell stamps it. The payload and the
+ * returns before the commit stamps it. The payload and the
  * metadata follow the input ownership rule of {@link createDomainEvent}.
  */
 export function createUnstampedDomainEvent<T extends string>(
