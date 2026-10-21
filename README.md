@@ -32,6 +32,10 @@ pnpm add @shirudo/ddd-kit @shirudo/result @shirudo/base-error
 `@shirudo/result` and `@shirudo/base-error` are peer dependencies. Install them
 once in the consuming app.
 
+Load one copy of the kit per process. An adapter package declares
+`@shirudo/ddd-kit` as a peer dependency and does not bundle it. An object that
+a second loaded copy built throws `DuplicateKitCopyError`.
+
 The package is ESM-only, requires TypeScript 5.9+, and supports Node 22+,
 Cloudflare Workers, Vercel Edge, Deno, and Bun.
 

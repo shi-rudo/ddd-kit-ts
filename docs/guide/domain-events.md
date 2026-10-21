@@ -99,12 +99,12 @@ The returned event is deeply frozen. The payload and metadata are cloned before 
 The kit marks every event its constructors return as kit-built. The aggregate
 recording paths (`apply`, `setState`, `addDomainEvent`) accept only kit-built
 events; a hand-rolled literal throws `HandBuiltEventError` (code
-`HAND_BUILT_EVENT`). The mark has two tiers. A module-private tier covers the
-events of this loaded copy of the kit. A cooperative `Symbol.for` brand
-covers events that a second loaded copy built (a duplicate dependency, a
-dual CJS/ESM load). The brand catches accidents, not adversaries: code in the
-same process can fake it. The gate is not a security boundary; validate
-untrusted input at the application edge.
+`HAND_BUILT_EVENT`). The mark is module-private, so it covers the events of
+this loaded copy of the kit only. An event that a second loaded copy built (a
+duplicate dependency, or an adapter package that bundles the kit) throws
+`DuplicateKitCopyError` (code `DUPLICATE_KIT_COPY`); load one copy per
+process. The gate catches accidents, not adversaries, and it is not a
+security boundary; validate untrusted input at the application edge.
 
 Events are plain data. The event constructors copy the payload and the metadata under the plain-data rule of the kit (see "One rule for plain data" in the design decisions), and `InMemoryEventStore.append` applies the same rule. A value outside the rule throws a `TypeError` that names the path. Such values are a function, a symbol, a class instance, an accessor, an enumerable symbol-keyed property, a non-enumerable data property, a `RegExp`, binary data, a promise, a `WeakMap`, a `WeakSet`, an `Error`, and a host object such as a `File`. A key of a `Map` and a member of a `Set` must be a primitive. Map a value object to plain data first. `toJSON()` of a kit `ValueObject` is shallow, so map a nested value object too. Map an `Error` to plain data, for example its message and code.
 
@@ -571,9 +571,10 @@ Do not record first and mutate second. If the mutation throws, the aggregate wou
 The mutation must also advance the version before an already-persisted
 aggregate is collected; otherwise two commits would share one projection
 position and `withCommit` rejects with `EventCollectionError`. An instance that
-this package did not construct (a repository DTO, a structural lookalike, or
-an aggregate from another package copy) is rejected at registration with
-`UnmanagedInstanceError` (code `UNMANAGED_INSTANCE`).
+this package did not construct (a repository DTO or a structural lookalike)
+is rejected at registration with `UnmanagedInstanceError` (code
+`UNMANAGED_INSTANCE`). An aggregate from another loaded copy of the kit throws
+`DuplicateKitCopyError` (code `DUPLICATE_KIT_COPY`).
 
 ## Naming Events
 

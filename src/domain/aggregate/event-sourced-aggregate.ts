@@ -331,9 +331,6 @@ export abstract class EventSourcedAggregate<
 			// so anything in it now came from a fold that recorded a
 			// decision; the rollback drops it too.
 			this.discardPendingDecisions();
-			// Copy-safe: a fold may run in another loaded copy of the kit,
-			// whose DomainError fails a plain instanceof; the Result channel
-			// must carry it regardless.
 			if (isDomainErrorLike(e)) return err(e);
 			throw e;
 		}

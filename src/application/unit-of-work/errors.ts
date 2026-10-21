@@ -452,8 +452,8 @@ export class RollbackError extends InfrastructureError<"ROLLBACK_FAILED"> {
 }
 
 /**
- * The first kit wiring error in the cause chain of `error`, also from another
- * copy of the kit. A wiring error states a defect of the wiring, so the unit
+ * The first kit wiring error in the cause chain of `error`, matched by its
+ * category. A wiring error states a defect of the wiring, so the unit
  * of work passes it to the caller and never lets a mapper or a retry
  * relabel it, even when an adapter or a scope wrapped it. If the rollback
  * failed as well, the wiring error becomes the cause of a `RollbackError`,

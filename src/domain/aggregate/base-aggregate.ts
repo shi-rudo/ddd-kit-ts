@@ -15,6 +15,7 @@ import {
 	type AnyUnstampedDomainEvent,
 	adoptStampedDomainEvent,
 	adoptUnstampedDomainEvent,
+	assertEventNotFromAnotherKitCopy,
 	buildUnstampedDomainEvent,
 	type CreateEventOptions,
 	isStampedDomainEvent,
@@ -193,6 +194,7 @@ export abstract class BaseAggregate<
 			const candidate = event as AnyDomainEvent | AnyUnstampedDomainEvent;
 			if (isStampedDomainEvent(candidate)) return candidate as TEvent;
 			if (!isUnstampedDomainEvent(candidate)) {
+				assertEventNotFromAnotherKitCopy(candidate);
 				throw new HandBuiltEventError(
 					(event as { readonly type: string }).type,
 				);
@@ -498,16 +500,17 @@ export abstract class BaseAggregate<
 
 	/**
 	 * Kit-built check for every recording path: only an event that a kit
-	 * constructor produced passes. The kit marks two shapes: a stamped
-	 * event carries the stamped brand (`createDomainEvent`,
-	 * `createStampedDomainEvent`) and a decision carries the unstamped
-	 * brand (the aggregate `createEvent` helper). Either brand implies deeply frozen with defensively copied
+	 * constructor of this copy produced passes. The kit registers two
+	 * shapes: a stamped event (`createDomainEvent`,
+	 * `createStampedDomainEvent`) and a decision (the aggregate
+	 * `createEvent` helper). Either registration implies deeply frozen with defensively copied
 	 * payload and metadata, a guarantee no frozen-ness probe can establish
 	 * (a shallow-frozen literal with mutable nested data would fool it).
-	 * O(1): one brand check per shape.
+	 * O(1): one set lookup per shape.
 	 */
 	protected assertKitBuiltEvent(event: PendingDomainEvent<TEvent>): void {
 		if (!isStampedDomainEvent(event) && !isUnstampedDomainEvent(event)) {
+			assertEventNotFromAnotherKitCopy(event);
 			throw new HandBuiltEventError(
 				(event as AnyDomainEvent | AnyUnstampedDomainEvent).type,
 			);

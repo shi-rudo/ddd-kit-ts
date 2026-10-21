@@ -2,7 +2,6 @@ import {
 	abortReason,
 	waitRejectingOnAbort,
 } from "../../../internal/async/abort";
-import { createGlobalCapabilityRegistry } from "../../../internal/global-capability-registry";
 import type {
 	InMemoryTransaction,
 	InMemoryTransactionParticipant,
@@ -11,13 +10,8 @@ import type { TransactionalOptions, TransactionScope } from "../scope";
 
 const ABORT_MESSAGE = "InMemoryTransactionScope aborted";
 
-// The key version stamps the registry shape: participant to the scope that
-// registered it. A registry on globalThis lets a scope of another kit copy
-// see the registration too.
-const { registry: registeredParticipants } =
-	createGlobalCapabilityRegistry<InMemoryTransactionScope>(
-		Symbol.for("@shirudo/ddd-kit/in-memory-transaction-participants/v1"),
-	);
+/** The scope that each registered participant belongs to. */
+const registeredParticipants = new WeakMap<object, InMemoryTransactionScope>();
 
 /**
  * A {@link TransactionScope} for tests and demos that gives in-memory stores

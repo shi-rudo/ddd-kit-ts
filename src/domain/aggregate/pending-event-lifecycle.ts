@@ -1,4 +1,5 @@
-import { createGlobalCapabilityRegistry } from "../../internal/global-capability-registry";
+import { UnmanagedInstanceError } from "../../errors/kit-errors";
+import { assertNotFromAnotherKitCopy } from "../../internal/kit-copy";
 import type { AnyDomainEvent, PendingDomainEvent } from "../event/domain-event";
 import type { Version } from "./aggregate";
 
@@ -48,26 +49,25 @@ export interface PendingEventLifecycleCapability
 	): void;
 }
 
-// The key version stamps the capability SHAPE. Bump it whenever the
-// interface above changes: registrations made under another key stay
-// invisible, so an aggregate constructed by an incompatible package copy
-// fails the UnmanagedInstanceError check at registration instead of
-// half-working through a shape it does not fully implement.
-const persistenceCapabilityRegistryKey = Symbol.for(
-	"@shirudo/ddd-kit/pending-event-lifecycle-registry/v7",
-);
+const capabilities = new WeakMap<object, PendingEventLifecycleCapability>();
 
-const { registry: capabilities, require } =
-	createGlobalCapabilityRegistry<PendingEventLifecycleCapability>(
-		persistenceCapabilityRegistryKey,
-	);
-
-/** Resolves the lifecycle authority or throws `UnmanagedInstanceError`. */
+/**
+ * Resolves the lifecycle authority. Throws `DuplicateKitCopyError` for an
+ * aggregate of another loaded kit copy and `UnmanagedInstanceError` for any
+ * other object.
+ */
 export function requirePendingEventLifecycleCapability(
 	aggregate: object,
 	operation: string,
 ): PendingEventLifecycleCapability {
-	return require(aggregate, operation, "aggregate");
+	const capability = capabilities.get(aggregate);
+	if (capability !== undefined) return capability;
+	assertNotFromAnotherKitCopy(aggregate, "The aggregate");
+	throw new UnmanagedInstanceError(
+		operation,
+		"aggregate",
+		(aggregate as { id?: unknown } | null | undefined)?.id,
+	);
 }
 
 export function registerPendingEventLifecycleCapability(

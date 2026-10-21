@@ -1,7 +1,7 @@
 import {
-	applyCooperativeBrand,
-	hasCooperativeBrand,
-} from "../../internal/cooperative-brand";
+	assertNotFromAnotherKitCopy,
+	markKitCopy,
+} from "../../internal/kit-copy";
 import type { StandardSchemaV1 } from "../../internal/standard-schema";
 import { copyPlainData } from "../../internal/structural/plain-data";
 import type { DomainEvent } from "./domain-event";
@@ -48,12 +48,7 @@ export type DomainEventOf<TDefinition extends DomainEventDefinition> =
 export type DomainEventPayloadInput<TDefinition extends DomainEventDefinition> =
 	StandardSchemaV1.InferInput<TDefinition["payload"]>;
 
-// One copy of the kit recognizes its own definitions through the WeakSet,
-// and another copy in the same process through the cooperative brand.
 const DEFINITIONS = new WeakSet<object>();
-const DEFINITION_BRAND = Symbol.for(
-	"@shirudo/ddd-kit/domain-event-definition/v1",
-);
 
 /**
  * Defines a domain event type with a Standard Schema for its payload, for
@@ -93,21 +88,23 @@ export function defineDomainEvent<
 		schemaVersion,
 		payload: options.payload,
 	};
-	applyCooperativeBrand(definition, DEFINITION_BRAND);
+	markKitCopy(definition);
 	Object.freeze(definition);
 	DEFINITIONS.add(definition);
 	return definition;
 }
 
-/** Whether `value` came out of {@link defineDomainEvent}. */
+/**
+ * Whether `value` came out of {@link defineDomainEvent} of this kit copy.
+ * Throws `DuplicateKitCopyError` for a definition of another loaded copy.
+ */
 export function isDomainEventDefinition(
 	value: unknown,
 ): value is DomainEventDefinition {
-	return (
-		typeof value === "object" &&
-		value !== null &&
-		(DEFINITIONS.has(value) || hasCooperativeBrand(value, DEFINITION_BRAND))
-	);
+	if (typeof value !== "object" || value === null) return false;
+	if (DEFINITIONS.has(value)) return true;
+	assertNotFromAnotherKitCopy(value, "The event definition");
+	return false;
 }
 
 function isStandardSchema(value: unknown): value is StandardSchemaV1 {

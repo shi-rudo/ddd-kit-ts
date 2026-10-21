@@ -391,21 +391,35 @@ describe("deepEqual – Error comparison", () => {
 });
 
 describe("deepEqual – Plain object vs class instance with identical keys", () => {
-	it("compares structurally on the tag = [object Object] (constructor not checked at the deepEqual level)", () => {
+	it("does not equate a class instance with a record of the same fields", () => {
 		class Money {
 			constructor(
 				public amount: number,
 				public currency: string,
 			) {}
 		}
-		const lhs = new Money(100, "EUR");
-		const rhs = { amount: 100, currency: "EUR" };
 
-		// Both have tag "[object Object]"; deepEqual is structurally
-		// equal even though the constructor differs. Consumers who need
-		// constructor-aware identity should use ValueObject.equals (which
-		// adds a constructor check on top of deepEqual).
-		expect(deepEqual(lhs, rhs)).toBe(true);
+		expect(
+			deepEqual(new Money(100, "EUR"), { amount: 100, currency: "EUR" }),
+		).toBe(false);
+	});
+
+	it("does not equate instances of two classes with the same fields", () => {
+		class Price {
+			constructor(public amount: number) {}
+		}
+		class Cost {
+			constructor(public amount: number) {}
+		}
+
+		expect(deepEqual(new Price(1), new Cost(1))).toBe(false);
+		expect(deepEqual(new Price(1), new Price(1))).toBe(true);
+	});
+
+	it("equates a record without a prototype with a plain record of the same fields", () => {
+		const bare = Object.assign(Object.create(null), { amount: 1 });
+
+		expect(deepEqual(bare, { amount: 1 })).toBe(true);
 	});
 
 	it("returns false when constructors AND structure differ", () => {

@@ -1575,6 +1575,13 @@ The root entry no longer exports `capturePersistenceBaseline`,
   throws now fails the retry or the poll loop; in rc.15 the kit replaced its
   value with the midpoint. `InMemoryOutbox.add` reads `eventId` and `type`
   as plain properties; in rc.15 it required own data properties.
+- Two copies of the kit no longer cooperate. In rc.15 they shared registries
+  and brands on `globalThis`. Now an object that another loaded copy built
+  throws `DuplicateKitCopyError` (code `DUPLICATE_KIT_COPY`).
+  `CapabilityRegistryConflictError` is gone. Load one copy per process, and
+  declare the kit as a peer dependency of an adapter package.
+  `deepEqual` and `valueObjectEquals` compare the prototype of a class
+  instance: a class instance no longer equals a record with the same fields.
 - On a leased idempotency store, a failure at commit time keeps the staged
   outcome. A retry of the same key rejects with `IdempotencyInFlightError`
   until the lease expires. After that, `reconcileIdempotency` decides. In

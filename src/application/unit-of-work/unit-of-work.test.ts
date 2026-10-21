@@ -4769,42 +4769,18 @@ describe("UnitOfWork", () => {
 			expect(rejection).toBe(foreign);
 		});
 
-		it("brands definitions with the shared cross-copy symbol", () => {
-			const definition = defineTestRepository({
+		it("rejects a hand-built definition object", async () => {
+			const handBuilt = Object.freeze({
 				aggregate: MockAggregate,
 				persistence: versionPersistenceModel<MockAggregate>(),
 				flush: async () => {},
+				mapError: mapTestRepositoryError,
 				create: () => ({}),
 			});
-
-			expect(Object.getOwnPropertySymbols(definition)).toContain(
-				Symbol.for("@shirudo/ddd-kit/repository-definition/v3"),
-			);
-		});
-
-		it("rejects a definition from a copy with the earlier flush contract", async () => {
-			const earlierContract = Object.freeze(
-				Object.defineProperty(
-					{
-						aggregate: MockAggregate,
-						persistence: versionPersistenceModel<MockAggregate>(),
-						flush: async () => {},
-						mapError: mapTestRepositoryError,
-						create: () => ({}),
-					},
-					Symbol.for("@shirudo/ddd-kit/repository-definition/v2"),
-					{
-						value: true,
-						enumerable: false,
-						writable: false,
-						configurable: false,
-					},
-				),
-			);
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
 				outbox: recordingOutbox<TestEvent>(),
-				repositories: { orders: earlierContract } as never,
+				repositories: { orders: handBuilt } as never,
 			});
 
 			await expect(uow.run(async () => undefined)).rejects.toBeInstanceOf(

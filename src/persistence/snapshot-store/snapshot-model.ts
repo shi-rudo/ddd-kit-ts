@@ -188,9 +188,6 @@ export function reconstituteAggregateFromSnapshot<
 		}
 		aggregate = model.reconstitute(id, state, version);
 	} catch (error) {
-		// Copy-safe: the model factory may run in another loaded copy of the
-		// kit (adapter package, dual CJS/ESM load), whose DomainError fails a
-		// plain instanceof; the corruption channel must catch it regardless.
 		if (isDomainErrorLike(error)) {
 			throw new SnapshotCorruptedError(
 				`Snapshot of ${describeAggregateIdentity({ aggregateType: model.aggregateType, aggregateId: String(id) })} (schema ` +

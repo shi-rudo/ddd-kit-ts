@@ -685,8 +685,8 @@ export class Session<Evt extends AnyDomainEvent> {
  * A flush and an event store report what they observed; the unit of work
  * knows which write it asked for. So the intent of a conflict and of a
  * statement defect comes from here. It is set on the error object itself,
- * found by its code anywhere in the cause chain, so a wrapped error and an
- * error from another copy of the kit get it too.
+ * found by its code anywhere in the cause chain, so a wrapped error gets it
+ * too.
  */
 function attributeWriteIntent(
 	error: unknown,
@@ -741,10 +741,6 @@ function mapRepositoryPersistenceError<Evt extends AnyDomainEvent>(
 			mapperError,
 		});
 	}
-	// Copy-safe: an adapter package can carry its own copy of the kit, whose
-	// InfrastructureError fails a plain instanceof here; rejecting it would
-	// turn every retryable conflict into a non-retryable wiring crash that
-	// blames a correct mapper.
 	if (isInfrastructureErrorLike(mapped)) {
 		attributeWriteIntent(mapped, write.intent);
 		return mapped;
