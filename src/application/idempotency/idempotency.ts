@@ -179,11 +179,12 @@ export interface IdempotencyStore<TCtx = unknown> {
 	/**
 	 * Releases a claim whose attempt did not commit: a pending claim or
 	 * a staged, unconfirmed outcome. Called by
-	 * {@link withIdempotentCommit} once per failed attempt, best-effort.
-	 * A transactional adapter implements this as a no-op: the rollback
-	 * already removed the row, and the method must be SAFE to call when
-	 * the commit outcome is unknown; it never releases a confirmed
-	 * record. A stale receipt is a no-op and must never release its successor.
+	 * {@link withIdempotentCommit} once per attempt that failed before its
+	 * commit, best-effort. A failure at commit time has an unknown outcome,
+	 * so the wrapper does not call it then. A transactional adapter
+	 * implements this as a no-op: the rollback already removed the row. It
+	 * never releases a confirmed record. A stale receipt is a no-op and must
+	 * never release its successor.
 	 */
 	abandon(claim: IdempotencyClaimHandle): Promise<void>;
 
@@ -250,6 +251,9 @@ export interface WithIdempotentCommitDeps<Evt extends AnyDomainEvent, TCtx>
 	 * return `committed` only when the command effect is durably visible, and
 	 * `not-committed` only when a durable marker proves the attempt cannot still
 	 * commit. `unknown` keeps the key blocked.
+	 *
+	 * A leased store needs this callback. Without it, an expired staged
+	 * outcome stays blocked, also after a commit that surely failed.
 	 */
 	reconcileIdempotency?: (
 		reconciliation: IdempotencyReconciliation,
@@ -386,6 +390,10 @@ function scopeWorkRegistration<Evt extends AnyDomainEvent>(
  *     `store.abandon(claim)` before leaving the transactional region. A stale
  *     abandon cannot release a successor. Secondary abandon/renew failures are
  *     observable but never mask the primary error.
+ *  6. A failure at commit time has an unknown outcome. The wrapper does not
+ *     release the staged outcome, so a retry cannot run the command a second
+ *     time. The key answers `IdempotencyInFlightError` until the lease
+ *     expires, and then `reconciliation-required`.
  *
  * Composes with `RetryingTransactionScope`: a retryable failure inside
  * one attempt releases that attempt's claim, and the retry either
@@ -421,96 +429,71 @@ export async function withIdempotentCommit<Evt extends AnyDomainEvent, R, TCtx>(
 	// attempt (the work, withCommit's collection guards, the outbox write),
 	// including the ones outside this module's own callback, and it runs
 	// INSIDE a retrying scope's loop, so the next attempt starts clean.
+	//
+	// A failure after the callback resolved is a failure at commit time,
+	// and its outcome is unknown: the effect can exist. Such a claim is not
+	// released. Its staged outcome stays, so a retry cannot run the command
+	// a second time. The heartbeat stopped when the callback resolved, so
+	// the lease expires and the claim returns reconciliation-required.
 	const scope: TransactionScope<TCtx> = {
-		transactional: async (work, options) => {
-			try {
-				return await deps.scope.transactional(async (ctx) => {
-					attempt.claim = undefined;
-					attempt.heartbeat = undefined;
-					try {
-						const result = await work(ctx);
-						const currentHeartbeat = attempt.heartbeat as
-							| LeaseHeartbeat
-							| undefined;
-						await currentHeartbeat?.stop();
-						const heartbeatFailure = currentHeartbeat?.failure();
-						if (heartbeatFailure !== undefined) throw heartbeatFailure;
-						return result;
-					} catch (error) {
-						const currentHeartbeat = attempt.heartbeat as
-							| LeaseHeartbeat
-							| undefined;
-						await currentHeartbeat?.stop();
-						const heartbeatFailure = currentHeartbeat?.failure();
-						const currentClaim = attempt.claim as
-							| IdempotencyClaimHandle
-							| undefined;
-						if (
-							heartbeatFailure !== undefined &&
-							heartbeatFailure !== error &&
-							currentClaim
-						) {
-							reportToObserver(() =>
-								deps.onIdempotencyError?.(heartbeatFailure, {
-									operation: "renew",
-									key: currentClaim.key,
-									token: currentClaim.token,
-								}),
-							);
-						}
-						const abandoned = attempt.claim as
-							| IdempotencyClaimHandle
-							| undefined;
-						if (abandoned) {
-							attempt.claim = undefined;
-							try {
-								await store.abandon(abandoned);
-							} catch (abandonError) {
-								// Best-effort release: the abandon failure must not
-								// mask the attempt's error. Transactional stores
-								// release via rollback anyway; a leased store can
-								// recover after expiry. The observer keeps the
-								// secondary operational failure visible.
-								reportToObserver(() =>
-									deps.onIdempotencyError?.(abandonError, {
-										operation: "abandon",
-										key: abandoned.key,
-										token: abandoned.token,
-									}),
-								);
-							}
-						}
-						throw error;
-					}
-				}, options);
-			} catch (error) {
-				// COMMIT-time failure: the driver rejected AFTER the callback
-				// resolved, so the catch above never saw it and the staged
-				// claim would stay wedged until lease expiry (and demand
-				// reconciliation after). The store contract declares abandon
-				// safe when the commit outcome is unknown: a transactional
-				// store's claim died with the rollback anyway, and a leased
-				// store releases the lease while the durable outcome record
-				// still decides replay on the next attempt.
-				const staged = attempt.claim as IdempotencyClaimHandle | undefined;
-				if (staged) {
-					attempt.claim = undefined;
-					attempt.heartbeat = undefined;
-					try {
-						await store.abandon(staged);
-					} catch (abandonError) {
+		transactional: (work, options) =>
+			deps.scope.transactional(async (ctx) => {
+				attempt.claim = undefined;
+				attempt.heartbeat = undefined;
+				try {
+					const result = await work(ctx);
+					const currentHeartbeat = attempt.heartbeat as
+						| LeaseHeartbeat
+						| undefined;
+					await currentHeartbeat?.stop();
+					const heartbeatFailure = currentHeartbeat?.failure();
+					if (heartbeatFailure !== undefined) throw heartbeatFailure;
+					return result;
+				} catch (error) {
+					const currentHeartbeat = attempt.heartbeat as
+						| LeaseHeartbeat
+						| undefined;
+					await currentHeartbeat?.stop();
+					const heartbeatFailure = currentHeartbeat?.failure();
+					const currentClaim = attempt.claim as
+						| IdempotencyClaimHandle
+						| undefined;
+					if (
+						heartbeatFailure !== undefined &&
+						heartbeatFailure !== error &&
+						currentClaim
+					) {
 						reportToObserver(() =>
-							deps.onIdempotencyError?.(abandonError, {
-								operation: "abandon",
-								key: staged.key,
-								token: staged.token,
+							deps.onIdempotencyError?.(heartbeatFailure, {
+								operation: "renew",
+								key: currentClaim.key,
+								token: currentClaim.token,
 							}),
 						);
 					}
+					const abandoned = attempt.claim as IdempotencyClaimHandle | undefined;
+					if (abandoned) {
+						attempt.claim = undefined;
+						try {
+							await store.abandon(abandoned);
+						} catch (abandonError) {
+							// Best-effort release: the abandon failure must not
+							// mask the attempt's error. Transactional stores
+							// release via rollback anyway; a leased store can
+							// recover after expiry. The observer keeps the
+							// secondary operational failure visible.
+							reportToObserver(() =>
+								deps.onIdempotencyError?.(abandonError, {
+									operation: "abandon",
+									key: abandoned.key,
+									token: abandoned.token,
+								}),
+							);
+						}
+					}
+					throw error;
 				}
-				throw error;
-			}
-		},
+			}, options),
 	};
 
 	const outcome = await withCommit<Evt, IdempotentCommitResult<R>, TCtx>(

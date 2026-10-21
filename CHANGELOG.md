@@ -473,6 +473,13 @@ immutable. Run one kit version per process during a cutover.
 
 ### Fixed
 
+- `withIdempotentCommit` keeps a staged outcome when the commit itself fails.
+  Before, it released the outcome on a leased store, and the retry ran the
+  command a second time, although the failed commit could have written its
+  effect. The key now answers `IdempotencyInFlightError` until the lease
+  expires, and then `reconciliation-required`. A leased store therefore needs
+  `reconcileIdempotency`: without it, the key stays blocked, also after a
+  commit that surely failed.
 - `withIdempotentCommit` passes the options of `registerSaved` and
   `registerRemoved` to `withCommit`. Before, it dropped `expectedVersion`, so
   a second registration of the same aggregate with a contradicting OCC

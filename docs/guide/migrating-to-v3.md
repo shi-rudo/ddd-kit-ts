@@ -1524,3 +1524,12 @@ The root entry no longer exports `capturePersistenceBaseline`,
   `withCommit` callback appends before its registration.
 - The repository contract suites accept a harness that records unstamped
   events. They read the registered batch after `add`, inside the run.
+
+**rc.16.**
+
+- On a leased idempotency store, a failure at commit time keeps the staged
+  outcome. A retry of the same key rejects with `IdempotencyInFlightError`
+  until the lease expires. After that, `reconcileIdempotency` decides. In
+  rc.15 the retry ran the command again. If you use a leased store without
+  `reconcileIdempotency`, add the callback: without it, such a key stays
+  blocked, also after a commit that surely failed.
