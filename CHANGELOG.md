@@ -354,7 +354,8 @@ immutable. Run one kit version per process during a cutover.
   data, and the kit copies and freezes it. A failed schema throws
   `DomainEventValidationError` with the code `EVENT_PAYLOAD_INVALID` and the
   issues; a schema that returns a Promise throws `EVENT_PAYLOAD_SCHEMA_ASYNC`.
-  The kit copies the Standard Schema types and adds no dependency.
+  Use strict object schemas: a plain `z.object` drops unknown keys without an
+  error. The kit copies the Standard Schema types and adds no dependency.
 - The root entry exports the types `Fold` and `CreateEventOptions`. A
   `Fold<State, Event>` takes the event type and fits an entry of
   `EventSourcedAggregate.folds`. `CreateEventOptions` holds what

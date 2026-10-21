@@ -234,6 +234,12 @@ does not promise that: `z.date()`, `z.any()`, and `z.custom()` pass the
 caller's objects through, and arktype returns the input object itself. Then
 the kit copies the output with `structuredClone` and freezes the copy.
 
+A schema can also lose data: `z.object` and `v.object` leave out unknown keys
+without an error. The kit cannot tell a dropped key from an intended reshape
+of the output, so it does not compare the input with the output. The guides
+use strict object schemas (`z.strictObject`, `v.strictObject`), which reject
+an unknown key, and say why.
+
 The kit copies the Standard Schema types instead of depending on
 `@standard-schema/spec`, as zod and arktype do. A schema must validate
 synchronously, because an event is created synchronously.

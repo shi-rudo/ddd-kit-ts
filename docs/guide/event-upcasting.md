@@ -56,7 +56,7 @@ the definition holds the version next to its schema. Raise both together:
 
 ```ts
 const OrderCreated = defineDomainEvent("OrderCreated", {
-  payload: z.object({ customerId: z.string(), currency: z.string() }),
+  payload: z.strictObject({ customerId: z.string(), currency: z.string() }),
   schemaVersion: 2,
 });
 

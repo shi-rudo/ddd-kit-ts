@@ -172,9 +172,11 @@ import { z } from "zod";
 import { defineDomainEvent, type DomainEventOf } from "@shirudo/ddd-kit";
 
 const OrderPlaced = defineDomainEvent("OrderPlaced", {
-  payload: z.object({
+  payload: z.strictObject({
     orderId: z.string(),
-    lines: z.array(z.object({ sku: z.string(), quantity: z.number().int() })),
+    lines: z.array(
+      z.strictObject({ sku: z.string(), quantity: z.number().int() }),
+    ),
   }),
   schemaVersion: 2,
 });
@@ -197,8 +199,11 @@ Pass the definition in place of the type to `createEvent`,
 `createDomainEvent`, `DomainEventFactory.create`, or
 `createStampedDomainEvent`. For such an event:
 
-- The schema output is the payload. A zod or valibot object schema leaves out
-  unknown keys.
+- The schema output is the payload. Use strict object schemas, such as
+  `z.strictObject` or `v.strictObject`: they reject an unknown key with
+  `EVENT_PAYLOAD_INVALID`. A plain `z.object` or `v.object` leaves out an
+  unknown key without an error, and the event then loses that field for
+  good.
 - The event takes the schema version of the definition. An explicit
   `schemaVersion` in the options throws `DomainEventValidationError` with the
   code `EVENT_SCHEMA_VERSION_INVALID`.
