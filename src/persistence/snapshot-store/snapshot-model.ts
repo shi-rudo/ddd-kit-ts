@@ -16,6 +16,10 @@ import {
 import { copyPlainState } from "../../internal/structural/copy-plain-state";
 import { assertPositiveSafeInteger } from "../../internal/validate";
 
+/**
+ * The fields of an aggregate that a snapshot model reads.
+ * @inline
+ */
 interface SnapshotAggregate {
 	readonly id: Id<string>;
 	readonly version: Version;

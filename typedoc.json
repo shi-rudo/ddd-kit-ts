@@ -14,5 +14,17 @@
 		"format": "vitepress",
 		"pretty": true,
 		"collapsed": false
+	},
+	"intentionallyNotExported": [
+		"IValueObject",
+		"RepositoryFacadeOf",
+		"RepositoryWiringViolation",
+		"UntypedMapDispatch"
+	],
+	"externalSymbolLinkMappings": {
+		"@shirudo/base-error": {
+			"ValidationError": "https://www.npmjs.com/package/@shirudo/base-error",
+			"someChainRetryable": "https://www.npmjs.com/package/@shirudo/base-error"
+		}
 	}
 }
