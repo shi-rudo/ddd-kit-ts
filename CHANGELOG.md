@@ -323,7 +323,10 @@ immutable. Run one kit version per process during a cutover.
   `createRepositoryContractTests`, `createEsRepositoryContractTests`,
   `createEventStoreContractTests`, `createSnapshotStoreContractTests`, and
   `createReplayableStreamPagesContractTests`, with
-  `createReplayableStreamPages` for a replay test without a store.
+  `createReplayableStreamPages` for a replay test without a store. The
+  types `ContractTest` (one test of any suite),
+  `DeadlineStoreContractPayload`, and `SnapshotStoreContractState` (the data
+  that the deadline and snapshot suites store) are exported too.
 - `Specification<T>` and `specification(name, predicate)` name executable
   domain criteria with `and`, `or`, and `not`.
 - The in-memory stores accept fail-loud capacities, and a store beyond its

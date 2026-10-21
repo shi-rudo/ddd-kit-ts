@@ -15,7 +15,7 @@ import {
 export type DeadlineStoreContractTest = ContractTest;
 
 /** The plain-data payload shape the suite round-trips. */
-interface SuitePayload {
+export interface DeadlineStoreContractPayload {
 	kind: string;
 	step?: number;
 }
@@ -26,7 +26,7 @@ interface SuitePayload {
  */
 export interface DeadlineStoreContractEnvironment {
 	/** The adapter under test. */
-	store: DeadlineStore<SuitePayload>;
+	store: DeadlineStore<DeadlineStoreContractPayload>;
 
 	/**
 	 * Runs `work` (schedule/cancel calls) the way production does:
@@ -355,7 +355,9 @@ export function createDeadlineStoreContractTests(
 				);
 				const [poison] = await env.store.due(at(T1), 1);
 				assert(poison !== undefined, "expected the due deadline");
-				let transition: DeadLetterDeadline<SuitePayload> | undefined;
+				let transition:
+					| DeadLetterDeadline<DeadlineStoreContractPayload>
+					| undefined;
 				for (let i = 0; i < ceiling; i++) {
 					const current = await env.store.markFailed(
 						poison.deliveryId,

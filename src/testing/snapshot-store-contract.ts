@@ -14,7 +14,7 @@ import {
 export type SnapshotStoreContractTest = ContractTest;
 
 /** The plain-data state shape the suite round-trips. */
-interface SuiteState {
+export interface SnapshotStoreContractState {
 	total: number;
 	items: Array<{ sku: string; qty: number }>;
 	note?: string;
@@ -28,7 +28,7 @@ interface SuiteState {
  */
 export interface SnapshotStoreContractEnvironment {
 	/** The adapter under test. */
-	store: SnapshotStore<SuiteState>;
+	store: SnapshotStore<SnapshotStoreContractState>;
 
 	/** Release connections, drop schemas, etc. Called in a finally. */
 	teardown?(): Promise<void>;
@@ -51,9 +51,9 @@ const AT = new Date("2026-01-05T10:20:30.456Z");
 
 function snapshot(
 	version: number,
-	state: SuiteState,
+	state: SnapshotStoreContractState,
 	schemaVersion?: number,
-): AggregateSnapshot<SuiteState> {
+): AggregateSnapshot<SnapshotStoreContractState> {
 	return {
 		state,
 		version: version as Version,
