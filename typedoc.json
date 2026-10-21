@@ -31,7 +31,7 @@
 	],
 	"validation": {
 		"notExported": true,
-		"invalidLink": false
+		"invalidLink": true
 	},
 	"treatValidationWarningsAsErrors": true
 }
