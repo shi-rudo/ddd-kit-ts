@@ -347,10 +347,9 @@ no-op without touching the source head. Unbounded production
 workloads need a durable adapter with an explicit source-head retention policy
 that keeps ended heads, and a transactional unique key on `eventId`.
 
-`add` reads each candidate once, before it reads its own state. It rejects a
-malformed candidate with `EventCollectionError`: a part that is not an object, an
-`eventId` or `type` that is not an own string data property of the event, a
-source field that is not a string, or a position that is not a valid commit
+`add` rejects a malformed candidate with `EventCollectionError`: a part that
+is not an object, an `eventId` or `type` that is not a string, a source field
+that is not a string, or a position that is not a valid commit
 position. A valid position has integer fields, an `aggregateVersion` of at
 least 0, and a `commitSequence` below `commitSize`. The candidates that
 `withCommit` builds pass.

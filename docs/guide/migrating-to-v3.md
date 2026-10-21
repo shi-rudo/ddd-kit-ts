@@ -1568,6 +1568,13 @@ The root entry no longer exports `capturePersistenceBaseline`,
   are gone. The messages of `InvalidDomainMachineContextError`,
   `InvalidDomainMachineInputError`, and `InvalidDomainTransitionResultError`
   now name the path.
+- The kit trusts the code that calls it (see "The kit catches accidents, not
+  misuse" in the design decisions). It no longer resists a value that claims
+  another built-in through `Symbol.toStringTag`, a forged prototype, or a
+  getter that changes the data during a check. An injected `random` that
+  throws now fails the retry or the poll loop; in rc.15 the kit replaced its
+  value with the midpoint. `InMemoryOutbox.add` reads `eventId` and `type`
+  as plain properties; in rc.15 it required own data properties.
 - On a leased idempotency store, a failure at commit time keeps the staged
   outcome. A retry of the same key rejects with `IdempotencyInFlightError`
   until the lease expires. After that, `reconcileIdempotency` decides. In

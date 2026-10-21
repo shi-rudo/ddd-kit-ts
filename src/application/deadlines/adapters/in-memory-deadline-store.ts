@@ -137,7 +137,6 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 		dueAt: Date;
 		payload: TPayload;
 	}): Promise<void> {
-		// Copy first: the copy can run caller code.
 		const scope = deadline.scope;
 		const key = deadline.key;
 		const dueAt = new Date(deadline.dueAt);

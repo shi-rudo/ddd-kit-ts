@@ -524,14 +524,9 @@ immutable. Run one kit version per process during a cutover.
   changes the store can no longer push it past `maxEntries`, replace a live
   claim of the same key, confirm an outcome that was released meanwhile, or
   release a claim that was made meanwhile.
-- The in-memory deadline, checkpoint, idempotency, and outbox stores read
-  and copy the caller's data once, before they read their own state. A
-  getter in a payload, a checkpoint, an outcome, or a candidate can no
-  longer run between a check and a write. It therefore cannot push a store
-  past its capacity or revive an abandoned claim.
 - `InMemoryOutbox.add` rejects a malformed candidate with
   `EventCollectionError`: a part that is not an object, an `eventId` or `type`
-  that is not an own string data property of the event, a source field that is
+  that is not a string, a source field that is
   not a string, or a position that is not a valid commit position. The message
   names the event, the field, and the value. Before, such a candidate could
   reach the outbox state, and a `NaN` position broke the order of its source.
