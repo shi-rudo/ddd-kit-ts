@@ -250,6 +250,11 @@ immutable. Run one kit version per process during a cutover.
   `@shirudo/ddd-kit/state-machine`: `DomainStateMachine`,
   `transitionDomainState`, `canTransitionDomainState`, its errors, and its
   types. The root entry no longer exports them.
+- The data of the domain state machine (context, inputs, outputs, and
+  snapshots) follows the plain-data rule of the kit. A `Date`, a `Map`, and a
+  `Set` are accepted now; a symbol value and a symbol-keyed property throw.
+  The limits of 10,000 object nodes, 100,000 own properties, and 256 levels
+  are gone.
 - The root entry no longer exports `deepEqualExcept`, `freezeShallow`, and
   `IValueObject`. Use `valueObjectEqualsExcept`, and type a value object with
   `ValueObject`.

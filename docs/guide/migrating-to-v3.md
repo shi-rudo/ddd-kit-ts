@@ -1559,6 +1559,12 @@ The root entry no longer exports `capturePersistenceBaseline`,
   string-keyed property. Now all four throw a `TypeError`. A non-enumerable
   symbol key is left out. An own `__proto__` key throws
   `PrototypePollutionError`; in rc.15 the copy kept it as inert data.
+- The domain state machine copies its data under the same rule. It accepts a
+  `Date`, a `Map`, and a `Set`, which rc.15 rejected. A symbol value and a
+  symbol-keyed property now throw. The limits on nodes, properties, and depth
+  are gone. The messages of `InvalidDomainMachineContextError`,
+  `InvalidDomainMachineInputError`, and `InvalidDomainTransitionResultError`
+  now name the path.
 - On a leased idempotency store, a failure at commit time keeps the staged
   outcome. A retry of the same key rejects with `IdempotencyInFlightError`
   until the lease expires. After that, `reconcileIdempotency` decides. In
