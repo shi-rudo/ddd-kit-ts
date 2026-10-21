@@ -12,6 +12,8 @@
  * the core barrel so test-only code never rides into production bundles.
  * Named exports only; a module this file does not export is kit-internal
  * test support.
+ *
+ * @module @shirudo/ddd-kit/testing
  */
 export {
 	type CommandOutboxContractEnvironment,
@@ -19,10 +21,12 @@ export {
 	type CommandOutboxContractTest,
 	createCommandOutboxContractTests,
 } from "./command-outbox-contract";
+export type { ContractTest } from "./contract-assertions";
 export {
 	createDeadlineStoreContractTests,
 	type DeadlineStoreContractEnvironment,
 	type DeadlineStoreContractHarness,
+	type DeadlineStoreContractPayload,
 	type DeadlineStoreContractTest,
 } from "./deadline-store-contract";
 export {
@@ -84,5 +88,6 @@ export {
 	createSnapshotStoreContractTests,
 	type SnapshotStoreContractEnvironment,
 	type SnapshotStoreContractHarness,
+	type SnapshotStoreContractState,
 	type SnapshotStoreContractTest,
 } from "./snapshot-store-contract";

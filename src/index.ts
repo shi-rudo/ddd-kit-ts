@@ -1,3 +1,4 @@
+/** @module @shirudo/ddd-kit */
 // Main entry point (`@shirudo/ddd-kit`). Every export is named
 // deliberately: the SemVer surface is exactly this list, internals never
 // leak by accident, and `test/architecture/api-surface.test.ts` pins the

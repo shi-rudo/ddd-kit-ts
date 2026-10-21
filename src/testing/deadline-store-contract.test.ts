@@ -6,17 +6,14 @@ import {
 	createDeadlineStoreContractTests,
 	type DeadlineStoreContractEnvironment,
 	type DeadlineStoreContractHarness,
+	type DeadlineStoreContractPayload,
 } from "./deadline-store-contract";
-
-type SuitePayload = Parameters<
-	DeadlineStoreContractEnvironment["store"]["schedule"]
->[0]["payload"];
 
 const CEILING = 3;
 const ROLLBACK = Symbol("rollback");
 
 /** A store whose rollback keeps the writes: the rollback tests must reject it. */
-class DeadlineStoreKeepingRolledBackWrites extends InMemoryDeadlineStore<SuitePayload> {
+class DeadlineStoreKeepingRolledBackWrites extends InMemoryDeadlineStore<DeadlineStoreContractPayload> {
 	override beginTransaction(): InMemoryTransaction {
 		const transaction = super.beginTransaction();
 		return {
@@ -27,7 +24,7 @@ class DeadlineStoreKeepingRolledBackWrites extends InMemoryDeadlineStore<SuitePa
 }
 
 /** A store whose rollback never ends the transaction: the rollback tests must reject it. */
-class DeadlineStoreLeavingRollbackOpen extends InMemoryDeadlineStore<SuitePayload> {
+class DeadlineStoreLeavingRollbackOpen extends InMemoryDeadlineStore<DeadlineStoreContractPayload> {
 	override beginTransaction(): InMemoryTransaction {
 		const transaction = super.beginTransaction();
 		return { commit: () => transaction.commit(), rollback: () => {} };
@@ -36,7 +33,9 @@ class DeadlineStoreLeavingRollbackOpen extends InMemoryDeadlineStore<SuitePayloa
 
 function createInMemoryHarness(
 	createStore = () =>
-		new InMemoryDeadlineStore<SuitePayload>({ maxDeliveryAttempts: CEILING }),
+		new InMemoryDeadlineStore<DeadlineStoreContractPayload>({
+			maxDeliveryAttempts: CEILING,
+		}),
 ): DeadlineStoreContractHarness {
 	return {
 		createEnvironment: async () => {

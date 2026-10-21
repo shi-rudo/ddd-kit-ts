@@ -116,6 +116,21 @@ void publicDeliveryAssessment;
 void (undefined as unknown as PublicExecutionContext);
 void (undefined as unknown as PublicContractRepository);
 
+// The testing entry names the types of its own signatures: one test of any
+// suite, and the data shapes that the deadline and snapshot suites store.
+type PublicContractTest = import("../../src/testing").ContractTest;
+type PublicDeadlinePayload =
+	import("../../src/testing").DeadlineStoreContractPayload;
+type PublicSnapshotState =
+	import("../../src/testing").SnapshotStoreContractState;
+const bindContractTests = (tests: ReadonlyArray<PublicContractTest>) =>
+	tests.map((test) => test.name);
+const storedPayload: PublicDeadlinePayload = { kind: "payment-timeout" };
+const storedState: PublicSnapshotState = { total: 0, items: [] };
+void bindContractTests;
+void storedPayload;
+void storedState;
+
 type PublicRepositoryContracts =
 	| AggregatePersistence<
 			Aggregate<Id<"PersistenceSurface">>,

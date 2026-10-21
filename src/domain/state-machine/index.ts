@@ -4,6 +4,8 @@
  * optional capability of the kit, published as `@shirudo/ddd-kit/state-machine`.
  * The entry point is experimental: a minor release can change it in a
  * breaking way (see STABILITY.md).
+ *
+ * @module @shirudo/ddd-kit/state-machine
  */
 export {
 	analyzeDomainMachineDefinition,

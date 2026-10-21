@@ -1,3 +1,4 @@
+/** @module @shirudo/ddd-kit/money */
 // Money contract & boundary helpers. Opt-in entry point
 // (`@shirudo/ddd-kit/money`) so the core kit stays money-free. The entry
 // point is experimental: a minor release can change it in a breaking way

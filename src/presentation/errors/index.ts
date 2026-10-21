@@ -1,3 +1,4 @@
+/** @module @shirudo/ddd-kit/public-errors */
 // Transport-neutral presentation helpers. Opt-in entry point
 // (`@shirudo/ddd-kit/public-errors`) so the core kit stays free of
 // presentation strings. These project the kit's technical errors into
