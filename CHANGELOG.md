@@ -160,6 +160,12 @@ immutable. Run one kit version per process during a cutover.
 - `valueObjectEquals` and `deepEqual` compare the class of a value object
   instance. Two instances of different classes with the same props are not
   equal.
+- `valueObject()` and `ValueObject` copy the props under the plain-data rule
+  of the kit, the same rule as an event payload. A `RegExp`, a boxed
+  primitive, an enumerable symbol-keyed property, a non-enumerable
+  string-keyed property, and an own `__proto__` key throw. Version 2.2.0
+  accepted them or dropped them without an error. A nested value object is
+  kept by reference, as before.
 
 #### Event store
 

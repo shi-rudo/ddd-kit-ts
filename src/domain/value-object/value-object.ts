@@ -2,11 +2,8 @@ import { err, ok, type Result } from "@shirudo/result";
 import { deepEqual } from "../../internal/structural/deep-equal";
 import { deepEqualExcept } from "../../internal/structural/deep-equal-except";
 import type { DeepOmitOptions } from "../../internal/structural/deep-omit";
-import {
-	builtInTagWithoutInvokingAccessors,
-	hasIntrinsicPrototypeChain,
-	isIntrinsicConstructorPrototype,
-} from "../../internal/structural/is-built-in";
+import { builtInTagWithoutInvokingAccessors } from "../../internal/structural/is-built-in";
+import { copyPlainData } from "../../internal/structural/plain-data";
 import { installMutatorShadows } from "../../internal/structural/shadowed-mutators";
 
 // ============================================================================
@@ -15,19 +12,16 @@ import { installMutatorShadows } from "../../internal/structural/shadowed-mutato
 
 export type ValueObjectOf<T> = Readonly<T>;
 
-const mapEntries = Map.prototype.entries;
-const setValues = Set.prototype.values;
-
 // Every ValueObject constructor records the class of the instance under
 // this key, as an own, non-enumerable, locked data property. The record
-// lets cloneForVo admit a value object inside another one by reference,
+// lets the props copy keep a value object inside another one by reference,
 // and it makes deepEqual class-aware: deepEqual counts own symbol keys and
 // compares functions by identity, so two nested value objects of different
 // classes compare unequal without deepEqual knowing about value objects.
 // The key is a Symbol.for, so an instance built by a second loaded copy of
 // this kit version is recognized too.
 //
-// A nested value object keeps all of its state in `props`: cloneForVo
+// A nested value object keeps all of its state in `props`: the props copy
 // rejects an instance with an own key outside `props` and the record. The
 // data gates never see the own fields of a subclass, and deepEqual counts
 // them. An open field would let ungated or mutable state into the value,
@@ -70,30 +64,8 @@ function isValueObjectInstance(value: unknown): boolean {
 	) {
 		return false;
 	}
-	const props = Reflect.getOwnPropertyDescriptor(value, "props");
-	return props !== undefined && isSealedProps(props.value);
-}
-
-// deepFreeze passes a RegExp through unfrozen (see its doc), and a RegExp
-// is the one such built-in that cloneForVo admits as the whole props.
-function isSealedProps(props: unknown): boolean {
-	if (typeof props !== "object" || props === null) {
-		return false;
-	}
-	return (
-		Object.isFrozen(props) ||
-		builtInTagWithoutInvokingAccessors(props) === "[object RegExp]"
-	);
-}
-
-// A class record under any descriptor, or sealed own props, marks an
-// instance that a kit copy of another version or a clone produced.
-function looksLikeValueObject(instance: object): boolean {
-	if (Object.hasOwn(instance, VALUE_OBJECT_CLASS)) {
-		return true;
-	}
-	const props = Reflect.getOwnPropertyDescriptor(instance, "props");
-	return props !== undefined && isSealedProps(props.value);
+	const props = Reflect.getOwnPropertyDescriptor(value, "props")?.value;
+	return typeof props === "object" && props !== null && Object.isFrozen(props);
 }
 
 function openValueObjectKeys(instance: object): PropertyKey[] {
@@ -263,229 +235,42 @@ function freezeDeep(obj: unknown, walk: FreezeWalk): boolean {
 }
 
 /**
- * Deep clone used by `valueObject()` and the `ValueObject` constructor.
- *
- * Plain objects, arrays, and Map values are walked manually so
- * that symbol-keyed properties survive (which `structuredClone` silently
- * drops; they would otherwise be invisible to `valueObjectEquals`, whose
- * `deepEqual` DOES consider symbol keys) and shared references / cycles
- * keep their identity across Map boundaries. Function values throw,
- * preserving `valueObject()`'s documented data-not-behaviour gate. Built-ins without
- * immutable value semantics throw a descriptive `TypeError`. A kit
- * `ValueObject` instance is admitted by reference (see
- * `VALUE_OBJECT_CLASS`). Every other custom class instance and every
- * subclass of a built-in is rejected because cloning it without invoking
- * its constructor can silently lose private or non-enumerable state. Map
- * keys and Set members must be primitive because their equality is
- * identity-based and object identity cannot survive defensive cloning.
- * Accessor properties are rejected without invoking them. Admitted atomic
- * built-ins (Date, RegExp and primitive wrappers) delegate to
- * `structuredClone`, brand-verified so a `Symbol.toStringTag` spoofer is
- * walked as the plain object it is. `__proto__` own keys are copied as
- * inert data properties.
+ * Copies the props of `valueObject()` and of the `ValueObject` constructor
+ * under the plain-data rule of the kit, so the deep freeze that follows
+ * never reaches the caller's objects. A nested kit `ValueObject` is kept by
+ * reference; it must keep all of its state in `props`.
  */
-function cloneForVo(
-	value: unknown,
-	visited: WeakMap<object, unknown>,
-): unknown {
-	if (typeof value === "function") {
+function copyValueObjectProps<T>(props: T, entry: string): T {
+	return copyPlainData(props, {
+		subject: `${entry}: props`,
+		keepByReference: keepNestedValueObject,
+	});
+}
+
+function keepNestedValueObject(value: object): boolean {
+	if (!isValueObjectInstance(value)) return false;
+	const openKeys = openValueObjectKeys(value);
+	if (openKeys.length > 0) {
 		throw new TypeError(
-			"valueObject() does not accept function values: Value Objects are data, not behaviour",
+			`valueObject() cannot nest a value object with own fields outside props (${openKeys.map(String).join(", ")}): keep the state of a value object in props`,
 		);
 	}
-	if (value === null || typeof value !== "object") {
-		return value;
-	}
-	const obj = value as object;
-	if (ArrayBuffer.isView(obj)) {
-		throwUnsupportedValueSemantics(
-			builtInTagWithoutInvokingAccessors(obj) ?? "[object ArrayBuffer view]",
-		);
-	}
-	if (visited.has(obj)) {
-		return visited.get(obj);
-	}
-
-	if (Array.isArray(obj)) {
-		if (!hasIntrinsicPrototypeChain(obj, "Array")) {
-			throwUnsupportedClassInstance(obj);
-		}
-		const clone: unknown[] = new Array(obj.length);
-		visited.set(obj, clone);
-		for (const key of Reflect.ownKeys(obj)) {
-			if (key === "length") continue;
-			const descriptor = Object.getOwnPropertyDescriptor(obj, key);
-			if (descriptor === undefined) continue;
-			if (!("value" in descriptor)) {
-				throwUnsupportedAccessorProperty();
-			}
-			// Drop non-enumerable string keys just like the plain-object branch
-			// below, so an array and an object carrying the same hidden property
-			// clone to the same value surface. Array indices are enumerable and
-			// therefore preserved.
-			if (typeof key === "string" && !descriptor.enumerable) continue;
-			descriptor.value = cloneForVo(descriptor.value, visited);
-			Object.defineProperty(clone, key, descriptor);
-		}
-		return clone;
-	}
-
-	const tag = builtInTagWithoutInvokingAccessors(obj);
-	if (tag !== undefined) {
-		if (!hasIntrinsicPrototypeChain(obj)) {
-			throwUnsupportedClassInstance(obj);
-		}
-		if (tag === "[object Map]") {
-			const clone = new Map<unknown, unknown>();
-			visited.set(obj, clone);
-			for (const [key, entry] of mapEntries.call(
-				obj as Map<unknown, unknown>,
-			)) {
-				if (!isPrimitiveValue(key)) {
-					throw new TypeError(
-						"valueObject() Map keys must be primitive values to preserve value equality",
-					);
-				}
-				clone.set(key, cloneForVo(entry, visited));
-			}
-			return clone;
-		}
-		if (tag === "[object Set]") {
-			const clone = new Set<unknown>();
-			visited.set(obj, clone);
-			for (const member of setValues.call(obj as Set<unknown>)) {
-				if (!isPrimitiveValue(member)) {
-					throw new TypeError(
-						"valueObject() Set members must be primitive values to preserve value equality",
-					);
-				}
-				clone.add(member);
-			}
-			return clone;
-		}
-		if (
-			tag === "[object Promise]" ||
-			tag === "[object WeakMap]" ||
-			tag === "[object WeakSet]"
-		) {
-			throw new TypeError(
-				`valueObject() cannot clone a ${tag.slice(8, -1)}: Value Objects are plain data`,
-			);
-		}
-		if (
-			tag === "[object Error]" ||
-			tag === "[object ArrayBuffer]" ||
-			tag === "[object SharedArrayBuffer]"
-		) {
-			throwUnsupportedValueSemantics(tag);
-		}
-		if (tag === "[object RegExp]") {
-			// A global or sticky RegExp carries observable mutable scan state:
-			// every test()/exec() writes lastIndex, so it is a stateful object,
-			// not a value. deepFreeze passes a RegExp through, so nothing else
-			// stops that write; reject it at admission. A plain (non-global,
-			// non-sticky) RegExp never touches lastIndex and stays a genuine
-			// immutable value.
-			const regExp = obj as RegExp;
-			if (regExp.global || regExp.sticky) {
-				throw new TypeError(
-					"valueObject() cannot accept a global or sticky RegExp: its lastIndex is mutable scan state, not an immutable value",
-				);
-			}
-		}
-		// Atomic built-ins admitted by the value object contract: Date, RegExp and
-		// primitive wrappers all have stable value semantics in deepEqual.
-		const builtInClone = structuredClone(obj);
-		visited.set(obj, builtInClone);
-		return builtInClone;
-	}
-
-	const prototype = Object.getPrototypeOf(obj);
-	if (
-		prototype !== null &&
-		(!isIntrinsicConstructorPrototype(prototype, "Object") ||
-			Object.getPrototypeOf(prototype) !== null)
-	) {
-		if (isValueObjectInstance(obj)) {
-			const openKeys = openValueObjectKeys(obj);
-			if (openKeys.length > 0) throwOpenValueObjectFields(openKeys);
-			return obj;
-		}
-		throwUnsupportedClassInstance(obj);
-	}
-
-	// Normalize cross-realm records to the local Object prototype.
-	const clone = Object.create(prototype === null ? null : Object.prototype);
-	visited.set(obj, clone);
-	for (const key of Reflect.ownKeys(obj)) {
-		const descriptor = Object.getOwnPropertyDescriptor(obj, key);
-		if (descriptor === undefined) continue;
-		if (!("value" in descriptor)) {
-			throwUnsupportedAccessorProperty();
-		}
-		if (typeof key === "string" && !descriptor.enumerable) continue;
-		// defineProperty (not assignment) so an own "__proto__" key can
-		// never invoke the prototype setter.
-		Object.defineProperty(clone, key, {
-			value: cloneForVo(descriptor.value, visited),
-			writable: true,
-			enumerable: descriptor.enumerable,
-			configurable: true,
-		});
-	}
-	return clone;
-}
-
-function throwUnsupportedClassInstance(instance: object): never {
-	const valueObjectHint = looksLikeValueObject(instance)
-		? ". A value object is recognized only when a copy of this kit version built it and its props are frozen"
-		: "";
-	throw new TypeError(
-		`valueObject() cannot clone custom class instances: Value Objects are plain data${valueObjectHint}`,
-	);
-}
-
-function throwOpenValueObjectFields(keys: readonly PropertyKey[]): never {
-	throw new TypeError(
-		`valueObject() cannot nest a value object with own fields outside props (${keys.map(String).join(", ")}): keep the state of a value object in props`,
-	);
-}
-
-function throwUnsupportedAccessorProperty(): never {
-	throw new TypeError(
-		"valueObject() cannot clone accessor properties: Value Objects are plain data",
-	);
-}
-
-function throwUnsupportedValueSemantics(tag: string): never {
-	const name = tag.startsWith("[object ") ? tag.slice(8, -1) : tag;
-	throw new TypeError(
-		`valueObject() cannot accept ${name} values: Value Objects require immutable value semantics`,
-	);
-}
-
-function isPrimitiveValue(value: unknown): boolean {
-	return (
-		value === null || (typeof value !== "object" && typeof value !== "function")
-	);
+	return true;
 }
 
 /**
  * Creates a deeply immutable value object from the given data.
  *
- * The input is first deep-cloned, then the clone is frozen, so calling
+ * The input is first copied, then the copy is frozen, so calling
  * `valueObject(input)` never freezes the caller's own object graph as a
  * side-effect. Mutating the input afterwards does not bleed into the value object.
- * Symbol-keyed properties are preserved (matching `valueObjectEquals`). A kit
- * `ValueObject` instance nested in the input is kept by reference and
- * frozen in place; it must keep all of its state in `props`. A value
- * object as the input itself is rejected.
- * Function values and every other custom class instance are rejected
- * (Value Objects are plain data, not behaviour-bearing object graphs). Inputs must be trusted and
- * Proxy-free: ECMAScript provides no portable way to identify a transparent
- * Proxy without potentially executing its traps, so `valueObject()` is not a sandbox
- * for hostile in-process objects. Built-ins that cannot provide immutable,
- * value-based semantics are rejected instead of weakening the value object contract.
+ * The copy follows the plain-data rule of the kit (records, arrays, `Date`,
+ * `Map`, `Set`, and primitives; see the design decisions) and throws a
+ * `TypeError` that names the path for any other value, for example a
+ * function, a class instance, or a `RegExp`. A kit `ValueObject` instance
+ * nested in the input is kept by reference and frozen in place; it must
+ * keep all of its state in `props`. A value object as the input itself is
+ * rejected.
  *
  * @example
  * ```typescript
@@ -497,7 +282,7 @@ function isPrimitiveValue(value: unknown): boolean {
  */
 export function valueObject<T>(t: T): ValueObjectOf<T> {
 	rejectValueObjectAsInput(t, "valueObject()");
-	return deepFreeze(cloneForVo(t, new WeakMap()) as T);
+	return deepFreeze(copyValueObjectProps(t, "valueObject()"));
 }
 
 /**
@@ -735,13 +520,7 @@ export abstract class ValueObject<T extends object> implements IValueObject<T> {
 	constructor(props: T) {
 		rejectValueObjectAsInput(props, "new ValueObject()");
 		this.validate(props);
-		// Same clone as valueObject(): Map/Set contents are walked (so the caller's
-		// entries are never frozen or shadowed in place), nested value
-		// objects are kept by reference, and functions and other custom
-		// class instances are rejected. A shallow `{ ...props }` or
-		// deepOmit (which aliases reference-compared built-ins by design)
-		// would let deepFreeze reach caller-owned objects.
-		this.props = deepFreeze(cloneForVo(props, new WeakMap()) as T);
+		this.props = deepFreeze(copyValueObjectProps(props, "new ValueObject()"));
 		recordValueObjectClass(this, this.constructor);
 	}
 
@@ -783,24 +562,7 @@ export abstract class ValueObject<T extends object> implements IValueObject<T> {
 	 */
 	public clone(props?: Partial<T>): this {
 		const Constructor = this.constructor as new (props: T) => this;
-		const merged = { ...this.props, ...(props || {}) } as T;
-		// A `{ ...spread }` copies only enumerable own keys, so any
-		// non-enumerable own property that cloneForVo preserved on this.props
-		// (e.g. a non-enumerable symbol) would be dropped, making
-		// `x.equals(x.clone())` false because deepEqual counts all own symbols.
-		// Re-attach every non-enumerable own key the caller did not override.
-		for (const key of Reflect.ownKeys(this.props)) {
-			const descriptor = Object.getOwnPropertyDescriptor(this.props, key);
-			if (descriptor === undefined || descriptor.enumerable) continue;
-			if (props && Object.hasOwn(props, key)) continue;
-			Object.defineProperty(merged, key, {
-				value: (this.props as Record<PropertyKey, unknown>)[key as PropertyKey],
-				writable: true,
-				enumerable: false,
-				configurable: true,
-			});
-		}
-		return new Constructor(merged);
+		return new Constructor({ ...this.props, ...(props || {}) } as T);
 	}
 
 	/**

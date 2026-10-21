@@ -278,15 +278,16 @@ the class of a nested value object is never ignored.
 Value objects only work when their content has value semantics. The library is
 strict here because loose value objects create subtle bugs.
 
-Plain records and arrays are accepted. Symbol-keyed properties are preserved and
-participate in equality. Accessor properties are rejected without calling their
-getters or setters.
+The props follow the plain-data rule of the kit (see "One rule for plain data"
+in the design decisions). Plain records, arrays, `Date`, `Map`, `Set`, and
+primitives are accepted. A value outside the rule throws a `TypeError` that
+names the path. That includes a `RegExp` (its `compile()` can change it), a
+boxed primitive, an accessor, an enumerable symbol-keyed property, and a
+non-enumerable string-keyed property.
 
-Dates, Maps, Sets, RegExp values, and primitive wrappers are accepted only when
-they can behave like immutable values. Date, Map, and Set mutator methods are
-shadowed on the frozen clone so accidental mutation throws. Map keys and Set
-members must be primitives, because JavaScript compares object keys and set
-members by identity.
+Date, Map, and Set mutator methods are shadowed on the frozen copy so
+accidental mutation throws. Map keys and Set members must be primitives,
+because JavaScript compares object keys and set members by identity.
 
 A `ValueObject<T>` instance is accepted, kept by reference, and frozen in
 place. It must keep all of its state in `props`. Functions and every other
@@ -300,9 +301,8 @@ are rejected. They are mutable, reference-oriented, or process state rather
 than stable value data. Convert binary data to an encoded string or a plain
 number array before constructing a value object.
 
-Do not pass hostile Proxy objects to `valueObject()`. JavaScript has no portable,
-side-effect-free way to identify a transparent Proxy, so reflective cloning can
-trigger traps. Treat `valueObject()` as an immutable value constructor, not as a sandbox.
+Treat `valueObject()` as an immutable value constructor, not as a sandbox. It
+catches accidents, not code that works against it on purpose.
 
 The exported `deepFreeze()` helper freezes in place and is used by lower-level
 internals. Application code should usually prefer `valueObject()` or `ValueObject<T>`,

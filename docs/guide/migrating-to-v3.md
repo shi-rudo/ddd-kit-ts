@@ -1553,6 +1553,12 @@ The root entry no longer exports `capturePersistenceBaseline`,
   rule. A snapshot DTO with a `RegExp`, a typed array, or a `DataView` now
   throws. In rc.15 it passed. Keep a pattern as its source and flags, and
   encode binary data as a string.
+- `valueObject()` and `ValueObject` copy the props under the same rule. In
+  rc.15 they accepted a non-global `RegExp`, a boxed primitive, and an
+  enumerable symbol-keyed property, and they dropped a non-enumerable
+  string-keyed property. Now all four throw a `TypeError`. A non-enumerable
+  symbol key is left out. An own `__proto__` key throws
+  `PrototypePollutionError`; in rc.15 the copy kept it as inert data.
 - On a leased idempotency store, a failure at commit time keeps the staged
   outcome. A retry of the same key rejects with `IdempotencyInFlightError`
   until the lease expires. After that, `reconcileIdempotency` decides. In

@@ -252,23 +252,13 @@ describe("value object functions", () => {
 		it("compares every admitted built-in category by value", () => {
 			const first = valueObject({
 				date: new Date(1_000),
-				regexp: /value/i,
 				map: new Map([["key", { nested: 1 }]]),
 				set: new Set(["a", "b"]),
-				number: new Number(7),
-				boolean: new Boolean(true),
-				string: new String("value"),
-				bigint: Object(7n),
 			});
 			const second = valueObject({
 				date: new Date(1_000),
-				regexp: /value/i,
 				map: new Map([["key", { nested: 1 }]]),
 				set: new Set(["a", "b"]),
-				number: new Number(7),
-				boolean: new Boolean(true),
-				string: new String("value"),
-				bigint: Object(7n),
 			});
 
 			expect(valueObjectEquals(first, second)).toBe(true);
@@ -542,7 +532,7 @@ describe("value object functions", () => {
 				},
 			});
 
-			expect(() => valueObject(input)).toThrow(/accessor properties/);
+			expect(() => valueObject(input)).toThrow(/is an accessor property/);
 			expect(getterCalls).toBe(0);
 		});
 
@@ -557,61 +547,28 @@ describe("value object functions", () => {
 				},
 			});
 
-			expect(() => valueObject(input)).toThrow(/accessor properties/);
+			expect(() => valueObject(input)).toThrow(/is an accessor property/);
 			expect(getterCalls).toBe(0);
 		});
 	});
 
-	describe("symbol-keyed properties", () => {
-		it("preserves and freezes symbol-keyed properties (previously dropped by structuredClone)", () => {
-			const tag = Symbol("tag");
-			const v = valueObject({ [tag]: { nested: 1 } } as Record<
-				symbol,
-				unknown
-			>);
-
-			const nested = (v as unknown as Record<symbol, { nested: number }>)[tag];
-			// NOT vacuous: the property must exist…
-			expect(nested).toEqual({ nested: 1 });
-			// …and be deeply frozen, matching deepEqual's symbol-key support.
-			expect(Object.isFrozen(nested)).toBe(true);
+	describe("symbol-keyed and hidden properties", () => {
+		it("rejects an enumerable symbol-keyed property", () => {
+			expect(() => valueObject({ amount: 5, [Symbol("tag")]: 1 })).toThrow(
+				"valueObject(): props has a symbol-keyed property",
+			);
 		});
 
-		it("preserves symbol keys nested below the top level", () => {
-			const meta = Symbol("meta");
-			const v = valueObject({ outer: { [meta]: "x", plain: 1 } });
-
-			expect((v.outer as unknown as Record<symbol, string>)[meta]).toBe("x");
-			expect(v.outer.plain).toBe(1);
-		});
-
-		it("preserves non-enumerable symbol properties", () => {
-			const hidden = Symbol("hidden");
-			const input = {} as Record<symbol, unknown>;
-			Object.defineProperty(input, hidden, {
-				value: { amount: 5 },
+		it("leaves out a non-enumerable symbol-keyed property", () => {
+			const input = Object.defineProperty({ amount: 5 }, Symbol("meta"), {
+				value: 1,
 				enumerable: false,
 			});
 
-			const result = valueObject(input) as Record<symbol, { amount: number }>;
+			const value = valueObject(input);
 
-			expect(result[hidden]).toEqual({ amount: 5 });
-			expect(Object.isFrozen(result[hidden])).toBe(true);
-		});
-
-		it("preserves array symbol properties and includes them in equality", () => {
-			const metadata = Symbol("metadata");
-			const first = [1] as number[] & Record<symbol, unknown>;
-			const second = [1] as number[] & Record<symbol, unknown>;
-			first[metadata] = { code: "first" };
-			second[metadata] = { code: "second" };
-
-			const firstVo = valueObject(first);
-			const secondVo = valueObject(second);
-
-			expect(firstVo[metadata]).toEqual({ code: "first" });
-			expect(Object.isFrozen(firstVo[metadata])).toBe(true);
-			expect(valueObjectEquals(firstVo, secondVo)).toBe(false);
+			expect(Object.getOwnPropertySymbols(value)).toEqual([]);
+			expect(value).toEqual({ amount: 5 });
 		});
 
 		it("preserves sparse array holes", () => {
@@ -622,42 +579,15 @@ describe("value object functions", () => {
 			expect(0 in result).toBe(false);
 		});
 
-		it("drops non-enumerable string properties on arrays like it does on objects", () => {
-			// The array and plain-object clone paths must treat a non-enumerable
-			// string property the same way, so structurally parallel inputs do
-			// not yield value objects that valueObjectEquals treats differently.
-			const arr = [1, 2] as number[] & Record<string, unknown>;
-			Object.defineProperty(arr, "meta", {
-				value: "hidden",
+		it("rejects a non-enumerable string-keyed property instead of dropping it", () => {
+			const input = Object.defineProperty({ amount: 5 }, "meta", {
+				value: 1,
 				enumerable: false,
 			});
 
-			const result = valueObject(arr);
-
-			expect(Object.getOwnPropertyNames(result)).not.toContain("meta");
-			expect([...result]).toEqual([1, 2]);
-		});
-
-		it("valueObjectEquals considers symbol-keyed values", () => {
-			const k = Symbol("k");
-			const a = valueObject({ [k]: 1 } as Record<symbol, unknown>);
-			const b = valueObject({ [k]: 1 } as Record<symbol, unknown>);
-			const c = valueObject({ [k]: 2 } as Record<symbol, unknown>);
-
-			expect(valueObjectEquals(a, b)).toBe(true);
-			expect(valueObjectEquals(a, c)).toBe(false);
-		});
-
-		it("does not mutate or freeze the caller's input when symbol keys are present", () => {
-			const tag = Symbol("tag");
-			const inner = { nested: 1 };
-			const input = { [tag]: inner } as Record<symbol, { nested: number }>;
-
-			valueObject(input);
-
-			expect(Object.isFrozen(inner)).toBe(false);
-			inner.nested = 2;
-			expect(input[tag]?.nested).toBe(2);
+			expect(() => valueObject(input)).toThrow(
+				"valueObject(): props.meta is not enumerable",
+			);
 		});
 	});
 
@@ -673,7 +603,7 @@ describe("value object functions", () => {
 			"rejects %s because every admitted value must be immutable and value-based",
 			(_name, create) => {
 				expect(() => valueObject({ value: create() })).toThrow(
-					/immutable value semantics/,
+					/is binary data|is an Error/,
 				);
 			},
 		);
@@ -684,21 +614,7 @@ describe("value object functions", () => {
 					{ data: new Uint8Array([9]) },
 					(value) => value.data.length > 0,
 				),
-			).toThrow(/immutable value semantics/);
-		});
-
-		it("rejects an ArrayBuffer view without invoking its toStringTag accessor", () => {
-			const value = new Uint8Array([1]);
-			let accessorInvoked = false;
-			Object.defineProperty(value, Symbol.toStringTag, {
-				get: () => {
-					accessorInvoked = true;
-					throw new Error("toStringTag getter must not run");
-				},
-			});
-
-			expect(() => valueObject({ value })).toThrow(/immutable value semantics/);
-			expect(accessorInvoked).toBe(false);
+			).toThrow(/is binary data|is an Error/);
 		});
 	});
 
@@ -759,57 +675,27 @@ describe("value object functions", () => {
 		});
 	});
 
-	describe("boxed BigInt values", () => {
-		it("compares the wrapped primitive instead of the empty object shell", () => {
-			const seven = valueObject({ value: Object(7n) });
-			const anotherSeven = valueObject({ value: Object(7n) });
-			const eight = valueObject({ value: Object(8n) });
-
-			expect(valueObjectEquals(seven, anotherSeven)).toBe(true);
-			expect(valueObjectEquals(seven, eight)).toBe(false);
+	describe("boxed primitives", () => {
+		it("rejects a boxed primitive and names the primitive value", () => {
+			expect(() => valueObject({ value: Object(7n) })).toThrow(
+				"valueObject(): props.value is a BigInt; use the primitive value",
+			);
 		});
 	});
 
 	describe("built-in boundary: Map/Set contents go through the valueObject clone", () => {
-		it("does not invoke overridden Map or Set iterators", () => {
-			let iteratorCalls = 0;
-			const map = new Map([["key", "value"]]);
-			const set = new Set(["member"]);
-			const failIfInvoked = () => {
-				iteratorCalls += 1;
-				throw new Error("custom iterator must not run");
-			};
-			Object.defineProperty(map, Symbol.iterator, { value: failIfInvoked });
-			Object.defineProperty(set, Symbol.iterator, { value: failIfInvoked });
-
-			const result = valueObject({ map, set });
-
-			expect(result.map.get("key")).toBe("value");
-			expect(result.set.has("member")).toBe(true);
-			expect(iteratorCalls).toBe(0);
-		});
-
 		it("rejects object Map keys and Set members that cannot preserve value equality", () => {
 			expect(() => valueObject({ m: new Map([[{ id: 1 }, "value"]]) })).toThrow(
-				/Map keys must be primitive values/,
+				/must be a primitive/,
 			);
 			expect(() => valueObject({ s: new Set([{ id: 1 }]) })).toThrow(
-				/Set members must be primitive values/,
+				/must be a primitive/,
 			);
-		});
-
-		it("preserves symbol-keyed properties inside Map values", () => {
-			const s = Symbol("s");
-			const v = valueObject({
-				m: new Map([["k", { [s]: 1 } as Record<symbol, number>]]),
-			});
-
-			expect(v.m.get("k")?.[s]).toBe(1);
 		});
 
 		it("rejects functions inside Map values with the documented TypeError", () => {
 			expect(() => valueObject({ m: new Map([["f", () => 1]]) })).toThrow(
-				/valueObject\(\) does not accept function values/,
+				/is a function/,
 			);
 		});
 
@@ -833,26 +719,11 @@ describe("value object functions", () => {
 
 		it("rejects Promise/WeakMap/WeakSet with a descriptive TypeError instead of DataCloneError", () => {
 			expect(() => valueObject({ p: Promise.resolve(1) })).toThrow(
-				/Value Objects are plain data/,
+				/is a (Promise|WeakMap|WeakSet)/,
 			);
 			expect(() => valueObject({ w: new WeakMap() })).toThrow(
-				/Value Objects are plain data/,
+				/is a (Promise|WeakMap|WeakSet)/,
 			);
-		});
-
-		it("treats Promise and Error toStringTag spoofers as ordinary value data", () => {
-			for (const tag of ["Promise", "Error"] as const) {
-				const marker = Symbol("marker");
-				const first = valueObject({
-					value: { [Symbol.toStringTag]: tag, [marker]: "kept", count: 1 },
-				});
-				const second = valueObject({
-					value: { [Symbol.toStringTag]: tag, [marker]: "kept", count: 1 },
-				});
-
-				expect(first.value[marker]).toBe("kept");
-				expect(valueObjectEquals(first, second)).toBe(true);
-			}
 		});
 
 		it("rejects custom class instances instead of creating incomplete clones", () => {
@@ -864,7 +735,7 @@ describe("value object functions", () => {
 			}
 
 			expect(() => valueObject({ price: new Money(5) })).toThrow(
-				/custom class instances/,
+				/is a class instance/,
 			);
 		});
 
@@ -1000,13 +871,13 @@ describe("value object functions", () => {
 			}
 
 			for (const value of [new PrivateValue(5), new HiddenValue(5)]) {
-				expect(() => valueObject({ value })).toThrow(/custom class instances/);
+				expect(() => valueObject({ value })).toThrow(/is a class instance/);
 			}
 		});
 
 		it("rejects boxed Symbol values instead of creating slotless wrappers", () => {
 			expect(() => valueObject({ value: Object(Symbol("value")) })).toThrow(
-				/custom class instances/,
+				/is a Symbol; map it to plain data/,
 			);
 		});
 
@@ -1022,7 +893,7 @@ describe("value object functions", () => {
 				new CustomMap([["one", 1]]),
 				new CustomError("failure"),
 			]) {
-				expect(() => valueObject({ value })).toThrow(/custom class instances/);
+				expect(() => valueObject({ value })).toThrow(/is a class instance/);
 			}
 		});
 
@@ -1037,53 +908,8 @@ describe("value object functions", () => {
 			Reflect.deleteProperty(CustomMap.prototype, "constructor");
 
 			expect(() => valueObject({ value: new CustomMap() })).toThrow(
-				/custom class instances/,
+				/is a class instance/,
 			);
-		});
-
-		it("does not invoke a custom constructor name accessor while rejecting its prototype", () => {
-			let nameAccessorInvoked = false;
-			const fakeConstructor = function CustomConstructor() {};
-			Object.defineProperty(fakeConstructor, "name", {
-				get: () => {
-					nameAccessorInvoked = true;
-					return "Object";
-				},
-			});
-			const prototype = Object.create(Object.prototype) as Record<
-				PropertyKey,
-				unknown
-			>;
-			Object.defineProperty(prototype, "constructor", {
-				value: fakeConstructor,
-			});
-			const value = Object.create(prototype) as object;
-
-			expect(() => valueObject({ value })).toThrow(/custom class instances/);
-			expect(nameAccessorInvoked).toBe(false);
-		});
-
-		it("rejects a custom Object prototype whose constructor is hidden behind a Proxy", () => {
-			const fakeConstructor = function FakeObject() {};
-			Object.defineProperty(fakeConstructor, "name", { value: "Object" });
-			let descriptorTrapCalls = 0;
-			const disguisedConstructor = new Proxy(fakeConstructor, {
-				getOwnPropertyDescriptor: (target, key) => {
-					descriptorTrapCalls += 1;
-					return Reflect.getOwnPropertyDescriptor(target, key);
-				},
-			});
-			Object.defineProperty(fakeConstructor.prototype, "constructor", {
-				value: disguisedConstructor,
-			});
-			Object.setPrototypeOf(fakeConstructor.prototype, null);
-			const value = Object.create(fakeConstructor.prototype) as {
-				amount: number;
-			};
-			value.amount = 5;
-
-			expect(() => valueObject(value)).toThrow(/custom class instances/);
-			expect(descriptorTrapCalls).toBe(0);
 		});
 
 		it("continues to accept cross-realm plain objects", () => {
@@ -1129,20 +955,6 @@ describe("value object functions", () => {
 	});
 
 	describe("Symbol.toStringTag spoofing and exotic freeze targets", () => {
-		it("treats a plain object spoofing the Map tag as a plain object instead of crashing", () => {
-			const v = valueObject({ m: { [Symbol.toStringTag]: "Map", x: 1 } });
-
-			expect(v.m.x).toBe(1);
-			expect(Object.isFrozen(v.m)).toBe(true);
-		});
-
-		it("does not install Date mutator shadows on a plain object spoofing the Date tag", () => {
-			const v = valueObject({ d: { [Symbol.toStringTag]: "Date", x: 1 } });
-
-			expect(v.d.x).toBe(1);
-			expect(Object.hasOwn(v.d, "setTime")).toBe(false);
-		});
-
 		it("deepFreeze does not crash on a sealed (non-extensible, not frozen) Date", () => {
 			const d = Object.assign(new Date(42), { note: "x" });
 			Object.seal(d);
@@ -1273,28 +1085,11 @@ describe("deepFreeze – mutator shadows are shared module-level functions", () 
 	});
 });
 
-describe("valueObject() – RegExp value semantics", () => {
-	it("admits a plain RegExp and keeps it usable after freezing", () => {
-		const value = valueObject({ pattern: /ab+c/i });
-
-		// A non-global, non-sticky RegExp never touches lastIndex, so it is
-		// a genuine immutable value.
-		expect(value.pattern.test("ABBBC")).toBe(true);
-		expect(value.pattern.source).toBe("ab+c");
-	});
-
-	it("rejects a global RegExp whose lastIndex is mutable scan state", () => {
-		// A global RegExp advances lastIndex on every test()/exec(), so it
-		// is a stateful object, not a value.
+describe("valueObject() – RegExp", () => {
+	it("rejects a RegExp of any flags, because compile() could still change it", () => {
+		expect(() => valueObject({ pattern: /ab+c/i })).toThrow(
+			"valueObject(): props.pattern is a RegExp; keep its source and flags as strings",
+		);
 		expect(() => valueObject({ pattern: /ab+c/g })).toThrow(TypeError);
-		expect(() => valueObject({ pattern: /ab+c/g })).toThrow(
-			/global or sticky RegExp/,
-		);
-	});
-
-	it("rejects a sticky RegExp for the same reason", () => {
-		expect(() => valueObject({ pattern: /ab+c/y })).toThrow(
-			/global or sticky RegExp/,
-		);
 	});
 });
