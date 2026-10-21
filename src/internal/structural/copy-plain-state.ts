@@ -150,10 +150,16 @@ class StepComparison {
 		private readonly subject: string,
 	) {}
 
-	take(next: Step, path: string): void {
+	/** `memberKey` names the key of a key step under `path`. */
+	take(next: Step, path: string, memberKey?: string): void {
 		const expected = this.recording.steps[this.#position];
 		if (expected !== next) {
-			throwChangedInCopy(this.subject, path, expected, next);
+			throwChangedInCopy(
+				this.subject,
+				memberKey === undefined ? path : memberPath(path, memberKey),
+				expected,
+				next,
+			);
 		}
 		this.#position += 1;
 	}
@@ -190,8 +196,16 @@ function newWalk(
 	return { seen: new WeakSet(), subject, rule, trace };
 }
 
-function step(walk: Walk, next: Step, path: string): void {
-	walk.trace.take(next, path);
+function step(walk: Walk, next: Step, path: string, memberKey?: string): void {
+	walk.trace.take(next, path, memberKey);
+}
+
+/**
+ * The path of `key` under `path`. Only an error and a descent into an object
+ * need it, so the walk builds it on demand, not for every key.
+ */
+function memberPath(path: string, key: string): string {
+	return INDEX_KEY.test(key) ? `${path}[${key}]` : `${path}.${key}`;
 }
 
 function throwChangedInCopy(
@@ -326,31 +340,43 @@ function assertOwnPropertiesCopyable(
 			);
 		}
 		if (owner === "array" && key === "length") continue;
-		const isIndex = INDEX_KEY.test(key);
-		const memberPath = isIndex ? `${path}[${key}]` : `${path}.${key}`;
 		if (!descriptor.enumerable) {
 			if (tag !== undefined && isBuiltInMachinery(tag, key, descriptor)) {
 				continue;
 			}
 			throw new TypeError(
-				`${walk.subject}${memberPath} is not enumerable and the clone would drop it; map it to plain data`,
+				`${walk.subject}${memberPath(path, key)} is not enumerable and the clone would drop it; map it to plain data`,
 			);
 		}
-		if (tag !== undefined && isIndex && Number(key) < contentLength) {
+		if (
+			tag !== undefined &&
+			INDEX_KEY.test(key) &&
+			Number(key) < contentLength
+		) {
 			continue;
 		}
 		if (!("value" in descriptor)) {
 			throw new TypeError(
-				`${walk.subject}${memberPath} is an accessor property; map it to plain data`,
+				`${walk.subject}${memberPath(path, key)} is an accessor property; map it to plain data`,
 			);
 		}
 		if (tag !== undefined) {
 			throw new TypeError(
-				`${walk.subject}${memberPath} is an expando on a ${constructorName(Object.getPrototypeOf(object)) ?? "built-in"} and the clone would drop it; map it to plain data`,
+				`${walk.subject}${memberPath(path, key)} is an expando on a ${constructorName(Object.getPrototypeOf(object)) ?? "built-in"} and the clone would drop it; map it to plain data`,
 			);
 		}
-		step(walk, key, memberPath);
-		assertCopyable(descriptor.value, memberPath, walk);
+		step(walk, key, path, key);
+		// A primitive other than a function or a symbol passes assertCopyable
+		// at once, so only those values need their path.
+		const value: unknown = descriptor.value;
+		if (
+			value !== null &&
+			(typeof value === "object" ||
+				typeof value === "function" ||
+				typeof value === "symbol")
+		) {
+			assertCopyable(value, memberPath(path, key), walk);
+		}
 	}
 }
 
