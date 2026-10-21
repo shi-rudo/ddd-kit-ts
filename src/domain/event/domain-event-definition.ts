@@ -23,6 +23,8 @@ import {
  * (records, arrays, `Date`, `Map`, `Set`, and primitives), copies the output,
  * and freezes the copy. A schema that passes a value through unchecked, for
  * example `z.any()`, moves the responsibility for that value to the schema.
+ * A schema that leaves out unknown keys, such as `z.object`, drops fields
+ * without an error, so use strict object schemas for event payloads.
  */
 export interface DomainEventDefinition<
 	TType extends string = string,
@@ -64,7 +66,7 @@ const DEFINITION_BRAND = Symbol.for(
  * @example
  * ```ts
  * const OrderPlaced = defineDomainEvent("OrderPlaced", {
- *   payload: z.object({ orderId: z.string(), total: z.number().int() }),
+ *   payload: z.strictObject({ orderId: z.string(), total: z.number().int() }),
  *   schemaVersion: 2,
  * });
  * type OrderPlaced = DomainEventOf<typeof OrderPlaced>;
