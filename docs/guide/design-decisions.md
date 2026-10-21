@@ -261,11 +261,9 @@ equality becomes an explicit decision instead of an effect of a hidden clock.
 
 ### A schema can own the payload of an event
 
-Every event payload is plain, structured-cloneable data, and the kit freezes
-it. Without a definition, the constructors check every object of the payload
-before and after they copy it. The check found a new special case in each
-review round: index expandos, non-enumerable properties, mutator shadows,
-`Proxy` traps. It is also the largest part of the cost of an event.
+Every event payload is plain data, and the kit freezes it. The constructors
+copy the payload with the one walk of the plain-data rule (see "One rule for
+plain data"), so the copy is the check.
 
 No established event-sourcing library checks payloads deeply at creation.
 Axon, EventSauce, Rails Event Store, Marten, Eventuous, Emmett, and Castore
@@ -274,13 +272,13 @@ with the serializer on append, and they upcast on read. Where a library
 validates a payload, a schema that belongs to the event type does it, for
 example in the Effect event log or in Castore event types.
 
-So an event can have a definition: `defineDomainEvent` pairs the type with a
-[Standard Schema](https://standardschema.dev) and the schema version. For a
-defined event, the schema output is the payload, and the deep check does not
-run. The kit still checks that the output is plain data, because a schema
-does not promise that: `z.date()`, `z.any()`, and `z.custom()` pass the
-caller's objects through, and arktype returns the input object itself. Then
-the kit copies the output with `structuredClone` and freezes the copy.
+So an event can also have a definition: `defineDomainEvent` pairs the type
+with a [Standard Schema](https://standardschema.dev) and the schema version.
+For a defined event, the schema decides what the payload may contain, and
+the schema output is the payload. The kit copies the output with the same
+walk and freezes the copy, because a schema does not promise plain data:
+`z.date()`, `z.any()`, and `z.custom()` pass the caller's objects through,
+and arktype returns the input object itself.
 
 A schema can also lose data: `z.object` and `v.object` leave out unknown keys
 without an error. The kit cannot tell a dropped key from an intended reshape
@@ -292,17 +290,16 @@ The kit copies the Standard Schema types instead of depending on
 `@standard-schema/spec`, as zod and arktype do. A schema must validate
 synchronously, because an event is created synchronously.
 
-The measurement of 2026-10-21 (built kit, zod, median per event): on Node
-24, a defined event costs 17.9 µs for a payload with three lines and 65 µs
-for twenty lines, against 31 µs and 143 µs with the deep check. In workerd,
-where zod cannot generate code at runtime and validates about three times
-slower, a defined event costs 16.1 µs and 62 µs, against 26.5 µs and 121 µs.
-valibot generates no code and costs the same in both runtimes. Most of the
-rest is shared by both paths: the freeze of the copy and the default stamp.
+The measurement of 2026-10-21 (Node 24, built kit, median per event, without
+a definition): an event costs about 17 µs for a payload with three lines and
+48 µs for twenty lines, the copy and the freeze included. A definition adds
+the cost of its schema. In workerd, zod cannot generate code at runtime and
+validates about three times slower than on Node; valibot generates no code
+and costs the same in both runtimes.
 
-Events without a definition keep the deep check. Moving the boundary to the
-serializer on append, as the other libraries do, would give up the frozen,
-plain events that in-process subscribers receive today.
+The kit keeps the copy at creation. Moving the boundary to the serializer on
+append, as the other libraries do, would give up the frozen, plain events
+that in-process subscribers receive.
 
 ## Private process facts do not double as participant commands
 
