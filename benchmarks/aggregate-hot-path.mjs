@@ -4,7 +4,6 @@ import {
 	createDomainEvent,
 	createDomainEventFactory,
 	EventSourcedAggregate,
-	recordPendingEvents,
 	StateStoredAggregate,
 	withCommit,
 } from "../dist/index.js";
@@ -72,10 +71,10 @@ const factory = createDomainEventFactory({
 	clock: () => fixedTime,
 });
 
-// The shell path of one commit, in memory: the domain method records a
-// decision, the shell stamps it, withCommit enrolls the aggregate,
-// harvests the event into the outbox, and acknowledges it. The outbox and
-// the transaction scope cost nothing, so the number is the kit's own cost.
+// The path of one commit, in memory: the domain method records a decision,
+// the registration in withCommit stamps it, withCommit collects the event
+// into the outbox, and acknowledges it. The outbox and the transaction
+// scope cost nothing, so the number is the kit's own cost.
 const outbox = {
 	add: async () => {},
 	getPending: async () => [],
@@ -87,10 +86,13 @@ const scope = {
 
 async function commitOne(order, sequence) {
 	order.touch(sequence);
-	await withCommit({ outbox, scope }, async (_ctx, enrollment) => {
-		recordPendingEvents(order, factory);
-		return { result: undefined, commits: [enrollment.enrollSaved(order)] };
-	});
+	await withCommit(
+		{ outbox, scope, eventStampFactory: factory },
+		async (_ctx, registration) => ({
+			result: undefined,
+			commits: [registration.registerSaved(order)],
+		}),
+	);
 }
 
 async function measure(name, iterations, setup, operation) {
@@ -208,7 +210,7 @@ console.log(
 			platform: `${process.platform}/${process.arch}`,
 			metricNotes: {
 				operationsPerSecond:
-					"Warm process throughput: one full in-memory commit (domain method, recordPendingEvents, withCommit enrollment, harvest, acknowledgement), or one full replay",
+					"Warm process throughput: one full in-memory commit (domain method, stamp at the registration, collection into the outbox, acknowledgement), or one full replay",
 				microsecondsPerOperation: "Wall time per operation",
 				retainedBytesPerOperation:
 					"Heap delta after forced GC per operation; a commit leaves nothing pending, so a positive value is a leak",
