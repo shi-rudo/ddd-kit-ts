@@ -421,7 +421,7 @@ function buildDomainEventFactory(
 }
 
 /**
- * Immutable UUID-v4/platform-clock factory used by the top-level
+ * Immutable UUID-v7/platform-clock factory used by the top-level
  * {@link createDomainEvent}. It cannot be reconfigured; construct an instance
  * with {@link createDomainEventFactory} for custom policy.
  */
@@ -670,6 +670,12 @@ export function adoptStampedDomainEvent<T extends object>(copy: T): T {
  * data before it goes into an event. `toJSON()` of a `ValueObject` is
  * shallow, so map a nested value object too.
  *
+ * **With a definition.** Pass a definition from `defineDomainEvent` in
+ * place of the type, and its Standard Schema decides what the payload may
+ * contain in place of the deep check. The payload is the schema output,
+ * copied and frozen, and the event takes the schema version of the
+ * definition.
+ *
  * **For aggregate-internal events, prefer `this.createEvent(...)` on
  * `StateStoredAggregate` / `EventSourcedAggregate`.** That helper auto-injects
  * `aggregateId` (from `this.id`) and `aggregateType` (from the
@@ -678,8 +684,8 @@ export function adoptStampedDomainEvent<T extends object>(copy: T): T {
  * route by. The commit boundary validates that both fields are present
  * and throws if they are missing, so a direct `createDomainEvent(...)`
  * call inside an aggregate that forgets the options is caught at
- * runtime. Stamp pending decisions in the application
- * shell before repository persistence or outbox collection.
+ * runtime. The commit stamps pending decisions when a repository write
+ * registers the aggregate.
  *
  * Use `createDomainEvent(...)` directly for events that don't belong to
  * an aggregate: system events, integration events, configuration events,
