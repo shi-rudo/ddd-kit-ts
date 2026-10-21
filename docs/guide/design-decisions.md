@@ -4,6 +4,26 @@ This page explains the choices in the kit that are not obvious from the API alon
 
 Most of these decisions are trade-offs, not universal rules. The point is to show where the kit draws its boundaries, why those boundaries exist, and when a consumer might reasonably choose a different shape on top.
 
+## The kit catches accidents, not misuse
+
+The kit trusts the code that calls it. It catches the mistakes that happen by
+accident: a forgotten `update`, a value that a copy would lose, a commit that
+fails with an unknown outcome, a sink that hangs on one record. It does not
+defend against code that works against it on purpose: a `Proxy` that lies, a
+getter with a side effect, a forged prototype, a subclass that turns off a
+guard, or a test stub that calls back into the store.
+
+A defense against hostile code in the same process has no end. JavaScript
+gives that code every tool to win, so each review round finds a new special
+case, and each fix makes the kit slower and harder to read. The defense also
+protects nothing: code in the same process can do more harm than any check
+can stop.
+
+So the kit spends its effort on the failures of production: timeouts, unknown
+commit outcomes, poison records, reads that lag, and a second copy of the kit
+in one process. Untrusted input is a different matter. Parse it at the
+boundary, for example with a schema, before it reaches the kit.
+
 ## Result lives at the App-Service boundary, not in the domain
 
 The kit keeps one clear error axis:
@@ -108,6 +128,34 @@ The state-stored helper is the same `setState` that every entity has; the events
 That is not just defensive programming. Domain events are facts. A subscriber should not be able to mutate a fact before the next subscriber sees it. In an in-process `EventBus`, all handlers receive the same event object. Without freezing, one handler could rewrite metadata, payload, or correlation fields and poison its peers.
 
 Freezing makes that failure loud. If a handler needs a derived shape, it should create one.
+
+## One rule for plain data
+
+Event payloads and metadata, value object props, snapshot states, and the data
+of the state machine follow one rule. The kit copies such a value with one
+walk. The walk builds the copy and checks each value as it copies it. If a
+value is not plain data, the walk throws a `TypeError` that names the path.
+
+| Value | The copy |
+| --- | --- |
+| `string`, `number`, `boolean`, `bigint`, `undefined`, `null` | keeps it |
+| A record whose prototype is `null` or an `Object.prototype` of any realm | copies its own enumerable string keys |
+| An array | copies its indexes and its other own enumerable string keys; a hole stays a hole |
+| A `Date` | copies its time |
+| A `Map` or a `Set` | copies its entries; a key or a member must be a primitive |
+| A function, a symbol, a class instance, or another built-in, for example a `RegExp`, an `Error`, a `Promise`, binary data, or a boxed primitive | throws |
+| An accessor, an enumerable symbol-keyed property, a non-enumerable string-keyed property, or an own `__proto__` key | throws |
+| A non-enumerable symbol-keyed property | leaves it out; it is metadata by convention |
+
+A `Map` and a `Set` compare their keys by identity, and a copy cannot keep the
+identity of an object. A copied `Map` with object keys would therefore stop
+finding its own entries, and equality would fail without an error. So a key or
+a member must be a primitive. A cycle and a shared reference survive the copy.
+A value object can hold another value object; the copy keeps it by reference.
+
+The copy is the data that the kit keeps, so the walk checks the copy only,
+once. Messages that leave the process, the command messages and the
+integration messages, follow the stricter JSON rule instead.
 
 ## Identity ids are branded strings, generated app-side
 

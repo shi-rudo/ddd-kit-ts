@@ -114,17 +114,17 @@ immutable. Run one kit version per process during a cutover.
   Code that expects version 4 in the id must pass its own `eventIdFactory`.
 - Events are readonly and kit-built. A recording path accepts only an event
   that a kit constructor built and throws `HandBuiltEventError` for a hand-built
-  object. `createDomainEvent` rejects binary buffers and a `RegExp`, because a
-  freeze cannot make them immutable. It checks the payload and the metadata
-  before and after it copies them, and `InMemoryEventStore.append` applies the
-  same rule. So it rejects a symbol, an `Error`, and a host object such as a
-  `File`. It also rejects every value that the copy would lose or change.
-  These are a class instance, an accessor, an enumerable symbol-keyed
-  property, a non-enumerable data property, and an expando on a built-in. A
-  value object with a private field no longer becomes an empty record without
-  an error. Map a value object to plain data first. `toJSON()` of a kit
-  `ValueObject` is shallow, so map a nested value object too. No getter of the
-  data runs. The checks catch accidents, not a hostile `Proxy`. The metadata
+  object. The event constructors copy the payload and the metadata under the
+  plain-data rule of the kit: records, arrays, `Date`, `Map`, `Set`, and
+  primitives (see "One rule for plain data" in the design decisions). A value
+  outside the rule throws a `TypeError` that names the path, for example a
+  function, a symbol, a class instance, a `RegExp`, binary data, an `Error`,
+  an accessor, or a symbol-keyed or hidden property. A key of a `Map` and a
+  member of a `Set` must be a primitive, and an own `__proto__` key throws
+  `PrototypePollutionError` at any depth. A value object with a private field
+  no longer becomes an empty record without an error. Map a value object to
+  plain data first. `toJSON()` of a kit `ValueObject` is shallow, so map a
+  nested value object too. The metadata
   must be a plain object or absent; `null`, a string, a number, an array, or a
   `Map` throws a `TypeError`, also with a factory `source`. `EventMetadata`
   fields are readonly. `DomainEvent` loses `aggregateVersion`; the commit
@@ -350,8 +350,8 @@ immutable. Run one kit version per process during a cutover.
   `DomainEventOf<typeof definition>` names its event. `createEvent`,
   `createDomainEvent`, `DomainEventFactory.create`, and
   `createStampedDomainEvent` take a definition in place of the type. The
-  schema output is the payload, in place of the deep check: it must be plain
-  data, and the kit copies and freezes it. A failed schema throws
+  schema output is the payload: the kit copies it under the plain-data rule
+  and freezes the copy. A failed schema throws
   `DomainEventValidationError` with the code `EVENT_PAYLOAD_INVALID` and the
   issues; a schema that returns a Promise throws `EVENT_PAYLOAD_SCHEMA_ASYNC`.
   Use strict object schemas: a plain `z.object` drops unknown keys without an

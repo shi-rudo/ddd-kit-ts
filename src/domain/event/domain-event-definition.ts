@@ -1,10 +1,9 @@
-import { assertNoOwnProtoKey } from "../../errors/kit-errors";
 import {
 	applyCooperativeBrand,
 	hasCooperativeBrand,
 } from "../../internal/cooperative-brand";
 import type { StandardSchemaV1 } from "../../internal/standard-schema";
-import { isIntrinsicConstructorPrototype } from "../../internal/structural/is-built-in";
+import { copyPlainData } from "../../internal/structural/plain-data";
 import type { DomainEvent } from "./domain-event";
 import {
 	assertEventSchemaVersion,
@@ -18,10 +17,9 @@ import {
  * schema version of that payload. Build it with {@link defineDomainEvent}.
  *
  * An event created from a definition takes the schema output as its payload:
- * the schema decides what the payload may contain, in place of the deep check
- * that an event without a definition gets. The kit still requires plain data
- * (records, arrays, `Date`, `Map`, `Set`, and primitives), copies the output,
- * and freezes the copy. A schema that passes a value through unchecked, for
+ * the schema decides what the payload may contain. As for every event, the
+ * kit copies the output under its plain-data rule (records, arrays, `Date`,
+ * `Map`, `Set`, and primitives) and freezes the copy. A schema that passes a value through unchecked, for
  * example `z.any()`, moves the responsibility for that value to the schema.
  * A schema that leaves out unknown keys, such as `z.object`, drops fields
  * without an error, so use strict object schemas for event payloads.
@@ -151,17 +149,9 @@ export function ownDefinedPayload(
 			issues,
 		);
 	}
-	const value = result.value;
-	if (value !== null && typeof value === "object") {
-		assertNoOwnProtoKey(value, `Event payload of ${operation}`);
-	}
-	assertPlainSchemaOutput(
-		value,
-		"",
-		`${operation}: the payload schema of "${definition.type}" returned`,
-		new Set(),
-	);
-	return structuredClone(value);
+	// The copy checks the output too: z.date(), z.any(), and z.custom() pass
+	// the caller's objects through, and arktype returns the input itself.
+	return copyPlainData(result.value, { subject: `${operation}: payload` });
 }
 
 function isThenable(value: unknown): value is PromiseLike<unknown> {
@@ -208,126 +198,4 @@ function describeIssues(
 	return more > 0
 		? `${described.join("; ")}; and ${more} more`
 		: described.join("; ");
-}
-
-/**
- * Checks that schema output is plain data before the copy: `structuredClone`
- * would turn a class instance into a plain record without an error, and a
- * freeze cannot make a binary buffer or a `RegExp` immutable. The check reads
- * the prototype of each object once, so it costs a small part of the deep
- * check that an event without a definition gets.
- */
-function assertPlainSchemaOutput(
-	value: unknown,
-	path: string,
-	subject: string,
-	seen: Set<object>,
-): void {
-	if (typeof value === "function" || typeof value === "symbol") {
-		throw new TypeError(
-			`${subject} a ${typeof value} at payload${path}; an event payload holds plain data`,
-		);
-	}
-	if (value === null || typeof value !== "object") return;
-	if (seen.has(value)) return;
-	seen.add(value);
-	const kind = plainDataKind(value);
-	switch (kind) {
-		case "record": {
-			for (const key of Object.keys(value)) {
-				assertPlainSchemaOutput(
-					(value as Record<string, unknown>)[key],
-					`${path}.${key}`,
-					subject,
-					seen,
-				);
-			}
-			if (
-				Object.getOwnPropertySymbols(value).some((symbol) =>
-					Object.prototype.propertyIsEnumerable.call(value, symbol),
-				)
-			) {
-				throw new TypeError(
-					`${subject} a symbol-keyed property at payload${path}; the copy of the payload would lose it`,
-				);
-			}
-			return;
-		}
-		case "array":
-			(value as ReadonlyArray<unknown>).forEach((element, index) => {
-				assertPlainSchemaOutput(element, `${path}[${index}]`, subject, seen);
-			});
-			return;
-		case "map":
-			for (const [key, entry] of value as ReadonlyMap<unknown, unknown>) {
-				assertPlainSchemaOutput(key, `${path}.<map key>`, subject, seen);
-				assertPlainSchemaOutput(
-					entry,
-					`${path}.get(${String(key)})`,
-					subject,
-					seen,
-				);
-			}
-			return;
-		case "set":
-			for (const element of value as ReadonlySet<unknown>) {
-				assertPlainSchemaOutput(element, `${path}.<set value>`, subject, seen);
-			}
-			return;
-		case "date":
-			return;
-		default:
-			throw new TypeError(
-				`${subject} ${describeObject(value)} at payload${path}; an event payload holds plain data: records, arrays, Date, Map, Set, and primitives`,
-			);
-	}
-}
-
-type PlainDataKind = "record" | "array" | "date" | "map" | "set";
-
-const PLAIN_DATA_PROTOTYPES: ReadonlyMap<object, PlainDataKind> = new Map<
-	object,
-	PlainDataKind
->([
-	[Object.prototype, "record"],
-	[Array.prototype, "array"],
-	[Date.prototype, "date"],
-	[Map.prototype, "map"],
-	[Set.prototype, "set"],
-]);
-
-const INTRINSIC_NAMES: ReadonlyArray<[string, PlainDataKind]> = [
-	["Object", "record"],
-	["Array", "array"],
-	["Date", "date"],
-	["Map", "map"],
-	["Set", "set"],
-];
-
-/**
- * The plain-data kind of an object, or `undefined`. The prototypes of this
- * realm answer directly; the slower intrinsic check covers an object from
- * another realm.
- */
-function plainDataKind(value: object): PlainDataKind | undefined {
-	const prototype = Object.getPrototypeOf(value);
-	if (prototype === null) return "record";
-	const kind = PLAIN_DATA_PROTOTYPES.get(prototype);
-	if (kind !== undefined) return kind;
-	for (const [name, intrinsicKind] of INTRINSIC_NAMES) {
-		if (isIntrinsicConstructorPrototype(prototype, name)) return intrinsicKind;
-	}
-	return undefined;
-}
-
-function describeObject(value: object): string {
-	const tag = Object.prototype.toString.call(value).slice(8, -1);
-	const constructorName = (
-		Object.getPrototypeOf(value) as {
-			readonly constructor?: { name?: unknown };
-		}
-	)?.constructor?.name;
-	return typeof constructorName === "string" && constructorName !== tag
-		? `a class instance (${constructorName})`
-		: `a ${tag}`;
 }

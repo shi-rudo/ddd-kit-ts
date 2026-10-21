@@ -1542,6 +1542,13 @@ The root entry no longer exports `capturePersistenceBaseline`,
 - `onPollError` of `OutboxDispatcher` can receive the new
   `AcknowledgedRecordPendingError`. It means that `getPending` returned a
   record that the pass already acknowledged.
+- The event constructors copy the payload and the metadata with one walk
+  under the plain-data rule (see "One rule for plain data" in the design
+  decisions). Three cases that rc.15 accepted now throw: an object as a key
+  of a `Map` or a member of a `Set`, and an own `__proto__` key below the
+  root. A `Proxy` over a record no longer throws; the copy takes its data.
+  An expando on a `Map`, a `Set`, or a `Date` no longer throws; the copy
+  leaves it out. The messages changed.
 - On a leased idempotency store, a failure at commit time keeps the staged
   outcome. A retry of the same key rejects with `IdempotencyInFlightError`
   until the lease expires. After that, `reconcileIdempotency` decides. In
