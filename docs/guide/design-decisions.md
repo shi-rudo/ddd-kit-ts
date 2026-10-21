@@ -238,10 +238,13 @@ The kit copies the Standard Schema types instead of depending on
 `@standard-schema/spec`, as zod and arktype do. A schema must validate
 synchronously, because an event is created synchronously.
 
-The measurement of 2026-10-21 (Node 24, built kit, zod, median per event):
-a defined event costs 17.9 µs for a payload with three lines and 65 µs for
-twenty lines, against 31 µs and 143 µs with the deep check. Most of the rest
-is shared by both paths: the freeze of the copy and the default stamp.
+The measurement of 2026-10-21 (built kit, zod, median per event): on Node
+24, a defined event costs 17.9 µs for a payload with three lines and 65 µs
+for twenty lines, against 31 µs and 143 µs with the deep check. In workerd,
+where zod cannot generate code at runtime and validates about three times
+slower, a defined event costs 16.1 µs and 62 µs, against 26.5 µs and 121 µs.
+valibot generates no code and costs the same in both runtimes. Most of the
+rest is shared by both paths: the freeze of the copy and the default stamp.
 
 Events without a definition keep the deep check. Moving the boundary to the
 serializer on append, as the other libraries do, would give up the frozen,
