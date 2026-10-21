@@ -276,6 +276,7 @@ const INDEX_SURFACE = [
 	"deepFreeze",
 	"deepOmit",
 	"defaultDomainEventFactory",
+	"defineDomainEvent",
 	"defineRepository",
 	"defineSnapshotModel",
 	"domainErrorToResult",

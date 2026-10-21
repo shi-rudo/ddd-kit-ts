@@ -8,7 +8,18 @@ import { isIntrinsicConstructorPrototype } from "../../internal/structural/is-bu
 import { uuidV7 } from "../../internal/uuid-v7";
 import { deepFreeze } from "../value-object/value-object";
 import { type ClockFactory, defaultClockFactory, readClock } from "./clock";
-import { DomainEventValidationError } from "./domain-event-errors";
+import {
+	type DomainEventDefinition,
+	type DomainEventOf,
+	type DomainEventPayloadInput,
+	isDomainEventDefinition,
+	ownDefinedPayload,
+} from "./domain-event-definition";
+import {
+	assertEventSchemaVersion,
+	assertNonBlankEventField,
+	DomainEventValidationError,
+} from "./domain-event-errors";
 
 export type { ClockFactory } from "./clock";
 
@@ -309,6 +320,11 @@ export interface DomainEventFactory {
 			payload: P,
 			options?: CreateDomainEventOptions,
 		): DomainEvent<T, P>;
+		<D extends DomainEventDefinition>(
+			definition: D,
+			payload: DomainEventPayloadInput<D>,
+			options?: Omit<CreateDomainEventOptions, "schemaVersion">,
+		): DomainEventOf<D>;
 	};
 	/**
 	 * Reads the captured clock and returns a defensive `Date` copy.
@@ -352,7 +368,7 @@ function buildDomainEventFactory(
 	const clock = options.clock ?? defaultClockFactory;
 	const { source } = options;
 	const create = (<T extends string, P>(
-		type: T,
+		type: T | DomainEventDefinition<T>,
 		payload?: P,
 		createOptions?: CreateDomainEventOptions,
 	): DomainEvent<T, P> =>
@@ -508,17 +524,24 @@ export function createUnstampedDomainEvent<T extends string, P>(
  * package entries.
  */
 export function buildUnstampedDomainEvent<T extends string, P>(
-	type: T,
+	typeOrDefinition: T | DomainEventDefinition<T>,
 	payload: P | undefined,
-	options: CreateUnstampedDomainEventOptions | undefined,
+	unstampedOptions: CreateUnstampedDomainEventOptions | undefined,
 	operation: string,
 ): UnstampedDomainEvent<T, P> {
+	const definition = definitionOf(typeOrDefinition);
+	const type = definition?.type ?? (typeOrDefinition as T);
+	const options = withDefinitionVersion(
+		definition,
+		unstampedOptions,
+		operation,
+	);
 	assertProducerOwnedEventFields(type, options);
 	const event: UnstampedDomainEvent<T, P> = {
 		type,
 		aggregateId: options?.aggregateId,
 		aggregateType: options?.aggregateType,
-		payload: cloneOwnedEventData(payload as P, "payload", operation),
+		payload: ownEventPayload(definition, payload, operation),
 		schemaVersion: options?.schemaVersion ?? 1,
 	};
 	brandUnstampedEvent(event);
@@ -684,16 +707,23 @@ export function createDomainEvent<T extends string, P>(
 	payload: P,
 	options?: CreateDomainEventOptions,
 ): DomainEvent<T, P>;
+export function createDomainEvent<D extends DomainEventDefinition>(
+	definition: D,
+	payload: DomainEventPayloadInput<D>,
+	options?: Omit<CreateDomainEventOptions, "schemaVersion">,
+): DomainEventOf<D>;
 export function createDomainEvent<T extends string, P>(
-	type: T,
+	type: T | DomainEventDefinition<T>,
 	payload?: P,
 	options?: CreateDomainEventOptions,
 ): DomainEvent<T, P> {
-	return defaultDomainEventFactory.create(
-		type,
-		payload as P,
-		options,
-	) as DomainEvent<T, P>;
+	return (
+		defaultDomainEventFactory.create as (
+			type: T | DomainEventDefinition<T>,
+			payload?: P,
+			options?: CreateDomainEventOptions,
+		) => DomainEvent<T, P>
+	)(type, payload, options);
 }
 
 /**
@@ -716,8 +746,13 @@ export function createStampedDomainEvent<T extends string, P>(
 	payload: P,
 	options: CreateStampedDomainEventOptions,
 ): DomainEvent<T, P>;
+export function createStampedDomainEvent<D extends DomainEventDefinition>(
+	definition: D,
+	payload: DomainEventPayloadInput<D>,
+	options: Omit<CreateStampedDomainEventOptions, "schemaVersion">,
+): DomainEventOf<D>;
 export function createStampedDomainEvent<T extends string, P>(
-	type: T,
+	type: T | DomainEventDefinition<T>,
 	payload: P | undefined,
 	options: CreateStampedDomainEventOptions,
 ): DomainEvent<T, P> {
@@ -754,14 +789,17 @@ function missingExplicitOccurredAt(): Date {
 }
 
 function buildDomainEvent<T extends string, P>(
-	type: T,
+	typeOrDefinition: T | DomainEventDefinition<T>,
 	payload: P | undefined,
-	options: CreateDomainEventOptions | undefined,
+	createOptions: CreateDomainEventOptions | undefined,
 	eventIdFactory: EventIdFactory,
 	clock: ClockFactory,
 	operation: string,
 	factorySource?: string,
 ): DomainEvent<T, P> {
+	const definition = definitionOf(typeOrDefinition);
+	const type = definition?.type ?? (typeOrDefinition as T);
+	const options = withDefinitionVersion(definition, createOptions, operation);
 	assertProducerOwnedEventFields(type, options);
 	const eventId = options?.eventId ?? eventIdFactory();
 	assertNonBlankEventField(eventId, "eventId", "EVENT_ID_INVALID");
@@ -781,7 +819,7 @@ function buildDomainEvent<T extends string, P>(
 		// object across events, would freeze the caller's objects in place;
 		// the next mutation then throws far away from the cause. Same
 		// ownership contract as `valueObject()` and the occurredAt copy.
-		payload: cloneOwnedEventData(payload as P, "payload", operation),
+		payload: ownEventPayload(definition, payload, operation),
 		// A caller-supplied occurredAt and a factory reading are both copied
 		// before the event is frozen, so neither aliases caller-owned state.
 		occurredAt,
@@ -807,18 +845,7 @@ function assertProducerOwnedEventFields(
 		| undefined,
 ): void {
 	assertNonBlankEventField(type, "type", "EVENT_TYPE_INVALID");
-	const schemaVersion = options?.schemaVersion ?? 1;
-	if (
-		!Number.isSafeInteger(schemaVersion) ||
-		typeof schemaVersion !== "number" ||
-		schemaVersion < 1
-	) {
-		throw new DomainEventValidationError(
-			"EVENT_SCHEMA_VERSION_INVALID",
-			"schemaVersion",
-			"domain-event schemaVersion must be a safe integer greater than or equal to 1",
-		);
-	}
+	assertEventSchemaVersion(options?.schemaVersion ?? 1);
 	if (options?.aggregateId !== undefined) {
 		assertNonBlankEventField(
 			options.aggregateId,
@@ -831,23 +858,6 @@ function assertProducerOwnedEventFields(
 			options.aggregateType,
 			"aggregateType",
 			"EVENT_AGGREGATE_IDENTITY_INVALID",
-		);
-	}
-}
-
-function assertNonBlankEventField(
-	value: unknown,
-	field: "eventId" | "type" | "aggregateId" | "aggregateType",
-	code:
-		| "EVENT_ID_INVALID"
-		| "EVENT_TYPE_INVALID"
-		| "EVENT_AGGREGATE_IDENTITY_INVALID",
-): asserts value is string {
-	if (typeof value !== "string" || value.trim().length === 0) {
-		throw new DomainEventValidationError(
-			code,
-			field,
-			`domain-event ${field} must be a non-blank string`,
 		);
 	}
 }
@@ -941,6 +951,51 @@ function cloneOwnedEventData<T>(
 	// The freeze rule keeps the guarantee "kit-built implies deeply
 	// frozen".
 	return copyFreezableState(value, `${operation}: ${field}`);
+}
+
+/** The definition when the caller passed one in place of the type. */
+function definitionOf<T extends string>(
+	typeOrDefinition: T | DomainEventDefinition<T>,
+): DomainEventDefinition<T> | undefined {
+	return isDomainEventDefinition(typeOrDefinition)
+		? (typeOrDefinition as DomainEventDefinition<T>)
+		: undefined;
+}
+
+/**
+ * The options with the schema version of the definition. A definition owns
+ * the version of its payload schema, so an explicit version contradicts it.
+ */
+function withDefinitionVersion<
+	TOptions extends { readonly schemaVersion?: number },
+>(
+	definition: DomainEventDefinition | undefined,
+	options: TOptions | undefined,
+	operation: string,
+): TOptions | undefined {
+	if (definition === undefined) return options;
+	if (options?.schemaVersion !== undefined) {
+		throw new DomainEventValidationError(
+			"EVENT_SCHEMA_VERSION_INVALID",
+			"schemaVersion",
+			`${operation}: an event of the definition "${definition.type}" takes its schemaVersion from the definition`,
+		);
+	}
+	return { ...options, schemaVersion: definition.schemaVersion } as TOptions;
+}
+
+/**
+ * The owned copy of the payload: the checked schema output for a defined
+ * event, and the deep-checked copy for any other event.
+ */
+function ownEventPayload<P>(
+	definition: DomainEventDefinition | undefined,
+	payload: P | undefined,
+	operation: string,
+): P {
+	return definition === undefined
+		? cloneOwnedEventData(payload as P, "payload", operation)
+		: (ownDefinedPayload(definition, payload, operation) as P);
 }
 
 /**

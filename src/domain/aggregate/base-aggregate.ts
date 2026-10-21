@@ -23,6 +23,10 @@ import {
 	stampDomainEvent,
 	type UnstampedDomainEventOf,
 } from "../event/domain-event";
+import type {
+	DomainEventDefinition,
+	DomainEventPayloadInput,
+} from "../event/domain-event-definition";
 import type { Id } from "../identity/id";
 import { type Aggregate, toVersion, type Version } from "./aggregate";
 import type { AggregateIdentity } from "./aggregate-identity";
@@ -517,14 +521,27 @@ export abstract class BaseAggregate<
 	 * The commit stamps pending events when it registers the aggregate,
 	 * before persistence. Payload schema version stays here, next to the
 	 * concrete event producer, rather than in shell-owned stamp data.
+	 *
+	 * Pass a definition from `defineDomainEvent` in place of the type to take
+	 * the payload through its schema and the schema version from the
+	 * definition.
 	 */
 	protected createEvent<E extends TEvent>(
 		type: E["type"],
 		payload: E["payload"],
 		options?: CreateEventOptions,
-	): UnstampedDomainEventOf<E> {
+	): UnstampedDomainEventOf<E>;
+	protected createEvent<D extends DomainEventDefinition<TEvent["type"]>>(
+		definition: D,
+		payload: DomainEventPayloadInput<D>,
+	): UnstampedDomainEventOf<Extract<TEvent, { type: D["type"] }>>;
+	protected createEvent(
+		typeOrDefinition: TEvent["type"] | DomainEventDefinition<TEvent["type"]>,
+		payload: unknown,
+		options?: CreateEventOptions,
+	): AnyUnstampedDomainEvent {
 		return buildUnstampedDomainEvent(
-			type,
+			typeOrDefinition,
 			payload,
 			{
 				...options,
@@ -532,7 +549,7 @@ export abstract class BaseAggregate<
 				aggregateType: this.aggregateType,
 			},
 			"createEvent",
-		) as UnstampedDomainEventOf<E>;
+		);
 	}
 }
 
