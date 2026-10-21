@@ -51,6 +51,18 @@ If you omit the producer-owned `schemaVersion`, the event is written with the de
 `1`, even though the payload has the new shape. That makes old and new events
 ambiguous and forces consumers to infer schema from fields. Do not do that.
 
+With an [event definition](./domain-events.md#event-definitions-with-a-schema),
+the definition holds the version next to its schema. Raise both together:
+
+```ts
+const OrderCreated = defineDomainEvent("OrderCreated", {
+  payload: z.object({ customerId: z.string(), currency: z.string() }),
+  schemaVersion: 2,
+});
+
+this.apply(this.createEvent(OrderCreated, { customerId, currency }));
+```
+
 ## Upcast at the boundary
 
 Upcast after reading from storage and before events reach the aggregate:

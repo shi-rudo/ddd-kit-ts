@@ -216,6 +216,12 @@ export {
 	type UnstampedDomainEventOf,
 } from "./domain/event/domain-event";
 export {
+	type DomainEventDefinition,
+	type DomainEventOf,
+	defineDomainEvent,
+} from "./domain/event/domain-event-definition";
+export {
+	type DomainEventPayloadIssue,
 	type DomainEventValidationCode,
 	DomainEventValidationError,
 	type DomainEventValidationField,
@@ -329,6 +335,7 @@ export type {
 	DeliveryFailureClassifier,
 	DeliveryFailureKind,
 } from "./internal/delivery-failure";
+export type { StandardSchemaV1 } from "./internal/standard-schema";
 export { copyPlainState } from "./internal/structural/copy-plain-state";
 // Structural equality and copies
 export { deepEqual } from "./internal/structural/deep-equal";

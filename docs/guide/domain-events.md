@@ -105,7 +105,7 @@ dual CJS/ESM load). The brand catches accidents, not adversaries: code in the
 same process can fake it. The gate is not a security boundary; validate
 untrusted input at the application edge.
 
-Events are plain structured-cloneable data. The event constructors check the payload and the metadata before and after they copy them. `InMemoryEventStore.append` applies the same rule. A value that the copy would lose or change throws a `TypeError` that names the path. Such values are a class instance, an accessor, an enumerable symbol-keyed property, a non-enumerable data property, and an expando on a built-in such as a `Map`. The check runs no getter of the data. A `Proxy` runs its traps in the check. The checks catch accidents, not a hostile `Proxy`: a trap that changes the data during the check can hide a loss. Map a value object to plain data first. `toJSON()` of a kit `ValueObject` is shallow, so map a nested value object too. The constructors also reject a function, a promise, a `WeakMap`, a `WeakSet`, an `Error`, and a host object such as a `File`. They reject binary buffers, shared memory, and a `RegExp` too. Map an `Error` to plain data, for example its message and code.
+Events are plain structured-cloneable data. Without a [definition](#event-definitions-with-a-schema), the event constructors check the payload and the metadata before and after they copy them. `InMemoryEventStore.append` applies the same rule. A value that the copy would lose or change throws a `TypeError` that names the path. Such values are a class instance, an accessor, an enumerable symbol-keyed property, a non-enumerable data property, and an expando on a built-in such as a `Map`. The check runs no getter of the data. A `Proxy` runs its traps in the check. The checks catch accidents, not a hostile `Proxy`: a trap that changes the data during the check can hide a loss. Map a value object to plain data first. `toJSON()` of a kit `ValueObject` is shallow, so map a nested value object too. The constructors also reject a function, a promise, a `WeakMap`, a `WeakSet`, an `Error`, and a host object such as a `File`. They reject binary buffers, shared memory, and a `RegExp` too. Map an `Error` to plain data, for example its message and code.
 
 `createDomainEvent` reads the platform clock and Web Crypto when `occurredAt`
 or `eventId` is omitted. If the caller must provide every nondeterministic
@@ -158,6 +158,71 @@ business timestamp from the technical event stamp by accident.
 Use `createDomainEvent(...)` directly for events that do not come from an aggregate: system events, integration events, test fixtures, process-manager events, and adapter-level events.
 
 See [Aggregates -> A Small Aggregate](./aggregates.md#state-version-domain-events).
+
+## Event definitions with a schema
+
+Without a definition, the constructors check every object of the payload
+before and after they copy it. That deep check is the largest part of the
+cost of an event. A definition replaces it with a schema. It pairs the event
+type with a [Standard Schema](https://standardschema.dev), for example a zod,
+valibot, or arktype schema, and with the schema version of the payload:
+
+```ts
+import { z } from "zod";
+import { defineDomainEvent, type DomainEventOf } from "@shirudo/ddd-kit";
+
+const OrderPlaced = defineDomainEvent("OrderPlaced", {
+  payload: z.object({
+    orderId: z.string(),
+    lines: z.array(z.object({ sku: z.string(), quantity: z.number().int() })),
+  }),
+  schemaVersion: 2,
+});
+type OrderPlaced = DomainEventOf<typeof OrderPlaced>;
+type OrderEvent = OrderPlaced | OrderConfirmed;
+
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
+  protected readonly aggregateType = "Order";
+
+  place(lines: ReadonlyArray<OrderLine>): void {
+    this.setState(
+      { ...this.state, status: "placed" },
+      this.createEvent(OrderPlaced, { orderId: this.id, lines }),
+    );
+  }
+}
+```
+
+Pass the definition in place of the type to `createEvent`,
+`createDomainEvent`, `DomainEventFactory.create`, or
+`createStampedDomainEvent`. For such an event:
+
+- The schema output is the payload. A zod or valibot object schema leaves out
+  unknown keys.
+- The event takes the schema version of the definition. An explicit
+  `schemaVersion` in the options throws `DomainEventValidationError` with the
+  code `EVENT_SCHEMA_VERSION_INVALID`.
+- A payload that fails the schema throws `DomainEventValidationError` with the
+  code `EVENT_PAYLOAD_INVALID`. Its `issues` hold the messages of the schema
+  and their paths as plain keys.
+- The schema must validate synchronously. A schema that returns a Promise
+  throws `EVENT_PAYLOAD_SCHEMA_ASYNC`. A zod schema also returns a Promise
+  when one of its refinements throws.
+- The schema output must be plain data: records, arrays, `Date`, `Map`, `Set`,
+  and primitives. A class instance, a binary buffer, a `RegExp`, a function,
+  or a symbol throws a `TypeError` that names the path.
+- The kit copies the output with `structuredClone` and freezes the copy. The
+  caller's objects stay unfrozen.
+
+With a definition, the schema decides what the payload may contain, and the
+deep check does not run. A schema that passes a value through unchecked, for
+example `z.any()`, `z.custom()`, or `z.instanceof()`, makes that value the
+responsibility of the schema. Only a definition from `defineDomainEvent`
+counts. A hand-built object with the same fields throws as an invalid type.
+
+A definition checks the events that the application creates. It does not
+check the events that a store returns. Upcast a stored event to the current
+schema at the read boundary; see [Event Upcasting](./event-upcasting.md).
 
 ## Convenience Defaults
 

@@ -3,6 +3,7 @@ import {
 	copyPlainState,
 	createDomainEvent,
 	createDomainEventFactory,
+	defineDomainEvent,
 	InMemoryEventStore,
 	StateStoredAggregate,
 	stampPendingEvents,
@@ -100,6 +101,34 @@ export async function runEdgeRuntimeSmoke(runtime) {
 		{ metadata: { correlationId: "corr-2" } },
 	);
 	await events.append(stream, [traced, correlated], { expectedVersion: 1 });
+
+	// A defined event takes its payload through a Standard Schema. The copy of
+	// the schema output can come from another realm, as on Vercel Edge.
+	const OrderNoted = defineDomainEvent("EdgeOrderNoted", {
+		payload: {
+			"~standard": {
+				version: 1,
+				vendor: "edge-smoke",
+				validate: (value) =>
+					typeof value?.note === "string"
+						? { value: { note: value.note, at: new Date(0) } }
+						: {
+								issues: [{ message: "note must be a string", path: ["note"] }],
+							},
+			},
+		},
+		schemaVersion: 2,
+	});
+	const noted = createDomainEvent(OrderNoted, { note: "edge", ignored: true });
+	assert(
+		noted.schemaVersion === 2 &&
+			noted.payload.note === "edge" &&
+			!("ignored" in noted.payload) &&
+			Object.isFrozen(noted.payload) &&
+			Object.isFrozen(noted.payload.at),
+		"the defined event lost its schema output or its freeze",
+	);
+	await events.append(stream, [noted], { expectedVersion: 3 });
 
 	const bus = new CommandBus();
 	bus.register("ReadOrder", async () => ok(orderView));

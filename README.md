@@ -126,7 +126,8 @@ aggregate as persisted after the transaction commits.
 - exact Money helpers in `@shirudo/ddd-kit/money` (experimental)
 - child entities with branded identity
 - state-stored and event-sourced aggregate roots
-- domain events with metadata, schema version, and commit stamps
+- domain events with metadata, schema version, and commit stamps, and
+  optional event definitions with a Standard Schema (zod, valibot, arktype)
 - a domain state machine for named lifecycle states in
   `@shirudo/ddd-kit/state-machine` (experimental)
 

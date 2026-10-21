@@ -345,6 +345,16 @@ immutable. Run one kit version per process during a cutover.
 
 #### Aggregates and events
 
+- `defineDomainEvent(type, { payload, schemaVersion })` pairs an event type
+  with a Standard Schema, for example a zod, valibot, or arktype schema, and
+  `DomainEventOf<typeof definition>` names its event. `createEvent`,
+  `createDomainEvent`, `DomainEventFactory.create`, and
+  `createStampedDomainEvent` take a definition in place of the type. The
+  schema output is the payload, in place of the deep check: it must be plain
+  data, and the kit copies and freezes it. A failed schema throws
+  `DomainEventValidationError` with the code `EVENT_PAYLOAD_INVALID` and the
+  issues; a schema that returns a Promise throws `EVENT_PAYLOAD_SCHEMA_ASYNC`.
+  The kit copies the Standard Schema types and adds no dependency.
 - The root entry exports the types `Fold` and `CreateEventOptions`. A
   `Fold<State, Event>` takes the event type and fits an entry of
   `EventSourcedAggregate.folds`. `CreateEventOptions` holds what
