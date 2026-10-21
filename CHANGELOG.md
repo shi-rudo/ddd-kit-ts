@@ -235,8 +235,12 @@ immutable. Run one kit version per process during a cutover.
 - The `deepOmit` types `Key` and `PathSegment` are `DeepOmitKey` and
   `DeepOmitPathSegment`. `computeBackoffDelay` is no longer exported.
 - `engines.node` is `>=22`. Node 20 reached its end of life on 2026-04-30.
-- The peer `@shirudo/base-error` is `^8.3.0`. Before 8.1.0, `redactAllow`
-  does not mask the fields that a kit error adds to its log object.
+- The peer `@shirudo/base-error` is `^9.0.0`. base-error 9 removes
+  `buildLogObject()`: the kit errors contribute their declared fields
+  through `buildOwnLogFields()`, and a subclass of `DomainError` or
+  `InfrastructureError` that overrode `buildLogObject` moves to
+  `buildOwnLogFields`. A `null` cause ends every cause-chain walk. See the
+  migration notes of `@shirudo/base-error` 9.
 - The repository contract suites are the v3 suites under the same names.
   Their failure messages start with "Contract violated:" and "Contract test
   skipped:".

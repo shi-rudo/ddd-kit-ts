@@ -1091,7 +1091,7 @@ default `Record<string, unknown>` map.
 | type `PathSegment` of `deepOmit` | `DeepOmitPathSegment` |
 | `computeBackoffDelay` | not exported; the retry behavior is unchanged |
 | `engines.node` `>=20` | `>=22` |
-| peer `@shirudo/base-error` `^7.1.1` | `^8.3.0` |
+| peer `@shirudo/base-error` `^7.1.1` | `^9.0.0` |
 | `import { DomainStateMachine } from "@shirudo/ddd-kit"` | `import { DomainStateMachine } from "@shirudo/ddd-kit/state-machine"` |
 | `deepEqualExcept` | not exported; use `valueObjectEqualsExcept` |
 | `freezeShallow` | not exported |
@@ -1099,10 +1099,31 @@ default `Record<string, unknown>` map.
 
 The `utils` entry point duplicated the root, so only the import path
 changes. `@shirudo/ddd-kit/money` is a new entry point. Node 20 reached its
-end of life on 2026-04-30. `@shirudo/base-error` before 8.1.0 does not mask
-the fields that a kit error adds when you log it with `redactAllow`. Follow
-the migration notes of `@shirudo/base-error` 8 where you use its API
-directly.
+end of life on 2026-04-30.
+
+`@shirudo/base-error` 9 removes `buildLogObject()`. The kit errors
+contribute their declared fields through `buildOwnLogFields()`. A subclass
+of `DomainError` or `InfrastructureError` that overrides `buildLogObject`
+moves its fields there:
+
+```ts
+// before
+protected override buildLogObject(): Record<string, unknown> {
+  return { ...super.buildLogObject(), orderId: this.orderId };
+}
+
+// after
+protected override buildOwnLogFields(): Record<string, unknown> {
+  return { ...super.buildOwnLogFields(), orderId: this.orderId };
+}
+```
+
+base-error writes the envelope itself (`name`, `message`, `code`,
+`category`, `retryable`, `timestamp`, `cause`, and the others) and drops
+those keys from own log fields. A `null` cause now ends every cause-chain
+walk, so `getRootCause` and `someChainRetryable` treat `cause: null` like a
+missing cause. Follow the migration notes of `@shirudo/base-error` 8 and 9
+where you use its API directly.
 
 ### Names
 
@@ -1524,3 +1545,11 @@ The root entry no longer exports `capturePersistenceBaseline`,
   `withCommit` callback appends before its registration.
 - The repository contract suites accept a harness that records unstamped
   events. They read the registered batch after `add`, inside the run.
+
+**rc.16.**
+
+- The peer `@shirudo/base-error` is `^9.0.0`. A subclass of `DomainError` or
+  `InfrastructureError` that overrides `buildLogObject` moves its fields to
+  `buildOwnLogFields`; see [Entry points and
+  platform](#entry-points-and-platform). A `null` cause now ends every
+  cause-chain walk.
