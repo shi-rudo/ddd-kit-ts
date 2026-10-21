@@ -145,7 +145,41 @@ const ERROR_INTRINSIC_NAMES = [
 	"AggregateError",
 ] as const;
 
+// The intrinsic prototypes of this realm, each confirmed once by the
+// source-text check. An identity match proves the intrinsic, so the hot paths
+// skip the descriptor and source reads for the objects of this realm.
+const localIntrinsicPrototypes: ReadonlyMap<object, string> = new Map(
+	INTRINSIC_CONSTRUCTOR_NAMES.flatMap((name) => {
+		const intrinsic = Object.getOwnPropertyDescriptor(globalThis, name)?.value;
+		if (typeof intrinsic !== "function") return [];
+		const prototype = Object.getOwnPropertyDescriptor(intrinsic, "prototype")
+			?.value as unknown;
+		return typeof prototype === "object" &&
+			prototype !== null &&
+			isIntrinsicConstructorPrototypeBySource(prototype, name)
+			? [[prototype, name] as const]
+			: [];
+	}),
+);
+
 export function isIntrinsicConstructorPrototype(
+	prototype: object,
+	expectedName?: string,
+): boolean {
+	const localName = localIntrinsicPrototypes.get(prototype);
+	if (localName !== undefined) {
+		return expectedName === undefined || localName === expectedName;
+	}
+	return isIntrinsicConstructorPrototypeBySource(prototype, expectedName);
+}
+
+/**
+ * The realm-independent check: the constructor of `prototype` is a native
+ * function with the source text and the name of an intrinsic, and its
+ * `prototype` is `prototype`. A prototype from another realm, such as a
+ * structured clone on Vercel Edge, needs it.
+ */
+function isIntrinsicConstructorPrototypeBySource(
 	prototype: object,
 	expectedName?: string,
 ): boolean {
@@ -214,8 +248,13 @@ export function hasIntrinsicPrototypeChain(
 	value: object,
 	expectedName?: string,
 ): boolean {
-	const visited = new WeakSet<object>();
 	let prototype = Object.getPrototypeOf(value);
+	const localName =
+		prototype === null ? undefined : localIntrinsicPrototypes.get(prototype);
+	if (localName !== undefined) {
+		return expectedName === undefined || localName === expectedName;
+	}
+	const visited = new WeakSet<object>();
 
 	while (prototype !== null && !visited.has(prototype)) {
 		visited.add(prototype);
@@ -278,11 +317,17 @@ export function findPropertyDescriptor(
 	value: object,
 	key: PropertyKey,
 ): PropertyDescriptor | undefined {
-	const visited = new WeakSet<object>();
+	// An ordinary prototype chain has no cycle, and a short one needs no
+	// guard. Only a chain deeper than any real one, which a Proxy trap can
+	// fake, pays for the cycle check.
+	let visited: WeakSet<object> | undefined;
 	let current: object | null = value;
-
-	while (current !== null && !visited.has(current)) {
-		visited.add(current);
+	for (let depth = 0; current !== null; depth += 1) {
+		if (depth >= UNGUARDED_PROTOTYPE_DEPTH) {
+			visited ??= new WeakSet<object>();
+			if (visited.has(current)) return undefined;
+			visited.add(current);
+		}
 		const descriptor = Object.getOwnPropertyDescriptor(current, key);
 		if (descriptor !== undefined) return descriptor;
 		current = Object.getPrototypeOf(current);
@@ -290,6 +335,8 @@ export function findPropertyDescriptor(
 
 	return undefined;
 }
+
+const UNGUARDED_PROTOTYPE_DEPTH = 32;
 
 export function builtInTagWithoutInvokingAccessors(
 	value: object,
