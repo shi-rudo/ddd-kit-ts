@@ -2,8 +2,8 @@ import { performance } from "node:perf_hooks";
 import process from "node:process";
 import {
 	createDomainEventFactory,
-	createUncommittedDomainEvent,
-	recordDomainEvent,
+	createStampedDomainEvent,
+	defineDomainEvent,
 } from "../dist/index.js";
 
 if (typeof global.gc !== "function") {
@@ -65,26 +65,44 @@ function nestedRecord(depth) {
 	return value;
 }
 
-function recordWithFactory(payload, metadata) {
-	const decision = createUncommittedDomainEvent("BenchmarkEvent", payload, {
-		aggregateId: "aggregate-1",
-		aggregateType: "BenchmarkAggregate",
-		schemaVersion: 2,
-	});
-	return recordDomainEvent(decision, factory.createStamp({ metadata }));
-}
+const source = {
+	aggregateId: "aggregate-1",
+	aggregateType: "BenchmarkAggregate",
+};
 
-function recordWithHandBuiltStamp(payload, metadata) {
-	const decision = createUncommittedDomainEvent("BenchmarkEvent", payload, {
-		aggregateId: "aggregate-1",
-		aggregateType: "BenchmarkAggregate",
+// A schema that returns its input measures the kit's own share of a defined
+// event: the plain-data check of the output, the copy, and the freeze.
+const passThrough = defineDomainEvent("BenchmarkEvent", {
+	payload: {
+		"~standard": {
+			version: 1,
+			vendor: "benchmark",
+			validate: (value) => ({ value }),
+		},
+	},
+	schemaVersion: 2,
+});
+
+function createWithFactory(payload, metadata) {
+	return factory.create("BenchmarkEvent", payload, {
+		...source,
 		schemaVersion: 2,
-	});
-	return recordDomainEvent(decision, {
-		eventId: `event-${++eventSequence}`,
-		occurredAt: fixedTime,
 		metadata,
 	});
+}
+
+function createWithExplicitFacts(payload, metadata) {
+	return createStampedDomainEvent("BenchmarkEvent", payload, {
+		...source,
+		eventId: `event-${++eventSequence}`,
+		occurredAt: fixedTime,
+		schemaVersion: 2,
+		metadata,
+	});
+}
+
+function createFromDefinition(payload, metadata) {
+	return factory.create(passThrough, payload, { ...source, metadata });
 }
 
 function measure(name, iterations, operation, payload, metadata) {
@@ -122,24 +140,21 @@ function measure(name, iterations, operation, payload, metadata) {
 
 const results = [];
 for (const scenario of scenarios) {
-	results.push(
-		measure(
-			`${scenario.name}/factory-stamp`,
-			scenario.iterations,
-			recordWithFactory,
-			scenario.payload,
-			scenario.metadata,
-		),
-	);
-	results.push(
-		measure(
-			`${scenario.name}/hand-built-stamp`,
-			scenario.iterations,
-			recordWithHandBuiltStamp,
-			scenario.payload,
-			scenario.metadata,
-		),
-	);
+	for (const [variant, operation] of [
+		["factory", createWithFactory],
+		["explicit-facts", createWithExplicitFacts],
+		["definition-pass-through", createFromDefinition],
+	]) {
+		results.push(
+			measure(
+				`${scenario.name}/${variant}`,
+				scenario.iterations,
+				operation,
+				scenario.payload,
+				scenario.metadata,
+			),
+		);
+	}
 }
 
 console.log(
@@ -149,7 +164,7 @@ console.log(
 			platform: `${process.platform}/${process.arch}`,
 			metricNotes: {
 				operationsPerSecond:
-					"Warm process throughput for decision creation plus recording",
+					"Warm process throughput for one stamped event: the payload and the metadata checked, copied, and frozen, plus the stamp",
 				retainedBytesPerEvent:
 					"Heap delta after forced GC while retaining every final event; transient allocations are reflected in throughput, not this number",
 			},
