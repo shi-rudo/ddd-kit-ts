@@ -1,6 +1,14 @@
 {
 	"$schema": "https://typedoc.org/schema.json",
-	"entryPoints": ["src/index.ts"],
+	"entryPoints": [
+		"src/index.ts",
+		"src/testing/index.ts",
+		"src/presentation/http/problem-details.ts",
+		"src/presentation/errors/index.ts",
+		"src/domain/state-machine/index.ts",
+		"src/domain/value-object/money/index.ts"
+	],
+	"sortEntryPoints": false,
 	"out": "docs/api",
 	"plugin": ["typedoc-plugin-markdown", "typedoc-vitepress-theme"],
 	"readme": "none",

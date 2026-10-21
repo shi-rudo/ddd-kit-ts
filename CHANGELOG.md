@@ -440,6 +440,9 @@ immutable. Run one kit version per process during a cutover.
 
 - The docs build fails when a public signature names a type that no entry
   exports. typedoc treats its validation warnings as errors.
+- The API docs cover every entry point: `@shirudo/ddd-kit`, `/testing`,
+  `/http`, `/public-errors`, `/state-machine`, and `/money`. Each entry is
+  one module, named by its import path.
 - `STABILITY.md` states the stability policy from 3.0.0: what the stable API
   is, what counts as a breaking change, the deprecation rule, the runtime
   support, and that only the newest major version gets releases.
