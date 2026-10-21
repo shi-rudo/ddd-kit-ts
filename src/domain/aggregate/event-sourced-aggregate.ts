@@ -26,7 +26,11 @@ import {
 } from "./base-aggregate";
 import { requirePendingEventLifecycleReadView } from "./pending-event-lifecycle";
 
-type Fold<TState, TEvent> = (state: TState, event: TEvent) => TState;
+/**
+ * Folds one event into the state of an event-sourced aggregate and returns
+ * the next state. Each entry of `EventSourcedAggregate.folds` is a fold.
+ */
+export type Fold<TState, TEvent> = (state: TState, event: TEvent) => TState;
 
 /**
  * Base class for Event-Sourced Aggregate Roots (Vernon, IDDD Chapter 8).

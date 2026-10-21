@@ -2,16 +2,20 @@ import { describe, expect, it } from "vite-plus/test";
 import type {
 	Aggregate,
 	AggregatePersistence,
+	CommandTypeMap,
+	CreateUnstampedDomainEventOptions,
 	DeadlineProcessorObservers,
 	DeliveryFailureAssessment,
 	DeliveryFailureClassifier,
 	DomainErrorClass,
 	DurableCommandMessage,
+	Fold,
 	ICommandBus,
 	Id,
 	IntegrationMessageRelationships,
 	IQueryBus,
 	OutboxDispatcherObservers,
+	QueryTypeMap,
 	Repository,
 	RepositoryTracking,
 	StateValidator,
@@ -58,6 +62,28 @@ const fakeQueryBus: IQueryBus = {
 };
 void fakeCommandBus;
 void fakeQueryBus;
+
+// A public signature names each of these types, so a consumer can name it
+// too: a generic helper over a typed bus, a fold written as a function, and
+// a helper that forwards the options of createEvent.
+function typedCommandBus<TMap extends CommandTypeMap>(
+	bus: ICommandBus<TMap>,
+): ICommandBus<TMap> {
+	return bus;
+}
+function typedQueryBus<TMap extends QueryTypeMap>(
+	bus: IQueryBus<TMap>,
+): IQueryBus<TMap> {
+	return bus;
+}
+const countConfirmed: Fold<number, { readonly type: "OrderConfirmed" }> = (
+	confirmed,
+) => confirmed + 1;
+const secondSchema: CreateUnstampedDomainEventOptions = { schemaVersion: 2 };
+void typedCommandBus;
+void typedQueryBus;
+void countConfirmed;
+void secondSchema;
 
 const publicStateValidator: StateValidator<{ value: number }> = (state) => {
 	void state.value;

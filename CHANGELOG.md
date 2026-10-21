@@ -342,6 +342,10 @@ immutable. Run one kit version per process during a cutover.
 
 #### Aggregates and events
 
+- The root entry exports the types `Fold`, one entry of
+  `EventSourcedAggregate.folds`, and `CreateUnstampedDomainEventOptions`, the
+  options of `createEvent`. Public signatures used both, but a consumer could
+  not name them.
 - `createDomainEventFactory({ eventIdFactory, clock, source })` and the frozen
   `defaultDomainEventFactory`. `eventStampFactory` and `stampOptions` let the
   commit stamp the pending events. `stampPendingEvents` accepts shared stamp
@@ -394,6 +398,9 @@ immutable. Run one kit version per process during a cutover.
 
 #### Application
 
+- The root entry exports the types `CommandTypeMap` and `QueryTypeMap`, the
+  constraints of the bus type maps, so a generic helper over a typed bus can
+  name them. Declare a map with `type`, not `interface`.
 - Command idempotency: the `IdempotencyStore` port, `withIdempotentCommit`,
   `InMemoryIdempotencyStore`, leased claims with reconciliation, and
   `createIdempotencyStoreContractTests`.

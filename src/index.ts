@@ -16,6 +16,7 @@ export type {
 export {
 	CommandBus,
 	type CommandBusOptions,
+	type CommandTypeMap,
 	type ICommandBus,
 } from "./application/cqrs/command/command-bus";
 export {
@@ -42,6 +43,7 @@ export {
 	type IQueryBus,
 	QueryBus,
 	type QueryBusOptions,
+	type QueryTypeMap,
 } from "./application/cqrs/query/query-bus";
 export {
 	InMemoryDeadlineStore,
@@ -170,6 +172,7 @@ export type { AggregateIdentity } from "./domain/aggregate/aggregate-identity";
 export type { AggregateConfig } from "./domain/aggregate/base-aggregate";
 export {
 	EventSourcedAggregate,
+	type Fold,
 	reconstituteAggregateFromHistory,
 } from "./domain/aggregate/event-sourced-aggregate";
 export { StateStoredAggregate } from "./domain/aggregate/state-stored-aggregate";
@@ -196,6 +199,7 @@ export {
 	type CreateDomainEventOptions,
 	type CreateDomainEventStampOptions,
 	type CreateStampedDomainEventOptions,
+	type CreateUnstampedDomainEventOptions,
 	copyMetadata,
 	createDomainEvent,
 	createDomainEventFactory,

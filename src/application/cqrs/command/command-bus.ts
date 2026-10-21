@@ -23,7 +23,9 @@ type StoredCommandHandler<E> = (cmd: Command) => Promise<Result<unknown, E>>;
 
 /**
  * Type map for command types to their return types.
- * Used to improve type inference in CommandBus.
+ * Used to improve type inference in CommandBus. Declare a map with `type`,
+ * not `interface`: an interface has no index signature, so it does not
+ * satisfy this constraint.
  *
  * @example
  * ```typescript
@@ -37,7 +39,7 @@ type StoredCommandHandler<E> = (cmd: Command) => Promise<Result<unknown, E>>;
  * // result: Result<OrderId, string>  ← automatically inferred
  * ```
  */
-type CommandTypeMap = Record<string, unknown>;
+export type CommandTypeMap = Record<string, unknown>;
 
 /**
  * Construction options for {@link CommandBus}.
