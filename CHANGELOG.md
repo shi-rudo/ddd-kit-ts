@@ -379,7 +379,7 @@ immutable. Run one kit version per process during a cutover.
 - `AggregateConfig.maxPendingEvents` limits the pending list with
   `PendingEventLimitExceededError`. `DuplicateEventIdError` and
   `ReentrantEventRecordingError` protect the recording.
-- `EntityConfig.trustInitialState`, `copyPlainState`, `toVersion`, and
+- `EntityConfig.trustInitialState`, `copyPlainData`, `toVersion`, and
   `reconstituteAggregateFromHistory`.
 - `DomainEventValidationError` and `SnapshotTimeValidationError` carry a
   `code` and a `field`.
@@ -519,25 +519,6 @@ immutable. Run one kit version per process during a cutover.
   `registerRemoved` to `withCommit`. Before, it dropped `expectedVersion`, so
   a second registration of the same aggregate with a contradicting OCC
   baseline passed without an error.
-- `copyPlainState` and `InMemoryEventStore.append` check the copy with a second
-  walk. Before, a `Map`, a `Set`, an `ArrayBuffer`, a `SharedArrayBuffer`, or
-  a boxed bigint whose prototype was replaced passed the walk as a record,
-  and the walk did not see its content. The copy then kept an `Error`, a
-  class instance, or shared memory, and it lost the own properties of the
-  built-in without an error. A Proxy trap could also swap a value in after
-  the walk. The second walk now also follows the steps of the first walk: the
-  kind of each object and the key of each data property, in walk order. A
-  copy that differs throws, with the path. In rc.11, the walks compared only
-  the number of data properties, and the content of the built-in could
-  balance that number.
-- `copyPlainState` and `InMemoryEventStore.append` reject every expando on a
-  built-in that the copy would drop. This includes an index key and a
-  non-enumerable data property or accessor. Before, the copy lost such a key
-  without an error, for example `0` on a `Map` or a key after the last
-  character of a boxed `String`. The elements of a typed array and the
-  characters of a boxed `String` still pass. So do the `lastIndex` of a
-  `RegExp` and the mutator shadows that a deep freeze puts on a `Date`, a
-  `Map`, or a `Set`.
 - `InMemoryIdempotencyStore` reads its clock before its state, and `claim`
   asks the token factory before its final checks. A clock or a factory that
   changes the store can no longer push it past `maxEntries`, replace a live
@@ -554,13 +535,11 @@ immutable. Run one kit version per process during a cutover.
   not a string, or a position that is not a valid commit position. The message
   names the event, the field, and the value. Before, such a candidate could
   reach the outbox state, and a `NaN` position broke the order of its source.
-- `copyPlainState` and the other plain-data checks of the kit accept a
-  structured clone in the Vercel Edge runtime. That runtime replaces the
-  global `Object`, so its source text no longer names `Object`, while a
-  clone keeps the constructor of the host. Before, the checks took every
-  cloned plain object for a class instance, and a snapshot restore from
-  `InMemorySnapshotStore` failed there. The edge smoke now checks a clone
-  and an event-store append.
+- The plain-data copy of the kit accepts a structured clone in the Vercel
+  Edge runtime, whose objects carry the `Object.prototype` of another realm.
+  Before, the checks took every cloned plain object for a class instance, and
+  a snapshot restore from `InMemorySnapshotStore` failed there. The edge
+  smoke now checks a clone and an event-store append.
 - `UnitOfWork.run` also closes the repository facades of an attempt whose
   step after the work failed, for example the outbox write, before a retry
   waits. A leaked write then gets `TransactionClosedError`. Before, it got
@@ -573,12 +552,6 @@ immutable. Run one kit version per process during a cutover.
   batch entry that is not an object, for example `null`, rejects too. Before,
   the store dropped the prototype of a class instance, ran accessors, and
   could keep part of a failed batch.
-- `copyPlainState` walks a Map or a Set with the built-in iteration and reads
-  class names through property descriptors, so no own iterator and no accessor
-  of the state runs. A Proxy still runs its traps, and an accessor that a trap
-  adds can run. Before, an own iterator could hide a class instance from the
-  check. This also covers the plain state of an entity and the snapshot model.
-  An optional second argument names the state in the messages.
 - `UnitOfWork.run` reports a failed rollback as `RollbackError` also when a
   step after the work failed inside the transaction, for example the outbox
   write. Before, it reported a `CommitError` whose cause was the rollback

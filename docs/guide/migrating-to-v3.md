@@ -124,15 +124,15 @@ aggregate no longer compiles. Replace application reads with domain queries
 ```ts
 class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   get plainState(): Readonly<OrderState> {
-    return deepFreeze(copyPlainState(this.state));
+    return deepFreeze(copyPlainData(this.state));
   }
 }
 ```
 
-`copyPlainState` throws when the state carries a class instance, a function, a
-symbol, or another value a structured clone would lose, and names the field
+`copyPlainData` throws when the state carries a class instance, a function, a
+symbol, or another value outside the plain-data rule, and names the field
 path. A state with class-based child entities
-needs an explicit mapper to plain data instead of the clone. See
+needs an explicit mapper to plain data instead of the copy. See
 [Aggregates -> Reading State from Outside](./aggregates.md#reading-state-from-outside).
 
 ### 2. Replace repository contracts
@@ -1542,6 +1542,9 @@ The root entry no longer exports `capturePersistenceBaseline`,
 - `onPollError` of `OutboxDispatcher` can receive the new
   `AcknowledgedRecordPendingError`. It means that `getPending` returned a
   record that the pass already acknowledged.
+- `copyPlainState(state, subject)` is `copyPlainData(value, { subject })`. It
+  copies with one walk under the plain-data rule and no longer uses
+  `structuredClone`. The rule changes of the next items apply to it too.
 - The event constructors copy the payload and the metadata with one walk
   under the plain-data rule (see "One rule for plain data" in the design
   decisions). Three cases that rc.15 accepted now throw: an object as a key

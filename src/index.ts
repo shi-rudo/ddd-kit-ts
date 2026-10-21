@@ -337,7 +337,6 @@ export type {
 	DeliveryFailureKind,
 } from "./internal/delivery-failure";
 export type { StandardSchemaV1 } from "./internal/standard-schema";
-export { copyPlainState } from "./internal/structural/copy-plain-state";
 // Structural equality and copies
 export { deepEqual } from "./internal/structural/deep-equal";
 export {
@@ -346,6 +345,7 @@ export {
 	type DeepOmitPathSegment,
 	deepOmit,
 } from "./internal/structural/deep-omit";
+export { copyPlainData } from "./internal/structural/plain-data";
 // Messaging: commit envelope, bus, outbox, dispatcher
 export type {
 	CommitPosition,

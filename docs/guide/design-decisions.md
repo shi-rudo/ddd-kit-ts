@@ -411,7 +411,7 @@ The structural sharing gives the aggregate a cheap way to decide.
 `Entity.state` is `protected`. A generic public getter cannot safely return a
 live graph. A generic copy destroys the prototypes of class-based child
 entities, so the kit offers no generic reader. Concrete models expose domain
-queries or a plain state. `copyPlainState` builds it from a plain-data
+queries or a plain state. `copyPlainData` builds it from a plain-data
 state and refuses a class instance with its field path; see
 [Aggregates -> Reading State from Outside](./aggregates.md#reading-state-from-outside).
 Persistence adapters define state and snapshot projections outside the
@@ -634,7 +634,7 @@ It ships DDD-specific shapes:
 
 It relies on peer dependencies and the TypeScript ecosystem for general-purpose concerns such as `Result`, structured errors, HTTP frameworks, and database clients.
 
-The root entry also exports a few structural helpers: `deepEqual`, `deepOmit`, `deepFreeze`, and the checked copy of a plain state. They are not general-purpose utilities. They implement the equality, the freeze, and the copy that the value objects, the persistence models, and the snapshot models of the kit rely on, so an adapter can use the same rule as the kit.
+The root entry also exports a few structural helpers: `deepEqual`, `deepOmit`, `deepFreeze`, and `copyPlainData`, the copy under the plain-data rule. They are not general-purpose utilities. They implement the equality, the freeze, and the copy that the value objects, the persistence models, and the snapshot models of the kit rely on, so an adapter can use the same rule as the kit.
 
 Optional capabilities have their own entries, so the root entry stays the core:
 

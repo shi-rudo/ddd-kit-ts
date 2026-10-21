@@ -2,8 +2,11 @@ import { PrototypePollutionError } from "../../errors/kit-errors";
 
 /** Options for {@link copyPlainData}. */
 export interface CopyPlainDataOptions {
-	/** Names the value at the start of every message, for example `createEvent: payload`. */
-	readonly subject: string;
+	/**
+	 * Names the value at the start of every message, for example
+	 * `createEvent: payload`. Default `copyPlainData: value`.
+	 */
+	readonly subject?: string;
 	/**
 	 * Keeps an object by reference instead of copying it. The walk does not
 	 * enter such an object. A value object keeps a nested value object this
@@ -20,9 +23,12 @@ export interface CopyPlainDataOptions {
  * `PrototypePollutionError`. Cycles and shared references survive the copy.
  * The copy holds objects of the local realm only.
  */
-export function copyPlainData<T>(value: T, options: CopyPlainDataOptions): T {
+export function copyPlainData<T>(
+	value: T,
+	options: CopyPlainDataOptions = {},
+): T {
 	const walk: Walk = {
-		subject: options.subject,
+		subject: options.subject ?? "copyPlainData: value",
 		keepByReference: options.keepByReference,
 		copies: new Map(),
 		path: [],
