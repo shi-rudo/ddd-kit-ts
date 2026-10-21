@@ -240,7 +240,7 @@ describe("routeEventsToCommandOutbox", () => {
 		expect(commandOutbox.added).toEqual([]);
 	});
 
-	it("rejects negative zero instead of silently storing it as 0", async () => {
+	it("stores a negative zero from ordinary arithmetic as 0", async () => {
 		const commandOutbox = recordingCommandOutbox<PublishedCommand>();
 		const writer = routeEventsToCommandOutbox(commandOutbox, () => [
 			{
@@ -248,17 +248,15 @@ describe("routeEventsToCommandOutbox", () => {
 				command: {
 					type: "AdjustBalance",
 					version: 1,
-					// JSON.stringify(-0) produces "0"; the exactness contract
-					// must reject the payload instead of mutating it.
-					payload: { delta: -0 },
+					payload: { delta: Math.round(-0.4) },
 				},
 			},
 		]);
 
-		await expect(writer.add([processEventCandidate()])).rejects.toThrow(
-			/negative zero/,
-		);
-		expect(commandOutbox.added).toEqual([]);
+		await writer.add([processEventCandidate()]);
+
+		const payload = commandOutbox.added[0]?.[0]?.messages[0]?.command.payload;
+		expect(Object.is((payload as { delta: number }).delta, 0)).toBe(true);
 	});
 
 	it("rejects a command without an explicit positive schema version", async () => {

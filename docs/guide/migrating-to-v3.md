@@ -1537,6 +1537,8 @@ The root entry no longer exports `capturePersistenceBaseline`,
 - `routeEventsToCommandOutbox` drops an invalid `traceparent` or
   `tracestate` instead of throwing `InvalidCommandMessageError`. A kept
   `tracestate` is stored without empty list-members and their white space.
+- A command message and an integration message store a negative zero as
+  `0`. In rc.15 they threw.
 - On a leased idempotency store, a failure at commit time keeps the staged
   outcome. A retry of the same key rejects with `IdempotencyInFlightError`
   until the lease expires. After that, `reconcileIdempotency` decides. In

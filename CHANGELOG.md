@@ -473,6 +473,9 @@ immutable. Run one kit version per process during a cutover.
 
 ### Fixed
 
+- A command message and an integration message accept negative zero and
+  store it as `0`. Before, `Math.round(-0.4)` or `0 * -5` in a payload threw,
+  although the kit's equality treats `-0` and `0` as equal.
 - `routeEventsToCommandOutbox` drops an invalid trace context and keeps the
   command. Before, a malformed `traceparent` or `tracestate` threw
   `InvalidCommandMessageError` inside the transaction, so an observability
