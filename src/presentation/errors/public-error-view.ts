@@ -44,8 +44,8 @@ export interface PublicErrorViewOptions {
 }
 
 /**
- * Maps a kit error (or any caught value) to a base-error
- * {@link LocalizedPublicError} by delegating to the public-error pipeline:
+ * Maps a kit error (or any caught value) to a `LocalizedPublicError` of
+ * `@shirudo/base-error` by delegating to the public-error pipeline:
  * `project` against a catalog (default {@link createKitPublicErrors}), then
  * `localize` with the catalog's messages. A **transport-neutral**,
  * client-safe representation (`code`, `message`, `locale`, optional
