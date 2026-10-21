@@ -1,16 +1,11 @@
-import {
-	applyCooperativeBrand,
-	hasCooperativeBrand,
-} from "../cooperative-brand";
 import { type BuiltInTag, builtInTypeName } from "./is-built-in";
 
 /**
  * `Object.freeze` does not protect internal slots: a frozen Date still
  * accepts `setTime`, a frozen Map still accepts `set`. A deep freeze
  * therefore shadows these mutators with own throwing functions. The
- * shadows are non-enumerable, so they are invisible to `Object.keys` and
- * spread, and `structuredClone` drops them. A walk that checks a copy
- * accepts them as machinery, not data.
+ * shadows are non-enumerable, so they are invisible to `Object.keys`,
+ * spread, and the plain-data copy.
  */
 const mutatorsByTag: ReadonlyMap<BuiltInTag, readonly string[]> = new Map<
 	BuiltInTag,
@@ -41,11 +36,6 @@ const mutatorsByTag: ReadonlyMap<BuiltInTag, readonly string[]> = new Map<
 	["[object Set]", ["add", "delete", "clear"]],
 ]);
 
-// The brand marks a shadow without its name or its identity: a minifier
-// can rename the function, and a second loaded copy of the kit has its
-// own shadows.
-const mutatorShadowBrand = Symbol.for("@shirudo/ddd-kit/mutator-shadow/v1");
-
 // One shadow per type and mutator for the lifetime of the module: a deep
 // freeze runs for every kit-built event, so a new closure per instance would
 // be allocation churn on a hot path.
@@ -60,7 +50,6 @@ function shadowOf(typeName: string, method: string): () => never {
 				`Cannot call ${method}() on a ${typeName} inside a deeply frozen value`,
 			);
 		};
-		applyCooperativeBrand(shadow, mutatorShadowBrand);
 		Object.freeze(shadow);
 		shadows.set(key, shadow);
 	}
@@ -93,26 +82,4 @@ export function installMutatorShadows(
 		Object.defineProperty(object, method, shadowDescriptor);
 	}
 	return true;
-}
-
-/**
- * Whether the own property `key` of a built-in whose tag is `tag` is a
- * mutator shadow: a locked, non-enumerable function with the cooperative
- * brand of a shadow, under a mutator key of that built-in. The brand
- * catches accidents, not a forgery.
- */
-export function isMutatorShadow(
-	tag: BuiltInTag,
-	key: string,
-	descriptor: PropertyDescriptor,
-): boolean {
-	const shadow = descriptor.value;
-	return (
-		(mutatorsByTag.get(tag)?.includes(key) ?? false) &&
-		typeof shadow === "function" &&
-		descriptor.enumerable === false &&
-		descriptor.writable === false &&
-		descriptor.configurable === false &&
-		hasCooperativeBrand(shadow, mutatorShadowBrand)
-	);
 }

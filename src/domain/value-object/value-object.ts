@@ -2,7 +2,7 @@ import { err, ok, type Result } from "@shirudo/result";
 import { deepEqual } from "../../internal/structural/deep-equal";
 import { deepEqualExcept } from "../../internal/structural/deep-equal-except";
 import type { DeepOmitOptions } from "../../internal/structural/deep-omit";
-import { builtInTagWithoutInvokingAccessors } from "../../internal/structural/is-built-in";
+import { builtInTag } from "../../internal/structural/is-built-in";
 import { copyPlainData } from "../../internal/structural/plain-data";
 import { installMutatorShadows } from "../../internal/structural/shadowed-mutators";
 
@@ -102,7 +102,8 @@ function rejectValueObjectAsInput(input: unknown, entry: string): void {
  * release time are blocked. If the runtime grows a NEW mutator (e.g. the
  * stage-3 `Map.prototype.getOrInsert` upsert proposal), it is not blocked
  * until the list is updated. Treat the mutator blocking as a guard rail,
- * not a security boundary.
+ * not a security boundary. A built-in that the caller froze before cannot
+ * take the shadows, so its mutators keep working.
  *
  * Two kinds of built-in pass through unfrozen. ArrayBuffer views
  * (TypedArrays, DataView): the spec forbids freezing a view with elements,
@@ -114,124 +115,51 @@ function rejectValueObjectAsInput(input: unknown, entry: string): void {
  * RegExp passes through whole: an expando property on it stays open, and
  * the walk does not enter its subtree.
  */
-// Every object whose whole subtree this module sealed: frozen, with every
-// Date, Map, and Set below it carrying the kit's mutator shadows. A later
-// walk stops at such an object, so a state written as `{ ...state, status }`
-// costs the root object, not the whole graph. A built-in frozen by the
-// caller takes no shadows and stays mutable through its prototype (a
-// frozen Date still answers setTime), so the objects that hold it are
-// walked again; their sealed siblings are not. A walk that meets a cycle
-// memoizes nothing, because a subtree's seal then depends on an ancestor
-// still in progress. The shadows are cooperative (see installMutatorShadows): a
-// member added through a prototype call that bypasses them is not seen by
-// a later walk either.
+// Every object that a deep freeze entered. A later walk stops at such an
+// object, so a state written as `{ ...state, status }` costs the root
+// object, not the whole graph. The walk marks an object before it
+// descends, so a cycle ends at the mark.
 const DEEP_FROZEN = new WeakSet<object>();
 
-// Built-ins whose mutator shadows this module installed. They are
-// non-extensible afterwards like a caller-frozen one, and this set is what
-// tells the two apart on the next walk.
-const KIT_SHADOWED = new WeakSet<object>();
-
-interface FreezeWalk {
-	cyclic: boolean;
-	readonly sealed: object[];
-	/** Objects this walk finished, with the seal of their subtree. */
-	readonly done: Map<object, boolean>;
-	/** Objects this walk is still inside of: a repeat visit is a cycle. */
-	readonly inProgress: Set<object>;
-}
-
 export function deepFreeze<T>(obj: T): Readonly<T> {
-	const walk: FreezeWalk = {
-		cyclic: false,
-		sealed: [],
-		done: new Map(),
-		inProgress: new Set(),
-	};
-	freezeDeep(obj, walk);
-	if (!walk.cyclic) {
-		for (const object of walk.sealed) DEEP_FROZEN.add(object);
-	}
+	freezeDeep(obj);
 	return obj as Readonly<T>;
 }
 
-/** Freezes `obj` and its subtree; returns whether the subtree is sealed. */
-function freezeDeep(obj: unknown, walk: FreezeWalk): boolean {
-	if (obj === null || typeof obj !== "object") {
-		return true;
+function freezeDeep(obj: unknown): void {
+	if (obj === null || typeof obj !== "object" || DEEP_FROZEN.has(obj)) {
+		return;
 	}
-	if (DEEP_FROZEN.has(obj)) {
-		return true;
-	}
-	// ArrayBuffer views are atomic: Object.freeze on a typed array with
-	// elements throws per spec, and freezing cannot protect the underlying
-	// buffer anyway, so views are returned as-is (their contents stay
-	// mutable). Mirrors deepEqual, which also treats views atomically.
-	if (ArrayBuffer.isView(obj)) {
-		return true;
-	}
-	// A shared reference (two edges to one object) is finished on the first
-	// visit and answers with its seal; only an object still in progress is
-	// a cycle.
-	const finished = walk.done.get(obj);
-	if (finished !== undefined) {
-		return finished;
-	}
-	if (walk.inProgress.has(obj)) {
-		walk.cyclic = true;
-		return true;
-	}
-
-	// Internal-slot brand probes distinguish genuine built-ins without
-	// invoking toStringTag accessors; spoofed plain objects are frozen
-	// structurally.
-	const builtInTag = builtInTagWithoutInvokingAccessors(obj);
-	// Atomic like a view, and like a view never bookkept: see the deepFreeze
-	// doc.
-	if (builtInTag === "[object RegExp]") {
-		return true;
-	}
-	walk.inProgress.add(obj);
-	let sealed = true;
+	// A view and a RegExp pass through whole; see the deepFreeze doc.
+	if (ArrayBuffer.isView(obj)) return;
+	const tag = builtInTag(obj);
+	if (tag === "[object RegExp]") return;
+	DEEP_FROZEN.add(obj);
 
 	// Date/Map/Set keep internal-slot mutability under Object.freeze:
 	// shadow their mutators and freeze Map/Set contents (entries are not
 	// own keys, so the key walk below would miss them).
-	if (
-		builtInTag === "[object Date]" ||
-		builtInTag === "[object Map]" ||
-		builtInTag === "[object Set]"
-	) {
-		if (builtInTag === "[object Map]") {
-			for (const [key, value] of obj as Map<unknown, unknown>) {
-				if (!freezeDeep(key, walk)) sealed = false;
-				if (!freezeDeep(value, walk)) sealed = false;
-			}
-		} else if (builtInTag === "[object Set]") {
-			for (const member of obj as Set<unknown>) {
-				if (!freezeDeep(member, walk)) sealed = false;
-			}
+	if (tag === "[object Map]") {
+		for (const [key, value] of obj as Map<unknown, unknown>) {
+			freezeDeep(key);
+			freezeDeep(value);
 		}
-		const shadowed =
-			installMutatorShadows(obj, builtInTag) || KIT_SHADOWED.has(obj);
-		if (shadowed) KIT_SHADOWED.add(obj);
-		else sealed = false;
+	} else if (tag === "[object Set]") {
+		for (const member of obj as Set<unknown>) freezeDeep(member);
+	}
+	if (
+		tag === "[object Date]" ||
+		tag === "[object Map]" ||
+		tag === "[object Set]"
+	) {
+		installMutatorShadows(obj, tag);
 	}
 
 	// Reflect.ownKeys returns both string and symbol own keys.
-	const keys = Reflect.ownKeys(obj);
-	for (const key of keys) {
-		const value = (obj as Record<string | symbol, unknown>)[key];
-		if (value !== null && typeof value === "object") {
-			if (!freezeDeep(value, walk)) sealed = false;
-		}
+	for (const key of Reflect.ownKeys(obj)) {
+		freezeDeep((obj as Record<string | symbol, unknown>)[key]);
 	}
-
 	Object.freeze(obj);
-	walk.inProgress.delete(obj);
-	walk.done.set(obj, sealed);
-	if (sealed) walk.sealed.push(obj);
-	return sealed;
 }
 
 /**

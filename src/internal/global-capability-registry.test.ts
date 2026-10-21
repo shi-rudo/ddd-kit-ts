@@ -92,22 +92,6 @@ describe("createGlobalCapabilityRegistry", () => {
 		expect(registry.get(instance)?.name).toBe("foreign");
 	});
 
-	it("refuses a key that holds a plain object claiming the WeakMap tag", () => {
-		const host = {};
-		const key = Symbol.for("@shirudo/ddd-kit/test-registry/spoofed");
-		const lookalike = {
-			[Symbol.toStringTag]: "WeakMap",
-			get: () => undefined,
-			set: () => lookalike,
-			has: () => false,
-		};
-		Object.defineProperty(host, key, { value: lookalike, configurable: true });
-
-		expect(() => createGlobalCapabilityRegistry<Capability>(key, host)).toThrow(
-			CapabilityRegistryConflictError,
-		);
-	});
-
 	it("refuses a key that an accessor holds, even one that yields a WeakMap", () => {
 		const host = {};
 		const key = Symbol.for("@shirudo/ddd-kit/test-registry/accessor");

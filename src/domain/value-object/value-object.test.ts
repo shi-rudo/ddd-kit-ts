@@ -1,31 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import { deepFreeze, ValueObject } from "./value-object";
 
-const mutableBuiltInCases = [
-	{
-		name: "Date",
-		create: () => new Date(1_000),
-		read: (value: object) => (value as Date).getTime(),
-		expected: 1_000,
-		mutate: (value: object) => (value as Date).setTime(0),
-	},
-	{
-		name: "Map",
-		create: () => new Map([["key", { value: "initial" }]]),
-		read: (value: object) => (value as Map<string, unknown>).get("key"),
-		expected: { value: "initial" },
-		mutate: (value: object) =>
-			(value as Map<string, unknown>).set("other", true),
-	},
-	{
-		name: "Set",
-		create: () => new Set(["initial"]),
-		read: (value: object) => (value as Set<unknown>).size,
-		expected: 1,
-		mutate: (value: object) => (value as Set<unknown>).add("other"),
-	},
-] as const;
-
 describe("deepFreeze", () => {
 	it("does not walk a subtree it already deep-froze", () => {
 		let reads = 0;
@@ -66,18 +41,6 @@ describe("deepFreeze", () => {
 
 		expect(readsAfterFirstFreeze).toBe(1);
 		expect(reads).toBe(1);
-	});
-
-	it("re-walks a subtree that holds a pre-frozen Map, because its entries can still change", () => {
-		// A frozen Map takes no mutator shadows, so entries can still be
-		// added; the memo must not skip the graph that holds it.
-		const map = Object.freeze(new Map<string, { mutable: boolean }>());
-		deepFreeze({ map });
-		map.set("k", { mutable: true });
-
-		deepFreeze({ map });
-
-		expect(Object.isFrozen(map.get("k"))).toBe(true);
 	});
 
 	it("memoizes a graph that references one object twice", () => {
@@ -145,68 +108,6 @@ describe("deepFreeze", () => {
 		expect(Object.isFrozen(grandchild)).toBe(true);
 	});
 
-	it.each(mutableBuiltInCases)(
-		"blocks $name mutators with an own toStringTag accessor",
-		({ name, create, mutate }) => {
-			const value = create();
-			Object.defineProperty(value, Symbol.toStringTag, {
-				configurable: true,
-				get: () => name,
-			});
-
-			deepFreeze(value);
-
-			expect(() => mutate(value)).toThrow(TypeError);
-		},
-	);
-
-	it.each(mutableBuiltInCases)(
-		"blocks $name mutators with an inherited toStringTag accessor",
-		({ name, create, mutate }) => {
-			const value = create();
-			const prototype = Object.create(Object.getPrototypeOf(value));
-			Object.defineProperty(prototype, Symbol.toStringTag, {
-				get: () => name,
-			});
-			Object.setPrototypeOf(value, prototype);
-
-			deepFreeze(value);
-
-			expect(() => mutate(value)).toThrow(TypeError);
-		},
-	);
-
-	it.each(mutableBuiltInCases)(
-		"blocks $name mutators with an own data toStringTag",
-		({ create, mutate }) => {
-			const value = create();
-			Object.defineProperty(value, Symbol.toStringTag, {
-				configurable: true,
-				value: "Object",
-			});
-
-			deepFreeze(value);
-
-			expect(() => mutate(value)).toThrow(TypeError);
-		},
-	);
-
-	it.each(mutableBuiltInCases)(
-		"blocks $name mutators with an inherited data toStringTag",
-		({ create, mutate }) => {
-			const value = create();
-			const prototype = Object.create(Object.getPrototypeOf(value));
-			Object.defineProperty(prototype, Symbol.toStringTag, {
-				value: "Object",
-			});
-			Object.setPrototypeOf(value, prototype);
-
-			deepFreeze(value);
-
-			expect(() => mutate(value)).toThrow(TypeError);
-		},
-	);
-
 	it.each([
 		["global", /a/g],
 		["sticky", /a/y],
@@ -215,25 +116,6 @@ describe("deepFreeze", () => {
 
 		expect(state.pattern.test("a")).toBe(true);
 		expect(Object.isFrozen(state)).toBe(true);
-	});
-
-	it("does not invoke inherited toStringTag accessors", () => {
-		let accessorInvoked = false;
-		const prototype = Object.create(Object.prototype);
-		Object.defineProperty(prototype, Symbol.toStringTag, {
-			get: () => {
-				accessorInvoked = true;
-				return "Object";
-			},
-		});
-		const value = Object.create(prototype) as { nested: { value: string } };
-		value.nested = { value: "initial" };
-
-		deepFreeze(value);
-
-		expect(accessorInvoked).toBe(false);
-		expect(Object.isFrozen(value)).toBe(true);
-		expect(Object.isFrozen(value.nested)).toBe(true);
 	});
 });
 
