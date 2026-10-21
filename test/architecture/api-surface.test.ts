@@ -182,6 +182,7 @@ void (undefined as unknown as DomainErrorClass);
  */
 
 const INDEX_SURFACE = [
+	"AcknowledgedRecordPendingError",
 	"AggregateDeletedError",
 	"AggregateNotFoundError",
 	"AggregateTrackingError",

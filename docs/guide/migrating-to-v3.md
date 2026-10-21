@@ -1539,6 +1539,9 @@ The root entry no longer exports `capturePersistenceBaseline`,
   `tracestate` is stored without empty list-members and their white space.
 - A command message and an integration message store a negative zero as
   `0`. In rc.15 they threw.
+- `onPollError` of `OutboxDispatcher` can receive the new
+  `AcknowledgedRecordPendingError`. It means that `getPending` returned a
+  record that the pass already acknowledged.
 - On a leased idempotency store, a failure at commit time keeps the staged
   outcome. A retry of the same key rejects with `IdempotencyInFlightError`
   until the lease expires. After that, `reconcileIdempotency` decides. In

@@ -12,6 +12,7 @@ import type {
 	PublishDepthExceededError,
 } from "../messaging/event-bus/errors";
 import {
+	AcknowledgedRecordPendingError,
 	AggregateDeletedError,
 	type AggregateDeletedErrorOptions,
 	type AggregateIdentityMismatchOptions,
@@ -285,6 +286,12 @@ const concreteCases: ReadonlyArray<{
 		error: () => new UnprojectableEventError("orders", "evt-1", "is invalid"),
 		code: "UNPROJECTABLE_EVENT",
 		category: "WIRING",
+		retryable: false,
+	},
+	{
+		error: () => new AcknowledgedRecordPendingError("evt-1"),
+		code: "ACKNOWLEDGED_RECORD_PENDING",
+		category: "INFRASTRUCTURE",
 		retryable: false,
 	},
 	{
@@ -654,6 +661,7 @@ describe("KitErrorCode stays in sync with the classes", () => {
 		// hand-maintained KitErrorCode union fails compilation here.
 		type AssertKitCode<T extends KitErrorCode> = T;
 		type _Checks = [
+			AssertKitCode<AcknowledgedRecordPendingError["code"]>,
 			AssertKitCode<AggregateDeletedError["code"]>,
 			AssertKitCode<AggregateNotFoundError["code"]>,
 			AssertKitCode<CapabilityRegistryConflictError["code"]>,

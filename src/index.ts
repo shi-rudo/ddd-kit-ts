@@ -248,6 +248,7 @@ export {
 export { valueObjectOrIssues } from "./domain/value-object/value-object-or-issues";
 // Errors
 export {
+	AcknowledgedRecordPendingError,
 	AggregateDeletedError,
 	type AggregateDeletedErrorOptions,
 	type AggregateIdentityMismatchOptions,

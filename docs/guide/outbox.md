@@ -463,6 +463,10 @@ The dispatcher has a narrow contract:
   store.
 - It never rejects from `run()` or `drainOnce()`. Failures go to observers
   and the loop backs off.
+- It ends a pass when `getPending` returns a record that the same pass
+  already acknowledged. `onPollError` then receives
+  `AcknowledgedRecordPendingError`, and the loop backs off. The cause is an
+  acknowledgement that did not take effect, or a read that lags behind it.
 - It does not coordinate multiple process instances. If several dispatchers
   poll the same outbox, your adapter must claim records in `getPending`
   (`FOR UPDATE SKIP LOCKED`, leases, visibility timeouts, or equivalent).

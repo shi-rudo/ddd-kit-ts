@@ -1,4 +1,5 @@
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
+import { AcknowledgedRecordPendingError } from "../../errors/kit-errors";
 import {
 	DEFAULT_EXECUTION_TIMEOUT_MS,
 	type ExecutionContext,
@@ -358,6 +359,7 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 	 * tracking outbox); the next cycle retries it.
 	 */
 	protected async pass(signal?: AbortSignal): Promise<"drained" | "stopped"> {
+		const acknowledged = new Set<string>();
 		while (!signal?.aborted) {
 			let batch: ReadonlyArray<OutboxRecord<Evt>>;
 			try {
@@ -380,7 +382,19 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 				this.consecutiveFailures = 0;
 				return "drained";
 			}
-			const completed = await this.dispatchBatch(batch, signal);
+			const repeated = batch.find((record) =>
+				acknowledged.has(record.dispatchId),
+			);
+			if (repeated !== undefined) {
+				this.consecutiveFailures += 1;
+				reportToObserver(() =>
+					this.observers.onPollError(
+						new AcknowledgedRecordPendingError(repeated.dispatchId),
+					),
+				);
+				return "stopped";
+			}
+			const completed = await this.dispatchBatch(batch, acknowledged, signal);
 			if (!completed) return "stopped";
 		}
 		return "stopped";
@@ -388,12 +402,14 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 
 	/**
 	 * Dispatches one batch sequentially and acks the delivered prefix in
-	 * a single `markDispatched` call. Returns `true` when every record
-	 * was delivered and acked, `false` when the pass stopped early
-	 * (publish failure, ack failure, or abort).
+	 * a single `markDispatched` call, and adds the acked ids to
+	 * `acknowledged`. Returns `true` when every record was delivered and
+	 * acked, `false` when the pass stopped early (publish failure, ack
+	 * failure, or abort).
 	 */
 	private async dispatchBatch(
 		batch: ReadonlyArray<OutboxRecord<Evt>>,
+		acknowledged: Set<string>,
 		signal?: AbortSignal,
 	): Promise<boolean> {
 		const delivered: string[] = [];
@@ -442,6 +458,7 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 					},
 					(context) => this.outbox.markDispatched(delivered, context),
 				);
+				for (const dispatchId of delivered) acknowledged.add(dispatchId);
 				this.consecutiveFailures = 0;
 			} catch (error) {
 				// The events WERE delivered; a failed ack means they will
