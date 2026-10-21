@@ -211,6 +211,42 @@ the payload. The application can use the same instant for both roles. It then
 supplies the value as business input and as the stamp time. This
 equality becomes an explicit decision instead of an effect of a hidden clock.
 
+### A schema can own the payload of an event
+
+Every event payload is plain, structured-cloneable data, and the kit freezes
+it. Without a definition, the constructors check every object of the payload
+before and after they copy it. The check found a new special case in each
+review round: index expandos, non-enumerable properties, mutator shadows,
+`Proxy` traps. It is also the largest part of the cost of an event.
+
+No established event-sourcing library checks payloads deeply at creation.
+Axon, EventSauce, Rails Event Store, Marten, Eventuous, Emmett, and Castore
+leave the payload to convention and types. They enforce the data boundary
+with the serializer on append, and they upcast on read. Where a library
+validates a payload, a schema that belongs to the event type does it, for
+example in the Effect event log or in Castore event types.
+
+So an event can have a definition: `defineDomainEvent` pairs the type with a
+[Standard Schema](https://standardschema.dev) and the schema version. For a
+defined event, the schema output is the payload, and the deep check does not
+run. The kit still checks that the output is plain data, because a schema
+does not promise that: `z.date()`, `z.any()`, and `z.custom()` pass the
+caller's objects through, and arktype returns the input object itself. Then
+the kit copies the output with `structuredClone` and freezes the copy.
+
+The kit copies the Standard Schema types instead of depending on
+`@standard-schema/spec`, as zod and arktype do. A schema must validate
+synchronously, because an event is created synchronously.
+
+The measurement of 2026-10-21 (Node 24, built kit, zod, median per event):
+a defined event costs 17.9 µs for a payload with three lines and 65 µs for
+twenty lines, against 31 µs and 143 µs with the deep check. Most of the rest
+is shared by both paths: the freeze of the copy and the default stamp.
+
+Events without a definition keep the deep check. Moving the boundary to the
+serializer on append, as the other libraries do, would give up the frozen,
+plain events that in-process subscribers receive today.
+
 ## Private process facts do not double as participant commands
 
 An event-sourced Process Manager needs durable history and durable outgoing
