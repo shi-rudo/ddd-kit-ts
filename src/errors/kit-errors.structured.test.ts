@@ -537,6 +537,32 @@ describe("the no-base-error consumer path is first-class", () => {
 });
 
 describe("a serialized kit error keeps the fields it declares", () => {
+	it("contributes only its declared fields to a subclass that composes its own log fields", () => {
+		class TaggedOrderError extends DomainError<"TAGGED_ORDER"> {
+			readonly orderId = "order-1";
+
+			constructor() {
+				super({ code: "TAGGED_ORDER", message: "tagged" });
+			}
+
+			protected override buildOwnLogFields(): Record<string, unknown> {
+				return { ...super.buildOwnLogFields(), tag: "probe" };
+			}
+
+			ownLogFields(): Record<string, unknown> {
+				return this.buildOwnLogFields();
+			}
+		}
+
+		const error = new TaggedOrderError();
+
+		expect(error.ownLogFields()).toEqual({ orderId: "order-1", tag: "probe" });
+		expect(error.toLogObject()).toMatchObject({
+			orderId: "order-1",
+			tag: "probe",
+		});
+	});
+
 	it("carries the fields of an infrastructure error", () => {
 		const error = new ConcurrencyConflictError({
 			reason: "stale_version",

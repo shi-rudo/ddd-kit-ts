@@ -57,8 +57,10 @@ export type ValidationProblemResult<
  * Details result by delegating to base-error's `toProblem` transport stage:
  * one pipeline, one wire profile, one hardening implementation. The body
  * carries the error's public `code`, and the whitelisted issues ride under
- * `details.issues` (`{ message, path, code?, pointer? }`, never raw
- * validator extras), the same shape `toPublicErrorView` uses.
+ * `details.issues` (`{ path?, pointer?, code? }`, never raw validator
+ * extras), the same shape `toPublicErrorView` uses. The message of an issue
+ * stays off the wire, because a validator's default message can embed the
+ * rejected value.
  *
  * All of `toProblem`'s wire-safety guarantees apply: the body is deeply
  * frozen with a null prototype (cannot carry or receive prototype
@@ -87,7 +89,7 @@ export type ValidationProblemResult<
  * }
  * // body → { type: "about:blank", title: "Validation Failed", status: 422,
  * //          code: "VALIDATION_FAILED",
- * //          details: { issues: [{ message: "must be a valid email", ... }] } }
+ * //          details: { issues: [{ path: ["email"], pointer: "email" }] } }
  * ```
  */
 export function toProblemDetails<

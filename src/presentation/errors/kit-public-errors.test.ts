@@ -82,7 +82,7 @@ describe("createKitPublicErrors catalog", () => {
 		expect(view.retryable).toBe(true);
 	});
 
-	it("projects a ValidationError with sanitized issues under details", () => {
+	it("projects a ValidationError with sanitized issues without their messages under details", () => {
 		const error = new ValidationError("invalid").addIssues([
 			{ message: "must be a valid email", path: ["email"] },
 		]);
@@ -90,9 +90,9 @@ describe("createKitPublicErrors catalog", () => {
 		const view = project(kitPublicErrors, error);
 
 		expect(view.code).toBe("VALIDATION_FAILED");
-		const details = view.details as { issues: Array<{ message: string }> };
-		expect(details.issues).toHaveLength(1);
-		expect(details.issues[0]?.message).toBe("must be a valid email");
+		expect(view.details).toEqual({
+			issues: [{ path: ["email"], pointer: "email" }],
+		});
 	});
 
 	it("degrades unknown errors to the INTERNAL_ERROR fallback", () => {

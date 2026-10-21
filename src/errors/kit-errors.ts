@@ -35,8 +35,23 @@ export interface KitErrorOptions<TCode extends string> {
 	retryable?: boolean;
 }
 
-/** The keys `StructuredError` owns, which a declared field never replaces. */
-const ENVELOPE_FIELDS: ReadonlySet<string> = new Set(["_tag", "details"]);
+/**
+ * The keys that base-error writes into the log envelope itself. It drops
+ * them from own log fields, so a kit error does not return them there.
+ */
+const ENVELOPE_FIELDS: ReadonlySet<string> = new Set([
+	"_tag",
+	"name",
+	"message",
+	"stack",
+	"code",
+	"category",
+	"retryable",
+	"timestamp",
+	"timestampIso",
+	"cause",
+	"details",
+]);
 
 /**
  * The fields a kit error declares of its own, for the raw log object.
@@ -142,8 +157,8 @@ export abstract class DomainError<
 	}
 
 	/** Carries the fields the concrete error declares into the log object. */
-	protected override buildLogObject(): Record<string, unknown> {
-		return { ...ownFields(this), ...super.buildLogObject() };
+	protected override buildOwnLogFields(): Record<string, unknown> {
+		return ownFields(this);
 	}
 }
 
@@ -163,8 +178,8 @@ export abstract class KitWiringError<
 	}
 
 	/** Carries the fields the concrete error declares into the log object. */
-	protected override buildLogObject(): Record<string, unknown> {
-		return { ...ownFields(this), ...super.buildLogObject() };
+	protected override buildOwnLogFields(): Record<string, unknown> {
+		return ownFields(this);
 	}
 }
 
@@ -198,8 +213,8 @@ export abstract class InfrastructureError<
 	}
 
 	/** Carries the fields the concrete error declares into the log object. */
-	protected override buildLogObject(): Record<string, unknown> {
-		return { ...ownFields(this), ...super.buildLogObject() };
+	protected override buildOwnLogFields(): Record<string, unknown> {
+		return ownFields(this);
 	}
 }
 

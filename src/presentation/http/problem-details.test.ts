@@ -9,7 +9,7 @@ const invalidRegistration = () =>
 	]);
 
 describe("toProblemDetails()", () => {
-	it("delegates to toProblem: 422 defaults, code member, issues under details", () => {
+	it("delegates to toProblem: 422 defaults, code member, issues without their messages under details", () => {
 		const problem = toProblemDetails(invalidRegistration());
 
 		expect(problem.status).toBe(422);
@@ -17,10 +17,10 @@ describe("toProblemDetails()", () => {
 		expect(problem.body.title).toBe("Validation Failed");
 		expect(problem.body.type).toBe("about:blank");
 		expect(problem.body.code).toBe("VALIDATION_FAILED");
-		expect(problem.body.details?.issues).toHaveLength(2);
-		expect(problem.body.details?.issues[0]?.message).toBe(
-			"must be a valid email",
-		);
+		expect(problem.body.details?.issues).toEqual([
+			{ path: ["email"], pointer: "email" },
+			{ path: ["age"], pointer: "age" },
+		]);
 		expect(problem.headers["content-type"]).toContain(
 			"application/problem+json",
 		);

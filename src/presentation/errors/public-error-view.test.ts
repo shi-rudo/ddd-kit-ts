@@ -42,7 +42,7 @@ describe("toPublicErrorView()", () => {
 		).toContain("already exists");
 	});
 
-	it("carries a ValidationError's whitelisted issues in details", () => {
+	it("carries a ValidationError's whitelisted issues without their messages in details", () => {
 		const error = new ValidationError("Registration is invalid").addIssues([
 			{ message: "must be a valid email", path: ["email"] },
 			{ message: "must not be negative", path: ["age"] },
@@ -51,8 +51,10 @@ describe("toPublicErrorView()", () => {
 		const view = toPublicErrorView(error);
 
 		expect(view.code).toBe("VALIDATION_FAILED");
-		expect(view.details?.issues).toHaveLength(2);
-		expect(view.details?.issues[0]?.message).toBe("must be a valid email");
+		expect(view.details?.issues).toEqual([
+			{ path: ["email"], pointer: "email" },
+			{ path: ["age"], pointer: "age" },
+		]);
 	});
 
 	it("is total over unknown: unmapped and non-kit values degrade to a generic view", () => {
@@ -166,7 +168,7 @@ describe("toPublicErrorView()", () => {
 			expect(view.details).toBeUndefined();
 		});
 
-		it("whitelists issue fields and drops non-conforming entries", () => {
+		it("whitelists issue fields and drops entries and fields that do not conform", () => {
 			// Simulates a genuine ValidationError from a duplicate base-error
 			// install: right name shape AND category, matched structurally.
 			const oversharing = {
@@ -197,8 +199,27 @@ describe("toPublicErrorView()", () => {
 					code: "EMAIL",
 					pointer: "email",
 				},
+				{},
 			]);
 			expect(JSON.stringify(view)).not.toContain("10.0.0.5");
+		});
+
+		it("keeps a null path segment in its place, so the path still names the field", () => {
+			const unkeyed = {
+				name: "VALIDATION_FAILED",
+				category: "VALIDATION",
+				publicIssues: () => [
+					{ path: ["lines", null, "sku"], pointer: "lines.null.sku" },
+					{ path: ["tags", { key: null }] },
+				],
+			};
+
+			const view = toPublicErrorView(unkeyed);
+
+			expect(view.details?.issues).toEqual([
+				{ path: ["lines", null, "sku"], pointer: "lines.null.sku" },
+				{ path: ["tags", { key: null }] },
+			]);
 		});
 
 		it("stays total when name or publicIssues are throwing accessors", () => {

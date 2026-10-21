@@ -52,16 +52,16 @@ function isValidationErrorLike(
  * Re-emits a `publicIssues()` result through the {@link PublicIssue}
  * whitelist so only the documented wire fields (`message`, `path`, `code`,
  * `pointer`) can reach a client: a duck-typed implementation must not be
- * able to smuggle arbitrary payloads into the view. Drops entries without
- * a string `message`.
+ * able to smuggle arbitrary payloads into the view. Each field crosses only
+ * with its documented type, and an entry that is no object is dropped.
  */
 function sanitizePublicIssues(result: unknown[]): readonly PublicIssue[] {
 	const issues: PublicIssue[] = [];
 	for (const entry of result) {
 		if (typeof entry !== "object" || entry === null) continue;
 		const { message, path, code, pointer } = entry as Record<string, unknown>;
-		if (typeof message !== "string") continue;
-		const issue: PublicIssue = { message };
+		const issue: PublicIssue = {};
+		if (typeof message === "string") issue.message = message;
 		const safePath = sanitizeIssuePath(path);
 		if (safePath !== undefined) issue.path = safePath;
 		if (typeof code === "string") issue.code = code;
@@ -71,31 +71,36 @@ function sanitizePublicIssues(result: unknown[]): readonly PublicIssue[] {
 	return issues;
 }
 
-/** Keeps only the documented path segments: property keys or `{ key }`. */
+/**
+ * Keeps only the documented path segments: a property key, `null`, or
+ * `{ key }` with one of them. `null` stands for a key that is no property
+ * key. It keeps its place, so the segments after it still name the field.
+ */
 function sanitizeIssuePath(path: unknown): PublicIssue["path"] | undefined {
 	if (!Array.isArray(path)) return undefined;
-	const segments: Array<PropertyKey | { readonly key: PropertyKey }> = [];
+	const segments: Array<
+		PropertyKey | null | { readonly key: PropertyKey | null }
+	> = [];
 	for (const segment of path) {
-		if (
-			typeof segment === "string" ||
-			typeof segment === "number" ||
-			typeof segment === "symbol"
-		) {
+		if (isPathKey(segment)) {
 			segments.push(segment);
 			continue;
 		}
-		if (typeof segment === "object" && segment !== null) {
+		if (typeof segment === "object") {
 			const { key } = segment as { key?: unknown };
-			if (
-				typeof key === "string" ||
-				typeof key === "number" ||
-				typeof key === "symbol"
-			) {
-				segments.push({ key });
-			}
+			if (isPathKey(key)) segments.push({ key });
 		}
 	}
 	return segments;
+}
+
+function isPathKey(value: unknown): value is PropertyKey | null {
+	return (
+		value === null ||
+		typeof value === "string" ||
+		typeof value === "number" ||
+		typeof value === "symbol"
+	);
 }
 
 /**
