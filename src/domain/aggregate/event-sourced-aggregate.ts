@@ -27,10 +27,16 @@ import {
 import { requirePendingEventLifecycleReadView } from "./pending-event-lifecycle";
 
 /**
- * Folds one event into the state of an event-sourced aggregate and returns
- * the next state. Each entry of `EventSourcedAggregate.folds` is a fold.
+ * Folds one event of type `TEvent` into the state of an event-sourced
+ * aggregate and returns the next state. Each entry of
+ * `EventSourcedAggregate.folds` is a fold. The fold receives the event
+ * without its stamp: a live `apply` folds the event before the commit stamps
+ * it.
  */
-export type Fold<TState, TEvent> = (state: TState, event: TEvent) => TState;
+export type Fold<TState, TEvent extends AnyDomainEvent> = (
+	state: TState,
+	event: UnstampedDomainEventOf<TEvent>,
+) => TState;
 
 /**
  * Base class for Event-Sourced Aggregate Roots (Vernon, IDDD Chapter 8).
@@ -242,10 +248,10 @@ export abstract class EventSourcedAggregate<
 		// "__proto__" (a corrupt or adversarial stream row) would resolve
 		// through Object.prototype and invoke a non-fold.
 		const fold = Object.hasOwn(this.folds, event.type)
-			? (this.folds[event.type as keyof typeof this.folds] as Fold<
-					TState,
-					TEvent | UnstampedDomainEventOf<TEvent>
-				>)
+			? (this.folds[event.type as keyof typeof this.folds] as (
+					state: TState,
+					event: TEvent | UnstampedDomainEventOf<TEvent>,
+				) => TState)
 			: undefined;
 		if (!fold) {
 			throw new MissingFoldError(event.type);
@@ -353,10 +359,7 @@ export abstract class EventSourcedAggregate<
 	 * business decision, pass it in the payload.
 	 */
 	protected abstract readonly folds: {
-		[K in TEvent["type"]]: Fold<
-			TState,
-			UnstampedDomainEventOf<Extract<TEvent, { type: K }>>
-		>;
+		[K in TEvent["type"]]: Fold<TState, Extract<TEvent, { type: K }>>;
 	};
 }
 

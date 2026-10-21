@@ -195,13 +195,17 @@ export type PendingDomainEvent<TEvent extends AnyDomainEvent> =
 	| UnstampedDomainEventOf<TEvent>;
 
 /**
- * Producer-owned options for an unstamped event. `createEvent` in an
- * aggregate takes the `schemaVersion` and fills the aggregate identity itself.
+ * Options of `createEvent` in an aggregate. The aggregate fills its own
+ * identity, so only the schema version of the payload is left.
  */
-export interface CreateUnstampedDomainEventOptions {
+export interface CreateEventOptions {
+	readonly schemaVersion?: number;
+}
+
+/** Producer-owned options for an unstamped event. */
+export interface CreateUnstampedDomainEventOptions extends CreateEventOptions {
 	readonly aggregateId?: string;
 	readonly aggregateType?: string;
-	readonly schemaVersion?: number;
 }
 
 /**

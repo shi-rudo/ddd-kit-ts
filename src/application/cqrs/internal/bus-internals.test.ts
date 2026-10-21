@@ -5,6 +5,9 @@ describe("UntypedMapDispatch", () => {
 	it("allows manual result typing only for the default untyped map", () => {
 		type Message = { readonly type: "Example" };
 		type AnyMap = ReturnType<typeof JSON.parse>;
+		interface InterfaceMap {
+			Example: string;
+		}
 
 		expectTypeOf<
 			UntypedMapDispatch<Record<string, unknown>, Message>
@@ -19,5 +22,8 @@ describe("UntypedMapDispatch", () => {
 			UntypedMapDispatch<Record<string, unknown> & { Example: string }, Message>
 		>().toEqualTypeOf<never>();
 		expectTypeOf<UntypedMapDispatch<AnyMap, Message>>().toEqualTypeOf<never>();
+		expectTypeOf<
+			UntypedMapDispatch<InterfaceMap, Message>
+		>().toEqualTypeOf<never>();
 	});
 });

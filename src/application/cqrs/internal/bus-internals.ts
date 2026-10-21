@@ -33,12 +33,14 @@ export type ExpectedErrorMapper<E> = (
 /**
  * Keeps manual result typing available only for the deliberately untyped
  * default map. Concrete maps, typed or refined index maps, and `any` keep their
- * mapped result contract authoritative.
+ * mapped result contract authoritative. Under the `object` bound, only `any`
+ * satisfies `unknown extends TMap`; the usual `0 extends 1 & TMap` probe
+ * reduces to `never` there and misses `any`.
  */
 export type UntypedMapDispatch<
-	TMap extends Record<string, unknown>,
+	TMap extends object,
 	TMessage,
-> = 0 extends 1 & TMap
+> = unknown extends TMap
 	? never
 	: string extends keyof TMap
 		? Record<string, unknown> extends TMap

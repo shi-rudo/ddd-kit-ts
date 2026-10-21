@@ -16,7 +16,7 @@ import {
 	adoptStampedDomainEvent,
 	adoptUnstampedDomainEvent,
 	buildUnstampedDomainEvent,
-	type CreateUnstampedDomainEventOptions,
+	type CreateEventOptions,
 	isStampedDomainEvent,
 	isUnstampedDomainEvent,
 	type PendingDomainEvent,
@@ -521,10 +521,7 @@ export abstract class BaseAggregate<
 	protected createEvent<E extends TEvent>(
 		type: E["type"],
 		payload: E["payload"],
-		options?: Omit<
-			CreateUnstampedDomainEventOptions,
-			"aggregateId" | "aggregateType"
-		>,
+		options?: CreateEventOptions,
 	): UnstampedDomainEventOf<E> {
 		return buildUnstampedDomainEvent(
 			type,

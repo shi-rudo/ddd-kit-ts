@@ -16,7 +16,6 @@ export type {
 export {
 	CommandBus,
 	type CommandBusOptions,
-	type CommandTypeMap,
 	type ICommandBus,
 } from "./application/cqrs/command/command-bus";
 export {
@@ -43,7 +42,6 @@ export {
 	type IQueryBus,
 	QueryBus,
 	type QueryBusOptions,
-	type QueryTypeMap,
 } from "./application/cqrs/query/query-bus";
 export {
 	InMemoryDeadlineStore,
@@ -198,8 +196,8 @@ export {
 	type ClockFactory,
 	type CreateDomainEventOptions,
 	type CreateDomainEventStampOptions,
+	type CreateEventOptions,
 	type CreateStampedDomainEventOptions,
-	type CreateUnstampedDomainEventOptions,
 	copyMetadata,
 	createDomainEvent,
 	createDomainEventFactory,

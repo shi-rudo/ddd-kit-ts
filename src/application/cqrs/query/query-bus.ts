@@ -22,26 +22,6 @@ import type { Query, QueryHandler } from "./query";
 type StoredQueryHandler = (query: Query) => Promise<unknown>;
 
 /**
- * Type map for query types to their return types.
- * Used to improve type inference in QueryBus. Declare a map with `type`,
- * not `interface`: an interface has no index signature, so it does not
- * satisfy this constraint.
- *
- * @example
- * ```typescript
- * type MyQueryMap = {
- *   GetOrder: Order | null;
- *   ListOrders: Order[];
- * };
- *
- * const bus = new QueryBus<MyQueryMap>();
- * const result = await bus.execute({ type: "GetOrder", orderId: "123" });
- * // result: Result<Order | null, string>  ← automatically inferred
- * ```
- */
-export type QueryTypeMap = Record<string, unknown>;
-
-/**
  * Construction options for {@link QueryBus}.
  *
  * @template E - The error channel type of the bus.
@@ -83,7 +63,7 @@ export interface QueryBusOptions<E = string> {
  * ```
  */
 export interface IQueryBus<
-	TMap extends QueryTypeMap = QueryTypeMap,
+	TMap extends object = Record<string, unknown>,
 	E = string,
 > {
 	/**
@@ -176,7 +156,7 @@ export interface IQueryBus<
  * const result = await bus.execute({ type: "GetOrder", orderId: "123" });
  * ```
  */
-export class QueryBus<TMap extends QueryTypeMap = QueryTypeMap, E = string>
+export class QueryBus<TMap extends object = Record<string, unknown>, E = string>
 	implements IQueryBus<TMap, E>
 {
 	private readonly handlers = new Map<string, StoredQueryHandler>();

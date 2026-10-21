@@ -22,26 +22,6 @@ import type { Command, CommandHandler } from "./command";
 type StoredCommandHandler<E> = (cmd: Command) => Promise<Result<unknown, E>>;
 
 /**
- * Type map for command types to their return types.
- * Used to improve type inference in CommandBus. Declare a map with `type`,
- * not `interface`: an interface has no index signature, so it does not
- * satisfy this constraint.
- *
- * @example
- * ```typescript
- * type MyCommandMap = {
- *   CreateOrder: OrderId;
- *   CancelOrder: void;
- * };
- *
- * const bus = new CommandBus<MyCommandMap>();
- * const result = await bus.execute({ type: "CreateOrder", ... });
- * // result: Result<OrderId, string>  ← automatically inferred
- * ```
- */
-export type CommandTypeMap = Record<string, unknown>;
-
-/**
  * Construction options for {@link CommandBus}.
  *
  * @template E - The error channel type of the bus.
@@ -84,7 +64,7 @@ export interface CommandBusOptions<E = string> {
  * ```
  */
 export interface ICommandBus<
-	TMap extends CommandTypeMap = CommandTypeMap,
+	TMap extends object = Record<string, unknown>,
 	E = string,
 > {
 	/**
@@ -163,7 +143,7 @@ export interface ICommandBus<
  * ```
  */
 export class CommandBus<
-	TMap extends CommandTypeMap = CommandTypeMap,
+	TMap extends object = Record<string, unknown>,
 	E = string,
 > implements ICommandBus<TMap, E>
 {

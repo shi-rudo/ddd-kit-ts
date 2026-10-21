@@ -2,12 +2,12 @@ import { describe, expect, it } from "vite-plus/test";
 import type {
 	Aggregate,
 	AggregatePersistence,
-	CommandTypeMap,
-	CreateUnstampedDomainEventOptions,
+	CreateEventOptions,
 	DeadlineProcessorObservers,
 	DeliveryFailureAssessment,
 	DeliveryFailureClassifier,
 	DomainErrorClass,
+	DomainEvent,
 	DurableCommandMessage,
 	Fold,
 	ICommandBus,
@@ -15,7 +15,6 @@ import type {
 	IntegrationMessageRelationships,
 	IQueryBus,
 	OutboxDispatcherObservers,
-	QueryTypeMap,
 	Repository,
 	RepositoryTracking,
 	StateValidator,
@@ -63,27 +62,35 @@ const fakeQueryBus: IQueryBus = {
 void fakeCommandBus;
 void fakeQueryBus;
 
-// A public signature names each of these types, so a consumer can name it
-// too: a generic helper over a typed bus, a fold written as a function, and
-// a helper that forwards the options of createEvent.
-function typedCommandBus<TMap extends CommandTypeMap>(
-	bus: ICommandBus<TMap>,
-): ICommandBus<TMap> {
-	return bus;
+// A consumer names the types of the public signatures: a fold written as a
+// function sits in `folds`, a domain method forwards the options of
+// createEvent, and a bus takes a type map declared as an interface.
+type OrderConfirmed = DomainEvent<"OrderConfirmed", { orderId: string }>;
+const countConfirmed: Fold<number, OrderConfirmed> = (confirmed) =>
+	confirmed + 1;
+class ConfirmationCounter extends index.EventSourcedAggregate<
+	number,
+	Id<"CounterId">,
+	OrderConfirmed
+> {
+	protected readonly aggregateType = "ConfirmationCounter";
+	protected readonly folds = { OrderConfirmed: countConfirmed };
+
+	confirm(orderId: string, options: CreateEventOptions): void {
+		this.apply(this.createEvent("OrderConfirmed", { orderId }, options));
+	}
 }
-function typedQueryBus<TMap extends QueryTypeMap>(
-	bus: IQueryBus<TMap>,
-): IQueryBus<TMap> {
-	return bus;
+interface InterfaceCommandMap {
+	PlaceOrder: Id<"OrderId">;
 }
-const countConfirmed: Fold<number, { readonly type: "OrderConfirmed" }> = (
-	confirmed,
-) => confirmed + 1;
-const secondSchema: CreateUnstampedDomainEventOptions = { schemaVersion: 2 };
-void typedCommandBus;
-void typedQueryBus;
-void countConfirmed;
-void secondSchema;
+interface InterfaceQueryMap {
+	OrderById: { readonly status: string } | undefined;
+}
+void ConfirmationCounter;
+void (undefined as unknown as index.CommandBus<InterfaceCommandMap>);
+void (undefined as unknown as ICommandBus<InterfaceCommandMap>);
+void (undefined as unknown as index.QueryBus<InterfaceQueryMap>);
+void (undefined as unknown as IQueryBus<InterfaceQueryMap>);
 
 const publicStateValidator: StateValidator<{ value: number }> = (state) => {
 	void state.value;
