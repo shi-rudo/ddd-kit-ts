@@ -211,8 +211,8 @@ export class DeadlineProcessor<TPayload = unknown> extends PollLoop {
 	}
 
 	/**
-	 * One full delivery pass (the `run`/`drainOnce` shell lives on
-	 * {@link PollLoop}): delivers due deadlines batch by batch until
+	 * One full delivery pass (the `run`/`drainOnce` shell lives on the
+	 * shared poll loop): delivers due deadlines batch by batch until
 	 * nothing is due or a cycle contained a failure.
 	 */
 	protected async pass(signal?: AbortSignal): Promise<"drained" | "stopped"> {

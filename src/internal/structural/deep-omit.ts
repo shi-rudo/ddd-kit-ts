@@ -44,7 +44,7 @@ export interface DeepOmitOptions {
  * path, so memoising the first path's result would be wrong. This is
  * inherently exponential for diamond-shaped sharing (a node reachable
  * via 2^n paths is cloned 2^n times); the walk aborts with a descriptive
- * error after {@link PATH_SENSITIVE_VISIT_BUDGET} node visits instead of
+ * error after a fixed budget of node visits instead of
  * hanging the process.
  *
  * **Prototype-pollution safety.** `__proto__` and `constructor` keys

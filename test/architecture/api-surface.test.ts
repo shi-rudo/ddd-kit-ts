@@ -2,11 +2,14 @@ import { describe, expect, it } from "vite-plus/test";
 import type {
 	Aggregate,
 	AggregatePersistence,
+	CreateEventOptions,
 	DeadlineProcessorObservers,
 	DeliveryFailureAssessment,
 	DeliveryFailureClassifier,
 	DomainErrorClass,
+	DomainEvent,
 	DurableCommandMessage,
+	Fold,
 	ICommandBus,
 	Id,
 	IntegrationMessageRelationships,
@@ -58,6 +61,36 @@ const fakeQueryBus: IQueryBus = {
 };
 void fakeCommandBus;
 void fakeQueryBus;
+
+// A consumer names the types of the public signatures: a fold written as a
+// function sits in `folds`, a domain method forwards the options of
+// createEvent, and a bus takes a type map declared as an interface.
+type OrderConfirmed = DomainEvent<"OrderConfirmed", { orderId: string }>;
+const countConfirmed: Fold<number, OrderConfirmed> = (confirmed) =>
+	confirmed + 1;
+class ConfirmationCounter extends index.EventSourcedAggregate<
+	number,
+	Id<"CounterId">,
+	OrderConfirmed
+> {
+	protected readonly aggregateType = "ConfirmationCounter";
+	protected readonly folds = { OrderConfirmed: countConfirmed };
+
+	confirm(orderId: string, options: CreateEventOptions): void {
+		this.apply(this.createEvent("OrderConfirmed", { orderId }, options));
+	}
+}
+interface InterfaceCommandMap {
+	PlaceOrder: Id<"OrderId">;
+}
+interface InterfaceQueryMap {
+	OrderById: { readonly status: string } | undefined;
+}
+void ConfirmationCounter;
+void (undefined as unknown as index.CommandBus<InterfaceCommandMap>);
+void (undefined as unknown as ICommandBus<InterfaceCommandMap>);
+void (undefined as unknown as index.QueryBus<InterfaceQueryMap>);
+void (undefined as unknown as IQueryBus<InterfaceQueryMap>);
 
 const publicStateValidator: StateValidator<{ value: number }> = (state) => {
 	void state.value;

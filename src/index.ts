@@ -170,6 +170,7 @@ export type { AggregateIdentity } from "./domain/aggregate/aggregate-identity";
 export type { AggregateConfig } from "./domain/aggregate/base-aggregate";
 export {
 	EventSourcedAggregate,
+	type Fold,
 	reconstituteAggregateFromHistory,
 } from "./domain/aggregate/event-sourced-aggregate";
 export { StateStoredAggregate } from "./domain/aggregate/state-stored-aggregate";
@@ -195,6 +196,7 @@ export {
 	type ClockFactory,
 	type CreateDomainEventOptions,
 	type CreateDomainEventStampOptions,
+	type CreateEventOptions,
 	type CreateStampedDomainEventOptions,
 	copyMetadata,
 	createDomainEvent,

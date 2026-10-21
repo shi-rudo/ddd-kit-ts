@@ -348,8 +348,8 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 	}
 
 	/**
-	 * One full dispatch pass (the `run`/`drainOnce` shell lives on
-	 * {@link PollLoop}): dispatches pending records batch by batch until
+	 * One full dispatch pass (the `run`/`drainOnce` shell lives on the
+	 * shared poll loop): dispatches pending records batch by batch until
 	 * the backlog is empty or a failure stops progress. A `"stopped"`
 	 * pass leaves the failed record pending (or dead-lettered by a
 	 * tracking outbox); the next cycle retries it.

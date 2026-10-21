@@ -14,5 +14,16 @@
 		"format": "vitepress",
 		"pretty": true,
 		"collapsed": false
-	}
+	},
+	"intentionallyNotExported": [
+		"IValueObject",
+		"RepositoryFacadeOf",
+		"RepositoryWiringViolation",
+		"UntypedMapDispatch"
+	],
+	"validation": {
+		"notExported": true,
+		"invalidLink": false
+	},
+	"treatValidationWarningsAsErrors": true
 }

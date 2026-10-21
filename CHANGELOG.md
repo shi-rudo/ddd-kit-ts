@@ -342,6 +342,10 @@ immutable. Run one kit version per process during a cutover.
 
 #### Aggregates and events
 
+- The root entry exports the types `Fold` and `CreateEventOptions`. A
+  `Fold<State, Event>` takes the event type and fits an entry of
+  `EventSourcedAggregate.folds`. `CreateEventOptions` holds what
+  `createEvent` takes: the payload schema version.
 - `createDomainEventFactory({ eventIdFactory, clock, source })` and the frozen
   `defaultDomainEventFactory`. `eventStampFactory` and `stampOptions` let the
   commit stamp the pending events. `stampPendingEvents` accepts shared stamp
@@ -394,6 +398,9 @@ immutable. Run one kit version per process during a cutover.
 
 #### Application
 
+- `CommandBus`, `QueryBus`, `ICommandBus`, and `IQueryBus` accept a type map
+  that is declared as an interface. The type map constraint is `object`, and
+  `Record<string, unknown>` stays the default.
 - Command idempotency: the `IdempotencyStore` port, `withIdempotentCommit`,
   `InMemoryIdempotencyStore`, leased claims with reconciliation, and
   `createIdempotencyStoreContractTests`.
@@ -428,6 +435,8 @@ immutable. Run one kit version per process during a cutover.
 
 #### Documentation and tooling
 
+- The docs build fails when a public signature names a type that no entry
+  exports. typedoc treats its validation warnings as errors.
 - `STABILITY.md` states the stability policy from 3.0.0: what the stable API
   is, what counts as a breaking change, the deprecation rule, the runtime
   support, and that only the newest major version gets releases.
