@@ -555,15 +555,13 @@ immutable. Run one kit version per process during a cutover.
   waits. A leaked write then gets `TransactionClosedError`. Before, it got
   `AggregateTrackingError` with the reason `registered_during_flush`.
 - `InMemoryEventStore.append` writes all of a batch or nothing, and it stores
-  only plain data. It copies each event with `copyPlainState`, the checked
-  state copy of the kit. An event with a value that the copy would lose or
-  change rejects with a `TypeError` that names the event index and the stream.
-  Examples are a function, a class instance, an accessor, an `Error`, and a
-  hidden or symbol-keyed property. A batch entry that is not an object, for
-  example `null`, rejects too. No accessor runs unless a Proxy trap adds one.
-  Before, the store dropped the prototype of a class instance, ran accessors,
-  and could keep part of a failed batch. It reads its arguments once, so a
-  getter on them cannot bypass the version check.
+  only plain data. It copies each event under the plain-data rule of the
+  event constructors. An event outside the rule rejects with a `TypeError`
+  that names the event index and the stream. Examples are a function, a class
+  instance, an accessor, an `Error`, and a hidden or symbol-keyed property. A
+  batch entry that is not an object, for example `null`, rejects too. Before,
+  the store dropped the prototype of a class instance, ran accessors, and
+  could keep part of a failed batch.
 - `copyPlainState` walks a Map or a Set with the built-in iteration and reads
   class names through property descriptors, so no own iterator and no accessor
   of the state runs. A Proxy still runs its traps, and an accessor that a trap

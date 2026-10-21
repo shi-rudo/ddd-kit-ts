@@ -779,17 +779,19 @@ Production adapters must pass `createSnapshotStoreContractTests` from
 ### Plain snapshot state
 
 Snapshots must round-trip through storage as plain data.
-`captureAggregateSnapshot(model, aggregate, snapshotAt)` fails fast if the
-model's DTO contains values that cannot restore faithfully:
+`captureAggregateSnapshot(model, aggregate, snapshotAt)` copies the model's
+DTO under the plain-data rule of the kit (see "One rule for plain data" in
+the design decisions). It fails fast, with the path, if the DTO contains a
+value that cannot restore faithfully, for example:
 
 - class instances
 - functions
-- `Promise`, `WeakMap`, or `WeakSet`
-- `Error` instances
+- `Promise`, `WeakMap`, `WeakSet`, or `Error` instances
+- a `RegExp` or binary data
 - symbol-keyed state
 
-A `RegExp` restores with its pattern and flags. Its `lastIndex` restores as
-0: the scan state of a global or sticky pattern is not domain data.
+Keep a pattern as its source and flags, and encode binary data as a string,
+for example base64.
 
 If live state contains class-based child entities, define a plain snapshot DTO
 and map both directions:

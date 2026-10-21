@@ -1549,6 +1549,10 @@ The root entry no longer exports `capturePersistenceBaseline`,
   root. A `Proxy` over a record no longer throws; the copy takes its data.
   An expando on a `Map`, a `Set`, or a `Date` no longer throws; the copy
   leaves it out. The messages changed.
+- `InMemoryEventStore.append` and the snapshot model copy under the same
+  rule. A snapshot DTO with a `RegExp`, a typed array, or a `DataView` now
+  throws. In rc.15 it passed. Keep a pattern as its source and flags, and
+  encode binary data as a string.
 - On a leased idempotency store, a failure at commit time keeps the staged
   outcome. A retry of the same key rejects with `IdempotencyInFlightError`
   until the lease expires. After that, `reconcileIdempotency` decides. In

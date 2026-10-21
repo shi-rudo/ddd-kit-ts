@@ -13,7 +13,7 @@ import {
 	SnapshotSchemaMismatchError,
 	SnapshotVersionNotRestoredError,
 } from "../../errors/kit-errors";
-import { copyPlainState } from "../../internal/structural/copy-plain-state";
+import { copyPlainData } from "../../internal/structural/plain-data";
 import { assertPositiveSafeInteger } from "../../internal/validate";
 
 /**
@@ -108,7 +108,9 @@ export function captureAggregateSnapshot<
 ): AggregateSnapshot<TSnapshotState> {
 	assertSnapshotModel(model);
 	const recordedAt = copySnapshotAt(snapshotAt);
-	const state = copyPlainState(model.capture(aggregate));
+	const state = copyPlainData(model.capture(aggregate), {
+		subject: "captureAggregateSnapshot: state",
+	});
 	return deepFreeze({
 		state,
 		version: aggregate.version,
@@ -164,11 +166,16 @@ export function reconstituteAggregateFromSnapshot<
 	try {
 		let state: TSnapshotState;
 		if (storedSchemaVersion === model.schemaVersion) {
-			state = copyPlainState(snapshot.state) as TSnapshotState;
+			state = copyPlainData(snapshot.state, {
+				subject: "reconstituteAggregateFromSnapshot: snapshot.state",
+			}) as TSnapshotState;
 		} else if (model.migrate) {
-			state = copyPlainState(
-				model.migrate(copyPlainState(snapshot.state), storedSchemaVersion),
-			);
+			const stored = copyPlainData(snapshot.state, {
+				subject: "reconstituteAggregateFromSnapshot: snapshot.state",
+			});
+			state = copyPlainData(model.migrate(stored, storedSchemaVersion), {
+				subject: "reconstituteAggregateFromSnapshot: migrated state",
+			});
 		} else {
 			throw new SnapshotSchemaMismatchError({
 				identity: {
