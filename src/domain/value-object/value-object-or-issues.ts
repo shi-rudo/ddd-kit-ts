@@ -4,7 +4,8 @@ import { type ValueObjectOf, valueObject } from "./value-object";
 
 /**
  * Builds an immutable value object while collecting **all** validation
- * violations into a single {@link ValidationError}, instead of failing on the
+ * violations into a single `ValidationError` of `@shirudo/base-error`,
+ * instead of failing on the
  * first one. This is the Result-first, multi-error counterpart to
  * `valueObjectOrError` (which returns a single string message).
  *

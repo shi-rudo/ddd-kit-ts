@@ -435,6 +435,8 @@ immutable. Run one kit version per process during a cutover.
 
 #### Documentation and tooling
 
+- The docs build fails when a public signature names a type that no entry
+  exports. typedoc treats its validation warnings as errors.
 - `STABILITY.md` states the stability policy from 3.0.0: what the stable API
   is, what counts as a breaking change, the deprecation rule, the runtime
   support, and that only the newest major version gets releases.

@@ -21,10 +21,9 @@
 		"RepositoryWiringViolation",
 		"UntypedMapDispatch"
 	],
-	"externalSymbolLinkMappings": {
-		"@shirudo/base-error": {
-			"ValidationError": "https://www.npmjs.com/package/@shirudo/base-error",
-			"someChainRetryable": "https://www.npmjs.com/package/@shirudo/base-error"
-		}
-	}
+	"validation": {
+		"notExported": true,
+		"invalidLink": false
+	},
+	"treatValidationWarningsAsErrors": true
 }

@@ -52,7 +52,7 @@ export type ValidationProblemResult<
 > = ProblemDetailsResult<ValidationProblemDetails, string, TExtensions>;
 
 /**
- * Projects a base-error {@link ValidationError} to an RFC 9457 Problem
+ * Projects a base-error `ValidationError` to an RFC 9457 Problem
  * Details result by delegating to base-error's `toProblem` transport stage:
  * one pipeline, one wire profile, one hardening implementation. The body
  * carries the error's public `code`, and the whitelisted issues ride under

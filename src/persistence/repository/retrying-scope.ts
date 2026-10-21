@@ -26,7 +26,7 @@ export interface RetryPolicy {
 	maxDelayMs?: number;
 	/**
 	 * Classifier deciding whether an error is worth retrying. Default
-	 * {@link someChainRetryable} (walks the cause chain for the loose
+	 * `someChainRetryable` of `@shirudo/base-error` (walks the cause chain for the loose
 	 * `retryable === true` marker, so a `ConcurrencyConflictError` matches
 	 * even when an adapter wraps it, unless its reason is
 	 * `version_unchanged`, which names a defect a retry repeats). Override
