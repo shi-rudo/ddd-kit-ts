@@ -1534,6 +1534,9 @@ The root entry no longer exports `capturePersistenceBaseline`,
 - The default delivery classifier takes the nearest `retryable` marker in the
   cause chain. An outer `retryable: false` over a retryable cause now counts
   as permanent. In rc.15 the deeper `retryable: true` won.
+- `routeEventsToCommandOutbox` drops an invalid `traceparent` or
+  `tracestate` instead of throwing `InvalidCommandMessageError`. A kept
+  `tracestate` is stored without empty list-members and their white space.
 - On a leased idempotency store, a failure at commit time keeps the staged
   outcome. A retry of the same key rejects with `IdempotencyInFlightError`
   until the lease expires. After that, `reconcileIdempotency` decides. In

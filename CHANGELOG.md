@@ -473,6 +473,12 @@ immutable. Run one kit version per process during a cutover.
 
 ### Fixed
 
+- `routeEventsToCommandOutbox` drops an invalid trace context and keeps the
+  command. Before, a malformed `traceparent` or `tracestate` threw
+  `InvalidCommandMessageError` inside the transaction, so an observability
+  header failed the business write. An invalid `traceparent` drops both
+  fields, as W3C Trace Context tells a receiver. An invalid `tracestate`
+  drops only itself, and a kept one is stored without empty list-members.
 - The default delivery classifier of `OutboxDispatcher` and
   `DeadlineProcessor` takes the nearest `retryable` marker in the cause chain.
   Before, a deeper `retryable: true` won over an outer `retryable: false`, so
