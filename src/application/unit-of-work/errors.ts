@@ -1,3 +1,4 @@
+import { findInCauseChain } from "@shirudo/base-error";
 import type { AggregateIdentity } from "../../domain/aggregate/aggregate-identity";
 import {
 	copyAggregateIdentity,
@@ -7,7 +8,6 @@ import {
 	KitWiringError,
 	rewriteErrorMessage,
 } from "../../errors/kit-errors";
-import { findInCauseChain } from "../../internal/cause-chain";
 import type { AggregateWriteIntent } from "./persistence-contract";
 
 /**
@@ -460,7 +460,5 @@ export class RollbackError extends InfrastructureError<"ROLLBACK_FAILED"> {
  * so the rollback failure stays visible.
  */
 export function wiringErrorInCauseChain(error: unknown): object | undefined {
-	return findInCauseChain(error, (link) =>
-		isWiringErrorLike(link) ? link : undefined,
-	);
+	return findInCauseChain(error, isWiringErrorLike);
 }

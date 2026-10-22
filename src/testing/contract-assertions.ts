@@ -4,6 +4,12 @@
  * to the testing entry: not re-exported from `@shirudo/ddd-kit/testing`.
  */
 
+import {
+	filterCauseChain,
+	findInCauseChain,
+	someCauseChain,
+	someChainRetryable,
+} from "@shirudo/base-error";
 import type { AggregateWriteIntent } from "../application/unit-of-work/persistence-contract";
 import { isStampedDomainEvent } from "../domain/event/domain-event";
 import { runBoundedExecution } from "../internal/async/execution";
@@ -374,44 +380,7 @@ export function assertEqual(
  * message.
  */
 export function chainContainsErrorNamed(error: unknown, name: string): boolean {
-	let found = false;
-	walkCauseChain(error, (node) => {
-		found = errorMatchesName(node, name);
-		return found;
-	});
-	return found;
-}
-
-/**
- * The one cause-chain walk every chain-inspecting helper in this file
- * is expressed through (cycle-safe, hostile-cause-getter-safe): visits
- * each object node until `visit` asks to stop by returning `true`, the
- * chain ends, repeats, or advancing turns hostile. Single-sourced on
- * purpose: a hardening fix (a depth cap, a new hostile shape) must land
- * in ALL walkers at once, or the suites judge the same adapter
- * rejection inconsistently. Per-node property reads stay the visitor's
- * responsibility; only the `cause` advance is guarded here.
- */
-function walkCauseChain(
-	error: unknown,
-	visit: (node: object) => boolean,
-): void {
-	const seen = new Set<unknown>();
-	let current: unknown = error;
-	while (
-		current !== null &&
-		current !== undefined &&
-		typeof current === "object" &&
-		!seen.has(current)
-	) {
-		seen.add(current);
-		if (visit(current)) return;
-		try {
-			current = (current as { cause?: unknown }).cause;
-		} catch {
-			return;
-		}
-	}
+	return someCauseChain(error, (node) => nameOf(node) === name);
 }
 
 /**
@@ -444,16 +413,14 @@ export function assertChainConflictNamesIntent(
 	intent: AggregateWriteIntent,
 	message: string,
 ): void {
-	let observed: unknown = "no CONCURRENCY_CONFLICT";
-	walkCauseChain(rejection, (node) => {
-		if (!errorMatchesName(node, "CONCURRENCY_CONFLICT")) return false;
-		try {
-			observed = (node as { intent?: unknown }).intent;
-		} catch {
-			observed = "an intent that cannot be read";
-		}
-		return true;
-	});
+	const conflict = findInCauseChain(
+		rejection,
+		(node) => nameOf(node) === "CONCURRENCY_CONFLICT",
+	);
+	const observed =
+		conflict === undefined
+			? "no CONCURRENCY_CONFLICT"
+			: (conflict as { intent?: unknown }).intent;
 	if (observed === intent) return;
 	throw new Error(
 		`Contract violated: ${message}; got ${typeof observed === "string" ? observed : String(observed)}`,
@@ -461,60 +428,21 @@ export function assertChainConflictNamesIntent(
 }
 
 /**
- * Walks the `cause` chain (cycle-safe, hostile-getter-safe) looking for
- * `retryable === true`: the same loose, property-based contract the
- * kit's retry classifier (`someChainRetryable`) applies. Suites assert
- * retryability with this instead of reading the top-level rejection, so
- * an adapter that wraps a kit error in its own error chain, which
- * {@link assertChainContainsKitError} deliberately tolerates, is judged
- * exactly the way a consumer's retry loop will judge it.
- *
- * Deliberately NOT a call to `someChainRetryable` itself: that
- * classifier throws on a circular cause chain (its callers handle
- * that), while a hardened suite must survive whatever error shape an
- * adapter rejects with and answer with a contract diagnostic, never a
- * helper crash. Same hardening discipline as
- * {@link chainContainsErrorNamed}.
+ * Whether the rejection or its `cause` chain is retryable, by the
+ * classifier the kit's retry loop uses (`someChainRetryable`). Suites
+ * assert retryability with this instead of reading the top-level
+ * rejection, so an adapter that wraps a kit error in its own error chain,
+ * which {@link assertChainContainsKitError} deliberately tolerates, is
+ * judged exactly the way a consumer's retry loop will judge it.
  */
 export function chainContainsRetryable(error: unknown): boolean {
-	let found = false;
-	walkCauseChain(error, (node) => {
-		try {
-			found = (node as { retryable?: unknown }).retryable === true;
-		} catch {
-			// Hostile `retryable` getter: stop the walk, keep found=false.
-			return true;
-		}
-		return found;
-	});
-	return found;
+	return someChainRetryable(error);
 }
 
-function errorMatchesName(candidate: object, name: string): boolean {
-	try {
-		if ((candidate as { name?: unknown }).name === name) {
-			return true;
-		}
-	} catch {
-		// Hostile `name` getter: treat as non-matching, keep walking.
-	}
-	// Fallback for errors whose own `name` was overridden (a subclass
-	// that re-assigns `this.name` after super): the prototype chain
-	// still carries the base class's constructor name.
-	try {
-		let proto: object | null = Object.getPrototypeOf(candidate);
-		for (let depth = 0; proto !== null && depth < 20; depth++) {
-			if (
-				(proto.constructor as { name?: unknown } | undefined)?.name === name
-			) {
-				return true;
-			}
-			proto = Object.getPrototypeOf(proto);
-		}
-	} catch {
-		// Hostile `constructor` getter on a prototype: non-matching.
-	}
-	return false;
+function nameOf(node: unknown): unknown {
+	return typeof node === "object" && node !== null
+		? (node as { name?: unknown }).name
+		: undefined;
 }
 
 export function describeError(error: unknown): string {
@@ -528,22 +456,13 @@ export function describeError(error: unknown): string {
 }
 
 /**
- * Names along the `cause` chain (cycle-safe, hostile-getter-safe), for
- * failure diagnostics: a wrapped rejection shows WHAT it wraps, so an
- * unexpected error deep in the chain (for example a raw driver error) is
- * identifiable from the message alone.
+ * Names along the `cause` chain, for failure diagnostics: a wrapped
+ * rejection shows WHAT it wraps, so an unexpected error deep in the chain
+ * (for example a raw driver error) is identifiable from the message alone.
  */
 function causeChainNames(error: Error): string[] {
-	const names: string[] = [];
-	walkCauseChain(error, (node) => {
-		try {
-			const { name } = node as { name?: unknown };
-			names.push(typeof name === "string" ? name : "(unnamed)");
-		} catch {
-			// Hostile `name` getter: stop with the partial chain collected.
-			return true;
-		}
-		return false;
+	return filterCauseChain(error, () => true).map((node) => {
+		const name = nameOf(node);
+		return typeof name === "string" ? name : "(unnamed)";
 	});
-	return names;
 }
