@@ -173,6 +173,26 @@ describe("toPublicErrorView()", () => {
 			expect(JSON.stringify(view)).not.toContain("10.0.0.5");
 		});
 
+		it("calls publicIssues() once per view", () => {
+			let calls = 0;
+			const validation = {
+				name: "VALIDATION_FAILED",
+				category: "VALIDATION",
+				publicIssues: () => {
+					calls += 1;
+					return [{ message: "Name is required.", path: ["name"] }];
+				},
+			};
+
+			const view = toPublicErrorView(validation);
+
+			expect(view.code).toBe("VALIDATION_FAILED");
+			expect(view.details?.issues).toEqual([
+				{ message: "Name is required.", path: ["name"] },
+			]);
+			expect(calls).toBe(1);
+		});
+
 		it("ignores a publicIssues() that does not return an array", () => {
 			const broken = {
 				name: "VALIDATION_FAILED",

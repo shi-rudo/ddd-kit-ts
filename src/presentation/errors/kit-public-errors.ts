@@ -29,24 +29,33 @@ function english(message: string): LocalizedMessageSet {
  * that actually returns an array. Reads and the probe call may throw on
  * hostile inputs; `project` contains a throwing matcher as a miss, which
  * keeps the projection total.
+ *
+ * The match keeps the array that the probe call returned, so the
+ * projection reads it instead of calling `publicIssues()` a second time.
  */
-function isValidationErrorLike(
-	error: unknown,
-): error is { publicIssues(): unknown[] } {
+function isValidationErrorLike(error: unknown): error is object {
 	if (typeof error !== "object" || error === null) return false;
 	const { name, category, publicIssues } = error as {
 		name?: unknown;
 		category?: unknown;
 		publicIssues?: unknown;
 	};
-	return (
-		typeof name === "string" &&
-		/^[A-Z][A-Z0-9_]*$/.test(name) &&
-		category === "VALIDATION" &&
-		typeof publicIssues === "function" &&
-		Array.isArray((error as { publicIssues(): unknown }).publicIssues())
-	);
+	if (
+		typeof name !== "string" ||
+		!/^[A-Z][A-Z0-9_]*$/.test(name) ||
+		category !== "VALIDATION" ||
+		typeof publicIssues !== "function"
+	) {
+		return false;
+	}
+	const issues: unknown = publicIssues.call(error);
+	if (!Array.isArray(issues)) return false;
+	matchedIssues.set(error, issues);
+	return true;
 }
+
+/** The `publicIssues()` result of each error that matched as a validation error. */
+const matchedIssues = new WeakMap<object, unknown[]>();
 
 /**
  * Re-emits a `publicIssues()` result through the {@link PublicIssue}
@@ -204,7 +213,7 @@ export function createKitPublicErrors() {
 				status: 422,
 				userMessages: english("The submitted data is invalid."),
 				projectDetails: (error): PublicErrorViewDetails => ({
-					issues: sanitizePublicIssues(error.publicIssues()),
+					issues: sanitizePublicIssues(matchedIssues.get(error) ?? []),
 				}),
 			},
 		});
