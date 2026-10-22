@@ -475,6 +475,9 @@ const uow = new UnitOfWork({
   writes from outbox `getPending`, deadline `due`, and checkpoint
   `hasReached`. Other reads also see the writes of an open transaction.
 - A store that is not registered keeps its behavior: it does not roll back.
+  `InMemoryIdempotencyStore` is the exception. It belongs to the
+  transactional family and throws outside a transaction, because a failed
+  attempt without a rollback would block its key.
 
 Each store decides what its rollback undoes. "Meanwhile" means while the
 transaction was open:
@@ -486,7 +489,8 @@ transaction was open:
 | `InMemoryDeadlineStore` | every write since the start of the transaction, also acknowledgements and failure reports that a processor made meanwhile; the processor then delivers such a deadline again |
 | `InMemoryProjectionCheckpointStore` | every write since the start of the transaction, also saves and resets made outside the transaction meanwhile; the checkpoint locks stay |
 | `InMemorySnapshotStore` | every write since the start of the transaction, also saves and deletes made outside the transaction meanwhile; a snapshot is derived data, so a later load replays more events or discards a restored snapshot |
-| `InMemoryIdempotencyStore` | the writes of `claim` and `complete`; the lease operations `renew`, `confirm`, `abandon`, and `reconcile` keep their writes on every other key |
+| `InMemoryIdempotencyStore` | the writes of `claim` and `complete` |
+| `InMemoryLeasedIdempotencyStore` | the writes of `claim` and `complete`; the lease operations `renew`, `confirm`, `abandon`, and `reconcile` keep their writes on every other key |
 
 You can register an in-memory table of your own. It implements
 `InMemoryTransactionParticipant`:

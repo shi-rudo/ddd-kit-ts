@@ -350,9 +350,9 @@ immutable. Run one kit version per process during a cutover.
   scope runs one transaction at a time, and a queued transaction stops
   waiting when its abort signal fires. A store belongs to one scope. While a
   transaction is open, outbox `getPending`, deadline `due`, and checkpoint
-  `hasReached` read only committed writes. A rollback of the idempotency
-  store undoes the writes of `claim` and `complete`; the lease operations
-  keep their writes on every other key. The in-memory references pass the rollback tests of the outbox, deadline, and
+  `hasReached` read only committed writes. A rollback of an idempotency
+  store undoes the writes of `claim` and `complete`; the lease operations of
+  the leased store keep their writes on every other key. The in-memory references pass the rollback tests of the outbox, deadline, and
   checkpoint contract suites.
 
 #### Aggregates and events
@@ -431,9 +431,14 @@ immutable. Run one kit version per process during a cutover.
 - `CommandBus`, `QueryBus`, `ICommandBus`, and `IQueryBus` accept a type map
   that is declared as an interface. The type map constraint is `object`, and
   `Record<string, unknown>` stays the default.
-- Command idempotency: the `IdempotencyStore` port, `withIdempotentCommit`,
-  `InMemoryIdempotencyStore`, leased claims with reconciliation, and
-  `createIdempotencyStoreContractTests`.
+- Command idempotency: `withIdempotentCommit` over one of two ports. The
+  transactional `IdempotencyStore` has only `claim` and `complete`. The
+  `LeasedIdempotencyStore` adds leased claims with `renew`, `confirm`,
+  `abandon`, and `reconcile`, and its dependency type requires
+  `reconcileIdempotency`. Each port has an in-memory reference
+  (`InMemoryIdempotencyStore`, `InMemoryLeasedIdempotencyStore`) and a
+  contract suite (`createIdempotencyStoreContractTests`,
+  `createLeasedIdempotencyStoreContractTests`).
 - Projections: the `ProjectionCheckpointStore` port, the `Projector` runner,
   `InMemoryProjectionCheckpointStore`, `projectionFromHandlers`, and
   `createProjectionCheckpointStoreContractTests`. The projector rejects a gap
@@ -518,17 +523,11 @@ immutable. Run one kit version per process during a cutover.
   command a second time, although the failed commit could have written its
   effect. The key now answers `IdempotencyInFlightError` until the lease
   expires, and then `reconciliation-required`. A leased store therefore needs
-  `reconcileIdempotency`: without it, the key stays blocked, also after a
-  commit that surely failed.
+  `reconcileIdempotency`, and its dependency type requires the callback.
 - `withIdempotentCommit` passes the options of `registerSaved` and
   `registerRemoved` to `withCommit`. Before, it dropped `expectedVersion`, so
   a second registration of the same aggregate with a contradicting OCC
   baseline passed without an error.
-- `InMemoryIdempotencyStore` reads its clock before its state, and `claim`
-  asks the token factory before its final checks. A clock or a factory that
-  changes the store can no longer push it past `maxEntries`, replace a live
-  claim of the same key, confirm an outcome that was released meanwhile, or
-  release a claim that was made meanwhile.
 - `InMemoryOutbox.add` rejects a malformed candidate with
   `EventCollectionError`: a part that is not an object, an `eventId` or `type`
   that is not a string, a source field that is

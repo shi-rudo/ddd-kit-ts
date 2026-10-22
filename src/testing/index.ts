@@ -55,6 +55,12 @@ export {
 	type IdempotencyStoreContractTest,
 } from "./idempotency-store-contract";
 export {
+	createLeasedIdempotencyStoreContractTests,
+	type LeasedIdempotencyStoreContractEnvironment,
+	type LeasedIdempotencyStoreContractHarness,
+	type LeasedIdempotencyStoreContractTest,
+} from "./leased-idempotency-store-contract";
+export {
 	createOutboxContractTests,
 	type OutboxContractEnvironment,
 	type OutboxContractHarness,

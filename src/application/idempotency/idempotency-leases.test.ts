@@ -1,34 +1,54 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import type { AnyDomainEvent } from "../../domain/event/domain-event";
-import { IdempotencyClaimLostError } from "../../errors/kit-errors";
+import { StateStoredAggregate } from "../../domain/aggregate/state-stored-aggregate";
+import {
+	type AnyDomainEvent,
+	createDomainEvent,
+	type DomainEvent,
+} from "../../domain/event/domain-event";
+import type { Id } from "../../domain/identity/id";
+import {
+	ConcurrencyConflictError,
+	IdempotencyInFlightError,
+	IdempotencyKeyReuseError,
+} from "../../errors/kit-errors";
+import type { EventCommitCandidate } from "../../messaging/committed-event";
 import { InMemoryOutbox } from "../../messaging/outbox/outbox";
+import { RetryingTransactionScope } from "../../persistence/repository/retrying-scope";
 import type { TransactionScope } from "../../persistence/repository/scope";
-import { InMemoryIdempotencyStore } from "./adapters/in-memory-idempotency-store";
-import { withIdempotentCommit } from "./idempotency";
+import type { CommitRegistration } from "../cqrs/handler";
+import { InMemoryLeasedIdempotencyStore } from "./adapters/in-memory-leased-idempotency-store";
+import {
+	type IdempotencyReconciliation,
+	type LeasedIdempotencyClaim,
+	type LeasedIdempotencyClaimHandle,
+	withIdempotentCommit,
+} from "./idempotency";
 
-interface TestClaimHandle {
-	readonly key: string;
-	readonly token: string;
-	readonly lease?: {
-		readonly expiresAt: string;
-		readonly renewAfterMs: number;
-	};
+type OrderId = Id<"OrderId">;
+type OrderEvent = DomainEvent<"OrderConfirmed", { orderId: string }>;
+
+class Order extends StateStoredAggregate<
+	{ status: "open" | "confirmed" },
+	OrderId,
+	OrderEvent
+> {
+	protected readonly aggregateType = "Order";
+
+	constructor(id: OrderId) {
+		super(id, { status: "open" });
+	}
+
+	confirm(): void {
+		this.setState(
+			{ status: "confirmed" },
+			createDomainEvent(
+				"OrderConfirmed",
+				{ orderId: this.id },
+				{ aggregateId: this.id, aggregateType: this.aggregateType },
+			),
+		);
+	}
 }
-
-interface TestReconciliationReceipt {
-	readonly key: string;
-	readonly fingerprint: string;
-	readonly token: string;
-	readonly expiredAt: string;
-}
-
-type TestClaim =
-	| { readonly status: "claimed"; readonly claim: TestClaimHandle }
-	| { readonly status: "completed"; readonly outcome: unknown }
-	| {
-			readonly status: "reconciliation-required";
-			readonly reconciliation: TestReconciliationReceipt;
-	  };
 
 interface MutableClock {
 	advance(ms: number): void;
@@ -51,7 +71,7 @@ function tokenFactory(): () => string {
 }
 
 function leasedStore(clock: MutableClock) {
-	return new InMemoryIdempotencyStore<undefined>({
+	return new InMemoryLeasedIdempotencyStore<undefined>({
 		clock: clock.now,
 		claimTokenFactory: tokenFactory(),
 		leaseDurationMs: 100,
@@ -59,22 +79,13 @@ function leasedStore(clock: MutableClock) {
 	});
 }
 
-function claimedHandle(claim: unknown): TestClaimHandle {
-	const candidate = claim as TestClaim;
-	if (candidate.status !== "claimed") {
-		throw new Error(`Expected claimed, received ${candidate.status}`);
+function claimedHandle(
+	claim: LeasedIdempotencyClaim,
+): LeasedIdempotencyClaimHandle {
+	if (claim.status !== "claimed") {
+		throw new Error(`Expected claimed, received ${claim.status}`);
 	}
-	return candidate.claim;
-}
-
-function reconciliationReceipt(claim: unknown): TestReconciliationReceipt {
-	const candidate = claim as TestClaim;
-	if (candidate.status !== "reconciliation-required") {
-		throw new Error(
-			`Expected reconciliation-required, received ${candidate.status}`,
-		);
-	}
-	return candidate.reconciliation;
+	return claim.claim;
 }
 
 function scope(): TransactionScope<undefined> {
@@ -83,262 +94,223 @@ function scope(): TransactionScope<undefined> {
 	};
 }
 
+function createDeps(
+	idempotency = new InMemoryLeasedIdempotencyStore<undefined>(),
+	outbox = new InMemoryOutbox<AnyDomainEvent>(),
+) {
+	return {
+		outbox,
+		scope: scope(),
+		idempotency,
+		reconcileIdempotency: async () => "unknown" as const,
+	};
+}
+
+const request = { key: "req-1", fingerprint: "fp-1" };
+
 afterEach(() => {
 	vi.useRealTimers();
 });
 
-describe("leased idempotency claims", () => {
-	it("reclaims an expired pending lease under a new token and fences the stale owner", async () => {
-		const clock = mutableClock();
-		const store = leasedStore(clock);
-		const first = claimedHandle(await store.claim(undefined, "key", "fp"));
+describe("withIdempotentCommit with a leased store", () => {
+	it("requires reconcileIdempotency by type", () => {
+		const { reconcileIdempotency: _required, ...withoutReconcile } =
+			createDeps();
 
-		expect(first).toMatchObject({
-			key: "key",
-			token: expect.any(String),
-			lease: { renewAfterMs: 40 },
-		});
-		clock.advance(101);
+		// @ts-expect-error A leased store needs a reconciliation decision.
+		void withIdempotentCommit(withoutReconcile, request, async () => "x");
+	});
 
-		const second = claimedHandle(await store.claim(undefined, "key", "fp"));
-		expect(second.token).not.toBe(first.token);
+	it("releases the claim through abandon when the work fails, so a retry runs fresh", async () => {
+		const deps = createDeps();
 		await expect(
-			store.complete(undefined, first, "stale result"),
-		).rejects.toMatchObject({ code: "IDEMPOTENCY_CLAIM_LOST" });
-
-		await store.complete(undefined, second, "winner");
-		await store.confirm(second);
-		await expect(store.claim(undefined, "key", "fp")).resolves.toEqual({
-			status: "completed",
-			outcome: "winner",
-		});
-	});
-
-	it("renew extends the pending lease without changing ownership", async () => {
-		const clock = mutableClock();
-		const store = leasedStore(clock);
-		const claim = claimedHandle(await store.claim(undefined, "key", "fp"));
-
-		clock.advance(40);
-		const renewed = await store.renew(claim);
-		expect(renewed).toMatchObject({ renewAfterMs: 40 });
-		clock.advance(61);
-		await expect(store.claim(undefined, "key", "fp")).rejects.toMatchObject({
-			code: "IDEMPOTENCY_IN_FLIGHT",
-		});
-
-		clock.advance(40);
-		const successor = claimedHandle(await store.claim(undefined, "key", "fp"));
-		expect(successor.token).not.toBe(claim.token);
-	});
-
-	it("stale abandon and confirm cannot alter a successor claim", async () => {
-		const clock = mutableClock();
-		const store = leasedStore(clock);
-		const first = claimedHandle(await store.claim(undefined, "key", "fp"));
-		clock.advance(101);
-		const second = claimedHandle(await store.claim(undefined, "key", "fp"));
-
-		await store.abandon(first);
-		await store.confirm(first);
-		await expect(store.claim(undefined, "key", "fp")).rejects.toMatchObject({
-			code: "IDEMPOTENCY_IN_FLIGHT",
-		});
-
-		await store.complete(undefined, second, "winner");
-		await store.confirm(second);
-		await expect(store.claim(undefined, "key", "fp")).resolves.toEqual({
-			status: "completed",
-			outcome: "winner",
-		});
-	});
-});
-
-describe("staged idempotency reconciliation", () => {
-	it("never reclaims an expired staged outcome without a source-of-truth decision", async () => {
-		const clock = mutableClock();
-		const store = leasedStore(clock);
-		const claim = claimedHandle(await store.claim(undefined, "key", "fp"));
-		await store.complete(undefined, claim, { orderId: "o-1" });
-		clock.advance(101);
-
-		const expired = (await store.claim(undefined, "key", "fp")) as TestClaim;
-		expect(expired).toMatchObject({
-			status: "reconciliation-required",
-			reconciliation: {
-				key: "key",
-				fingerprint: "fp",
-				token: claim.token,
-			},
-		});
-	});
-
-	it("a committed decision confirms the staged outcome for replay", async () => {
-		const clock = mutableClock();
-		const store = leasedStore(clock);
-		const claim = claimedHandle(await store.claim(undefined, "key", "fp"));
-		await store.complete(undefined, claim, { orderId: "o-1" });
-		clock.advance(101);
-		const receipt = reconciliationReceipt(
-			await store.claim(undefined, "key", "fp"),
-		);
-
-		await store.reconcile(receipt, "committed");
-
-		await expect(store.claim(undefined, "key", "fp")).resolves.toEqual({
-			status: "completed",
-			outcome: { orderId: "o-1" },
-		});
-	});
-
-	it("does not confirm an outcome that a clock callback released meanwhile", async () => {
-		const clock = mutableClock();
-		let onRead: (() => void) | undefined;
-		const store = new InMemoryIdempotencyStore<undefined>({
-			clock: () => {
-				const callback = onRead;
-				onRead = undefined;
-				callback?.();
-				return clock.now();
-			},
-			claimTokenFactory: tokenFactory(),
-			leaseDurationMs: 100,
-			renewAfterMs: 40,
-		});
-		const claim = claimedHandle(await store.claim(undefined, "key", "fp"));
-		await store.complete(undefined, claim, { orderId: "o-1" });
-		clock.advance(101);
-		const receipt = reconciliationReceipt(
-			await store.claim(undefined, "key", "fp"),
-		);
-		let inner: Promise<void> | undefined;
-		onRead = () => {
-			inner = store.reconcile(receipt, "not-committed");
-		};
-
-		const outer = store.reconcile(receipt, "committed");
-
-		await expect(outer).rejects.toBeInstanceOf(IdempotencyClaimLostError);
-		await expect(inner).resolves.toBeUndefined();
-		expect(store.size).toBe(0);
-	});
-
-	it("keeps a claim that a clock callback made while not-committed was reconciled", async () => {
-		const clock = mutableClock();
-		let onRead: (() => void) | undefined;
-		const store = new InMemoryIdempotencyStore<undefined>({
-			clock: () => {
-				const callback = onRead;
-				onRead = undefined;
-				callback?.();
-				return clock.now();
-			},
-			claimTokenFactory: tokenFactory(),
-			leaseDurationMs: 100,
-			renewAfterMs: 40,
-		});
-		const claim = claimedHandle(await store.claim(undefined, "key", "fp"));
-		await store.complete(undefined, claim, { orderId: "o-1" });
-		clock.advance(101);
-		const receipt = reconciliationReceipt(
-			await store.claim(undefined, "key", "fp"),
-		);
-		let fresh: Promise<unknown> | undefined;
-		onRead = () => {
-			fresh = store
-				.reconcile(receipt, "not-committed")
-				.then(() => store.claim(undefined, "key", "fp"));
-		};
+			withIdempotentCommit(deps, request, async () => {
+				throw new Error("boom");
+			}),
+		).rejects.toThrow("boom");
 
 		await expect(
-			store.reconcile(receipt, "not-committed"),
-		).rejects.toBeInstanceOf(IdempotencyClaimLostError);
-		const freshClaim = claimedHandle(await fresh);
-		await expect(store.renew(freshClaim)).resolves.toBeDefined();
+			withIdempotentCommit(deps, request, async () => "second attempt"),
+		).resolves.toEqual({ replayed: false, result: "second attempt" });
 	});
 
-	it("reads a reconciliation receipt once", async () => {
-		const clock = mutableClock();
-		const store = leasedStore(clock);
-		const claim = claimedHandle(await store.claim(undefined, "key", "fp"));
-		await store.complete(undefined, claim, { orderId: "o-1" });
-		clock.advance(101);
-		const receipt = reconciliationReceipt(
-			await store.claim(undefined, "key", "fp"),
-		);
-		let keyReads = 0;
-		const counted = {
-			...receipt,
-			get key() {
-				keyReads += 1;
-				return receipt.key;
+	it("keeps the staged outcome when the commit itself fails, so a retry cannot run the command again", async () => {
+		let nowMs = 0;
+		const deps = {
+			...createDeps(
+				new InMemoryLeasedIdempotencyStore<undefined>({
+					clock: () => new Date(nowMs),
+					leaseDurationMs: 1_000,
+				}),
+			),
+			reconcileIdempotency: async () => "committed" as const,
+		};
+		// A driver that rejects AFTER the callback resolved, for example a
+		// dropped connection after COMMIT was sent: the commit outcome is
+		// unknown, and the command effect can exist.
+		let commits = 0;
+		deps.scope = {
+			transactional: async (fn) => {
+				const result = await fn(undefined);
+				commits += 1;
+				if (commits === 1) throw new Error("commit failed");
+				return result;
 			},
 		};
+		let executions = 0;
+		const run = () =>
+			withIdempotentCommit(deps, request, async () => {
+				executions += 1;
+				return executions;
+			});
 
-		await store.reconcile(counted, "committed");
+		await expect(run()).rejects.toThrow("commit failed");
+		await expect(run()).rejects.toBeInstanceOf(IdempotencyInFlightError);
+		nowMs = 1_000;
+		const settled = await run();
 
-		expect(keyReads).toBe(1);
+		expect(settled).toEqual({ replayed: true, result: 1 });
+		expect(executions).toBe(1);
 	});
 
-	it("a not-committed decision releases the staged outcome for fresh execution", async () => {
-		const clock = mutableClock();
-		const store = leasedStore(clock);
-		const claim = claimedHandle(await store.claim(undefined, "key", "fp"));
-		await store.complete(undefined, claim, "rolled back");
-		clock.advance(101);
-		const receipt = reconciliationReceipt(
-			await store.claim(undefined, "key", "fp"),
+	it("does not replay a false success when the transaction fails after complete()", async () => {
+		class FlakyOutbox extends InMemoryOutbox<AnyDomainEvent> {
+			failNext = true;
+			override async add(
+				events: ReadonlyArray<EventCommitCandidate<AnyDomainEvent>>,
+			): Promise<void> {
+				if (this.failNext) {
+					this.failNext = false;
+					throw new Error("outbox down");
+				}
+				return super.add(events);
+			}
+		}
+		const deps = createDeps(undefined, new FlakyOutbox());
+		let executions = 0;
+		const work = async (
+			_ctx: undefined,
+			registration: CommitRegistration<AnyDomainEvent>,
+		) => {
+			executions++;
+			const order = new Order(`o-${executions}` as OrderId);
+			order.confirm();
+			registration.registerSaved(order);
+			return { orderId: order.id };
+		};
+
+		// complete() stages the outcome, then the outbox write fails inside the
+		// transaction. The staged outcome must not become replayable.
+		await expect(withIdempotentCommit(deps, request, work)).rejects.toThrow(
+			"outbox down",
 		);
 
-		await store.reconcile(receipt, "not-committed");
+		const second = await withIdempotentCommit(deps, request, work);
+		expect(executions).toBe(2);
+		expect(second).toEqual({ replayed: false, result: { orderId: "o-2" } });
 
-		const fresh = claimedHandle(await store.claim(undefined, "key", "fp"));
-		expect(fresh.token).not.toBe(claim.token);
+		const third = await withIdempotentCommit(deps, request, work);
+		expect(executions).toBe(2);
+		expect(third).toEqual({ replayed: true, result: { orderId: "o-2" } });
 	});
 
-	it("a stale reconciliation receipt cannot settle a newer staged owner", async () => {
-		const clock = mutableClock();
-		const store = leasedStore(clock);
-		const first = claimedHandle(await store.claim(undefined, "key", "fp"));
-		await store.complete(undefined, first, "first");
-		clock.advance(101);
-		const staleReceipt = reconciliationReceipt(
-			await store.claim(undefined, "key", "fp"),
-		);
-		await store.reconcile(staleReceipt, "not-committed");
+	it("surfaces a concurrent in-flight duplicate as a retryable error", async () => {
+		const deps = createDeps();
+		let releaseFirst: () => void = () => {};
+		const firstBlocked = new Promise<void>((resolve) => {
+			releaseFirst = resolve;
+		});
 
-		const second = claimedHandle(await store.claim(undefined, "key", "fp"));
-		await store.complete(undefined, second, "second");
-		clock.advance(101);
-		await expect(
-			store.reconcile(staleReceipt, "committed"),
-		).rejects.toMatchObject({ code: "IDEMPOTENCY_CLAIM_LOST" });
-	});
+		const first = withIdempotentCommit(deps, request, async () => {
+			await firstBlocked;
+			return "first";
+		});
+		// Give the first execution time to claim.
+		await new Promise((resolve) => setTimeout(resolve, 0));
 
-	it("rejects an unknown store decision without releasing the staged outcome", async () => {
-		const clock = mutableClock();
-		const store = leasedStore(clock);
-		const claim = claimedHandle(await store.claim(undefined, "key", "fp"));
-		await store.complete(undefined, claim, "uncertain");
-		clock.advance(101);
-		const receipt = reconciliationReceipt(
-			await store.claim(undefined, "key", "fp"),
-		);
+		const second = withIdempotentCommit(deps, request, async () => "second");
+		await expect(second).rejects.toBeInstanceOf(IdempotencyInFlightError);
+		await expect(second).rejects.toMatchObject({ retryable: true });
 
-		await expect(
-			store.reconcile(receipt, "unknown" as never),
-		).rejects.toBeInstanceOf(TypeError);
-		expect(await store.claim(undefined, "key", "fp")).toMatchObject({
-			status: "reconciliation-required",
+		releaseFirst();
+		await expect(first).resolves.toEqual({
+			replayed: false,
+			result: "first",
 		});
 	});
-});
 
-describe("withIdempotentCommit lease orchestration", () => {
+	it("composes with RetryingTransactionScope: a retryable attempt failure releases its claim and the retry runs fresh", async () => {
+		const deps = {
+			...createDeps(),
+			scope: new RetryingTransactionScope(scope(), {
+				maxAttempts: 3,
+				baseDelayMs: 1,
+			}),
+		};
+		let executions = 0;
+
+		const outcome = await withIdempotentCommit(deps, request, async () => {
+			executions++;
+			if (executions === 1) {
+				throw new ConcurrencyConflictError({
+					reason: "stale_version",
+					identity: { aggregateType: "Order", aggregateId: "o-1" },
+					expectedVersion: 1,
+					actualVersion: 2,
+				});
+			}
+			return "second attempt";
+		});
+
+		expect(executions).toBe(2);
+		expect(outcome).toEqual({ replayed: false, result: "second attempt" });
+	});
+
+	it("propagates the work error and reports the abandon failure", async () => {
+		const abandonFailure = new Error("abandon failed");
+		const reported: unknown[] = [];
+		const deps = {
+			...createDeps(),
+			onIdempotencyError: (error: unknown) => {
+				reported.push(error);
+			},
+		};
+		deps.idempotency.abandon = async () => {
+			throw abandonFailure;
+		};
+
+		await expect(
+			withIdempotentCommit(deps, request, async () => {
+				throw new Error("boom");
+			}),
+		).rejects.toThrow("boom");
+		expect(reported).toEqual([abandonFailure]);
+	});
+
+	it("does not abandon when the claim itself was the failure", async () => {
+		const deps = createDeps();
+		await withIdempotentCommit(deps, request, async () => "first");
+		let abandoned = false;
+		const originalAbandon = deps.idempotency.abandon.bind(deps.idempotency);
+		deps.idempotency.abandon = async (claim) => {
+			abandoned = true;
+			return originalAbandon(claim);
+		};
+
+		await expect(
+			withIdempotentCommit(
+				deps,
+				{ key: request.key, fingerprint: "fp-OTHER" },
+				async () => "x",
+			),
+		).rejects.toBeInstanceOf(IdempotencyKeyReuseError);
+		expect(abandoned).toBe(false);
+	});
+
 	it("renews a leased claim while the transaction remains in flight", async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date("2026-07-14T10:00:00.000Z"));
-		const idempotency = new InMemoryIdempotencyStore<undefined>({
+		const idempotency = new InMemoryLeasedIdempotencyStore<undefined>({
 			claimTokenFactory: tokenFactory(),
 			leaseDurationMs: 100,
 			renewAfterMs: 40,
@@ -352,11 +324,7 @@ describe("withIdempotentCommit lease orchestration", () => {
 			release = resolve;
 		});
 		const execution = withIdempotentCommit(
-			{
-				idempotency,
-				outbox: new InMemoryOutbox<AnyDomainEvent>(),
-				scope: scope(),
-			},
+			createDeps(idempotency),
 			{ key: "key", fingerprint: "fp" },
 			async () => {
 				entered();
@@ -381,7 +349,7 @@ describe("withIdempotentCommit lease orchestration", () => {
 	it("rolls back and releases the claim when lease renewal fails", async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date("2026-07-14T10:00:00.000Z"));
-		const idempotency = new InMemoryIdempotencyStore<undefined>({
+		const idempotency = new InMemoryLeasedIdempotencyStore<undefined>({
 			claimTokenFactory: tokenFactory(),
 			leaseDurationMs: 100,
 			renewAfterMs: 40,
@@ -399,11 +367,7 @@ describe("withIdempotentCommit lease orchestration", () => {
 			release = resolve;
 		});
 		const execution = withIdempotentCommit(
-			{
-				idempotency,
-				outbox: new InMemoryOutbox<AnyDomainEvent>(),
-				scope: scope(),
-			},
+			createDeps(idempotency),
 			{ key: "key", fingerprint: "fp" },
 			async () => {
 				entered();
@@ -431,14 +395,12 @@ describe("withIdempotentCommit lease orchestration", () => {
 		await idempotency.complete(undefined, claim, { orderId: "o-1" });
 		clock.advance(101);
 		let executions = 0;
-		const reconciled: TestReconciliationReceipt[] = [];
+		const reconciled: IdempotencyReconciliation[] = [];
 
 		const result = await withIdempotentCommit(
 			{
-				idempotency,
-				outbox: new InMemoryOutbox<AnyDomainEvent>(),
-				scope: scope(),
-				reconcileIdempotency: async (receipt: TestReconciliationReceipt) => {
+				...createDeps(idempotency),
+				reconcileIdempotency: async (receipt) => {
 					reconciled.push(receipt);
 					return "committed" as const;
 				},
@@ -468,10 +430,8 @@ describe("withIdempotentCommit lease orchestration", () => {
 
 		const result = await withIdempotentCommit(
 			{
-				idempotency,
-				outbox: new InMemoryOutbox<AnyDomainEvent>(),
-				scope: scope(),
-				reconcileIdempotency: async () => "not-committed",
+				...createDeps(idempotency),
+				reconcileIdempotency: async () => "not-committed" as const,
 			},
 			request,
 			async (_ctx, _registration, execution) => {
@@ -501,9 +461,7 @@ describe("withIdempotentCommit lease orchestration", () => {
 
 		const result = await withIdempotentCommit(
 			{
-				idempotency,
-				outbox: new InMemoryOutbox<AnyDomainEvent>(),
-				scope: scope(),
+				...createDeps(idempotency),
 				onIdempotencyError: (error, context) => {
 					reported.push({ error, ...context });
 				},
@@ -535,12 +493,7 @@ describe("withIdempotentCommit lease orchestration", () => {
 
 		await expect(
 			withIdempotentCommit(
-				{
-					idempotency,
-					outbox: new InMemoryOutbox<AnyDomainEvent>(),
-					scope: scope(),
-					reconcileIdempotency: async () => "unknown" as const,
-				},
+				createDeps(idempotency),
 				request,
 				async () => "must not run",
 			),

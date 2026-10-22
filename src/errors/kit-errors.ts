@@ -2079,8 +2079,8 @@ export interface IdempotencyInFlightErrorOptions {
 /**
  * Thrown by `IdempotencyStore.claim()` when the key is already claimed
  * by an execution that has not completed yet: the first delivery of the
- * command is still running (or crashed mid-flight on a
- * non-transactional store). Retryable by design: a later retry either
+ * command is still running (or crashed mid-flight on a leased store).
+ * Retryable by design: a later retry either
  * finds the completed outcome and replays it, or finds the claim
  * released (rolled back) and executes fresh. `RetryingTransactionScope`
  * picks this up through the `retryable` flag without extra wiring.
