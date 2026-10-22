@@ -476,33 +476,6 @@ describe("ValueObject Class", () => {
 			);
 		});
 
-		const VALUE_OBJECT_CLASS = Symbol.for(
-			"@shirudo/ddd-kit/value-object-class/v1",
-		);
-
-		it("recognizes a value object built by another copy of the kit through the class record", () => {
-			class OtherCopyMoney {
-				readonly props: Readonly<MoneyProps>;
-				constructor(props: MoneyProps) {
-					this.props = Object.freeze({ ...props });
-					Object.defineProperty(this, VALUE_OBJECT_CLASS, {
-						value: OtherCopyMoney,
-						enumerable: false,
-						writable: false,
-						configurable: false,
-					});
-				}
-			}
-			const money = new OtherCopyMoney({ amount: 100, currency: "USD" });
-
-			const price = new Price({
-				amount: money,
-				label: "list",
-			} as unknown as PriceProps);
-
-			expect(price.props.amount).toBe(money);
-		});
-
 		it("rejects a class with a props field that no value object built", () => {
 			class Component {
 				props = { amount: 100 };

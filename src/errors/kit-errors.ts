@@ -204,12 +204,11 @@ export abstract class InfrastructureError<
 }
 
 /**
- * Copy-safe membership check for the kit's domain-error family.
- *
- * `instanceof` is false for an error constructed by another loaded copy of
- * the kit (a separately installed adapter package, a CJS/ESM dual load), so
- * kit boundaries that route by error family fall back to the structural
- * `category` field, the stable cross-copy contract.
+ * Membership check for the kit's domain-error family. The `category` field
+ * is the contract of the family, so the check also accepts an `Error` that
+ * carries `category: "DOMAIN"` without extending the kit class, for example
+ * a `StructuredError` of `@shirudo/base-error`. Kit boundaries that route
+ * by error family use it.
  */
 export function isDomainErrorLike(value: unknown): value is DomainError {
 	return (
@@ -220,8 +219,8 @@ export function isDomainErrorLike(value: unknown): value is DomainError {
 }
 
 /**
- * Copy-safe membership check for the kit's infrastructure-error family.
- * Same rationale as {@link isDomainErrorLike}.
+ * Membership check for the kit's infrastructure-error family, by class or
+ * by `category`, like {@link isDomainErrorLike}.
  */
 export function isInfrastructureErrorLike(
 	value: unknown,
@@ -234,16 +233,15 @@ export function isInfrastructureErrorLike(
 }
 
 /**
- * Copy-safe membership check for the kit's wiring-error family.
- * Same rationale as {@link isDomainErrorLike}.
+ * Membership check for the kit's wiring-error family, by `category`, like
+ * {@link isDomainErrorLike}.
  *
  * A wiring error states a deterministic programming or configuration defect.
  * A kit boundary that translates failures uses this check to pass such an
  * error through untouched, instead of relabelling it as a store failure.
  *
  * The check narrows to the structural shape, not to a class: the family's
- * base stays kit-internal, and an error from another kit copy carries the
- * shape without being an instance of this copy's class.
+ * base stays kit-internal.
  */
 export function isWiringErrorLike(value: unknown): value is Error & {
 	readonly code: string;
@@ -873,16 +871,13 @@ export class SnapshotCorruptedError extends InfrastructureError<"SNAPSHOT_CORRUP
  * (`apply`, `setState`, `addDomainEvent`) without having been built by
  * the kit's constructors: `createDomainEvent`, `createStampedDomainEvent`, or
  * the aggregate `createEvent` helper. Those constructors deep-freeze the
- * event, defensively copy payload and metadata, and mark the result as
- * kit-built. The mark has two tiers: a
- * module-private one for events of this loaded copy of the kit, and a
- * cooperative `Symbol.for` brand that a second loaded copy applies and
- * recognizes. Anything else (a hand-rolled literal, a shallow-frozen
- * copy with mutable nested data) is rejected: a mutable event recorded
- * next to a state change can silently diverge from it afterwards. A
- * wiring error: deterministic bug at the call site, the remedy is
- * building through the constructors. The gate catches accidents, not
- * adversaries: code in the same process can fake the brand.
+ * event, defensively copy payload and metadata, and register the result
+ * in a module-private set. Anything else (a hand-rolled literal, a
+ * shallow-frozen copy with mutable nested data) is rejected: a mutable
+ * event recorded next to a state change can silently diverge from it
+ * afterwards. A wiring error: deterministic bug at the call site, the
+ * remedy is building through the constructors. An event of another loaded
+ * copy of the kit throws `DuplicateKitCopyError` instead.
  */
 export class HandBuiltEventError extends KitWiringError<"HAND_BUILT_EVENT"> {
 	constructor(eventType: string) {
@@ -1425,29 +1420,32 @@ export class EventCollectionError extends KitWiringError<"EVENT_COLLECTION_FAILE
 }
 
 /**
- * Thrown at bootstrap when the global key of a kit capability registry
- * already holds a value that is not a registry: another module claimed
- * the key. The kit neither shares that value nor overwrites it, because a
- * silent replacement would break whichever module owned the key first. A
- * wiring error in the host process; the remedy is one owner per key.
+ * Thrown when a kit operation receives an object that another loaded copy
+ * of the kit built. Each copy keeps its capabilities to itself, so such an
+ * object cannot work here. Two copies load when an adapter package bundles
+ * the kit or depends on another version of it. A wiring error: load one
+ * copy per process, and declare the kit as a peerDependency of an adapter
+ * package.
  */
-export class CapabilityRegistryConflictError extends KitWiringError<"CAPABILITY_REGISTRY_CONFLICT"> {
-	constructor(public readonly key: symbol) {
+export class DuplicateKitCopyError extends KitWiringError<"DUPLICATE_KIT_COPY"> {
+	constructor(
+		/** What was rejected, for example "aggregate" or "domain event". */
+		public readonly subject: string,
+	) {
 		super(
-			"CAPABILITY_REGISTRY_CONFLICT",
-			`The global key ${String(key)} holds a value that is not a ` +
-				"capability registry of this package. Another module claimed the " +
-				"key; the kit refuses to share or overwrite it.",
+			"DUPLICATE_KIT_COPY",
+			`${subject} was built by another loaded copy of @shirudo/ddd-kit. ` +
+				"Load one copy per process: dedupe the dependency, and declare " +
+				"the kit as a peerDependency of an adapter package.",
 		);
 	}
 }
 
 /**
  * Thrown when a kit operation receives an instance that this package did
- * not construct: a structural lookalike, a repository DTO, or an instance
- * from an incompatible copy of the package. Such an instance carries none
- * of the kit-managed capabilities the operation needs. A wiring error:
- * extend the kit's base classes and run one compatible package copy.
+ * not construct: a structural lookalike or a repository DTO. Such an
+ * instance carries none of the kit-managed capabilities the operation
+ * needs. A wiring error: extend the kit's base classes.
  */
 export class UnmanagedInstanceError extends KitWiringError<"UNMANAGED_INSTANCE"> {
 	constructor(
@@ -1457,17 +1455,13 @@ export class UnmanagedInstanceError extends KitWiringError<"UNMANAGED_INSTANCE">
 		public readonly subject: string,
 		/** The rejected instance's id, when it has one. */
 		public readonly instanceId?: unknown,
-		/** One extra sentence about the registry state, when it explains the rejection. */
-		detail?: string,
 	) {
 		super(
 			"UNMANAGED_INSTANCE",
 			`${operation} requires an instance constructed by this package; ` +
 				`${instanceId === undefined ? subject : `${subject} ${String(instanceId)}`} ` +
 				"carries no kit-managed capability. Construct it through this " +
-				"package and run one compatible package copy; a structural " +
-				"lookalike or an instance from another copy cannot be managed." +
-				(detail === undefined ? "" : ` ${detail}`),
+				"package; a structural lookalike cannot be managed.",
 		);
 	}
 }
@@ -2171,13 +2165,13 @@ export type KitErrorCode =
 	| "AGGREGATE_DELETED"
 	| "AGGREGATE_NOT_FOUND"
 	| "AGGREGATE_TRACKING"
-	| "CAPABILITY_REGISTRY_CONFLICT"
 	| "COMMIT_FAILED"
 	| "CONCURRENCY_CONFLICT"
 	| "DIRECT_STATE_MUTATION"
 	| "DOMAIN_TRANSITION_GUARD_REJECTED"
 	| "DUPLICATE_AGGREGATE"
 	| "DUPLICATE_EVENT_ID"
+	| "DUPLICATE_KIT_COPY"
 	| "DUPLICATE_HANDLER_REGISTRATION"
 	| "ERROR_MAPPER_FAILED"
 	| "EVENT_AGGREGATE_IDENTITY_INVALID"

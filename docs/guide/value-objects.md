@@ -193,10 +193,10 @@ The base class gives you:
 
 `equals()` checks the constructor as well as the props. A `DateRange` is not
 equal to another class with the same `{ from, to }` shape, because the type is
-part of the meaning. `valueObjectEquals()` and `deepEqual()` see the class too: every
-instance records its class under an own symbol key, so two instances of
-different classes are not equal, and an instance is not equal to a plain
-`{ props }` record.
+part of the meaning. `valueObjectEquals()` and `deepEqual()` see the class too:
+they compare the prototype of a class instance, so two instances of different
+classes are not equal, and an instance is not equal to a plain `{ props }`
+record.
 
 ### Compose Value Objects
 
@@ -270,8 +270,8 @@ usually belong to an entity, a persistence record, or an event envelope.
 Inside a nested value object the `path` of `ignoreKeyPredicate` continues with
 `props`, for example `["window", "props"]`. `ignoreKeys: ["props"]` therefore
 empties every nested value object. To ignore a field of your own named `props`,
-use `ignoreKeyPredicate` and check the path. The key under which the kit records
-the class of a nested value object is never ignored.
+use `ignoreKeyPredicate` and check the path. The class of a nested value object
+counts in every case.
 
 ## Data Rules That Matter
 

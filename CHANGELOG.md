@@ -295,8 +295,8 @@ immutable. Run one kit version per process during a cutover.
   `update`, or `remove`. The unit of work sets it on every conflict that
   leaves a flush, because a flush or an event store reports only what it
   observed. It sets the intent on the conflict object itself, found by its
-  code in the cause chain, so a conflict that the flush wraps, or one from
-  another copy of the kit, gets it too, and `mapError` receives the error
+  code in the cause chain, so a conflict that the flush wraps gets it too,
+  and `mapError` receives the error
   that the flush threw. A conflict that `mapError` returns gets the intent as
   well. A conflict outside a unit of work has `intent: null`.
 - `defineRepository` accepts an append-only port with `appendOnly: true`,
@@ -384,9 +384,13 @@ immutable. Run one kit version per process during a cutover.
 - `DomainEventValidationError` and `SnapshotTimeValidationError` carry a
   `code` and a `field`.
 - `isDomainErrorLike`, `isInfrastructureErrorLike`, and `isWiringErrorLike`
-  recognize an error from another copy of the kit. The capability registries
-  recognize an aggregate from another copy and fail loud with
-  `CapabilityRegistryConflictError` on a foreign value.
+  recognize the error families by class or by their `category` field.
+- One copy of the kit per process. An aggregate, an entity, an event, an
+  event definition, a value object, or a repository definition that a second
+  loaded copy built throws `DuplicateKitCopyError` (code
+  `DUPLICATE_KIT_COPY`) at the first lookup that fails. Declare the kit as a
+  peer dependency of an adapter package. The kit keeps no registry on
+  `globalThis`.
 
 #### Messaging and delivery
 
@@ -578,8 +582,6 @@ immutable. Run one kit version per process during a cutover.
   same order. An array state keeps its non-index keys.
 - A state-stored aggregate checks the aggregate identity of an event. Before,
   it recorded an event of another aggregate, and `withCommit` published it.
-- A replay routes a `DomainError` from another copy of the kit into the
-  `Result`.
 - `InMemoryEventStore.append` costs the size of the batch, not of the stream.
   `InMemoryOutbox.getPending(limit)` stops at the limit.
 

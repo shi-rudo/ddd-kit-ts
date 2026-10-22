@@ -18,7 +18,6 @@ import {
 	type AggregateIdentityMismatchOptions,
 	AggregateNotFoundError,
 	type AggregateNotFoundErrorOptions,
-	CapabilityRegistryConflictError,
 	ConcurrencyConflictError,
 	type ConcurrencyConflictErrorOptions,
 	DirectStateMutationError,
@@ -27,6 +26,7 @@ import {
 	DuplicateAggregateError,
 	type DuplicateAggregateErrorOptions,
 	type DuplicateEventIdErrorOptions,
+	DuplicateKitCopyError,
 	ErrorMapperFailedError,
 	EventCollectionError,
 	FoldReturnedNoStateError,
@@ -220,11 +220,8 @@ const concreteCases: ReadonlyArray<{
 		retryable: false,
 	},
 	{
-		error: () =>
-			new CapabilityRegistryConflictError(
-				Symbol.for("@shirudo/ddd-kit/test-registry/v1"),
-			),
-		code: "CAPABILITY_REGISTRY_CONFLICT",
+		error: () => new DuplicateKitCopyError("The aggregate"),
+		code: "DUPLICATE_KIT_COPY",
 		category: "WIRING",
 		retryable: false,
 	},
@@ -420,24 +417,6 @@ describe("kit errors are StructuredErrors (code = name = the one identifier)", (
 		);
 
 		expect(status).toBe(409);
-	});
-
-	it("UnmanagedInstanceError appends the registry detail when given one", () => {
-		const withDetail = new UnmanagedInstanceError(
-			"stampPendingEvents",
-			"aggregate",
-			"order-1",
-			"The registry is private.",
-		);
-		const withoutDetail = new UnmanagedInstanceError(
-			"stampPendingEvents",
-			"aggregate",
-			"order-1",
-		);
-
-		expect(withDetail.message).toContain("aggregate order-1");
-		expect(withDetail.message.endsWith("The registry is private.")).toBe(true);
-		expect(withoutDetail.message).not.toContain("private");
 	});
 
 	it("further structured kit errors carry their codes", () => {
@@ -664,7 +643,7 @@ describe("KitErrorCode stays in sync with the classes", () => {
 			AssertKitCode<AcknowledgedRecordPendingError["code"]>,
 			AssertKitCode<AggregateDeletedError["code"]>,
 			AssertKitCode<AggregateNotFoundError["code"]>,
-			AssertKitCode<CapabilityRegistryConflictError["code"]>,
+			AssertKitCode<DuplicateKitCopyError["code"]>,
 			AssertKitCode<ConcurrencyConflictError["code"]>,
 			AssertKitCode<DirectStateMutationError["code"]>,
 			AssertKitCode<DuplicateAggregateError["code"]>,

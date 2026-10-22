@@ -658,7 +658,7 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 									`${describeAggregateIdentity({ aggregateType: registeredType, aggregateId: registeredId })}. ` +
 									"The aggregate base " +
 									"classes attribute every event to the aggregate on every recording path; an " +
-									"instance from another package copy must stamp it the " +
+									"aggregate that does not extend them must attribute it the " +
 									"same way.",
 								event.type,
 							);

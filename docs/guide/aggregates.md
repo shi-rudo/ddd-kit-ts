@@ -95,12 +95,10 @@ Two wiring guards sit on the recording paths. An event that no kit
 constructor built throws `HandBuiltEventError` (code `HAND_BUILT_EVENT`). A
 state or payload root that carries an own `__proto__` key throws
 `PrototypePollutionError` (code `PROTOTYPE_POLLUTION`). Both guard against
-accidents, not against code in the same process: the kit-built mark has a
-cooperative tier that another loaded copy of the kit can apply, and the key
-guard looks at the root object only. Validate and strip untrusted input at
-the application edge. See
-[Domain Events -> Shape](./domain-events.md#shape) for the two tiers of the
-kit-built mark.
+accidents, not against code in the same process. Validate and strip
+untrusted input at the application edge. An event that another loaded copy of
+the kit built throws `DuplicateKitCopyError`; see
+[Domain Events -> Shape](./domain-events.md#shape).
 
 `AggregateConfig.maxPendingEvents` limits the pending list. A recording that
 would grow the list past the limit throws `PendingEventLimitExceededError`

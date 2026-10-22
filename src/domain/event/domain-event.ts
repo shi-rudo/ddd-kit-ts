@@ -1,8 +1,8 @@
 import { assertNoOwnProtoKey } from "../../errors/kit-errors";
 import {
-	applyCooperativeBrand,
-	hasCooperativeBrand,
-} from "../../internal/cooperative-brand";
+	assertNotFromAnotherKitCopy,
+	markKitCopy,
+} from "../../internal/kit-copy";
 import { copyPlainData } from "../../internal/structural/plain-data";
 import { uuidV7 } from "../../internal/uuid-v7";
 import { deepFreeze } from "../value-object/value-object";
@@ -438,55 +438,37 @@ const STAMPED_EVENTS = new WeakSet<object>();
 const UNSTAMPED_EVENTS = new WeakSet<object>();
 const FACTORY_OWNED_EVENT_STAMPS = new WeakSet<object>();
 
-// Cooperative cross-instance tier of the kit-built check: a WeakSet is
-// bound to ONE loaded copy of this module, so an event legitimately
-// built by a second copy of the kit would be rejected as hand-built.
-// Such events are recognized by the cooperative brand instead, which
-// every constructor and kit-derived copy applies before it freezes the
-// event (see `cooperative-brand.ts` for the probe rules).
-// The key strings are the cross-copy wire contract: every kit copy in a
-// process reads and applies the same keys. The constant names follow the
-// vocabulary; the key strings never change, so an older word in a key is
-// part of the contract, not a name.
-const STAMPED_BRAND = Symbol.for("@shirudo/ddd-kit.mintedEvent");
-const UNSTAMPED_BRAND = Symbol.for("@shirudo/ddd-kit.uncommittedEvent");
-
-function brandStampedEvent(event: object): void {
-	applyCooperativeBrand(event, STAMPED_BRAND);
-}
-
-function brandUnstampedEvent(event: object): void {
-	applyCooperativeBrand(event, UNSTAMPED_BRAND);
-}
-
 function isFactoryOwnedDomainEventStamp(stamp: object): boolean {
 	return FACTORY_OWNED_EVENT_STAMPS.has(stamp);
 }
 
 /**
- * Whether `event` is a stamped domain event: it came out of
- * {@link createDomainEvent}, {@link createStampedDomainEvent}, or
- * {@link stampDomainEvent}, so it is deeply frozen with defensively copied
- * payload and metadata. An unstamped decision carries the other brand; see
- * {@link isUnstampedDomainEvent}. Two tiers: events of THIS
- * loaded copy of the kit are verified through the module-private
- * WeakSet; events built by ANOTHER copy (duplicate dependency, dual
- * CJS/ESM load) are recognized through a cooperative `Symbol.for`
- * brand that code in the same process can fake. The gate catches
- * accidents, not adversaries. Module-internal export for the aggregate
- * recording paths; not part of the package entries.
+ * Whether `event` is a stamped domain event that this copy of the kit
+ * built: it came out of {@link createDomainEvent},
+ * {@link createStampedDomainEvent}, or {@link stampDomainEvent}, so it is
+ * deeply frozen with defensively copied payload and metadata. An unstamped
+ * decision is in the other set; see {@link isUnstampedDomainEvent}.
+ * Module-internal export for the aggregate recording paths; not part of
+ * the package entries.
  */
 export function isStampedDomainEvent(event: object): event is AnyDomainEvent {
-	return STAMPED_EVENTS.has(event) || hasCooperativeBrand(event, STAMPED_BRAND);
+	return STAMPED_EVENTS.has(event);
 }
 
-/** Whether a value is a kit-built unstamped event. */
+/** Whether a value is an unstamped event that this copy of the kit built. */
 export function isUnstampedDomainEvent(
 	event: object,
 ): event is AnyUnstampedDomainEvent {
-	return (
-		UNSTAMPED_EVENTS.has(event) || hasCooperativeBrand(event, UNSTAMPED_BRAND)
-	);
+	return UNSTAMPED_EVENTS.has(event);
+}
+
+/**
+ * Throws `DuplicateKitCopyError` when another loaded copy of the kit built
+ * `event`. A recording path calls it before it reports the event as
+ * hand-built.
+ */
+export function assertEventNotFromAnotherKitCopy(event: unknown): void {
+	assertNotFromAnotherKitCopy(event, "The domain event");
 }
 
 /**
@@ -543,15 +525,15 @@ export function buildUnstampedDomainEvent<T extends string, P>(
 		payload: ownEventPayload(definition, payload, operation),
 		schemaVersion: options?.schemaVersion ?? 1,
 	};
-	brandUnstampedEvent(event);
+	markKitCopy(event);
 	const unstamped = deepFreeze(event) as UnstampedDomainEvent<T, P>;
 	UNSTAMPED_EVENTS.add(unstamped);
 	return unstamped;
 }
 
-/** Brands and freezes a kit-derived copy of an unstamped event. */
+/** Marks and freezes a kit-derived copy of an unstamped event. */
 export function adoptUnstampedDomainEvent<T extends object>(copy: T): T {
-	brandUnstampedEvent(copy);
+	markKitCopy(copy);
 	Object.freeze(copy);
 	UNSTAMPED_EVENTS.add(copy);
 	return copy;
@@ -569,6 +551,7 @@ export function stampDomainEvent<T extends string, P>(
 	stamp: DomainEventStamp,
 ): DomainEvent<T, P> {
 	if (!isUnstampedDomainEvent(event)) {
+		assertEventNotFromAnotherKitCopy(event);
 		throw new TypeError(
 			"stampDomainEvent requires an unstamped event from an aggregate's createEvent",
 		);
@@ -623,24 +606,22 @@ function buildStampedEvent<T extends string, P>(
 		schemaVersion: event.schemaVersion,
 		metadata,
 	};
-	brandStampedEvent(recorded);
+	markKitCopy(recorded);
 	Object.freeze(recorded);
 	STAMPED_EVENTS.add(recorded);
 	return recorded;
 }
 
 /**
- * Brands, freezes, and registers a kit-derived copy of a stamped event
+ * Marks, freezes, and registers a kit-derived copy of a stamped event
  * (e.g. the copy `apply()` stamps with the aggregate identity) as recorded
  * itself.
  * The copy shares the already-frozen payload/metadata of its source,
- * so the kit-built guarantee carries over. Applying the cooperative brand
- * before freezing keeps the copy recognizable by another loaded kit
- * instance as well as by this instance's WeakSet. Module-internal
- * export; not part of the package entries.
+ * so the kit-built guarantee carries over. Module-internal export; not
+ * part of the package entries.
  */
 export function adoptStampedDomainEvent<T extends object>(copy: T): T {
-	brandStampedEvent(copy);
+	markKitCopy(copy);
 	Object.freeze(copy);
 	STAMPED_EVENTS.add(copy);
 	return copy;
@@ -827,7 +808,7 @@ function buildDomainEvent<T extends string, P>(
 	// (Vernon, IDDD §8).
 	// Brand BEFORE the freeze (a frozen object rejects new properties);
 	// non-enumerable, so spreads, JSON, and equality never see it.
-	brandStampedEvent(event);
+	markKitCopy(event);
 	const built = deepFreeze(event) as DomainEvent<T, P>;
 	STAMPED_EVENTS.add(built);
 	return built;

@@ -9,9 +9,9 @@ import { abortReason } from "../../internal/async/abort";
 import type { ExecutionContext } from "../../internal/async/execution";
 import { findInCauseChain } from "../../internal/cause-chain";
 import {
-	applyCooperativeBrand,
-	hasCooperativeBrand,
-} from "../../internal/cooperative-brand";
+	assertNotFromAnotherKitCopy,
+	markKitCopy,
+} from "../../internal/kit-copy";
 import type { EventBus } from "../../messaging/event-bus/ports";
 import type { OutboxWriter } from "../../messaging/outbox/ports";
 import type { AggregateClass } from "../../persistence/repository/identity-map";
@@ -84,14 +84,10 @@ export interface RunOptions {
 	readonly stampOptions?: SharedDomainEventStampOptions;
 }
 
-// Shared across package copies like every other kit brand: a definition
-// built by a bundled plugin copy's defineRepository must be accepted by the
-// host copy's UnitOfWork. The key version stamps the definition SHAPE; bump
-// it when the definition contract changes so an incompatible copy fails the
-// generic not-a-definition check instead of half-working.
-const repositoryDefinitionBrand: unique symbol = Symbol.for(
-	"@shirudo/ddd-kit/repository-definition/v3",
-);
+// A type-level marker: only defineRepository produces a RepositoryDefinition.
+declare const repositoryDefinitionBrand: unique symbol;
+
+const REPOSITORY_DEFINITIONS = new WeakSet<object>();
 
 /** Adapter wiring accepted by {@link defineRepository}. */
 export interface RepositoryDefinitionOptions<
@@ -502,8 +498,10 @@ export function defineRepository<
 		// non-enumerable members vanish silently. Without this check, the
 		// loss surfaces as a bare TypeError deep inside the first run().
 		assertRepositoryDefinitionMembers(branded as Record<PropertyKey, unknown>);
-		applyCooperativeBrand(branded, repositoryDefinitionBrand);
-		return Object.freeze(branded);
+		markKitCopy(branded);
+		Object.freeze(branded);
+		REPOSITORY_DEFINITIONS.add(branded);
+		return branded;
 	};
 	return builder as unknown as RepositoryDefinitionBuilder<TRepositoryPort>;
 }
@@ -839,6 +837,10 @@ export class UnitOfWork<
 		>) {
 			const candidate = this.deps.repositories[key] as unknown;
 			if (!isRepositoryDefinition(candidate)) {
+				assertNotFromAnotherKitCopy(
+					candidate,
+					`The repository definition "${String(key)}"`,
+				);
 				throw new InvalidRepositoryDefinitionError(String(key));
 			}
 			const definition = candidate as RuntimeRepositoryDefinition<Evt, TCtx>;
@@ -855,7 +857,11 @@ export class UnitOfWork<
 }
 
 function isRepositoryDefinition(value: unknown): value is object {
-	return hasCooperativeBrand(value, repositoryDefinitionBrand);
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		REPOSITORY_DEFINITIONS.has(value)
+	);
 }
 
 function makeContext<TRepos, Evt extends AnyDomainEvent>(

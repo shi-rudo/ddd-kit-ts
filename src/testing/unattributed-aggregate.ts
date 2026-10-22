@@ -10,8 +10,8 @@ import type { Id } from "../domain/identity/id";
 /**
  * An instance with the kit's lifecycle capability but without the aggregate
  * identity attribution of the aggregate base classes: the shape of an aggregate
- * from another package copy. Only such an instance can carry an unattributed event,
- * or an event of another aggregate, into the collection.
+ * that does not extend them. Only such an instance can carry an unattributed
+ * event, or an event of another aggregate, into the collection.
  */
 export function unattributedAggregate<
 	TId extends Id<string>,

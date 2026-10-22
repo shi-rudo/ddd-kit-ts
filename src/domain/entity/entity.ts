@@ -64,6 +64,10 @@ import {
 	MissingEntityIdError,
 	UnmanagedInstanceError,
 } from "../../errors/kit-errors";
+import {
+	assertNotFromAnotherKitCopy,
+	markKitCopy,
+} from "../../internal/kit-copy";
 import type { Id } from "../identity/id";
 import { deepFreeze } from "../value-object/value-object";
 
@@ -307,6 +311,7 @@ export abstract class Entity<TState, TId extends Id<string>>
 			throw new MissingEntityIdError(id);
 		}
 		this.id = id;
+		markKitCopy(this);
 		this._stateFreezeMode =
 			(config?.deepFreezeState ?? false) ? "deep" : "shallow";
 		stateValidators.set(
@@ -382,6 +387,7 @@ export function assertStateInvariant<TState>(
 ): void {
 	const validateState = stateValidators.get(entity);
 	if (validateState === undefined) {
+		assertNotFromAnotherKitCopy(entity, "The entity");
 		throw new UnmanagedInstanceError(
 			"assertStateInvariant",
 			"entity",

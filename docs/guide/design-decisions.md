@@ -24,6 +24,24 @@ commit outcomes, poison records, reads that lag, and a second copy of the kit
 in one process. Untrusted input is a different matter. Parse it at the
 boundary, for example with a schema, before it reaches the kit.
 
+## One copy of the kit per process
+
+The kit keeps the capabilities of its aggregates, events, and definitions in
+module-private maps. A second loaded copy, for example from an adapter
+package that bundles the kit, cannot see them. So an object that one copy
+built does not work in the other. The kit marks the objects that it builds,
+and when a lookup fails, it checks the mark. An object of another copy then
+throws `DuplicateKitCopyError` and names the fix: load one copy, and declare
+the kit as a peer dependency of an adapter package. A hand-built object keeps
+its own error.
+
+The kit does not let two copies cooperate. Cooperation needed shared
+registries on `globalThis` and a version in each key, and two copies whose
+versions did not match failed in ways that were hard to trace. A loud failure
+at the first contact is easier to fix. The check runs only when a lookup
+fails, so a test runner or a hot reload that loads a module twice triggers it
+only when an object of the old load reaches the new one.
+
 ## Result lives at the App-Service boundary, not in the domain
 
 The kit keeps one clear error axis:

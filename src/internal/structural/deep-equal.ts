@@ -176,6 +176,7 @@ function deepEqualInner(
 		// identity is the only honest comparison; symmetric because
 		// tagA === tagB was already enforced above.
 		if (isOpaqueExoticTag(tagA)) return objA === objB;
+		if (!haveComparablePrototypes(objA, objB)) return false;
 		return comparePlainObjects(objA, objB, visited);
 	}
 
@@ -242,6 +243,25 @@ function deepEqualInner(
 			return objA === objB;
 		}
 	}
+}
+
+/**
+ * Two records compare by content, whatever realm they come from. Any other
+ * object needs the prototype of the other side: two classes with the same
+ * fields are two different values.
+ */
+function haveComparablePrototypes(a: object, b: object): boolean {
+	const prototypeA: object | null = Object.getPrototypeOf(a);
+	const prototypeB: object | null = Object.getPrototypeOf(b);
+	return (
+		prototypeA === prototypeB ||
+		(isRecordPrototype(prototypeA) && isRecordPrototype(prototypeB))
+	);
+}
+
+/** `null`, or an `Object.prototype` of any realm. */
+function isRecordPrototype(prototype: object | null): boolean {
+	return prototype === null || Object.getPrototypeOf(prototype) === null;
 }
 
 /**

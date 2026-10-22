@@ -1,4 +1,8 @@
 import { err, ok, type Result } from "@shirudo/result";
+import {
+	assertNotFromAnotherKitCopy,
+	markKitCopy,
+} from "../../internal/kit-copy";
 import { deepEqual } from "../../internal/structural/deep-equal";
 import { deepEqualExcept } from "../../internal/structural/deep-equal-except";
 import type { DeepOmitOptions } from "../../internal/structural/deep-omit";
@@ -12,66 +16,19 @@ import { installMutatorShadows } from "../../internal/structural/shadowed-mutato
 
 export type ValueObjectOf<T> = Readonly<T>;
 
-// Every ValueObject constructor records the class of the instance under
-// this key, as an own, non-enumerable, locked data property. The record
-// lets the props copy keep a value object inside another one by reference,
-// and it makes deepEqual class-aware: deepEqual counts own symbol keys and
-// compares functions by identity, so two nested value objects of different
-// classes compare unequal without deepEqual knowing about value objects.
-// The key is a Symbol.for, so an instance built by a second loaded copy of
-// this kit version is recognized too.
-//
 // A nested value object keeps all of its state in `props`: the props copy
-// rejects an instance with an own key outside `props` and the record. The
-// data gates never see the own fields of a subclass, and deepEqual counts
-// them. An open field would let ungated or mutable state into the value,
-// and nested equality would differ from `equals`. With that rule the
-// deepFreeze walk that follows the clone freezes the instance in place
-// and reaches nothing but its own sealed props.
-//
-// This is not a cooperative brand (see internal/cooperative-brand.ts).
-// That probe reads a `true` on a frozen carrier. An instance is open
-// until the walk reaches it, and the stored value must be the class. The
-// frozen carrier here is `props`, and the probe checks it. Like every kit
-// marker it catches accidents, not adversaries. The key version stamps
-// the shape of the record (its value is the class); bump it when that
-// shape changes.
-const VALUE_OBJECT_CLASS = Symbol.for("@shirudo/ddd-kit/value-object-class/v1");
-
-function recordValueObjectClass(
-	instance: object,
-	valueObjectClass: unknown,
-): void {
-	Object.defineProperty(instance, VALUE_OBJECT_CLASS, {
-		value: valueObjectClass,
-		enumerable: false,
-		writable: false,
-		configurable: false,
-	});
+// rejects an instance with an own field outside `props`. The data gates
+// never see the own fields of a subclass, and deepEqual counts them. An
+// open field would let ungated or mutable state into the value, and nested
+// equality would differ from `equals`. With that rule the deepFreeze walk
+// that follows the copy freezes the instance in place and reaches nothing
+// but its own sealed props.
+function isValueObjectInstance(value: unknown): value is ValueObject<object> {
+	return value instanceof ValueObject;
 }
 
-function isValueObjectInstance(value: unknown): boolean {
-	if (value === null || typeof value !== "object") {
-		return false;
-	}
-	const record = Reflect.getOwnPropertyDescriptor(value, VALUE_OBJECT_CLASS);
-	if (
-		record === undefined ||
-		typeof record.value !== "function" ||
-		record.enumerable !== false ||
-		record.writable !== false ||
-		record.configurable !== false
-	) {
-		return false;
-	}
-	const props = Reflect.getOwnPropertyDescriptor(value, "props")?.value;
-	return typeof props === "object" && props !== null && Object.isFrozen(props);
-}
-
-function openValueObjectKeys(instance: object): PropertyKey[] {
-	return Reflect.ownKeys(instance).filter(
-		(key) => key !== "props" && key !== VALUE_OBJECT_CLASS,
-	);
+function openValueObjectKeys(instance: object): string[] {
+	return Object.keys(instance).filter((key) => key !== "props");
 }
 
 function rejectValueObjectAsInput(input: unknown, entry: string): void {
@@ -176,7 +133,10 @@ function copyValueObjectProps<T>(props: T, entry: string): T {
 }
 
 function keepNestedValueObject(value: object): boolean {
-	if (!isValueObjectInstance(value)) return false;
+	if (!isValueObjectInstance(value)) {
+		assertNotFromAnotherKitCopy(value, "The nested value object");
+		return false;
+	}
 	const openKeys = openValueObjectKeys(value);
 	if (openKeys.length > 0) {
 		throw new TypeError(
@@ -257,8 +217,8 @@ export function valueObjectEquals<T>(
  *
  * The walk enters a nested `ValueObject` instance like any other object,
  * so inside it the path continues with `props`; `ignoreKeys: ["props"]`
- * empties every nested value object. The key under which the kit records
- * the class of the instance is never ignored.
+ * empties every nested value object. The class of a nested value object
+ * counts in every case.
  *
  * @param a - First value object
  * @param b - Second value object
@@ -297,21 +257,7 @@ export function valueObjectEqualsExcept<T>(
 	b: ValueObjectOf<T>,
 	options: DeepOmitOptions,
 ): boolean {
-	return deepEqualExcept(a, b, keepValueObjectClass(options));
-}
-
-// Without the class record two nested value objects of different classes
-// compare equal, so no option may ignore it.
-function keepValueObjectClass(options: DeepOmitOptions): DeepOmitOptions {
-	const { ignoreKeys, ignoreKeyPredicate } = options;
-	return {
-		...options,
-		ignoreKeys: ignoreKeys?.filter((key) => key !== VALUE_OBJECT_CLASS),
-		ignoreKeyPredicate:
-			ignoreKeyPredicate &&
-			((key, path) =>
-				key !== VALUE_OBJECT_CLASS && ignoreKeyPredicate(key, path)),
-	};
+	return deepEqualExcept(a, b, options);
 }
 
 /**
@@ -415,8 +361,7 @@ export interface IValueObject<T extends object> {
 /**
  * Abstract base class for creating Value Objects.
  * Value Objects are immutable and defined by their properties. A value
- * object can hold other value objects in its props. Every instance
- * records its class under an own symbol key, so `equals` compares a
+ * object can hold other value objects in its props. `equals` compares a
  * nested value object by class and props and does not call its `equals`
  * method.
  *
@@ -449,7 +394,7 @@ export abstract class ValueObject<T extends object> implements IValueObject<T> {
 		rejectValueObjectAsInput(props, "new ValueObject()");
 		this.validate(props);
 		this.props = deepFreeze(copyValueObjectProps(props, "new ValueObject()"));
-		recordValueObjectClass(this, this.constructor);
+		markKitCopy(this);
 	}
 
 	/**

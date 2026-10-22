@@ -365,21 +365,13 @@ export function assertEqual(
 }
 
 /**
- * Walks the standard `cause` chain (cycle-safe, hostile-getter-safe)
- * looking for an Error that matches the given name. Matching is
- * deliberately by NAME, not `instanceof`: the suite ships in its own
- * bundle entry, and the adapter's errors come from the main entry's
- * copy of the kit (or even a second installed kit version) -
- * cross-copy `instanceof` is always false, name identity is the stable
- * contract. Since v3 the kit's errors are StructuredErrors whose
- * runtime `name` IS their SCREAMING_SNAKE code, minification-stable by
- * construction and inherited by subclasses (a `PgConflictError extends
- * ConcurrencyConflictError` keeps the code as its name). The suites
- * match ONLY the v3 codes. Failure diagnostics render the rejection's
- * cause-chain names ({@link describeError}), so an unexpected error,
- * including one from a different kit copy in the dependency graph, is
- * identifiable from the message without version-specific knowledge in
- * the suite.
+ * Walks the standard `cause` chain (cycle-safe) looking for an Error whose
+ * name is the given kit code. A kit error carries its code as its name,
+ * minification-stable by construction and inherited by subclasses (a
+ * `PgConflictError extends ConcurrencyConflictError` keeps the code as its
+ * name). Failure diagnostics render the names of the cause chain
+ * ({@link describeError}), so an unexpected error is identifiable from the
+ * message.
  */
 export function chainContainsErrorNamed(error: unknown, name: string): boolean {
 	let found = false;
@@ -538,8 +530,8 @@ export function describeError(error: unknown): string {
 /**
  * Names along the `cause` chain (cycle-safe, hostile-getter-safe), for
  * failure diagnostics: a wrapped rejection shows WHAT it wraps, so an
- * unexpected error deep in the chain (a raw driver error, or an error
- * from a different kit copy) is identifiable from the message alone.
+ * unexpected error deep in the chain (for example a raw driver error) is
+ * identifiable from the message alone.
  */
 function causeChainNames(error: Error): string[] {
 	const names: string[] = [];
