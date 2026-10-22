@@ -1641,6 +1641,8 @@ The root entry no longer exports `capturePersistenceBaseline`,
 - `occurredAt` and the event clock accept a `Date` of another realm, for
   example one from `node:vm`. In rc.15 they threw
   `EVENT_OCCURRED_AT_INVALID`.
+- `createMoneyFactory().scaleOf` throws `INVALID_MONEY` when the resolver
+  returns an invalid scale. In rc.15 it returned the value unchecked.
 - `toPublicErrorView` accepts an `onCatalogError` observer. A failure of the
   catalog still returns the fallback view, and the observer now receives the
   failure.
