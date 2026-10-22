@@ -3,7 +3,7 @@ import {
 	assertNotFromAnotherKitCopy,
 	markKitCopy,
 } from "../../internal/kit-copy";
-import { copyPlainData } from "../../internal/structural/plain-data";
+import { copyPlainData, isDate } from "../../internal/structural/plain-data";
 import { uuidV7 } from "../../internal/uuid-v7";
 import { deepFreeze } from "../value-object/value-object";
 import { type ClockFactory, defaultClockFactory, readClock } from "./clock";
@@ -840,7 +840,7 @@ function assertProducerOwnedEventFields(
 }
 
 function copyValidEventDate(value: unknown): Date {
-	if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
+	if (!isDate(value) || !Number.isFinite(value.getTime())) {
 		throw new DomainEventValidationError(
 			"EVENT_OCCURRED_AT_INVALID",
 			"occurredAt",
@@ -1003,24 +1003,13 @@ export function copyMetadata(
 export function mergeMetadata(
 	...metadataObjects: Array<EventMetadata | undefined>
 ): EventMetadata {
-	// Copy via defineProperty, not Object.assign: assign uses [[Set]],
-	// which invokes the `__proto__` setter for an own "__proto__" key
-	// (typical of JSON.parse'd metadata from outbox rows or message
-	// envelopes) and would install an attacker-controlled prototype.
 	const merged: Record<PropertyKey, unknown> = {};
 	for (const metadata of metadataObjects) {
 		if (!metadata) continue;
+		// An own "__proto__" key, typical of JSON.parse'd metadata, would
+		// reach the prototype setter of `merged` through Object.assign.
 		assertNoOwnProtoKey(metadata, "Event metadata");
-		for (const key of Reflect.ownKeys(metadata)) {
-			const descriptor = Object.getOwnPropertyDescriptor(metadata, key);
-			if (!descriptor?.enumerable) continue;
-			Object.defineProperty(merged, key, {
-				value: (metadata as Record<PropertyKey, unknown>)[key],
-				writable: true,
-				enumerable: true,
-				configurable: true,
-			});
-		}
+		Object.assign(merged, metadata);
 	}
 	return merged as EventMetadata;
 }

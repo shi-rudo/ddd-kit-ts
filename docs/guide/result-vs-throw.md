@@ -381,7 +381,9 @@ return Response.json(problem.body, { status: problem.status });
 
 `toPublicErrorView` maps known kit errors to stable public codes and safe
 messages. Extend the catalog with your own domain error codes when you need
-localized client text.
+localized client text. If your catalog or its messages fail, the view falls
+back to `INTERNAL_ERROR`. Pass `onCatalogError` to see that failure in your
+logs.
 
 For validation errors specifically, use the HTTP shortcut:
 

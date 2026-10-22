@@ -1554,7 +1554,8 @@ The root entry no longer exports `capturePersistenceBaseline`,
   `structuredClone`. The rule changes of the next items apply to it too.
 - The event constructors copy the payload and the metadata with one walk
   under the plain-data rule (see "One rule for plain data" in the design
-  decisions). Three cases that rc.15 accepted now throw: an object as a key
+  decisions). A `Date` of any realm, also a subclass such as the `Date` of
+  fake timers, becomes a plain `Date`. Three cases that rc.15 accepted now throw: an object as a key
   of a `Map` or a member of a `Set`, and an own `__proto__` key below the
   root. A `Proxy` over a record no longer throws; the copy takes its data.
   An expando on a `Map`, a `Set`, or a `Date` no longer throws; the copy
@@ -1635,3 +1636,13 @@ The root entry no longer exports `capturePersistenceBaseline`,
   passes only `context.signal` now starts a new chain, so add `publishChain`
   next to `signal`. `EventHandler` receives an `EventHandlerContext`, which
   extends `ExecutionContext`.
+- `DomainStateMachine.snapshot` returns the same deeply frozen snapshot until
+  the next successful `dispatch`. In rc.15 every read returned a new copy.
+- `occurredAt` and the event clock accept a `Date` of another realm, for
+  example one from `node:vm`. In rc.15 they threw
+  `EVENT_OCCURRED_AT_INVALID`.
+- `createMoneyFactory().scaleOf` throws `INVALID_MONEY` when the resolver
+  returns an invalid scale. In rc.15 it returned the value unchecked.
+- `toPublicErrorView` accepts an `onCatalogError` observer. A failure of the
+  catalog still returns the fallback view, and the observer now receives the
+  failure.

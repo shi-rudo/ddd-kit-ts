@@ -7,10 +7,7 @@ import type {
 } from "./contracts";
 import { ensureStableDomainMachineDefinition } from "./definition";
 import { ReentrantDomainStateMachineEvaluationError } from "./errors";
-import {
-	createDomainMachineSnapshot,
-	prepareDomainMachineSnapshot,
-} from "./snapshot";
+import { prepareDomainMachineSnapshot } from "./snapshot";
 import {
 	canTransitionPreparedDomainState,
 	createInitialDomainMachineSnapshotFromPrepared,
@@ -112,9 +109,9 @@ export class DomainStateMachine<
 		}
 	}
 
-	/** Returns a defensive, deeply frozen copy of the current snapshot. */
+	/** The current snapshot. It is deeply frozen, so callers share it safely. */
 	get snapshot(): DomainMachineSnapshot<TState, TContext> {
-		return createDomainMachineSnapshot<TState, TContext>(this.#snapshot);
+		return this.#snapshot;
 	}
 
 	/** Current named control state. */

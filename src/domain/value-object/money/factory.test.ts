@@ -74,6 +74,13 @@ describe("createMoneyFactory", () => {
 		expect(factory.scaleOf("EUR")).toBe(2);
 	});
 
+	it("rejects an invalid scale from the resolver", () => {
+		const broken = createMoneyFactory({ scaleFor: () => 2.5 });
+
+		expect(() => broken.scaleOf("EUR")).toThrow(InvalidMoneyError);
+		expect(() => broken.zero("EUR")).toThrow(InvalidMoneyError);
+	});
+
 	it("parse is exact-only: over-precise input is rejected, never rounded", () => {
 		expect(() => factory.parse("10.999", "EUR")).toThrow(
 			MoneyPrecisionLossError,

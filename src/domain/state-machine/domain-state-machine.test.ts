@@ -1759,17 +1759,18 @@ describe("DomainStateMachine", () => {
 		expect(machine.dispatch({ type: "Close" }).to).toBe("closed");
 	});
 
-	it("does not expose its internal snapshot reference through the snapshot getter", () => {
+	it("shares one deeply frozen snapshot that a caller cannot change", () => {
 		const machine = new DomainStateMachine(checkoutDefinition());
 		const exposed = machine.snapshot;
 
 		expect(Object.isFrozen(exposed)).toBe(true);
+		expect(Object.isFrozen(exposed.context)).toBe(true);
 		expect(() => {
 			(exposed as { state: CheckoutState }).state = "completed";
 		}).toThrow();
 
 		expect(machine.state).toBe("awaiting-payment");
-		expect(machine.snapshot).not.toBe(exposed);
+		expect(machine.snapshot).toBe(exposed);
 	});
 
 	it("does not let dispatch results mutate its current snapshot", () => {
@@ -2434,7 +2435,6 @@ describe("DomainStateMachine", () => {
 		}
 		class SecretMap extends Map<string, string> {}
 		class SecretSet extends Set<string> {}
-		class SecretDate extends Date {}
 		class SecretRegExp extends RegExp {
 			constructor() {
 				super("secret");
@@ -2499,18 +2499,6 @@ describe("DomainStateMachine", () => {
 				closed: { terminal: true },
 			},
 		};
-		const dateDefinition: DomainMachineDefinition<
-			"open" | "closed",
-			{ readonly secret: SecretDate },
-			{ readonly type: "Close" }
-		> = {
-			initial: "open",
-			initialContext: () => ({ secret: new SecretDate() }),
-			states: {
-				open: { on: { Close: { target: "closed" } } },
-				closed: { terminal: true },
-			},
-		};
 		const regexpInputDefinition: DomainMachineDefinition<
 			"open" | "closed",
 			Record<string, never>,
@@ -2554,9 +2542,6 @@ describe("DomainStateMachine", () => {
 		expect(() => new DomainStateMachine(mapDefinition)).toThrow(
 			InvalidDomainMachineContextError,
 		);
-		expect(() => new DomainStateMachine(dateDefinition)).toThrow(
-			InvalidDomainMachineContextError,
-		);
 		expect(() => new DomainStateMachine(alteredPrototypeDefinition)).toThrow(
 			InvalidDomainMachineContextError,
 		);
@@ -2588,6 +2573,26 @@ describe("DomainStateMachine", () => {
 				{ type: "Close" },
 			),
 		).toThrow(InvalidDomainTransitionResultError);
+	});
+
+	it("copies a Date subclass in its data to a plain Date", () => {
+		class BusinessDate extends Date {}
+		const definition: DomainMachineDefinition<
+			"open",
+			{ readonly openedAt: Date },
+			{ readonly type: "Stay" }
+		> = {
+			initial: "open",
+			initialContext: () => ({
+				openedAt: new BusinessDate("2026-10-21T10:00:00.000Z"),
+			}),
+			states: { open: {} },
+		};
+
+		const { openedAt } = new DomainStateMachine(definition).context;
+
+		expect(Object.getPrototypeOf(openedAt)).toBe(Date.prototype);
+		expect(openedAt.toISOString()).toBe("2026-10-21T10:00:00.000Z");
 	});
 
 	it("rejects Array subclasses instead of silently removing their behavior", () => {

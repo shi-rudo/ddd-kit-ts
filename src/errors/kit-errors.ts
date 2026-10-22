@@ -19,6 +19,18 @@ import { StructuredError } from "@shirudo/base-error";
  */
 
 /**
+ * The identity of one aggregate instance, in the messages and fields of an
+ * error. The domain `AggregateIdentity` owns the concept. This copy exists
+ * because the errors area imports nothing from the rest of the kit.
+ *
+ * @inline
+ */
+type AggregateIdentity = {
+	readonly aggregateType: string;
+	readonly aggregateId: string;
+};
+
+/**
  * Options for consumer subclasses of {@link DomainError} and
  * {@link InfrastructureError}: the `code` (which also becomes
  * `error.name`) and the technical `message` are the only obligations;
@@ -366,10 +378,7 @@ export class FoldReturnedNoStateError extends KitWiringError<"FOLD_RETURNED_NO_S
 /** Constructor options for {@link DirectStateMutationError}. */
 export interface DirectStateMutationErrorOptions {
 	/** The aggregate the error names. */
-	readonly identity: {
-		readonly aggregateType: string;
-		readonly aggregateId: string;
-	};
+	readonly identity: AggregateIdentity;
 }
 
 /**
@@ -663,10 +672,7 @@ export class InvalidVersionError extends KitWiringError<"INVALID_VERSION"> {
 /** Constructor options for {@link UnreplayableAggregateError}. */
 export interface UnreplayableAggregateErrorOptions {
 	/** The aggregate the error names. */
-	readonly identity: {
-		readonly aggregateType: string;
-		readonly aggregateId: string;
-	};
+	readonly identity: AggregateIdentity;
 	/** Why the aggregate cannot take a replay, with the safe remedy. */
 	readonly reason: string;
 }
@@ -712,10 +718,7 @@ export class UnreplayableAggregateError extends KitWiringError<"UNREPLAYABLE_AGG
  * event states.
  */
 export interface AggregateIdentityMismatchOptions {
-	readonly expected: {
-		readonly aggregateType: string;
-		readonly aggregateId: string;
-	};
+	readonly expected: AggregateIdentity;
 	readonly actual: {
 		readonly aggregateType?: string;
 		readonly aggregateId?: string;
@@ -728,10 +731,7 @@ export interface AggregateIdentityMismatchOptions {
  * format every kit message uses, so a log search finds all of them. Kit
  * modules only; not part of the package entries.
  */
-export function describeAggregateIdentity(identity: {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
-}): string {
+export function describeAggregateIdentity(identity: AggregateIdentity): string {
 	return `${identity.aggregateType}(${identity.aggregateId})`;
 }
 
@@ -741,10 +741,9 @@ export function describeAggregateIdentity(identity: {
  * properties into the log. Kit modules only; not part of the package
  * entries.
  */
-export function copyAggregateIdentity(identity: {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
-}): { readonly aggregateType: string; readonly aggregateId: string } {
+export function copyAggregateIdentity(
+	identity: AggregateIdentity,
+): AggregateIdentity {
 	return Object.freeze({
 		aggregateType: identity.aggregateType,
 		aggregateId: identity.aggregateId,
@@ -811,10 +810,7 @@ export class MisattributedEventError extends KitWiringError<"MISATTRIBUTED_EVENT
 /** Constructor options for {@link SnapshotVersionNotRestoredError}. */
 export interface SnapshotVersionNotRestoredErrorOptions {
 	/** The aggregate the error names. */
-	readonly identity: {
-		readonly aggregateType: string;
-		readonly aggregateId: string;
-	};
+	readonly identity: AggregateIdentity;
 	/** The version the snapshot carries. */
 	readonly snapshotVersion: number;
 	/** The version the factory's aggregate reports. */
@@ -895,10 +891,7 @@ export class HandBuiltEventError extends KitWiringError<"HAND_BUILT_EVENT"> {
 /** Constructor options for {@link ReentrantEventRecordingError}. */
 export interface ReentrantEventRecordingErrorOptions {
 	/** The aggregate the error names. */
-	readonly identity: {
-		readonly aggregateType: string;
-		readonly aggregateId: string;
-	};
+	readonly identity: AggregateIdentity;
 }
 
 /**
@@ -930,10 +923,7 @@ export class ReentrantEventRecordingError extends KitWiringError<"REENTRANT_EVEN
 /** Constructor options for {@link DuplicateEventIdError}. */
 export interface DuplicateEventIdErrorOptions {
 	/** The aggregate the error names. */
-	readonly identity: {
-		readonly aggregateType: string;
-		readonly aggregateId: string;
-	};
+	readonly identity: AggregateIdentity;
 	/** The event id two pending events would have shared. */
 	readonly eventId: string;
 }
@@ -971,10 +961,7 @@ export class DuplicateEventIdError extends KitWiringError<"DUPLICATE_EVENT_ID"> 
 /** Constructor options for {@link PendingEventLimitExceededError}. */
 export interface PendingEventLimitExceededErrorOptions {
 	/** The aggregate the error names. */
-	readonly identity: {
-		readonly aggregateType: string;
-		readonly aggregateId: string;
-	};
+	readonly identity: AggregateIdentity;
 	/** The configured `maxPendingEvents`. */
 	readonly limit: number;
 	/** Events pending before the rejected recording. */
@@ -1017,10 +1004,7 @@ export class PendingEventLimitExceededError extends KitWiringError<"PENDING_EVEN
 /** Constructor options for {@link PendingEventBatchMismatchError}. */
 export interface PendingEventBatchMismatchErrorOptions {
 	/** The aggregate the error names. */
-	readonly identity: {
-		readonly aggregateType: string;
-		readonly aggregateId: string;
-	};
+	readonly identity: AggregateIdentity;
 	/** Events in the committed batch. */
 	readonly batchLength: number;
 	/** Events pending on the aggregate. */
@@ -1106,10 +1090,7 @@ export type EventStreamPageReason =
 /** Constructor options for {@link InvalidEventStreamPageError}. */
 export interface InvalidEventStreamPageErrorOptions {
 	/** The aggregate the error names. */
-	readonly identity: {
-		readonly aggregateType: string;
-		readonly aggregateId: string;
-	};
+	readonly identity: AggregateIdentity;
 	/** How the page breaks the contract; see {@link EventStreamPageReason}. */
 	readonly reason: EventStreamPageReason;
 	/** The exclusive cursor the page followed. */
@@ -1258,10 +1239,7 @@ export type ReplayTargetMismatchReason =
 /** Constructor options for {@link ReplayTargetMismatchError}. */
 export interface ReplayTargetMismatchErrorOptions {
 	/** The aggregate the error names. */
-	readonly identity: {
-		readonly aggregateType: string;
-		readonly aggregateId: string;
-	};
+	readonly identity: AggregateIdentity;
 	/** The check that failed; see {@link ReplayTargetMismatchReason}. */
 	readonly reason: ReplayTargetMismatchReason;
 	/** The cursor the read started at; the replay target must start here. */
@@ -1338,10 +1316,7 @@ export class ReplayTargetMismatchError extends InfrastructureError<"REPLAY_TARGE
 /** Constructor options for {@link ReplayRejectedError}. */
 export interface ReplayRejectedErrorOptions {
 	/** The aggregate the error names. */
-	readonly identity: {
-		readonly aggregateType: string;
-		readonly aggregateId: string;
-	};
+	readonly identity: AggregateIdentity;
 	/**
 	 * The version the aggregate held before the rejected page. With
 	 * `toVersion`, it bounds the window `(fromVersion, toVersion]` of the
@@ -1595,10 +1570,7 @@ export class ErrorMapperFailedError extends KitWiringError<"ERROR_MAPPER_FAILED"
 /** Constructor options for {@link UnregisteredChangesError}. */
 export interface UnregisteredChangesErrorOptions {
 	/** The aggregate the error names. */
-	readonly identity: {
-		readonly aggregateType: string;
-		readonly aggregateId: string;
-	};
+	readonly identity: AggregateIdentity;
 	/** Whether the repository of the aggregate is append-only. */
 	readonly appendOnly?: boolean;
 }
@@ -1646,10 +1618,7 @@ export class UnregisteredChangesError extends KitWiringError<"UNREGISTERED_CHANG
 /** Constructor options for {@link AggregateDeletedError}. */
 export interface AggregateDeletedErrorOptions {
 	/** The aggregate the error names. */
-	readonly identity: {
-		readonly aggregateType: string;
-		readonly aggregateId: string;
-	};
+	readonly identity: AggregateIdentity;
 }
 
 /**
@@ -1693,10 +1662,7 @@ export class AggregateDeletedError extends KitWiringError<"AGGREGATE_DELETED"> {
  */
 export interface AggregateNotFoundErrorOptions {
 	/** The aggregate the error names. */
-	readonly identity: {
-		readonly aggregateType: string;
-		readonly aggregateId: string;
-	};
+	readonly identity: AggregateIdentity;
 	/** Optional lower-level error to preserve in the cause chain. */
 	readonly cause?: unknown;
 }
@@ -1735,10 +1701,7 @@ export class AggregateNotFoundError extends InfrastructureError<"AGGREGATE_NOT_F
  */
 export interface DuplicateAggregateErrorOptions {
 	/** The aggregate the error names. */
-	readonly identity: {
-		readonly aggregateType: string;
-		readonly aggregateId: string;
-	};
+	readonly identity: AggregateIdentity;
 	/** Optional driver-level error to preserve in the cause chain. */
 	readonly cause?: unknown;
 }
@@ -1773,10 +1736,7 @@ export class DuplicateAggregateError extends InfrastructureError<"DUPLICATE_AGGR
  */
 export interface SnapshotSchemaMismatchErrorOptions {
 	/** The aggregate the error names. */
-	readonly identity: {
-		readonly aggregateType: string;
-		readonly aggregateId: string;
-	};
+	readonly identity: AggregateIdentity;
 	readonly expectedSchemaVersion: number;
 	readonly actualSchemaVersion: number;
 }
@@ -1838,10 +1798,7 @@ export type ConcurrencyConflictReason =
 
 export type ConcurrencyConflictErrorOptions = {
 	/** The aggregate the error names. */
-	readonly identity: {
-		readonly aggregateType: string;
-		readonly aggregateId: string;
-	};
+	readonly identity: AggregateIdentity;
 	/** The write that failed, or `null` when the raising code does not know it. */
 	readonly intent?: "add" | "update" | "remove" | null;
 	readonly expectedVersion: number;

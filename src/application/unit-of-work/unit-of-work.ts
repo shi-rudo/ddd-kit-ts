@@ -1,3 +1,4 @@
+import { someCauseChain } from "@shirudo/base-error";
 import type { Aggregate, Version } from "../../domain/aggregate/aggregate";
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
@@ -7,7 +8,6 @@ import {
 } from "../../errors/kit-errors";
 import { abortReason } from "../../internal/async/abort";
 import type { ExecutionContext } from "../../internal/async/execution";
-import { findInCauseChain } from "../../internal/cause-chain";
 import {
 	assertNotFromAnotherKitCopy,
 	markKitCopy,
@@ -945,18 +945,11 @@ function classifyRunError(
 	// attempt. Classifying by those stale flags would mislabel the abort as
 	// a RollbackError carrying a retryable cause, inviting a retry of an
 	// explicitly cancelled operation.
-	if (
-		signal?.aborted &&
-		signal.reason !== undefined &&
-		(error === signal.reason || causeChainContains(error, signal.reason))
-	) {
+	if (signal?.aborted && causeChainContains(error, signal.reason)) {
 		return error;
 	}
 	if (state.workThrew) {
-		if (
-			error === state.workError ||
-			causeChainContains(error, state.workError)
-		) {
+		if (causeChainContains(error, state.workError)) {
 			return error;
 		}
 		return new RollbackError(state.workError, error);
@@ -968,7 +961,6 @@ function classifyRunError(
 		}
 		if (
 			state.failedBeforeCommit &&
-			error !== state.failureBeforeCommit &&
 			!causeChainContains(error, state.failureBeforeCommit)
 		) {
 			return new RollbackError(state.failureBeforeCommit, error);
@@ -979,17 +971,13 @@ function classifyRunError(
 }
 
 /**
- * Whether `error`'s `cause` chain contains `target` by reference. A
- * `target` of `undefined`/`null` never matches: every error without a
- * `cause` property would otherwise "contain" a thrown `undefined`.
+ * Whether `error` or its `cause` chain is `target`, by reference. A `target`
+ * of `undefined`/`null` never matches: a thrown `undefined` would otherwise
+ * match every error.
  */
 function causeChainContains(error: unknown, target: unknown): boolean {
 	if (target === undefined || target === null) {
 		return false;
 	}
-	return (
-		findInCauseChain(error, (_link, cause) =>
-			cause === target ? true : undefined,
-		) ?? false
-	);
+	return someCauseChain(error, (link) => link === target);
 }

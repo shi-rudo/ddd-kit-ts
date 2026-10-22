@@ -80,13 +80,15 @@ function copyValue(value: unknown, walk: Walk): unknown {
 	}
 
 	const tag = objectToString.call(value);
-	if (!hasBuiltInPrototypeChain(value) || !COPIED_TAGS.has(tag)) {
-		rejectObject(value, tag, walk);
-	}
+	// A subclass of Date is copied too: fake timers replace the global Date
+	// with one, and a Date subclass carries no state beyond its time.
 	if (tag === "[object Date]") {
 		const copy = new Date((value as Date).getTime());
 		walk.copies.set(value, copy);
 		return copy;
+	}
+	if (!hasBuiltInPrototypeChain(value) || !COPIED_TAGS.has(tag)) {
+		rejectObject(value, tag, walk);
 	}
 	if (tag === "[object Map]") {
 		const copy = new Map<unknown, unknown>();
@@ -116,15 +118,26 @@ function copyValue(value: unknown, walk: Walk): unknown {
 }
 
 const COPIED_TAGS: ReadonlySet<string> = new Set([
-	"[object Date]",
 	"[object Map]",
 	"[object Set]",
 ]);
 
 /**
+ * Whether `value` is a `Date` under the plain-data rule: a `Date` of any
+ * realm, also a subclass such as the `Date` of fake timers.
+ */
+export function isDate(value: unknown): value is Date {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		objectToString.call(value) === "[object Date]"
+	);
+}
+
+/**
  * Whether the prototype chain of `value` has exactly two links, as an
- * array, a `Date`, a `Map`, or a `Set` of any realm has: its own prototype,
- * then `Object.prototype`. A subclass adds a link.
+ * array, a `Map`, or a `Set` of any realm has: its own prototype, then
+ * `Object.prototype`. A subclass adds a link.
  */
 function hasBuiltInPrototypeChain(value: object): boolean {
 	const prototype = Object.getPrototypeOf(value);

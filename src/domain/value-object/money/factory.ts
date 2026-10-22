@@ -1,5 +1,10 @@
 import { UnknownCurrencyError } from "./errors";
-import { type CurrencyCode, type Money, moneyOfMinor } from "./money";
+import {
+	assertValidScale,
+	type CurrencyCode,
+	type Money,
+	moneyOfMinor,
+} from "./money";
 import { parseMoneyInput } from "./parse";
 
 /**
@@ -26,7 +31,10 @@ export interface MoneyFactory {
 	parse(input: unknown, currency: CurrencyCode): Money;
 	/** Zero in the given currency at its resolved scale. */
 	zero(currency: CurrencyCode): Money;
-	/** The resolved scale; throws `UNKNOWN_CURRENCY` when unresolved. */
+	/**
+	 * The resolved scale; throws `UNKNOWN_CURRENCY` when unresolved and
+	 * `INVALID_MONEY` when the resolver returns an invalid scale.
+	 */
 	scaleOf(currency: CurrencyCode): number;
 }
 
@@ -54,6 +62,7 @@ export function createMoneyFactory(
 	const scaleOf = (currency: CurrencyCode): number => {
 		const scale = scaleFor(currency);
 		if (scale === undefined) throw new UnknownCurrencyError(currency);
+		assertValidScale(scale);
 		return scale;
 	};
 	return Object.freeze({

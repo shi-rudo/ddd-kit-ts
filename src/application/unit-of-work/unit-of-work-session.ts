@@ -1,3 +1,4 @@
+import { findInCauseChain } from "@shirudo/base-error";
 import type { Aggregate, Version } from "../../domain/aggregate/aggregate";
 import { requirePendingEventLifecycleReadView } from "../../domain/aggregate/pending-event-lifecycle";
 import type {
@@ -13,7 +14,6 @@ import {
 	isInfrastructureErrorLike,
 	UnregisteredChangesError,
 } from "../../errors/kit-errors";
-import { findInCauseChain } from "../../internal/cause-chain";
 import {
 	type AggregateClass,
 	IdentityMap,
@@ -693,13 +693,13 @@ function firstInCauseChainWithCode(
 	error: unknown,
 	code: string,
 ): object | undefined {
-	return findInCauseChain(error, (link) => {
-		try {
-			return (link as { code?: unknown }).code === code ? link : undefined;
-		} catch {
-			return undefined;
-		}
-	});
+	return findInCauseChain(
+		error,
+		(link): link is object =>
+			typeof link === "object" &&
+			link !== null &&
+			(link as { code?: unknown }).code === code,
+	);
 }
 
 function mapRepositoryPersistenceError<Evt extends AnyDomainEvent>(
