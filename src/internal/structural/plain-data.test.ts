@@ -1,6 +1,6 @@
 // @ts-expect-error Node's VM exists in the test runtime; the package stays Node-type-free.
 import { runInNewContext } from "node:vm";
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { PrototypePollutionError } from "../../errors/kit-errors";
 import { copyPlainData } from "./plain-data";
 
@@ -72,6 +72,34 @@ describe("copyPlainData", () => {
 
 		expect(copy).not.toBe(value);
 		expect(copy.getTime()).toBe(value.getTime());
+	});
+
+	describe("a Date that fake timers create", () => {
+		afterEach(() => {
+			vi.useRealTimers();
+		});
+
+		it("copies it to a plain Date with its time", () => {
+			vi.useFakeTimers();
+			vi.setSystemTime(new Date("2026-10-21T10:00:00.000Z"));
+			const value = { at: new Date() };
+
+			const copy = copyPlainData(value, options);
+
+			expect(copy.at.toISOString()).toBe("2026-10-21T10:00:00.000Z");
+		});
+	});
+
+	it("copies a Date subclass to a plain Date", () => {
+		class BusinessDate extends Date {}
+
+		const copy = copyPlainData(
+			{ at: new BusinessDate("2026-10-21T10:00:00.000Z") },
+			options,
+		);
+
+		expect(Object.getPrototypeOf(copy.at)).toBe(Date.prototype);
+		expect(copy.at.toISOString()).toBe("2026-10-21T10:00:00.000Z");
 	});
 
 	it("copies a Map and a Set with primitive keys and members", () => {

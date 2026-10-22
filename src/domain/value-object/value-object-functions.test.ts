@@ -883,18 +883,25 @@ describe("value object functions", () => {
 
 		it("rejects custom subclasses of otherwise supported built-ins", () => {
 			class CustomArray extends Array<number> {}
-			class CustomDate extends Date {}
 			class CustomMap extends Map<string, number> {}
 			class CustomError extends Error {}
 
 			for (const value of [
 				new CustomArray(1, 2),
-				new CustomDate(0),
 				new CustomMap([["one", 1]]),
 				new CustomError("failure"),
 			]) {
 				expect(() => valueObject({ value })).toThrow(/is a class instance/);
 			}
+		});
+
+		it("copies a Date subclass to a plain Date", () => {
+			class CustomDate extends Date {}
+
+			const { at } = valueObject({ at: new CustomDate(0) });
+
+			expect(Object.getPrototypeOf(at)).toBe(Date.prototype);
+			expect(at.getTime()).toBe(0);
 		});
 
 		it("rejects a built-in subclass after its constructor marker is removed", () => {

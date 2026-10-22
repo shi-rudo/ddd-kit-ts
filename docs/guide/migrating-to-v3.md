@@ -1554,7 +1554,8 @@ The root entry no longer exports `capturePersistenceBaseline`,
   `structuredClone`. The rule changes of the next items apply to it too.
 - The event constructors copy the payload and the metadata with one walk
   under the plain-data rule (see "One rule for plain data" in the design
-  decisions). Three cases that rc.15 accepted now throw: an object as a key
+  decisions). A `Date` of any realm, also a subclass such as the `Date` of
+  fake timers, becomes a plain `Date`. Three cases that rc.15 accepted now throw: an object as a key
   of a `Map` or a member of a `Set`, and an own `__proto__` key below the
   root. A `Proxy` over a record no longer throws; the copy takes its data.
   An expando on a `Map`, a `Set`, or a `Date` no longer throws; the copy

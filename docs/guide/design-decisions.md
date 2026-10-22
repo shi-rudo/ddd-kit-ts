@@ -159,7 +159,7 @@ value is not plain data, the walk throws a `TypeError` that names the path.
 | `string`, `number`, `boolean`, `bigint`, `undefined`, `null` | keeps it |
 | A record whose prototype is `null` or an `Object.prototype` of any realm | copies its own enumerable string keys |
 | An array | copies its indexes and its other own enumerable string keys; a hole stays a hole |
-| A `Date` | copies its time |
+| A `Date` of any realm, also a subclass such as the `Date` of fake timers | copies its time into a plain `Date` |
 | A `Map` or a `Set` | copies its entries; a key or a member must be a primitive |
 | A function, a symbol, a class instance, or another built-in, for example a `RegExp`, an `Error`, a `Promise`, binary data, or a boxed primitive | throws |
 | An accessor, an enumerable symbol-keyed property, a non-enumerable string-keyed property, or an own `__proto__` key | throws |
