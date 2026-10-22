@@ -401,32 +401,33 @@ Three facts decide how you write a handler:
 2. A retry after a timeout runs the handlers a second time. The first attempt
    can still run. Make the handler idempotent, or do not retry a publish that
    timed out.
-3. A handler that publishes must pass `context.signal` into that publication.
-   The signal links the nested publication to its chain, and the bus stops a
-   cycle at `maxPublishDepth` (default 32) with `PublishDepthExceededError`.
-   If another handler of the same event also fails, that error arrives inside
-   an `AggregateError`.
+3. A handler that publishes must pass `context.publishChain` as
+   `publishChain` into that publication. The chain links the nested
+   publication to its parent, and the bus stops a cycle at `maxPublishDepth`
+   (default 32) with `PublishDepthExceededError`. If another handler of the
+   same event also fails, that error arrives inside an `AggregateError`.
 
-Pass `context.signal` into every call a handler makes. The signal gives the
-call cancellation, and it gives the bus the chain.
-
-The link survives the nested operations of the kit, `withCommit` included. It
-ends at a signal that the kit did not derive, for example one from
-`AbortSignal.any`. Without the link, an asynchronous cycle starves the event
-loop, and the process runs out of memory.
-
-On Node, `chainStore` follows every chain, even when a handler replaces the
-signal. The kit does not import `node:async_hooks` itself, because that
-specifier does not resolve in an edge bundle.
+Pass `context.signal` into every call a handler makes, for cancellation. Pass
+`context.publishChain` into every publication that the handler awaits, also
+through `withCommit` and `UnitOfWork.run`. Without the chain, the nested
+publication starts a new chain. A synchronous cycle then overflows the call
+stack, and an asynchronous cycle starves the event loop until the process
+runs out of memory.
 
 ```ts
-import { AsyncLocalStorage } from "node:async_hooks";
-import { InProcessEventBus, type PublishChainState } from "@shirudo/ddd-kit";
-
-const bus = new InProcessEventBus<OrderEvent>({
-  chainStore: new AsyncLocalStorage<PublishChainState>(),
+bus.subscribe("OrderPlaced", async (event, context) => {
+  await withCommit(
+    { ...deps, signal: context.signal, publishChain: context.publishChain },
+    async (tx, registration) => {
+      // ...
+    },
+  );
 });
 ```
+
+The bus counts only the publications of a chain that are still open. A
+publication that the handler schedules for later, or does not await, ends the
+chain of its parent and never reaches the bound.
 
 ```ts
 // Rebuildable. The bus is the right home.
@@ -602,7 +603,8 @@ When you review code that uses the kit, make sure that these rules apply:
 - Preserve structured errors until the mapping boundary.
 - Put work that the business cannot lose behind the outbox, not on the
   event bus.
-- Pass `context.signal` into every publication a handler makes.
+- Pass `context.signal` and `context.publishChain` into every publication a
+  handler makes.
 - Call the unsubscribe function that `subscribe` returns.
 
 Most production bugs in this area come from moving responsibility one layer too early: repositories clearing events, callers collecting events, tests owning globals, or application code bypassing aggregate metadata. Keep each responsibility at its boundary and the kit stays predictable.

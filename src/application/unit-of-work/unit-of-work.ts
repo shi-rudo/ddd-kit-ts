@@ -12,7 +12,7 @@ import {
 	assertNotFromAnotherKitCopy,
 	markKitCopy,
 } from "../../internal/kit-copy";
-import type { EventBus } from "../../messaging/event-bus/ports";
+import type { EventBus, PublishChain } from "../../messaging/event-bus/ports";
 import type { OutboxWriter } from "../../messaging/outbox/ports";
 import type { AggregateClass } from "../../persistence/repository/identity-map";
 import type { PersistenceModel } from "../../persistence/repository/persistence-model";
@@ -77,6 +77,11 @@ export interface RunOptions {
 	 * `TransactionScope`. Use `AbortSignal.timeout(ms)` for a deadline.
 	 */
 	readonly signal?: AbortSignal;
+	/**
+	 * See `withCommit`: the chain of the event handler that runs this unit of
+	 * work, from `context.publishChain`.
+	 */
+	readonly publishChain?: PublishChain;
 	/**
 	 * Stamp options that every event stamped in this run shares, for example
 	 * the correlation id of the request.
@@ -749,6 +754,7 @@ export class UnitOfWork<
 					onPersistError: this.deps.onPersistError,
 					postCommitTimeoutMs: this.deps.postCommitTimeoutMs,
 					signal: options?.signal,
+					publishChain: options?.publishChain,
 					eventStampFactory: this.deps.eventStampFactory,
 					stampOptions: options?.stampOptions,
 				},

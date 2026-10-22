@@ -41,10 +41,13 @@ forever. The imperative shell is the part of the application that invokes the
 handler and supervises the I/O it starts.
 
 `InProcessEventBus` therefore bounds the execution of every handler. For each call
-to `publish`, it creates one `ExecutionContext` and passes it to every handler
-for the event type, including handlers registered through `subscribeAll`. The
-context gives all of those handlers the same cancellation signal and time
-budget:
+to `publish`, it creates one `ExecutionContext`. Every handler of the
+publication receives it as part of its `EventHandlerContext`, including
+handlers registered through `subscribeAll`. The context gives all of those
+handlers the same cancellation signal and time budget. It also carries the
+publish chain of the event, which a handler passes on to a publication that it
+awaits; see
+[Using the Event Bus for Work That Must Not Be Lost](./common-mistakes.md#using-the-event-bus-for-work-that-must-not-be-lost):
 
 ```ts
 eventBus.subscribe("OrderConfirmed", async (event, context) => {

@@ -377,13 +377,11 @@ export {
 export type {
 	EventBus,
 	EventHandler,
+	EventHandlerContext,
 	OnceOptions,
+	PublishChain,
 	PublishOptions,
 } from "./messaging/event-bus/ports";
-export type {
-	PublishChainState,
-	PublishChainStore,
-} from "./messaging/event-bus/publish-chain";
 export {
 	createIntegrationMessage,
 	decodeIntegrationMessage,
