@@ -22,11 +22,13 @@ import { StructuredError } from "@shirudo/base-error";
  * The identity of one aggregate instance, in the messages and fields of an
  * error. The domain `AggregateIdentity` owns the concept. This copy exists
  * because the errors area imports nothing from the rest of the kit.
+ *
+ * @inline
  */
-interface AggregateIdentity {
+type AggregateIdentity = {
 	readonly aggregateType: string;
 	readonly aggregateId: string;
-}
+};
 
 /**
  * Options for consumer subclasses of {@link DomainError} and
