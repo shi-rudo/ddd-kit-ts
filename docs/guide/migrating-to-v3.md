@@ -1638,6 +1638,9 @@ The root entry no longer exports `capturePersistenceBaseline`,
   extends `ExecutionContext`.
 - `DomainStateMachine.snapshot` returns the same deeply frozen snapshot until
   the next successful `dispatch`. In rc.15 every read returned a new copy.
+- `occurredAt` and the event clock accept a `Date` of another realm, for
+  example one from `node:vm`. In rc.15 they threw
+  `EVENT_OCCURRED_AT_INVALID`.
 - `toPublicErrorView` accepts an `onCatalogError` observer. A failure of the
   catalog still returns the fallback view, and the observer now receives the
   failure.

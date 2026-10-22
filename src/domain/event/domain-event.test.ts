@@ -450,6 +450,32 @@ describe("DomainEvent", () => {
 			);
 		});
 
+		it("accepts an occurrence time from another realm and copies it", () => {
+			const occurredAt = runInNewContext(
+				"new Date('2027-04-05T06:07:08.000Z')",
+			) as Date;
+
+			const event = createStampedDomainEvent("OrderConfirmed", undefined, {
+				eventId: "event-1",
+				occurredAt,
+			});
+
+			expect(event.occurredAt).toBeInstanceOf(Date);
+			expect(event.occurredAt.toISOString()).toBe("2027-04-05T06:07:08.000Z");
+		});
+
+		it("copies a Date subclass, such as the Date of fake timers, to a plain Date", () => {
+			class BusinessDate extends Date {}
+
+			const event = createStampedDomainEvent("OrderConfirmed", undefined, {
+				eventId: "event-1",
+				occurredAt: new BusinessDate("2027-04-05T06:07:08.000Z"),
+			});
+
+			expect(Object.getPrototypeOf(event.occurredAt)).toBe(Date.prototype);
+			expect(event.occurredAt.toISOString()).toBe("2027-04-05T06:07:08.000Z");
+		});
+
 		it("rejects missing facts at runtime instead of falling back", () => {
 			const occurredAt = new Date("2027-04-05T06:07:08.000Z");
 

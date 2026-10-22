@@ -3,7 +3,7 @@ import {
 	assertNotFromAnotherKitCopy,
 	markKitCopy,
 } from "../../internal/kit-copy";
-import { copyPlainData } from "../../internal/structural/plain-data";
+import { copyPlainData, isDate } from "../../internal/structural/plain-data";
 import { uuidV7 } from "../../internal/uuid-v7";
 import { deepFreeze } from "../value-object/value-object";
 import { type ClockFactory, defaultClockFactory, readClock } from "./clock";
@@ -840,7 +840,7 @@ function assertProducerOwnedEventFields(
 }
 
 function copyValidEventDate(value: unknown): Date {
-	if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
+	if (!isDate(value) || !Number.isFinite(value.getTime())) {
 		throw new DomainEventValidationError(
 			"EVENT_OCCURRED_AT_INVALID",
 			"occurredAt",
