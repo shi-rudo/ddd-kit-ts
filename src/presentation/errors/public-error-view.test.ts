@@ -5,6 +5,7 @@ import {
 	ConcurrencyConflictError,
 	DuplicateAggregateError,
 } from "../../errors/kit-errors";
+import { createKitPublicErrors } from "./kit-public-errors";
 import { toPublicErrorView } from "./public-error-view";
 
 describe("toPublicErrorView()", () => {
@@ -95,6 +96,25 @@ describe("toPublicErrorView()", () => {
 		);
 		expect(view.locale).toBe("en");
 		expect(view.message).toBe("The requested resource could not be found.");
+	});
+
+	it("reports a failing catalog to onCatalogError and returns the fallback view", () => {
+		const catalog = createKitPublicErrors();
+		const failure = new Error("message set unavailable");
+		catalog.messagesFor = () => {
+			throw failure;
+		};
+		const reported: unknown[] = [];
+
+		const view = toPublicErrorView(
+			new AggregateNotFoundError({
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
+			}),
+			{ catalog, onCatalogError: (error) => reported.push(error) },
+		);
+
+		expect(view.code).toBe("INTERNAL_ERROR");
+		expect(reported).toEqual([failure]);
 	});
 
 	describe("hardening against hostile or accidental publicIssues()", () => {

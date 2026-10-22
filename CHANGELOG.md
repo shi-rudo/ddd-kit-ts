@@ -467,7 +467,8 @@ immutable. Run one kit version per process during a cutover.
 
 - `createKitPublicErrors()` builds a public error catalog of the kit codes,
   which the consumer extends at the composition root. `toPublicErrorView`
-  accepts a `catalog` option.
+  accepts a `catalog` option, and it reports a failure of that catalog to the
+  `onCatalogError` observer before it falls back to the generic view.
 
 #### Documentation and tooling
 
