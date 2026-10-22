@@ -874,11 +874,12 @@ Give a single-result method a uniqueness law from the domain. Give a
 multi-result method a validated limit, one stable order, and a cursor.
 `Specification<T>` names domain criteria that such a method accepts.
 
-#### `withCommit` takes commit tokens
+#### `withCommit` collects the registered aggregates
 
-A direct caller of `withCommit` returns tokens from the registration
-capability, not the aggregates it touched. A touched aggregate is no proof
-that its write joined the transaction.
+A direct caller of `withCommit` registers each aggregate whose write joined
+the transaction, and returns its result itself. A touched aggregate is no
+proof that its write joined the transaction, so `withCommit` collects only
+the registered ones.
 
 ```ts
 // before
@@ -894,16 +895,22 @@ await withCommit({ scope, outbox, bus }, async (tx, registration) => {
   const order = await orders(tx).getById(orderId);
   order.confirm();
   await persistOrder(tx, order);
-  return { result: order.id, commits: [registration.registerSaved(order)] };
+  registration.registerSaved(order);
+  return order.id;
 });
 ```
 
 `persistOrder` stands for the state write of your own adapter: a v3
 repository has no `save`.
 
-For a physical removal, return `registration.registerRemoved(aggregate)`. The
-`deleted` array is gone. Every token that the callback receives must be in
-`commits`. A `UnitOfWork` use case keeps returning its result directly.
+For a physical removal, call `registration.registerRemoved(aggregate)`. The
+`deleted` array is gone. A `UnitOfWork` use case also returns its result
+directly.
+
+A callback that still returns `{ result, aggregates }` compiles when nothing
+types its result, and `withCommit` then resolves to that object and collects
+nothing. Search your code for `aggregates:` and `deleted:` in `withCommit`
+callbacks.
 
 #### The outbox dependency is the write half
 
@@ -1575,6 +1582,16 @@ The root entry no longer exports `capturePersistenceBaseline`,
   throws now fails the retry or the poll loop; in rc.15 the kit replaced its
   value with the midpoint. `InMemoryOutbox.add` reads `eventId` and `type`
   as plain properties; in rc.15 it required own data properties.
+- `withCommit`, `withIdempotentCommit`, and the registration capability no
+  longer use commit tokens. `registerSaved` and `registerRemoved` return
+  nothing, `withCommit` collects every registered aggregate in registration
+  order, and the callback returns its result directly.
+  `AggregateCommitToken` and `WithCommitWorkResult` are gone. Replace
+  `return { result, commits: [registration.registerSaved(order)] }` with
+  `registration.registerSaved(order); return result;`. A callback that still
+  returns `{ result, commits }` compiles when nothing types its result, and
+  `withCommit` then resolves to that object. Search your code for
+  `commits:`.
 - Two copies of the kit no longer cooperate. In rc.15 they shared registries
   and brands on `globalThis`. Now an object that another loaded copy built
   throws `DuplicateKitCopyError` (code `DUPLICATE_KIT_COPY`).

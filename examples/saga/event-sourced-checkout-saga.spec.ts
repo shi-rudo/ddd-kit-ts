@@ -127,10 +127,8 @@ async function commitProcessDecision(
 				}),
 			);
 			await database.append(recorded);
-			return {
-				result: undefined,
-				commits: [registration.registerSaved(saga)],
-			};
+			registration.registerSaved(saga);
+			return undefined;
 		},
 	);
 }
@@ -402,10 +400,7 @@ describe("Event-sourced checkout saga", () => {
 				},
 				async () => {
 					executions += 1;
-					return {
-						result: { paymentId, accepted: true },
-						commits: [],
-					};
+					return { paymentId, accepted: true };
 				},
 			);
 

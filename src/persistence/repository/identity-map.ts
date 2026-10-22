@@ -32,10 +32,10 @@ export type AggregateClass<TAgg> =
  * This is the shipped implementation of the contract the
  * Repository guide (`docs/guide/repository.md`) places on
  * `AggregatePersistence` implementations: two `findById(id)` calls in the same
- * unit of work MUST return the same instance, because commit-token
- * write registration dedupes by JavaScript object identity. Two instances for
- * one logical aggregate can otherwise produce two tokens, two collections,
- * and two post-commit lifecycle calls.
+ * unit of work MUST return the same instance, because commit registration
+ * dedupes by JavaScript object identity. Two instances for one logical
+ * aggregate can otherwise produce two registrations, two collections, and
+ * two post-commit lifecycle calls.
  *
  * Storage is two-level (per-type stores created lazily), so
  * `Restaurant:123` and `Booking:123` can never collide: the type key

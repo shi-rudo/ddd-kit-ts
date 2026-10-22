@@ -56,7 +56,7 @@ its events.
    aggregate that are still unstamped, with `eventStampFactory` and
    `stampOptions` from the dependencies.
 4. Still inside the transaction, the unit of work freezes and flushes the
-   registered receipts. `withCommit` rejects invalid internal commit tokens
+   registered receipts. `withCommit` collects every registered aggregate
    and calls `outbox.add(events)` with the exact batches.
 5. The transaction commits.
 6. After commit, `withCommit` acknowledges every saved aggregate through a
@@ -163,10 +163,7 @@ const scope: TransactionScope<undefined> = {
   transactional: (fn) => fn(undefined),
 };
 
-await withCommit({ scope, outbox }, async () => ({
-  result: "ok",
-  commits: [],
-}));
+await withCommit({ scope, outbox }, async () => "ok");
 ```
 
 This scope has no rollback. For a test that rolls back or retries, use
@@ -735,7 +732,6 @@ You may use both channels for different audiences:
 await withCommit({ scope, outbox, bus }, async (tx) => {
   // bus: in-process fast path after commit
   // outbox: durable handoff for dispatchers
-  return { result: undefined, commits: [] };
 });
 ```
 
@@ -764,8 +760,8 @@ Within one aggregate, event order is causal. If an aggregate emits
 that order. `withCommit` collects events in the order the aggregate recorded
 them, and a sequential outbox dispatcher preserves that order.
 
-Across aggregates, order is not a domain guarantee. Returning commit tokens
-for `[a, b]` creates a deterministic collection order, but brokers, parallel
+Across aggregates, order is not a domain guarantee. Registering `a`, then
+`b`, creates a deterministic collection order, but brokers, parallel
 dispatchers, and separate processes may reorder events from `a` against events
 from `b`.
 

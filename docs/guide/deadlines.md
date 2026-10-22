@@ -42,10 +42,8 @@ await withCommit({ scope, outbox }, async (tx, registration) => {
     payload: { kind: "payment-timeout", paymentId },
   });
 
-  return {
-    result: saga.id,
-    commits: [registration.registerSaved(saga)],
-  };
+  registration.registerSaved(saga);
+  return saga.id;
 });
 ```
 

@@ -31,11 +31,9 @@ export {
 } from "./application/cqrs/command/command-outbox";
 // App orchestration: withCommit + Unit of Work
 export {
-	type AggregateCommitToken,
 	type CommitRegistration,
 	type CommitRegistrationOptions,
 	type WithCommitDeps,
-	type WithCommitWorkResult,
 	withCommit,
 } from "./application/cqrs/handler";
 export type { Query, QueryHandler } from "./application/cqrs/query/query";

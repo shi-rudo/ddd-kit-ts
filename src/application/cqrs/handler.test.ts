@@ -19,12 +19,7 @@ import type { TransactionScope } from "../../persistence/repository/scope";
 import { recordingOutbox } from "../../testing/recording-outbox";
 import { unattributedAggregate } from "../../testing/unattributed-aggregate";
 import { stampPendingEvents } from "../unit-of-work/stamp-pending-events";
-import {
-	type AggregateCommitToken,
-	type CommitRegistration,
-	type WithCommitWorkResult,
-	withCommit,
-} from "./handler";
+import { type CommitRegistration, withCommit } from "./handler";
 
 type TestEvent = DomainEvent<"OrderCreated", { orderId: string }>;
 type TestId = Id<"TestId">;
@@ -130,36 +125,20 @@ function registeredResult<R>(
 	result: R,
 	aggregates: ReadonlyArray<Aggregate<Id<string>, TestEvent>>,
 	deleted: ReadonlyArray<Aggregate<Id<string>, TestEvent>> = [],
-): WithCommitWorkResult<TestEvent, R> {
+): R {
 	const deletedSet = new Set(deleted);
-	return {
-		result,
-		commits: aggregates.map((aggregate) =>
-			deletedSet.has(aggregate)
-				? registration.registerRemoved(aggregate)
-				: registration.registerSaved(aggregate),
-		),
-	};
+	for (const aggregate of aggregates) {
+		if (deletedSet.has(aggregate)) registration.registerRemoved(aggregate);
+		else registration.registerSaved(aggregate);
+	}
+	return result;
 }
 
 describe("withCommit", () => {
-	it("keeps commit evidence opaque at the type boundary", () => {
-		const legacy: WithCommitWorkResult<TestEvent, string> = {
-			result: "legacy",
-			// @ts-expect-error a naked aggregate array is no longer a work result
-			aggregates: [],
-		};
-		// @ts-expect-error consumers cannot structurally construct the private brand
-		const forged: AggregateCommitToken<TestEvent> = {};
-
-		expect(legacy.result).toBe("legacy");
-		expect(forged).toEqual({});
-	});
-
 	it("returns the result from the function", async () => {
 		const result = await withCommit(
 			{ outbox: recordingOutbox<TestEvent>(), scope: createMockScope() },
-			async () => ({ result: "order-123", commits: [] }),
+			async () => "order-123",
 		);
 
 		expect(result).toBe("order-123");
@@ -365,9 +344,9 @@ describe("withCommit", () => {
 			await withCommit(
 				{ outbox, scope: createMockScope() },
 				async (_ctx, registration) => {
-					const first = registration.registerSaved(aggregate);
-					const second = registration.registerSaved(aggregate);
-					return { result: "ok", commits: [first, second] };
+					registration.registerSaved(aggregate);
+					registration.registerSaved(aggregate);
+					return "ok";
 				},
 			);
 
@@ -443,10 +422,10 @@ describe("withCommit", () => {
 		const outbox = recordingOutbox<TestEvent>();
 
 		await expect(
-			withCommit({ outbox, scope }, async (_ctx, registration) => ({
-				result: "must not commit",
-				commits: [registration.registerSaved(lookalike)],
-			})),
+			withCommit({ outbox, scope }, async (_ctx, registration) => {
+				registration.registerSaved(lookalike);
+				return "must not commit";
+			}),
 		).rejects.toBeInstanceOf(UnmanagedInstanceError);
 
 		expect(committed).toBe(false);
@@ -549,7 +528,7 @@ describe("withCommit", () => {
 		expect(outbox.added).toEqual([]);
 	});
 
-	it("rejects a fresh aggregate that was never registered by persistence", async () => {
+	it("does not collect an aggregate that was never registered", async () => {
 		const outbox = recordingOutbox<TestEvent>();
 		const event = createDomainEvent(
 			"OrderCreated",
@@ -558,85 +537,39 @@ describe("withCommit", () => {
 		);
 		const aggregate = createMockAggregate([event]);
 
-		await expect(
-			withCommit(
-				{ outbox, scope: createMockScope() },
-				async () =>
-					({
-						result: "must not commit",
-						aggregates: [aggregate],
-					}) as unknown as WithCommitWorkResult<TestEvent, string>,
-			),
-		).rejects.toBeInstanceOf(EventCollectionError);
+		const result = await withCommit(
+			{ outbox, scope: createMockScope() },
+			async () => "done",
+		);
+
+		expect(result).toBe("done");
 		expect(outbox.added).toEqual([]);
 		expect(aggregate.pendingEvents).toEqual([event]);
 		expect(persistedVersionOf(aggregate)).not.toBe(aggregate.version);
 	});
 
-	it("rejects a forged commit token before collecting", async () => {
+	it("collects a registered aggregate without a receipt from the callback", async () => {
 		const outbox = recordingOutbox<TestEvent>();
 		const event = createDomainEvent(
 			"OrderCreated",
-			{ orderId: "order-1" },
+			{ orderId: "order-registered" },
 			{ aggregateId: "agg-1", aggregateType: "MockOrder" },
 		);
 		const aggregate = createMockAggregate([event]);
-		const forged = Object.freeze({}) as AggregateCommitToken<TestEvent>;
 
-		await expect(
-			withCommit({ outbox, scope: createMockScope() }, async () => ({
-				result: "must not commit",
-				commits: [forged],
-			})),
-		).rejects.toBeInstanceOf(EventCollectionError);
-		expect(outbox.added).toEqual([]);
-		expect(aggregate.pendingEvents).toEqual([event]);
-		expect(persistedVersionOf(aggregate)).not.toBe(aggregate.version);
-	});
-
-	it("rejects a token issued by an earlier withCommit invocation", async () => {
-		let staleToken: AggregateCommitToken<TestEvent> | undefined;
-		const firstAggregate = createMockAggregate([]);
 		await withCommit(
-			{ outbox: recordingOutbox<TestEvent>(), scope: createMockScope() },
+			{ outbox, scope: createMockScope() },
 			async (_ctx, registration) => {
-				staleToken = registration.registerSaved(firstAggregate);
-				return { result: undefined, commits: [staleToken] };
+				registration.registerSaved(aggregate);
+				return undefined;
 			},
 		);
 
-		const outbox = recordingOutbox<TestEvent>();
-		await expect(
-			withCommit({ outbox, scope: createMockScope() }, async () => ({
-				result: "must not commit",
-				commits: [staleToken as AggregateCommitToken<TestEvent>],
-			})),
-		).rejects.toBeInstanceOf(EventCollectionError);
-		expect(outbox.added).toEqual([]);
-	});
-
-	it("rejects a registered aggregate whose token was not returned", async () => {
-		const outbox = recordingOutbox<TestEvent>();
-		const event = createDomainEvent(
-			"OrderCreated",
-			{ orderId: "order-omitted" },
-			{ aggregateId: "agg-1", aggregateType: "MockOrder" },
-		);
-		const aggregate = createMockAggregate([event]);
-
-		await expect(
-			withCommit(
-				{ outbox, scope: createMockScope() },
-				async (_ctx, registration) => {
-					registration.registerSaved(aggregate);
-					return { result: undefined, commits: [] };
-				},
-			),
-		).rejects.toBeInstanceOf(EventCollectionError);
-
-		expect(outbox.added).toEqual([]);
-		expect(aggregate.pendingEvents).toEqual([event]);
-		expect(persistedVersionOf(aggregate)).not.toBe(aggregate.version);
+		expect(outbox.added[0]?.map(({ event: collected }) => collected)).toEqual([
+			event,
+		]);
+		expect(aggregate.pendingEvents).toEqual([]);
+		expect(persistedVersionOf(aggregate)).toBe(aggregate.version);
 	});
 
 	it("seals registration before the outbox write begins", async () => {
@@ -781,7 +714,7 @@ describe("withCommit", () => {
 			{ outbox: recordingOutbox<TestEvent>(), scope },
 			async () => {
 				callOrder.push("fn");
-				return { result: "ok", commits: [] };
+				return "ok";
 			},
 		);
 
@@ -955,7 +888,7 @@ describe("withCommit", () => {
 			{ outbox: recordingOutbox<TestEvent>(), scope },
 			async (ctx) => {
 				received = ctx;
-				return { result: ctx.id, commits: [] };
+				return ctx.id;
 			},
 		);
 
@@ -1330,14 +1263,12 @@ describe("withCommit", () => {
 		await expect(
 			withCommit(
 				{ outbox, scope: createMockScope() },
-				async (_ctx, registration) => ({
-					result: "r",
-					commits: [
-						registration.registerSaved(aggregate, {
-							expectedVersion: 5 as Version,
-						}),
-					],
-				}),
+				async (_ctx, registration) => {
+					registration.registerSaved(aggregate, {
+						expectedVersion: 5 as Version,
+					});
+					return "r";
+				},
 			),
 		).rejects.toThrow(/did not advance/i);
 		expect(outbox.added).toHaveLength(0);
@@ -1359,10 +1290,10 @@ describe("withCommit", () => {
 		await expect(
 			withCommit(
 				{ outbox, scope: createMockScope() },
-				async (_ctx, registration) => ({
-					result: "r",
-					commits: [registration.registerSaved(aggregate)],
-				}),
+				async (_ctx, registration) => {
+					registration.registerSaved(aggregate);
+					return "r";
+				},
 			),
 		).rejects.toThrow(/did not advance/i);
 		expect(outbox.added).toHaveLength(0);
@@ -1381,10 +1312,10 @@ describe("withCommit", () => {
 
 		await withCommit(
 			{ outbox, scope: createMockScope() },
-			async (_ctx, registration) => ({
-				result: "r",
-				commits: [registration.registerSaved(aggregate)],
-			}),
+			async (_ctx, registration) => {
+				registration.registerSaved(aggregate);
+				return "r";
+			},
 		);
 
 		expect(outbox.added[0]?.[0]?.position.aggregateVersion).toBe(0);
@@ -1706,7 +1637,7 @@ describe("withCommit", () => {
 						scope,
 						postCommitTimeoutMs: -1,
 					},
-					async () => ({ result: undefined, commits: [] }),
+					async () => undefined,
 				),
 			).rejects.toThrow(/postCommitTimeoutMs/);
 			expect(opened).toBe(false);
@@ -1728,7 +1659,7 @@ describe("withCommit", () => {
 						scope,
 						postCommitTimeoutMs: 2 ** 31,
 					},
-					async () => ({ result: undefined, commits: [] }),
+					async () => undefined,
 				),
 			).rejects.toThrow(/postCommitTimeoutMs/);
 			expect(opened).toBe(false);
@@ -1741,7 +1672,7 @@ describe("withCommit", () => {
 					scope: createMockScope(),
 					postCommitTimeoutMs: 2 ** 31 - 1,
 				},
-				async () => ({ result: "committed", commits: [] }),
+				async () => "committed",
 			);
 
 			expect(result).toBe("committed");
@@ -2091,9 +2022,9 @@ describe("commit registration lifecycle", () => {
 			withCommit(
 				{ outbox, scope: createMockScope() },
 				async (_ctx, registration) => {
-					const token = registration.registerSaved(aggregate);
+					registration.registerSaved(aggregate);
 					aggregate.recordAfterRegistrationForTest(later);
-					return { result: undefined, commits: [token] };
+					return undefined;
 				},
 			),
 		).rejects.toThrow(
@@ -2119,14 +2050,13 @@ describe("commit registration lifecycle", () => {
 		await withCommit(
 			{ outbox, scope: createMockScope() },
 			async (_ctx, registration) => {
-				const first = registration.registerSaved(aggregate, {
+				registration.registerSaved(aggregate, {
 					expectedVersion: 5 as Version,
 				});
 				// Duplicate registration is idempotent by reference; a repeat
 				// call without options makes no OCC assertion.
-				const second = registration.registerSaved(aggregate);
-				expect(second).toBe(first);
-				return { result: "r", commits: [first] };
+				registration.registerSaved(aggregate);
+				return "r";
 			},
 		);
 
@@ -2153,10 +2083,10 @@ describe("commit registration lifecycle", () => {
 
 		await withCommit(
 			{ outbox: recordingOutbox<TestEvent>(), scope },
-			async (_ctx, registration) => ({
-				result: "r",
-				commits: [registration.registerSaved(aggregate)],
-			}),
+			async (_ctx, registration) => {
+				registration.registerSaved(aggregate);
+				return "r";
+			},
 		);
 
 		// The marker reflects what the commit persisted (7), not the version
@@ -2175,10 +2105,10 @@ describe("commit registration lifecycle", () => {
 
 		await withCommit(
 			{ outbox: recordingOutbox<TestEvent>(), scope: createMockScope() },
-			async (_ctx, registration) => ({
-				result: "r",
-				commits: [registration.registerRemoved(aggregate)],
-			}),
+			async (_ctx, registration) => {
+				registration.registerRemoved(aggregate);
+				return "r";
+			},
 		);
 
 		// The row is gone: stamping the marker from the live instance would
@@ -2200,15 +2130,15 @@ describe("commit registration lifecycle", () => {
 		await withCommit(
 			{ outbox, scope: createMockScope() },
 			async (_ctx, registration) => {
-				const token = registration.registerSaved(aggregate);
+				registration.registerSaved(aggregate);
 				// A rejected delete registration whose error the callback catches
-				// must not flip the record to deleted behind the token's back.
+				// must not flip the record to deleted.
 				expect(() =>
 					registration.registerRemoved(aggregate, {
 						expectedVersion: 99 as Version,
 					}),
 				).toThrow(/re-registered with expectedVersion/);
-				return { result: "r", commits: [token] };
+				return "r";
 			},
 		);
 
@@ -2229,13 +2159,13 @@ describe("commit registration lifecycle", () => {
 			withCommit(
 				{ outbox, scope: createMockScope() },
 				async (_ctx, registration) => {
-					const first = registration.registerSaved(aggregate, {
+					registration.registerSaved(aggregate, {
 						expectedVersion: 5 as Version,
 					});
 					registration.registerSaved(aggregate, {
 						expectedVersion: 6 as Version,
 					});
-					return { result: "r", commits: [first] };
+					return "r";
 				},
 			),
 		).rejects.toThrow(/re-registered with expectedVersion/);
@@ -2257,7 +2187,7 @@ describe("commit registration lifecycle", () => {
 				async (_ctx, registration) => {
 					registration.registerRemoved(aggregate);
 					registration.registerSaved(aggregate);
-					return { result: "r", commits: [] };
+					return "r";
 				},
 			),
 		).rejects.toBeInstanceOf(EventCollectionError);
