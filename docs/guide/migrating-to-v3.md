@@ -124,15 +124,15 @@ aggregate no longer compiles. Replace application reads with domain queries
 ```ts
 class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   get plainState(): Readonly<OrderState> {
-    return deepFreeze(copyPlainState(this.state));
+    return deepFreeze(copyPlainData(this.state));
   }
 }
 ```
 
-`copyPlainState` throws when the state carries a class instance, a function, a
-symbol, or another value a structured clone would lose, and names the field
+`copyPlainData` throws when the state carries a class instance, a function, a
+symbol, or another value outside the plain-data rule, and names the field
 path. A state with class-based child entities
-needs an explicit mapper to plain data instead of the clone. See
+needs an explicit mapper to plain data instead of the copy. See
 [Aggregates -> Reading State from Outside](./aggregates.md#reading-state-from-outside).
 
 ### 2. Replace repository contracts
@@ -1542,6 +1542,39 @@ The root entry no longer exports `capturePersistenceBaseline`,
 - `onPollError` of `OutboxDispatcher` can receive the new
   `AcknowledgedRecordPendingError`. It means that `getPending` returned a
   record that the pass already acknowledged.
+- `copyPlainState(state, subject)` is `copyPlainData(value, { subject })`. It
+  copies with one walk under the plain-data rule and no longer uses
+  `structuredClone`. The rule changes of the next items apply to it too.
+- The event constructors copy the payload and the metadata with one walk
+  under the plain-data rule (see "One rule for plain data" in the design
+  decisions). Three cases that rc.15 accepted now throw: an object as a key
+  of a `Map` or a member of a `Set`, and an own `__proto__` key below the
+  root. A `Proxy` over a record no longer throws; the copy takes its data.
+  An expando on a `Map`, a `Set`, or a `Date` no longer throws; the copy
+  leaves it out. The messages changed.
+- `InMemoryEventStore.append` and the snapshot model copy under the same
+  rule. A snapshot DTO with a `RegExp`, a typed array, or a `DataView` now
+  throws. In rc.15 it passed. Keep a pattern as its source and flags, and
+  encode binary data as a string.
+- `valueObject()` and `ValueObject` copy the props under the same rule. In
+  rc.15 they accepted a non-global `RegExp`, a boxed primitive, and an
+  enumerable symbol-keyed property, and they dropped a non-enumerable
+  string-keyed property. Now all four throw a `TypeError`. A non-enumerable
+  symbol key is left out. An own `__proto__` key throws
+  `PrototypePollutionError`; in rc.15 the copy kept it as inert data.
+- The domain state machine copies its data under the same rule. It accepts a
+  `Date`, a `Map`, and a `Set`, which rc.15 rejected. A symbol value and a
+  symbol-keyed property now throw. The limits on nodes, properties, and depth
+  are gone. The messages of `InvalidDomainMachineContextError`,
+  `InvalidDomainMachineInputError`, and `InvalidDomainTransitionResultError`
+  now name the path.
+- The kit trusts the code that calls it (see "The kit catches accidents, not
+  misuse" in the design decisions). It no longer resists a value that claims
+  another built-in through `Symbol.toStringTag`, a forged prototype, or a
+  getter that changes the data during a check. An injected `random` that
+  throws now fails the retry or the poll loop; in rc.15 the kit replaced its
+  value with the midpoint. `InMemoryOutbox.add` reads `eventId` and `type`
+  as plain properties; in rc.15 it required own data properties.
 - On a leased idempotency store, a failure at commit time keeps the staged
   outcome. A retry of the same key rejects with `IdempotencyInFlightError`
   until the lease expires. After that, `reconcileIdempotency` decides. In

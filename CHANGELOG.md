@@ -114,17 +114,17 @@ immutable. Run one kit version per process during a cutover.
   Code that expects version 4 in the id must pass its own `eventIdFactory`.
 - Events are readonly and kit-built. A recording path accepts only an event
   that a kit constructor built and throws `HandBuiltEventError` for a hand-built
-  object. `createDomainEvent` rejects binary buffers and a `RegExp`, because a
-  freeze cannot make them immutable. It checks the payload and the metadata
-  before and after it copies them, and `InMemoryEventStore.append` applies the
-  same rule. So it rejects a symbol, an `Error`, and a host object such as a
-  `File`. It also rejects every value that the copy would lose or change.
-  These are a class instance, an accessor, an enumerable symbol-keyed
-  property, a non-enumerable data property, and an expando on a built-in. A
-  value object with a private field no longer becomes an empty record without
-  an error. Map a value object to plain data first. `toJSON()` of a kit
-  `ValueObject` is shallow, so map a nested value object too. No getter of the
-  data runs. The checks catch accidents, not a hostile `Proxy`. The metadata
+  object. The event constructors copy the payload and the metadata under the
+  plain-data rule of the kit: records, arrays, `Date`, `Map`, `Set`, and
+  primitives (see "One rule for plain data" in the design decisions). A value
+  outside the rule throws a `TypeError` that names the path, for example a
+  function, a symbol, a class instance, a `RegExp`, binary data, an `Error`,
+  an accessor, or a symbol-keyed or hidden property. A key of a `Map` and a
+  member of a `Set` must be a primitive, and an own `__proto__` key throws
+  `PrototypePollutionError` at any depth. A value object with a private field
+  no longer becomes an empty record without an error. Map a value object to
+  plain data first. `toJSON()` of a kit `ValueObject` is shallow, so map a
+  nested value object too. The metadata
   must be a plain object or absent; `null`, a string, a number, an array, or a
   `Map` throws a `TypeError`, also with a factory `source`. `EventMetadata`
   fields are readonly. `DomainEvent` loses `aggregateVersion`; the commit
@@ -160,6 +160,12 @@ immutable. Run one kit version per process during a cutover.
 - `valueObjectEquals` and `deepEqual` compare the class of a value object
   instance. Two instances of different classes with the same props are not
   equal.
+- `valueObject()` and `ValueObject` copy the props under the plain-data rule
+  of the kit, the same rule as an event payload. A `RegExp`, a boxed
+  primitive, an enumerable symbol-keyed property, a non-enumerable
+  string-keyed property, and an own `__proto__` key throw. Version 2.2.0
+  accepted them or dropped them without an error. A nested value object is
+  kept by reference, as before.
 
 #### Event store
 
@@ -244,6 +250,11 @@ immutable. Run one kit version per process during a cutover.
   `@shirudo/ddd-kit/state-machine`: `DomainStateMachine`,
   `transitionDomainState`, `canTransitionDomainState`, its errors, and its
   types. The root entry no longer exports them.
+- The data of the domain state machine (context, inputs, outputs, and
+  snapshots) follows the plain-data rule of the kit. A `Date`, a `Map`, and a
+  `Set` are accepted now; a symbol value and a symbol-keyed property throw.
+  The limits of 10,000 object nodes, 100,000 own properties, and 256 levels
+  are gone.
 - The root entry no longer exports `deepEqualExcept`, `freezeShallow`, and
   `IValueObject`. Use `valueObjectEqualsExcept`, and type a value object with
   `ValueObject`.
@@ -350,8 +361,8 @@ immutable. Run one kit version per process during a cutover.
   `DomainEventOf<typeof definition>` names its event. `createEvent`,
   `createDomainEvent`, `DomainEventFactory.create`, and
   `createStampedDomainEvent` take a definition in place of the type. The
-  schema output is the payload, in place of the deep check: it must be plain
-  data, and the kit copies and freezes it. A failed schema throws
+  schema output is the payload: the kit copies it under the plain-data rule
+  and freezes the copy. A failed schema throws
   `DomainEventValidationError` with the code `EVENT_PAYLOAD_INVALID` and the
   issues; a schema that returns a Promise throws `EVENT_PAYLOAD_SCHEMA_ASYNC`.
   Use strict object schemas: a plain `z.object` drops unknown keys without an
@@ -368,7 +379,7 @@ immutable. Run one kit version per process during a cutover.
 - `AggregateConfig.maxPendingEvents` limits the pending list with
   `PendingEventLimitExceededError`. `DuplicateEventIdError` and
   `ReentrantEventRecordingError` protect the recording.
-- `EntityConfig.trustInitialState`, `copyPlainState`, `toVersion`, and
+- `EntityConfig.trustInitialState`, `copyPlainData`, `toVersion`, and
   `reconstituteAggregateFromHistory`.
 - `DomainEventValidationError` and `SnapshotTimeValidationError` carry a
   `code` and a `field`.
@@ -508,68 +519,34 @@ immutable. Run one kit version per process during a cutover.
   `registerRemoved` to `withCommit`. Before, it dropped `expectedVersion`, so
   a second registration of the same aggregate with a contradicting OCC
   baseline passed without an error.
-- `copyPlainState` and `InMemoryEventStore.append` check the copy with a second
-  walk. Before, a `Map`, a `Set`, an `ArrayBuffer`, a `SharedArrayBuffer`, or
-  a boxed bigint whose prototype was replaced passed the walk as a record,
-  and the walk did not see its content. The copy then kept an `Error`, a
-  class instance, or shared memory, and it lost the own properties of the
-  built-in without an error. A Proxy trap could also swap a value in after
-  the walk. The second walk now also follows the steps of the first walk: the
-  kind of each object and the key of each data property, in walk order. A
-  copy that differs throws, with the path. In rc.11, the walks compared only
-  the number of data properties, and the content of the built-in could
-  balance that number.
-- `copyPlainState` and `InMemoryEventStore.append` reject every expando on a
-  built-in that the copy would drop. This includes an index key and a
-  non-enumerable data property or accessor. Before, the copy lost such a key
-  without an error, for example `0` on a `Map` or a key after the last
-  character of a boxed `String`. The elements of a typed array and the
-  characters of a boxed `String` still pass. So do the `lastIndex` of a
-  `RegExp` and the mutator shadows that a deep freeze puts on a `Date`, a
-  `Map`, or a `Set`.
 - `InMemoryIdempotencyStore` reads its clock before its state, and `claim`
   asks the token factory before its final checks. A clock or a factory that
   changes the store can no longer push it past `maxEntries`, replace a live
   claim of the same key, confirm an outcome that was released meanwhile, or
   release a claim that was made meanwhile.
-- The in-memory deadline, checkpoint, idempotency, and outbox stores read
-  and copy the caller's data once, before they read their own state. A
-  getter in a payload, a checkpoint, an outcome, or a candidate can no
-  longer run between a check and a write. It therefore cannot push a store
-  past its capacity or revive an abandoned claim.
 - `InMemoryOutbox.add` rejects a malformed candidate with
   `EventCollectionError`: a part that is not an object, an `eventId` or `type`
-  that is not an own string data property of the event, a source field that is
+  that is not a string, a source field that is
   not a string, or a position that is not a valid commit position. The message
   names the event, the field, and the value. Before, such a candidate could
   reach the outbox state, and a `NaN` position broke the order of its source.
-- `copyPlainState` and the other plain-data checks of the kit accept a
-  structured clone in the Vercel Edge runtime. That runtime replaces the
-  global `Object`, so its source text no longer names `Object`, while a
-  clone keeps the constructor of the host. Before, the checks took every
-  cloned plain object for a class instance, and a snapshot restore from
-  `InMemorySnapshotStore` failed there. The edge smoke now checks a clone
-  and an event-store append.
+- The plain-data copy of the kit accepts a structured clone in the Vercel
+  Edge runtime, whose objects carry the `Object.prototype` of another realm.
+  Before, the checks took every cloned plain object for a class instance, and
+  a snapshot restore from `InMemorySnapshotStore` failed there. The edge
+  smoke now checks a clone and an event-store append.
 - `UnitOfWork.run` also closes the repository facades of an attempt whose
   step after the work failed, for example the outbox write, before a retry
   waits. A leaked write then gets `TransactionClosedError`. Before, it got
   `AggregateTrackingError` with the reason `registered_during_flush`.
 - `InMemoryEventStore.append` writes all of a batch or nothing, and it stores
-  only plain data. It copies each event with `copyPlainState`, the checked
-  state copy of the kit. An event with a value that the copy would lose or
-  change rejects with a `TypeError` that names the event index and the stream.
-  Examples are a function, a class instance, an accessor, an `Error`, and a
-  hidden or symbol-keyed property. A batch entry that is not an object, for
-  example `null`, rejects too. No accessor runs unless a Proxy trap adds one.
-  Before, the store dropped the prototype of a class instance, ran accessors,
-  and could keep part of a failed batch. It reads its arguments once, so a
-  getter on them cannot bypass the version check.
-- `copyPlainState` walks a Map or a Set with the built-in iteration and reads
-  class names through property descriptors, so no own iterator and no accessor
-  of the state runs. A Proxy still runs its traps, and an accessor that a trap
-  adds can run. Before, an own iterator could hide a class instance from the
-  check. This also covers the plain state of an entity and the snapshot model.
-  An optional second argument names the state in the messages.
+  only plain data. It copies each event under the plain-data rule of the
+  event constructors. An event outside the rule rejects with a `TypeError`
+  that names the event index and the stream. Examples are a function, a class
+  instance, an accessor, an `Error`, and a hidden or symbol-keyed property. A
+  batch entry that is not an object, for example `null`, rejects too. Before,
+  the store dropped the prototype of a class instance, ran accessors, and
+  could keep part of a failed batch.
 - `UnitOfWork.run` reports a failed rollback as `RollbackError` also when a
   step after the work failed inside the transaction, for example the outbox
   write. Before, it reported a `CommitError` whose cause was the rollback

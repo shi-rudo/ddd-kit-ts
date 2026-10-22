@@ -507,36 +507,29 @@ describe("adapter-owned snapshot models", () => {
 		).toThrow(/symbol-keyed/);
 	});
 
-	const regExpPatterns: ReadonlyArray<readonly [string, RegExp]> = [
-		["plain", /sku-\d+/i],
-		["global", /sku-\d+/g],
-		["sticky", /sku-\d+/y],
-	];
-	it.each(regExpPatterns)(
-		"keeps a %s RegExp in the state DTO matching after capture",
-		(_kind, skuPattern) => {
-			const regExpModel = defineSnapshotModel({
-				aggregateType: "Order",
-				schemaVersion: 1,
-				capture: () => ({ skuPattern }),
-				reconstitute: (id: OrderId, _state, version: Version): Order => ({
-					id,
-					state: { status: "unused" },
-					version,
-				}),
-			});
-			const order: Order = {
-				id: "order-1" as OrderId,
-				state: { status: "placed" },
-				version: 1 as Version,
-			};
+	it("rejects a RegExp in the state DTO and names how to keep it", () => {
+		const regExpModel = defineSnapshotModel({
+			aggregateType: "Order",
+			schemaVersion: 1,
+			capture: () => ({ skuPattern: /sku-\d+/i }),
+			reconstitute: (id: OrderId, _state, version: Version): Order => ({
+				id,
+				state: { status: "unused" },
+				version,
+			}),
+		});
+		const order: Order = {
+			id: "order-1" as OrderId,
+			state: { status: "placed" },
+			version: 1 as Version,
+		};
 
-			const snapshot = captureAggregateSnapshot(regExpModel, order, new Date());
-
-			expect(Object.isFrozen(snapshot.state)).toBe(true);
-			expect(snapshot.state.skuPattern.test("sku-42")).toBe(true);
-		},
-	);
+		expect(() =>
+			captureAggregateSnapshot(regExpModel, order, new Date()),
+		).toThrow(
+			"captureAggregateSnapshot: state.skuPattern is a RegExp; keep its source and flags as strings",
+		);
+	});
 
 	it("composes snapshot reconstitution with additive event-tail replay", () => {
 		type CounterId = Id<"Counter">;

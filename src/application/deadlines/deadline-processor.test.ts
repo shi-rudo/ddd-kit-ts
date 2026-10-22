@@ -761,7 +761,7 @@ describe("DeadlineProcessor", () => {
 		});
 	});
 
-	it("throwing observers and jitter source are neutralized", async () => {
+	it("throwing observers are neutralized", async () => {
 		const store = await seeded([{ key: "poison" }, { key: "healthy" }], {
 			maxDeliveryAttempts: 1,
 		});
@@ -771,9 +771,6 @@ describe("DeadlineProcessor", () => {
 			handler: (deadline) => {
 				if (deadline.key === "poison") throw new Error("boom");
 				handled.push(deadline.key);
-			},
-			random: () => {
-				throw new Error("jitter bug");
 			},
 			observers: {
 				onDeliveryError: () => {

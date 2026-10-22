@@ -1,11 +1,11 @@
 # Structural Comparison
 
-Functions that compare, reshape, and copy a value structure in depth: equality, equality with exclusions, key removal, and a guarded structured clone. They work over objects, arrays, Maps, Sets and TypedArrays.
+Functions that compare, reshape, and copy a value structure in depth: equality, equality with exclusions, key removal, and the copy under the plain-data rule. They work over objects, arrays, Maps, Sets and TypedArrays.
 
 ## Installation
 
 ```ts
-import { deepEqual, deepOmit, copyPlainState } from '@shirudo/ddd-kit';
+import { deepEqual, deepOmit, copyPlainData } from '@shirudo/ddd-kit';
 ```
 
 ## Functions
@@ -110,46 +110,39 @@ const result2 = deepOmit(obj, {
 
 ---
 
-### `copyPlainState(state, subject?)`
+### `copyPlainData(value, options?)`
 
-Returns a copy of `state` that shares no object with the original. The copy is a `structuredClone`, taken after a walk that rejects every value the clone would lose or silently degrade. A class instance keeps its data properties in a clone and loses the methods on its prototype; the walk throws a `TypeError` that names the path and the class instead. The optional `subject` replaces `copyPlainState: state` at the start of every message.
+Returns a copy of `value` under the plain-data rule of the kit (see "One rule for plain data" in the design decisions). One walk builds the copy and checks each value as it copies it. A value outside the rule throws a `TypeError` that names the path. `options.subject` replaces `copyPlainData: value` at the start of every message.
 
-The walk reads the graph through property descriptors and walks a `Map` or a `Set` with the built-in iteration. No accessor and no own iterator of the state runs. A `Proxy` runs its traps during the walk. A trap can change the graph, and an accessor that a trap adds runs during the clone. A second walk checks the clone, so a value that a trap swapped in and the content of a built-in whose prototype was replaced are rejected too. The second walk also follows the steps of the first walk: the kind of each object and the key of each data property, in walk order. A clone that differs throws, with the path: a built-in whose prototype was replaced is a built-in again in the clone and loses its own properties.
+#### The rule
 
-#### Rejected values
+- Kept: `string`, `number`, `boolean`, `bigint`, `undefined`, `null`
+- Copied: a record whose prototype is `null` or an `Object.prototype` of any realm, an array (holes stay holes), a `Date`, a `Map`, and a `Set`
+- Throws: a function, a symbol, a class instance (also a subclass of a built-in), a `RegExp`, binary data, an `Error`, a `Promise`, a `WeakMap`, a `WeakSet`, a boxed primitive, an accessor, an enumerable symbol-keyed property, a non-enumerable string-keyed property, an object as a `Map` key or a `Set` member, and an own `__proto__` key (`PrototypePollutionError`)
+- Left out: a non-enumerable symbol-keyed property
 
-- A class instance, including a subclass of a built-in (`class Tags extends Set`)
-- A function or a symbol value
-- An enumerable symbol-keyed property anywhere (a hidden symbol key passes as metadata)
-- A non-enumerable string-keyed property (the clone drops it). On a built-in, the mutator shadows of a deep freeze, the `lastIndex` of a `RegExp`, and the `length` of a boxed `String` pass: they are machinery, not data
-- An accessor property (the walk does not invoke it)
-- An expando on a built-in such as a `Map` or a `Date`, also at an index key (the clone drops it)
-- An `Error`, a `Promise`, a `WeakMap`, or a `WeakSet`
-- A `SharedArrayBuffer` or a view over one (the copy would share its memory)
-- A `Proxy`: the walk or the clone fails; `copyPlainState` rethrows a failure of the clone as a `TypeError` that keeps the cause
-
-Plain objects from any realm, arrays, `Date`, `Map`, `Set`, `RegExp`, bigints, and typed arrays pass. Circular references are preserved.
+Cycles and shared references survive the copy. The copy holds objects of the local realm only.
 
 #### Example
 
 ```ts
-import { deepFreeze, copyPlainState } from '@shirudo/ddd-kit';
+import { deepFreeze, copyPlainData } from '@shirudo/ddd-kit';
 
 class Order extends StateStoredAggregate<OrderState, OrderId> {
   /** An immutable copy of the state. Never the live graph. */
   get plainState(): Readonly<OrderState> {
-    return deepFreeze(copyPlainState(this.state));
+    return deepFreeze(copyPlainData(this.state, { subject: 'Order state' }));
   }
 }
 
-copyPlainState({ review: new OwnerReview() });
-// TypeError: copyPlainState: state.review is a class instance (OwnerReview); map it to plain data
+copyPlainData({ review: new OwnerReview() });
+// TypeError: copyPlainData: value.review is a class instance (OwnerReview); map it to plain data
 ```
 
 #### Notes
 
-- The snapshot model copies the captured DTO and the restored state with the same function
-- A state that carries a class-based child entity is mapped to plain data first; the walk names the field to map
+- The event constructors, the value objects, the snapshot model, and the state machine copy their data with the same function
+- A state that carries a class-based child entity is mapped to plain data first; the error names the field to map
 
 ---
 

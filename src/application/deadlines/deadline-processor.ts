@@ -117,9 +117,7 @@ export interface DeadlineProcessorOptions<TPayload> {
 
 	/**
 	 * Jitter source for the failure backoff, injectable for
-	 * deterministic tests. Default `Math.random`. Neutralized like every
-	 * user callback: a throwing or non-finite source degrades to the
-	 * midpoint multiplier.
+	 * deterministic tests. Default `Math.random`.
 	 */
 	random?: () => number;
 

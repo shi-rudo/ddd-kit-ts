@@ -139,9 +139,7 @@ function deepEqualInner(
 		return true;
 	}
 
-	// 5. Arrays: `Array.isArray` is brand-based and immune to
-	// `Symbol.toStringTag` spoofing (a spoofed tag would otherwise route a
-	// real array away from element comparison, or a plain object into it).
+	// 5. Arrays: `Array.isArray` answers the same in every realm.
 	if (Array.isArray(objA) || Array.isArray(objB)) {
 		if (!Array.isArray(objA) || !Array.isArray(objB)) return false;
 		if (objA.length !== objB.length) return false;
@@ -168,19 +166,12 @@ function deepEqualInner(
 		return true;
 	}
 
-	// 6. Tag-based type detection (robust across realms), brand-verified:
-	// a plain object spoofing a built-in tag is compared as a plain object
-	// instead of crashing type-specific code below.
+	// 6. Tag-based type detection, the same in every realm.
 	const tagA = objToString.call(objA);
 	const tagB = objToString.call(objB);
 	if (tagA !== tagB) return false;
 
-	const builtInA = isBuiltInObject(objA, tagA);
-	const builtInB = isBuiltInObject(objB, tagB);
-	// A genuine built-in never equals a spoofed lookalike.
-	if (builtInA !== builtInB) return false;
-
-	if (!builtInA) {
+	if (!isBuiltInObject(objA, tagA)) {
 		// Opaque intrinsics (boxed Symbol, generator, WeakRef, ...):
 		// identity is the only honest comparison; symmetric because
 		// tagA === tagB was already enforced above.
@@ -242,7 +233,7 @@ function deepEqualInner(
 		}
 
 		default: {
-			// Unhandled but brand-trusted built-ins: compared by reference.
+			// Unhandled built-ins: compared by reference.
 			// Their internal structure is unknown, and this keeps new
 			// built-ins from falling through to plain-object comparison.
 			// This branch IS the REFERENCE_COMPARED_TAGS contract exported
@@ -255,8 +246,7 @@ function deepEqualInner(
 
 /**
  * Plain / custom objects: compare own enumerable string keys + own symbol
- * keys and their values. Used both as the final fallback and for objects
- * whose built-in-looking tag failed brand verification.
+ * keys and their values. The final fallback after the built-ins.
  */
 function comparePlainObjects(
 	objA: object,

@@ -23,7 +23,7 @@ The runtime surface is intentionally small:
 - no required `process`, `fs`, or `Buffer` usage in the package runtime
 - default event ids are UUID v7 from Web Crypto's `crypto.getRandomValues()`
 - event and snapshot timestamps use `new Date()`
-- aggregate snapshots and value-object cloning use `structuredClone`
+- the in-memory reference adapters copy their records with `structuredClone`
 - `EventBus` uses `Promise.allSettled`
 - cancellation-aware APIs accept `AbortSignal`
 

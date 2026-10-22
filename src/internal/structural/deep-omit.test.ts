@@ -436,56 +436,6 @@ describe("deepOmit – Prototype pollution safety", () => {
 	});
 });
 
-describe("deepOmit – Symbol.toStringTag spoofing", () => {
-	it("walks a spoofed Date as a plain object instead of crashing", () => {
-		const input = { d: { [Symbol.toStringTag]: "Date", secret: 1, keep: 2 } };
-
-		const result = deepOmit(input, { ignoreKeys: ["secret"] }) as {
-			d: { keep: number };
-		};
-
-		expect(result.d.keep).toBe(2);
-		expect("secret" in result.d).toBe(false);
-	});
-
-	it("walks a spoofed Map as a plain object instead of crashing", () => {
-		const input = { m: { [Symbol.toStringTag]: "Map", x: 1 } };
-
-		const result = deepOmit(input, { ignoreKeys: [] }) as {
-			m: { x: number };
-		};
-
-		expect(result.m.x).toBe(1);
-	});
-
-	it.each(["Promise", "Error"])(
-		"walks a spoofed %s as plain data and applies omissions",
-		(tag) => {
-			const value = { [Symbol.toStringTag]: tag, secret: 1, keep: 2 };
-			const result = deepOmit(value, { ignoreKeys: ["secret"] }) as {
-				keep: number;
-			};
-
-			// Keep the hostile Symbol.toStringTag value out of the assertion
-			// formatter; older supported Node releases recurse while formatting a
-			// plain object that identifies itself as an Error.
-			expect(Object.is(result, value)).toBe(false);
-			expect(result.keep).toBe(2);
-			expect("secret" in result).toBe(false);
-		},
-	);
-
-	it("still clones real built-ins by type (regression guard)", () => {
-		const input = { d: new Date(5), m: new Map([["k", 1]]) };
-		const result = deepOmit(input, {}) as { d: Date; m: Map<string, number> };
-
-		expect(result.d).not.toBe(input.d);
-		expect(result.d.getTime()).toBe(5);
-		expect(result.m).not.toBe(input.m);
-		expect(result.m.get("k")).toBe(1);
-	});
-});
-
 describe("deepOmit – shared references (DAG) vs cycles with path-sensitive predicates", () => {
 	it("evaluates the predicate per path when the same object is shared under two keys", () => {
 		const shared = { x: 1, y: 2 };

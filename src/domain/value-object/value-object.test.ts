@@ -1,89 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { deepFreeze, ValueObject, valueObject } from "./value-object";
-
-const mutableBuiltInCases = [
-	{
-		name: "Date",
-		create: () => new Date(1_000),
-		read: (value: object) => (value as Date).getTime(),
-		expected: 1_000,
-		mutate: (value: object) => (value as Date).setTime(0),
-	},
-	{
-		name: "Map",
-		create: () => new Map([["key", { value: "initial" }]]),
-		read: (value: object) => (value as Map<string, unknown>).get("key"),
-		expected: { value: "initial" },
-		mutate: (value: object) =>
-			(value as Map<string, unknown>).set("other", true),
-	},
-	{
-		name: "Set",
-		create: () => new Set(["initial"]),
-		read: (value: object) => (value as Set<unknown>).size,
-		expected: 1,
-		mutate: (value: object) => (value as Set<unknown>).add("other"),
-	},
-] as const;
-
-const atomicBuiltInCases = [
-	{
-		name: "RegExp",
-		create: () => /value/,
-		read: (value: object) => (value as RegExp).test("value"),
-		expected: true,
-	},
-	{
-		name: "Number",
-		create: () => new Number(7),
-		read: (value: object) => (value as { valueOf(): unknown }).valueOf(),
-		expected: 7,
-	},
-	{
-		name: "Boolean",
-		create: () => new Boolean(true),
-		read: (value: object) => (value as { valueOf(): unknown }).valueOf(),
-		expected: true,
-	},
-	{
-		name: "String",
-		create: () => new String("value"),
-		read: (value: object) => (value as { valueOf(): unknown }).valueOf(),
-		expected: "value",
-	},
-	{
-		name: "BigInt",
-		create: () => Object(7n),
-		read: (value: object) => value.valueOf(),
-		expected: 7n,
-	},
-] as const;
-
-const forbiddenBuiltInCases = [
-	{ name: "Promise", create: () => Promise.resolve("value") },
-	{ name: "WeakMap", create: () => new WeakMap<object, unknown>() },
-	{ name: "WeakSet", create: () => new WeakSet<object>() },
-	{ name: "Error", create: () => new Error("value") },
-	{ name: "ArrayBuffer", create: () => new ArrayBuffer(8) },
-	{ name: "SharedArrayBuffer", create: () => new SharedArrayBuffer(8) },
-	{ name: "Uint8Array", create: () => new Uint8Array([1]) },
-	{ name: "DataView", create: () => new DataView(new ArrayBuffer(1)) },
-] as const;
-
-function maskWithOwnDataTag<T extends object>(value: T): T {
-	Object.defineProperty(value, Symbol.toStringTag, {
-		configurable: true,
-		value: "Object",
-	});
-	return value;
-}
-
-function maskWithInheritedDataTag<T extends object>(value: T): T {
-	const prototype = Object.create(Object.getPrototypeOf(value));
-	Object.defineProperty(prototype, Symbol.toStringTag, { value: "Object" });
-	Object.setPrototypeOf(value, prototype);
-	return value;
-}
+import { deepFreeze, ValueObject } from "./value-object";
 
 describe("deepFreeze", () => {
 	it("does not walk a subtree it already deep-froze", () => {
@@ -125,18 +41,6 @@ describe("deepFreeze", () => {
 
 		expect(readsAfterFirstFreeze).toBe(1);
 		expect(reads).toBe(1);
-	});
-
-	it("re-walks a subtree that holds a pre-frozen Map, because its entries can still change", () => {
-		// A frozen Map takes no mutator shadows, so entries can still be
-		// added; the memo must not skip the graph that holds it.
-		const map = Object.freeze(new Map<string, { mutable: boolean }>());
-		deepFreeze({ map });
-		map.set("k", { mutable: true });
-
-		deepFreeze({ map });
-
-		expect(Object.isFrozen(map.get("k"))).toBe(true);
 	});
 
 	it("memoizes a graph that references one object twice", () => {
@@ -204,68 +108,6 @@ describe("deepFreeze", () => {
 		expect(Object.isFrozen(grandchild)).toBe(true);
 	});
 
-	it.each(mutableBuiltInCases)(
-		"blocks $name mutators with an own toStringTag accessor",
-		({ name, create, mutate }) => {
-			const value = create();
-			Object.defineProperty(value, Symbol.toStringTag, {
-				configurable: true,
-				get: () => name,
-			});
-
-			deepFreeze(value);
-
-			expect(() => mutate(value)).toThrow(TypeError);
-		},
-	);
-
-	it.each(mutableBuiltInCases)(
-		"blocks $name mutators with an inherited toStringTag accessor",
-		({ name, create, mutate }) => {
-			const value = create();
-			const prototype = Object.create(Object.getPrototypeOf(value));
-			Object.defineProperty(prototype, Symbol.toStringTag, {
-				get: () => name,
-			});
-			Object.setPrototypeOf(value, prototype);
-
-			deepFreeze(value);
-
-			expect(() => mutate(value)).toThrow(TypeError);
-		},
-	);
-
-	it.each(mutableBuiltInCases)(
-		"blocks $name mutators with an own data toStringTag",
-		({ create, mutate }) => {
-			const value = create();
-			Object.defineProperty(value, Symbol.toStringTag, {
-				configurable: true,
-				value: "Object",
-			});
-
-			deepFreeze(value);
-
-			expect(() => mutate(value)).toThrow(TypeError);
-		},
-	);
-
-	it.each(mutableBuiltInCases)(
-		"blocks $name mutators with an inherited data toStringTag",
-		({ create, mutate }) => {
-			const value = create();
-			const prototype = Object.create(Object.getPrototypeOf(value));
-			Object.defineProperty(prototype, Symbol.toStringTag, {
-				value: "Object",
-			});
-			Object.setPrototypeOf(value, prototype);
-
-			deepFreeze(value);
-
-			expect(() => mutate(value)).toThrow(TypeError);
-		},
-	);
-
 	it.each([
 		["global", /a/g],
 		["sticky", /a/y],
@@ -275,98 +117,6 @@ describe("deepFreeze", () => {
 		expect(state.pattern.test("a")).toBe(true);
 		expect(Object.isFrozen(state)).toBe(true);
 	});
-
-	it("does not invoke inherited toStringTag accessors", () => {
-		let accessorInvoked = false;
-		const prototype = Object.create(Object.prototype);
-		Object.defineProperty(prototype, Symbol.toStringTag, {
-			get: () => {
-				accessorInvoked = true;
-				return "Object";
-			},
-		});
-		const value = Object.create(prototype) as { nested: { value: string } };
-		value.nested = { value: "initial" };
-
-		deepFreeze(value);
-
-		expect(accessorInvoked).toBe(false);
-		expect(Object.isFrozen(value)).toBe(true);
-		expect(Object.isFrozen(value.nested)).toBe(true);
-	});
-});
-
-describe("valueObject built-ins with data toStringTag overrides", () => {
-	it.each(mutableBuiltInCases)(
-		"preserves $name with an own data toStringTag",
-		({ create, read, expected, mutate }) => {
-			const value = create();
-			Object.defineProperty(value, Symbol.toStringTag, {
-				configurable: true,
-				value: "Object",
-			});
-
-			const frozen = valueObject({ value }).value;
-
-			expect(read(frozen)).toEqual(expected);
-			expect(() => mutate(frozen)).toThrow(TypeError);
-		},
-	);
-
-	it.each(mutableBuiltInCases)(
-		"preserves $name with an inherited data toStringTag",
-		({ create, read, expected, mutate }) => {
-			const value = create();
-			const prototype = Object.create(Object.getPrototypeOf(value));
-			Object.defineProperty(prototype, Symbol.toStringTag, {
-				value: "Object",
-			});
-			Object.setPrototypeOf(value, prototype);
-
-			const frozen = valueObject({ value }).value;
-
-			expect(read(frozen)).toEqual(expected);
-			expect(() => mutate(frozen)).toThrow(TypeError);
-		},
-	);
-
-	it.each(atomicBuiltInCases)(
-		"preserves $name with an own data toStringTag",
-		({ create, read, expected }) => {
-			const frozen = valueObject({ value: maskWithOwnDataTag(create()) }).value;
-
-			expect(read(frozen)).toEqual(expected);
-		},
-	);
-
-	it.each(atomicBuiltInCases)(
-		"preserves $name with an inherited data toStringTag",
-		({ create, read, expected }) => {
-			const frozen = valueObject({
-				value: maskWithInheritedDataTag(create()),
-			}).value;
-
-			expect(read(frozen)).toEqual(expected);
-		},
-	);
-
-	it.each(forbiddenBuiltInCases)(
-		"rejects $name with an own data toStringTag",
-		({ create }) => {
-			expect(() =>
-				valueObject({ value: maskWithOwnDataTag(create()) }),
-			).toThrow(/(Value Objects are plain data|immutable value semantics)/);
-		},
-	);
-
-	it.each(forbiddenBuiltInCases)(
-		"rejects $name with an inherited data toStringTag",
-		({ create }) => {
-			expect(() =>
-				valueObject({ value: maskWithInheritedDataTag(create()) }),
-			).toThrow(/(Value Objects are plain data|immutable value semantics)/);
-		},
-	);
 });
 
 describe("ValueObject Class", () => {
@@ -434,7 +184,7 @@ describe("ValueObject Class", () => {
 				new SharedArrayBuffer(4),
 				new Error("failure"),
 			]) {
-				expect(() => new Blob({ data })).toThrow(/immutable value semantics/);
+				expect(() => new Blob({ data })).toThrow(/is binary data|is an Error/);
 			}
 		});
 
@@ -463,9 +213,7 @@ describe("ValueObject Class", () => {
 			}
 			class FnVO extends ValueObject<FnProps> {}
 
-			expect(() => new FnVO({ calc: () => 42 })).toThrow(
-				/does not accept function values/,
-			);
+			expect(() => new FnVO({ calc: () => 42 })).toThrow(/is a function/);
 		});
 
 		it("rejects custom class instances in props instead of creating incomplete clones", () => {
@@ -481,7 +229,7 @@ describe("ValueObject Class", () => {
 
 			expect(
 				() => new PrivateValueObject({ value: new PrivateValue() }),
-			).toThrow(/custom class instances/);
+			).toThrow(/is a class instance/);
 		});
 
 		it("does not freeze the caller's props object or nested objects", () => {
@@ -591,27 +339,6 @@ describe("ValueObject Class", () => {
 			expect(cloned.props.amount).toBe(200);
 			expect(cloned.props.currency).toBe("USD");
 			expect(cloned.equals(money)).toBe(false);
-		});
-
-		it("stays equal to its clone when props carry a non-enumerable symbol", () => {
-			// cloneForVo preserves non-enumerable symbol properties, but a
-			// `{ ...props }` spread would drop them, so clone() must re-attach
-			// them; otherwise equals(clone) fails, since deepEqual counts all
-			// own symbols regardless of enumerability.
-			const hidden = Symbol("hidden");
-			const props: MoneyProps = { amount: 100, currency: "USD" };
-			Object.defineProperty(props, hidden, {
-				value: 42,
-				enumerable: false,
-			});
-
-			const money = new Money(props);
-			const cloned = money.clone();
-
-			expect(Object.getOwnPropertySymbols(money.props)).toHaveLength(1);
-			expect(Object.getOwnPropertySymbols(cloned.props)).toHaveLength(1);
-			expect((cloned.props as Record<symbol, unknown>)[hidden]).toBe(42);
-			expect(money.equals(cloned)).toBe(true);
 		});
 	});
 
@@ -776,45 +503,7 @@ describe("ValueObject Class", () => {
 			expect(price.props.amount).toBe(money);
 		});
 
-		it("ignores the class record on an object whose props are not frozen", () => {
-			class OpenMoney {
-				readonly props: MoneyProps;
-				constructor(props: MoneyProps) {
-					this.props = { ...props };
-					Object.defineProperty(this, VALUE_OBJECT_CLASS, {
-						value: OpenMoney,
-						enumerable: false,
-						writable: false,
-						configurable: false,
-					});
-				}
-			}
-			const money = new OpenMoney({ amount: 100, currency: "USD" });
-
-			expect(
-				() =>
-					new Price({ amount: money, label: "list" } as unknown as PriceProps),
-			).toThrow(
-				"valueObject() cannot clone custom class instances: Value Objects are plain data. A value object is recognized only when a copy of this kit version built it and its props are frozen",
-			);
-		});
-
-		it("names the version mismatch when a value object carries no class record", () => {
-			class OlderCopyMoney {
-				readonly props: Readonly<MoneyProps>;
-				constructor(props: MoneyProps) {
-					this.props = Object.freeze({ ...props });
-				}
-			}
-			const money = new OlderCopyMoney({ amount: 100, currency: "USD" });
-
-			expect(
-				() =>
-					new Price({ amount: money, label: "list" } as unknown as PriceProps),
-			).toThrow(/recognized only when a copy of this kit version built it/);
-		});
-
-		it("does not hint at a version mismatch for a class with an open props field", () => {
+		it("rejects a class with a props field that no value object built", () => {
 			class Component {
 				props = { amount: 100 };
 			}
@@ -826,20 +515,15 @@ describe("ValueObject Class", () => {
 						label: "list",
 					} as unknown as PriceProps),
 			).toThrow(
-				"valueObject() cannot clone custom class instances: Value Objects are plain data",
+				"new ValueObject(): props.amount is a class instance (Component); map it to plain data",
 			);
 		});
 
-		it("recognizes a nested value object whose props is a RegExp", () => {
-			class Pattern extends ValueObject<RegExp> {}
-			class Rule extends ValueObject<{ pattern: Pattern }> {}
-			const pattern = new Pattern(/^[a-z]+$/);
+		it("rejects a RegExp in the props, because compile() could still change it", () => {
+			class Rule extends ValueObject<{ pattern: RegExp }> {}
 
-			const rule = new Rule({ pattern });
-
-			expect(rule.props.pattern).toBe(pattern);
-			expect(rule.equals(new Rule({ pattern: new Pattern(/^[a-z]+$/) }))).toBe(
-				true,
+			expect(() => new Rule({ pattern: /^[a-z]+$/ })).toThrow(
+				"new ValueObject(): props.pattern is a RegExp; keep its source and flags as strings",
 			);
 		});
 
@@ -854,7 +538,7 @@ describe("ValueObject Class", () => {
 						amount: new Tag("x"),
 						label: "list",
 					} as unknown as PriceProps),
-			).toThrow(/custom class instances/);
+			).toThrow(/is a class instance/);
 		});
 	});
 });

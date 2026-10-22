@@ -1,6 +1,6 @@
 import {
 	CommandBus,
-	copyPlainState,
+	copyPlainData,
 	createDomainEvent,
 	createDomainEventFactory,
 	defineDomainEvent,
@@ -76,8 +76,8 @@ export async function runEdgeRuntimeSmoke(runtime) {
 	// A runtime can return a structured clone from another realm. The plain
 	// data check of the kit must accept it, and the event store must accept
 	// the event that the kit built.
-	const copy = copyPlainState(structuredClone({ line: { sku: "a", qty: 1 } }));
-	assert(copy.line.qty === 1, "copyPlainState rejected a structured clone");
+	const copy = copyPlainData(structuredClone({ line: { sku: "a", qty: 1 } }));
+	assert(copy.line.qty === 1, "copyPlainData rejected a structured clone");
 	const events = new InMemoryEventStore();
 	const stream = { aggregateType: "EdgeOrder", aggregateId: order.id };
 	await events.append(stream, [orderView.pendingEvent], { expectedVersion: 0 });

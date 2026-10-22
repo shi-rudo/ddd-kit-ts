@@ -106,7 +106,7 @@ dual CJS/ESM load). The brand catches accidents, not adversaries: code in the
 same process can fake it. The gate is not a security boundary; validate
 untrusted input at the application edge.
 
-Events are plain structured-cloneable data. Without a [definition](#event-definitions-with-a-schema), the event constructors check the payload and the metadata before and after they copy them. `InMemoryEventStore.append` applies the same rule. A value that the copy would lose or change throws a `TypeError` that names the path. Such values are a class instance, an accessor, an enumerable symbol-keyed property, a non-enumerable data property, and an expando on a built-in such as a `Map`. The check runs no getter of the data. A `Proxy` runs its traps in the check. The checks catch accidents, not a hostile `Proxy`: a trap that changes the data during the check can hide a loss. Map a value object to plain data first. `toJSON()` of a kit `ValueObject` is shallow, so map a nested value object too. The constructors also reject a function, a promise, a `WeakMap`, a `WeakSet`, an `Error`, and a host object such as a `File`. They reject binary buffers, shared memory, and a `RegExp` too. Map an `Error` to plain data, for example its message and code.
+Events are plain data. The event constructors copy the payload and the metadata under the plain-data rule of the kit (see "One rule for plain data" in the design decisions), and `InMemoryEventStore.append` applies the same rule. A value outside the rule throws a `TypeError` that names the path. Such values are a function, a symbol, a class instance, an accessor, an enumerable symbol-keyed property, a non-enumerable data property, a `RegExp`, binary data, a promise, a `WeakMap`, a `WeakSet`, an `Error`, and a host object such as a `File`. A key of a `Map` and a member of a `Set` must be a primitive. Map a value object to plain data first. `toJSON()` of a kit `ValueObject` is shallow, so map a nested value object too. Map an `Error` to plain data, for example its message and code.
 
 `createDomainEvent` reads the platform clock and Web Crypto when `occurredAt`
 or `eventId` is omitted. If the caller must provide every nondeterministic
@@ -162,11 +162,11 @@ See [Aggregates -> A Small Aggregate](./aggregates.md#state-version-domain-event
 
 ## Event definitions with a schema
 
-Without a definition, the constructors check every object of the payload
-before and after they copy it. That deep check is the largest part of the
-cost of an event. A definition replaces it with a schema. It pairs the event
-type with a [Standard Schema](https://standardschema.dev), for example a zod,
-valibot, or arktype schema, and with the schema version of the payload:
+Without a definition, the plain-data copy is the only check of the payload.
+A definition adds a schema that decides what the payload may contain. It
+pairs the event type with a [Standard Schema](https://standardschema.dev),
+for example a zod, valibot, or arktype schema, and with the schema version of
+the payload:
 
 ```ts
 import { z } from "zod";
@@ -217,11 +217,11 @@ Pass the definition in place of the type to `createEvent`,
 - The schema output must be plain data: records, arrays, `Date`, `Map`, `Set`,
   and primitives. A class instance, a binary buffer, a `RegExp`, a function,
   or a symbol throws a `TypeError` that names the path.
-- The kit copies the output with `structuredClone` and freezes the copy. The
-  caller's objects stay unfrozen.
+- The kit copies the output under the plain-data rule and freezes the copy.
+  The caller's objects stay unfrozen.
 
-With a definition, the schema decides what the payload may contain, and the
-deep check does not run. A schema that passes a value through unchecked, for
+With a definition, the schema decides what the payload may contain. A schema
+that passes a value through unchecked, for
 example `z.any()`, `z.custom()`, or `z.instanceof()`, makes that value the
 responsibility of the schema. Only a definition from `defineDomainEvent`
 counts. A hand-built object with the same fields throws as an invalid type.

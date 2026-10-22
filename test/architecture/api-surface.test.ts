@@ -267,7 +267,7 @@ const INDEX_SURFACE = [
 	"captureAggregateSnapshot",
 	"classifyConcurrencyConflict",
 	"copyMetadata",
-	"copyPlainState",
+	"copyPlainData",
 	"createDomainEvent",
 	"createDomainEventFactory",
 	"createIntegrationMessage",

@@ -244,8 +244,6 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 	}
 
 	async add(events: ReadonlyArray<EventCommitCandidate<Evt>>): Promise<void> {
-		// Copy first: the copy can run caller code. A Proxy event still runs
-		// its traps on each read of its eventId.
 		const batch = Array.from(events, ownCandidate);
 		// Prove identity/receipt and source-position consistency for the whole input
 		// before mutating pending records or source heads. Otherwise a conflict later
@@ -901,11 +899,9 @@ function assertReceiptShape(
 }
 
 /**
- * The fields of a candidate that the outbox reads, read once and checked.
- * The function copies the source and the position. The event stays the
- * caller's object, because a dispatcher gets the event that the commit
- * recorded. The outbox reads only `eventId` and `type` from it, so these
- * must be own data properties: a read of them then runs no getter.
+ * The fields of a candidate that the outbox reads, checked. The function
+ * copies the source and the position. The event stays the caller's object,
+ * because a dispatcher gets the event that the commit recorded.
  */
 function ownCandidate<Evt extends AnyDomainEvent>(
 	candidate: EventCommitCandidate<Evt>,
@@ -926,25 +922,19 @@ function ownCandidate<Evt extends AnyDomainEvent>(
 	if (typeof event !== "object" || event === null) {
 		throw rejection("event", "an object", describeRejected(event));
 	}
-	const eventId = Object.getOwnPropertyDescriptor(event, "eventId");
-	const type = Object.getOwnPropertyDescriptor(event, "type");
-	if (typeof type?.value === "string") eventType = type.value;
-	if (typeof eventId?.value === "string") {
-		subject = `event "${eventId.value}" (the candidate at index ${index})`;
+	const { eventId, type } = event as {
+		readonly eventId?: unknown;
+		readonly type?: unknown;
+	};
+	if (typeof type === "string") eventType = type;
+	if (typeof eventId === "string") {
+		subject = `event "${eventId}" (the candidate at index ${index})`;
 	}
-	for (const [field, descriptor] of [
-		["event.eventId", eventId],
-		["event.type", type],
-	] as const) {
-		if (descriptor === undefined) {
-			throw rejection(field, "an own data property", "missing");
-		}
-		if (!("value" in descriptor)) {
-			throw rejection(field, "an own data property", "an accessor");
-		}
-		if (typeof descriptor.value !== "string") {
-			throw rejection(field, "a string", describeRejected(descriptor.value));
-		}
+	if (typeof eventId !== "string") {
+		throw rejection("event.eventId", "a string", describeRejected(eventId));
+	}
+	if (typeof type !== "string") {
+		throw rejection("event.type", "a string", describeRejected(type));
 	}
 	if (typeof source !== "object" || source === null) {
 		throw rejection("source", "an object", describeRejected(source));

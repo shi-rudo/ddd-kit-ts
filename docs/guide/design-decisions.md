@@ -4,6 +4,26 @@ This page explains the choices in the kit that are not obvious from the API alon
 
 Most of these decisions are trade-offs, not universal rules. The point is to show where the kit draws its boundaries, why those boundaries exist, and when a consumer might reasonably choose a different shape on top.
 
+## The kit catches accidents, not misuse
+
+The kit trusts the code that calls it. It catches the mistakes that happen by
+accident: a forgotten `update`, a value that a copy would lose, a commit that
+fails with an unknown outcome, a sink that hangs on one record. It does not
+defend against code that works against it on purpose: a `Proxy` that lies, a
+getter with a side effect, a forged prototype, a subclass that turns off a
+guard, or a test stub that calls back into the store.
+
+A defense against hostile code in the same process has no end. JavaScript
+gives that code every tool to win, so each review round finds a new special
+case, and each fix makes the kit slower and harder to read. The defense also
+protects nothing: code in the same process can do more harm than any check
+can stop.
+
+So the kit spends its effort on the failures of production: timeouts, unknown
+commit outcomes, poison records, reads that lag, and a second copy of the kit
+in one process. Untrusted input is a different matter. Parse it at the
+boundary, for example with a schema, before it reaches the kit.
+
 ## Result lives at the App-Service boundary, not in the domain
 
 The kit keeps one clear error axis:
@@ -109,6 +129,34 @@ That is not just defensive programming. Domain events are facts. A subscriber sh
 
 Freezing makes that failure loud. If a handler needs a derived shape, it should create one.
 
+## One rule for plain data
+
+Event payloads and metadata, value object props, snapshot states, and the data
+of the state machine follow one rule. The kit copies such a value with one
+walk. The walk builds the copy and checks each value as it copies it. If a
+value is not plain data, the walk throws a `TypeError` that names the path.
+
+| Value | The copy |
+| --- | --- |
+| `string`, `number`, `boolean`, `bigint`, `undefined`, `null` | keeps it |
+| A record whose prototype is `null` or an `Object.prototype` of any realm | copies its own enumerable string keys |
+| An array | copies its indexes and its other own enumerable string keys; a hole stays a hole |
+| A `Date` | copies its time |
+| A `Map` or a `Set` | copies its entries; a key or a member must be a primitive |
+| A function, a symbol, a class instance, or another built-in, for example a `RegExp`, an `Error`, a `Promise`, binary data, or a boxed primitive | throws |
+| An accessor, an enumerable symbol-keyed property, a non-enumerable string-keyed property, or an own `__proto__` key | throws |
+| A non-enumerable symbol-keyed property | leaves it out; it is metadata by convention |
+
+A `Map` and a `Set` compare their keys by identity, and a copy cannot keep the
+identity of an object. A copied `Map` with object keys would therefore stop
+finding its own entries, and equality would fail without an error. So a key or
+a member must be a primitive. A cycle and a shared reference survive the copy.
+A value object can hold another value object; the copy keeps it by reference.
+
+The copy is the data that the kit keeps, so the walk checks the copy only,
+once. Messages that leave the process, the command messages and the
+integration messages, follow the stricter JSON rule instead.
+
 ## Identity ids are branded strings, generated app-side
 
 `Id<Tag>` is a branded string:
@@ -213,11 +261,9 @@ equality becomes an explicit decision instead of an effect of a hidden clock.
 
 ### A schema can own the payload of an event
 
-Every event payload is plain, structured-cloneable data, and the kit freezes
-it. Without a definition, the constructors check every object of the payload
-before and after they copy it. The check found a new special case in each
-review round: index expandos, non-enumerable properties, mutator shadows,
-`Proxy` traps. It is also the largest part of the cost of an event.
+Every event payload is plain data, and the kit freezes it. The constructors
+copy the payload with the one walk of the plain-data rule (see "One rule for
+plain data"), so the copy is the check.
 
 No established event-sourcing library checks payloads deeply at creation.
 Axon, EventSauce, Rails Event Store, Marten, Eventuous, Emmett, and Castore
@@ -226,13 +272,13 @@ with the serializer on append, and they upcast on read. Where a library
 validates a payload, a schema that belongs to the event type does it, for
 example in the Effect event log or in Castore event types.
 
-So an event can have a definition: `defineDomainEvent` pairs the type with a
-[Standard Schema](https://standardschema.dev) and the schema version. For a
-defined event, the schema output is the payload, and the deep check does not
-run. The kit still checks that the output is plain data, because a schema
-does not promise that: `z.date()`, `z.any()`, and `z.custom()` pass the
-caller's objects through, and arktype returns the input object itself. Then
-the kit copies the output with `structuredClone` and freezes the copy.
+So an event can also have a definition: `defineDomainEvent` pairs the type
+with a [Standard Schema](https://standardschema.dev) and the schema version.
+For a defined event, the schema decides what the payload may contain, and
+the schema output is the payload. The kit copies the output with the same
+walk and freezes the copy, because a schema does not promise plain data:
+`z.date()`, `z.any()`, and `z.custom()` pass the caller's objects through,
+and arktype returns the input object itself.
 
 A schema can also lose data: `z.object` and `v.object` leave out unknown keys
 without an error. The kit cannot tell a dropped key from an intended reshape
@@ -244,17 +290,16 @@ The kit copies the Standard Schema types instead of depending on
 `@standard-schema/spec`, as zod and arktype do. A schema must validate
 synchronously, because an event is created synchronously.
 
-The measurement of 2026-10-21 (built kit, zod, median per event): on Node
-24, a defined event costs 17.9 µs for a payload with three lines and 65 µs
-for twenty lines, against 31 µs and 143 µs with the deep check. In workerd,
-where zod cannot generate code at runtime and validates about three times
-slower, a defined event costs 16.1 µs and 62 µs, against 26.5 µs and 121 µs.
-valibot generates no code and costs the same in both runtimes. Most of the
-rest is shared by both paths: the freeze of the copy and the default stamp.
+The measurement of 2026-10-21 (Node 24, built kit, median per event, without
+a definition): an event costs about 17 µs for a payload with three lines and
+48 µs for twenty lines, the copy and the freeze included. A definition adds
+the cost of its schema. In workerd, zod cannot generate code at runtime and
+validates about three times slower than on Node; valibot generates no code
+and costs the same in both runtimes.
 
-Events without a definition keep the deep check. Moving the boundary to the
-serializer on append, as the other libraries do, would give up the frozen,
-plain events that in-process subscribers receive today.
+The kit keeps the copy at creation. Moving the boundary to the serializer on
+append, as the other libraries do, would give up the frozen, plain events
+that in-process subscribers receive.
 
 ## Private process facts do not double as participant commands
 
@@ -363,7 +408,7 @@ The structural sharing gives the aggregate a cheap way to decide.
 `Entity.state` is `protected`. A generic public getter cannot safely return a
 live graph. A generic copy destroys the prototypes of class-based child
 entities, so the kit offers no generic reader. Concrete models expose domain
-queries or a plain state. `copyPlainState` builds it from a plain-data
+queries or a plain state. `copyPlainData` builds it from a plain-data
 state and refuses a class instance with its field path; see
 [Aggregates -> Reading State from Outside](./aggregates.md#reading-state-from-outside).
 Persistence adapters define state and snapshot projections outside the
@@ -586,7 +631,7 @@ It ships DDD-specific shapes:
 
 It relies on peer dependencies and the TypeScript ecosystem for general-purpose concerns such as `Result`, structured errors, HTTP frameworks, and database clients.
 
-The root entry also exports a few structural helpers: `deepEqual`, `deepOmit`, `deepFreeze`, and the checked copy of a plain state. They are not general-purpose utilities. They implement the equality, the freeze, and the copy that the value objects, the persistence models, and the snapshot models of the kit rely on, so an adapter can use the same rule as the kit.
+The root entry also exports a few structural helpers: `deepEqual`, `deepOmit`, `deepFreeze`, and `copyPlainData`, the copy under the plain-data rule. They are not general-purpose utilities. They implement the equality, the freeze, and the copy that the value objects, the persistence models, and the snapshot models of the kit rely on, so an adapter can use the same rule as the kit.
 
 Optional capabilities have their own entries, so the root entry stays the core:
 

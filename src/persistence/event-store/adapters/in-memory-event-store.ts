@@ -10,7 +10,7 @@ import {
 	InMemoryCapacityExceededError,
 } from "../../../errors/kit-errors";
 import { abortReason } from "../../../internal/async/abort";
-import { copyFreezableState } from "../../../internal/structural/copy-plain-state";
+import { copyPlainData } from "../../../internal/structural/plain-data";
 import { assertPositiveSafeInteger } from "../../../internal/validate";
 import type {
 	InMemoryTransaction,
@@ -32,12 +32,8 @@ export interface InMemoryEventStoreOptions {
 }
 
 /**
- * A copy of `event` that shares nothing with the caller. The walk rejects a
- * value that a copy would lose or change, for example a function, a class
- * instance, or an accessor, and what a freeze cannot make immutable (binary
- * data and a RegExp), as the event constructors do.
- * It runs no accessor unless a Proxy trap adds one. Its rejection names the
- * event, and any other error passes unchanged.
+ * A copy of `event` that shares nothing with the caller, under the
+ * plain-data rule of the event constructors. Its rejection names the event.
  */
 function copyForStorage<Evt>(
 	event: Evt,
@@ -50,8 +46,7 @@ function copyForStorage<Evt>(
 	if (event === null || typeof event !== "object") {
 		throw new TypeError(`${subject} is not an event object`);
 	}
-	// Checked on the copy: a Proxy in the batch runs its traps only once.
-	const copy = copyFreezableState(event, subject);
+	const copy = copyPlainData(event, { subject });
 	const eventId = (copy as { readonly eventId?: unknown }).eventId;
 	if (typeof eventId !== "string" || eventId === "") {
 		throw new TypeError(

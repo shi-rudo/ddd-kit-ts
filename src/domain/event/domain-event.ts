@@ -3,8 +3,7 @@ import {
 	applyCooperativeBrand,
 	hasCooperativeBrand,
 } from "../../internal/cooperative-brand";
-import { copyFreezableState } from "../../internal/structural/copy-plain-state";
-import { isIntrinsicConstructorPrototype } from "../../internal/structural/is-built-in";
+import { copyPlainData } from "../../internal/structural/plain-data";
 import { uuidV7 } from "../../internal/uuid-v7";
 import { deepFreeze } from "../value-object/value-object";
 import { type ClockFactory, defaultClockFactory, readClock } from "./clock";
@@ -652,29 +651,20 @@ export function adoptStampedDomainEvent<T extends object>(copy: T): T {
  * Sets occurredAt to current date and schemaVersion to 1 if not provided.
  *
  * **Input ownership.** The event is deeply frozen, and `payload` and
- * `metadata` are deep-cloned first, so the caller's own objects are never
+ * `metadata` are copied first, so the caller's own objects are never
  * frozen in place and later mutation of them does not bleed into the event
- * (same contract as `valueObject()`). The event data rule checks the data before the
- * copy and the copy after it. So the copy loses no data without an error,
- * and no getter of the data runs. The in-memory event store applies the
- * same rule on append. The checks catch accidents, not a hostile `Proxy`: a
- * trap that changes the data during the check can hide a loss. An error
- * that a `Proxy` trap throws passes unchanged, so a coded error of the
- * caller keeps its code. These values throw a `TypeError`: a function, a
- * Promise, a WeakMap or a WeakSet, an `Error`, a host object such as a
- * `File`, a binary buffer, a `RegExp`, and shared memory. The same holds
- * for what the copy would lose or change: a class instance, an accessor, an
- * enumerable symbol-keyed property, a non-enumerable data property, and an
- * expando on a built-in. A non-enumerable symbol key is metadata by
- * convention, and the event does not get it. Map a value object to plain
- * data before it goes into an event. `toJSON()` of a `ValueObject` is
- * shallow, so map a nested value object too.
+ * (same contract as `valueObject()`). The copy follows the plain-data rule
+ * of the kit (records, arrays, `Date`, `Map`, `Set`, and primitives; see
+ * the design decisions). A value outside it throws a `TypeError` that names
+ * the path, for example a function, a class instance, a `RegExp`, binary
+ * data, or an accessor. Map a value object to plain data before it goes
+ * into an event. `toJSON()` of a `ValueObject` is shallow, so map a nested
+ * value object too.
  *
  * **With a definition.** Pass a definition from `defineDomainEvent` in
  * place of the type, and its Standard Schema decides what the payload may
- * contain in place of the deep check. The payload is the schema output,
- * copied and frozen, and the event takes the schema version of the
- * definition.
+ * contain. The payload is the schema output, copied and frozen, and the
+ * event takes the schema version of the definition.
  *
  * **For aggregate-internal events, prefer `this.createEvent(...)` on
  * `StateStoredAggregate` / `EventSourcedAggregate`.** That helper auto-injects
@@ -900,8 +890,7 @@ function ownedEventMetadata(
 		return factorySource === undefined ? undefined : { source: factorySource };
 	}
 	const owned: unknown = cloneOwnedEventData(metadata, "metadata", operation);
-	if (!isPlainRecordCopy(owned)) {
-		// The copy is the kit's own, so its tag runs no caller code.
+	if (!isPlainRecord(owned)) {
 		const received =
 			typeof owned === "object"
 				? owned === null
@@ -919,44 +908,24 @@ function ownedEventMetadata(
 	return { ...record, source: factorySource };
 }
 
-/**
- * True for a structured-clone copy of a plain record. A runtime such as
- * Vercel Edge returns the copy with the `Object.prototype` of another realm,
- * so the check compares the source text of the constructor, not the
- * prototype object.
- */
-function isPlainRecordCopy(copy: unknown): boolean {
+/** True for the copy of a record: the copy lives in this realm. */
+function isPlainRecord(copy: unknown): boolean {
 	if (typeof copy !== "object" || copy === null) return false;
 	const prototype = Object.getPrototypeOf(copy);
-	return (
-		prototype !== null &&
-		isIntrinsicConstructorPrototype(prototype, "Object") &&
-		Object.getPrototypeOf(prototype) === null
-	);
+	return prototype === Object.prototype || prototype === null;
 }
 
 /**
- * Deep-clones caller-supplied event data (payload, metadata) before the
- * event is frozen, so a constructor never freezes or aliases the caller's
- * own object graph. {@link copyFreezableState} checks the data and the
- * clone; its JSDoc states the rule and its limits.
+ * Copies caller-supplied event data (payload, metadata) under the
+ * plain-data rule before the event is frozen, so a constructor never freezes
+ * or aliases the caller's own object graph.
  */
 function cloneOwnedEventData<T>(
 	value: T,
 	field: "payload" | "metadata",
 	operation: string,
 ): T {
-	// An own "__proto__" data key survives structuredClone and would
-	// re-arm prototype pollution in every [[Set]]-based consumer of the
-	// event; reject it at the root, the same contract as entity state. The
-	// check runs first, so this key throws its own error whatever else is
-	// wrong with the data.
-	if (value !== null && typeof value === "object") {
-		assertNoOwnProtoKey(value, `Event ${field} of ${operation}`);
-	}
-	// The freeze rule keeps the guarantee "kit-built implies deeply
-	// frozen".
-	return copyFreezableState(value, `${operation}: ${field}`);
+	return copyPlainData(value, { subject: `${operation}: ${field}` });
 }
 
 /** The definition when the caller passed one in place of the type. */
