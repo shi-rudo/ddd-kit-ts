@@ -1759,17 +1759,18 @@ describe("DomainStateMachine", () => {
 		expect(machine.dispatch({ type: "Close" }).to).toBe("closed");
 	});
 
-	it("does not expose its internal snapshot reference through the snapshot getter", () => {
+	it("shares one deeply frozen snapshot that a caller cannot change", () => {
 		const machine = new DomainStateMachine(checkoutDefinition());
 		const exposed = machine.snapshot;
 
 		expect(Object.isFrozen(exposed)).toBe(true);
+		expect(Object.isFrozen(exposed.context)).toBe(true);
 		expect(() => {
 			(exposed as { state: CheckoutState }).state = "completed";
 		}).toThrow();
 
 		expect(machine.state).toBe("awaiting-payment");
-		expect(machine.snapshot).not.toBe(exposed);
+		expect(machine.snapshot).toBe(exposed);
 	});
 
 	it("does not let dispatch results mutate its current snapshot", () => {

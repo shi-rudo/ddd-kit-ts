@@ -1635,3 +1635,5 @@ The root entry no longer exports `capturePersistenceBaseline`,
   passes only `context.signal` now starts a new chain, so add `publishChain`
   next to `signal`. `EventHandler` receives an `EventHandlerContext`, which
   extends `ExecutionContext`.
+- `DomainStateMachine.snapshot` returns the same deeply frozen snapshot until
+  the next successful `dispatch`. In rc.15 every read returned a new copy.
