@@ -345,7 +345,10 @@ export {
 	type DeepOmitPathSegment,
 	deepOmit,
 } from "./internal/structural/deep-omit";
-export { copyPlainData } from "./internal/structural/plain-data";
+export {
+	type CopyPlainDataOptions,
+	copyPlainData,
+} from "./internal/structural/plain-data";
 // Messaging: commit envelope, bus, outbox, dispatcher
 export type {
 	CommitPosition,
