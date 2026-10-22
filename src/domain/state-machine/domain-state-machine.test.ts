@@ -12,18 +12,20 @@ import {
 	DomainStateMachine,
 	type DomainTransition,
 	DomainTransitionGuardRejectedError,
-	InvalidDomainMachineContextError,
-	InvalidDomainMachineDefinitionError,
-	InvalidDomainMachineInputError,
-	InvalidDomainMachineSnapshotError,
 	InvalidDomainTransitionError,
-	InvalidDomainTransitionGuardResultError,
-	InvalidDomainTransitionResultError,
 	type PreparedDomainMachineDefinition,
 	prepareDomainMachineDefinition,
-	ReentrantDomainStateMachineEvaluationError,
 	transitionDomainState,
 } from "./domain-state-machine";
+import {
+	invalidDomainMachineContextError,
+	invalidDomainMachineDefinitionError,
+	invalidDomainMachineInputError,
+	invalidDomainMachineSnapshotError,
+	invalidDomainTransitionGuardResultError,
+	invalidDomainTransitionResultError,
+	reentrantDomainStateMachineEvaluationError,
+} from "./errors";
 
 type CheckoutState =
 	| "awaiting-payment"
@@ -160,7 +162,7 @@ describe("prepareDomainMachineDefinition (pure-API fast path)", () => {
 			initial: "no-such-state" as CheckoutState,
 		};
 		expect(() => prepareDomainMachineDefinition(invalid)).toThrow(
-			InvalidDomainMachineDefinitionError,
+			expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_DEFINITION" }),
 		);
 	});
 
@@ -196,7 +198,7 @@ describe("prepareDomainMachineDefinition (pure-API fast path)", () => {
 		// ...while the raw object keeps the documented per-call validation
 		// of the unprepared path and now fails it.
 		expect(() => transitionDomainState(raw, snapshot, requestPayment)).toThrow(
-			InvalidDomainMachineDefinitionError,
+			expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_DEFINITION" }),
 		);
 	});
 
@@ -261,7 +263,7 @@ describe("DomainStateMachine", () => {
 		};
 
 		expect(() => createInitialDomainMachineSnapshot(definition)).toThrow(
-			InvalidDomainMachineSnapshotError,
+			expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_SNAPSHOT" }),
 		);
 	});
 
@@ -281,7 +283,7 @@ describe("DomainStateMachine", () => {
 			>;
 
 			expect(() => createInitialDomainMachineSnapshot(definition)).toThrow(
-				InvalidDomainMachineDefinitionError,
+				expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_DEFINITION" }),
 			);
 		}
 	});
@@ -308,7 +310,7 @@ describe("DomainStateMachine", () => {
 		const machine = new DomainStateMachine(definition);
 
 		expect(() => machine.dispatch({ type: "Close" })).toThrow(
-			InvalidDomainMachineSnapshotError,
+			expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_SNAPSHOT" }),
 		);
 		expect(machine.state).toBe("open");
 	});
@@ -424,7 +426,7 @@ describe("DomainStateMachine", () => {
 		const machine = new DomainStateMachine(definition);
 
 		expect(() => machine.dispatch({ type: "Invalidate" })).toThrow(
-			InvalidDomainMachineSnapshotError,
+			expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_SNAPSHOT" }),
 		);
 		expect(machine.snapshot).toEqual({
 			state: "active",
@@ -443,7 +445,7 @@ describe("DomainStateMachine", () => {
 			{ readonly type: "Stay" }
 		>;
 		expect(() => new DomainStateMachine(malformedDefinition)).toThrow(
-			InvalidDomainMachineDefinitionError,
+			expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_DEFINITION" }),
 		);
 
 		const invalidResult: DomainMachineDefinition<
@@ -460,7 +462,7 @@ describe("DomainStateMachine", () => {
 			},
 		};
 		expect(() => createInitialDomainMachineSnapshot(invalidResult)).toThrow(
-			InvalidDomainMachineDefinitionError,
+			expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_DEFINITION" }),
 		);
 	});
 
@@ -548,7 +550,9 @@ describe("DomainStateMachine", () => {
 					state: "awaiting-shipping",
 					context: { orderId: "order-1", totalCents: 1000 },
 				}),
-		).toThrow(InvalidDomainMachineSnapshotError);
+		).toThrow(
+			expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_SNAPSHOT" }),
+		);
 	});
 
 	it("rejects a snapshot whose state is not in the definition", () => {
@@ -558,7 +562,9 @@ describe("DomainStateMachine", () => {
 					state: "lost" as CheckoutState,
 					context: { orderId: "order-1", totalCents: 1000 },
 				}),
-		).toThrow(InvalidDomainMachineSnapshotError);
+		).toThrow(
+			expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_SNAPSHOT" }),
+		);
 	});
 
 	it("throws structured errors for malformed runtime snapshots", () => {
@@ -583,7 +589,9 @@ describe("DomainStateMachine", () => {
 					>,
 					{ type: "PaymentReceived" },
 				),
-			).toThrow(InvalidDomainMachineSnapshotError);
+			).toThrow(
+				expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_SNAPSHOT" }),
+			);
 			expect(
 				() =>
 					new DomainStateMachine(
@@ -593,7 +601,9 @@ describe("DomainStateMachine", () => {
 							CheckoutContext
 						>,
 					),
-			).toThrow(InvalidDomainMachineSnapshotError);
+			).toThrow(
+				expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_SNAPSHOT" }),
+			);
 		}
 
 		// The pure transition function requires a snapshot, so `undefined` is
@@ -607,7 +617,9 @@ describe("DomainStateMachine", () => {
 				>,
 				{ type: "PaymentReceived" },
 			),
-		).toThrow(InvalidDomainMachineSnapshotError);
+		).toThrow(
+			expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_SNAPSHOT" }),
+		);
 	});
 
 	it("validates pure API input snapshots before invoking callbacks", () => {
@@ -641,10 +653,14 @@ describe("DomainStateMachine", () => {
 
 		expect(() =>
 			canTransitionDomainState(definition, invalidSnapshot, { type: "Stay" }),
-		).toThrow(InvalidDomainMachineSnapshotError);
+		).toThrow(
+			expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_SNAPSHOT" }),
+		);
 		expect(() =>
 			transitionDomainState(definition, invalidSnapshot, { type: "Stay" }),
-		).toThrow(InvalidDomainMachineSnapshotError);
+		).toThrow(
+			expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_SNAPSHOT" }),
+		);
 		expect(guardCalled).toBe(false);
 	});
 
@@ -685,21 +701,27 @@ describe("DomainStateMachine", () => {
 					snapshot as DomainMachineSnapshot<CheckoutState, CheckoutContext>,
 					{ type: "PaymentReceived" },
 				),
-			).toThrow(InvalidDomainMachineSnapshotError);
+			).toThrow(
+				expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_SNAPSHOT" }),
+			);
 			expect(() =>
 				transitionDomainState(
 					definition,
 					snapshot as DomainMachineSnapshot<CheckoutState, CheckoutContext>,
 					{ type: "PaymentReceived" },
 				),
-			).toThrow(InvalidDomainMachineSnapshotError);
+			).toThrow(
+				expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_SNAPSHOT" }),
+			);
 			expect(
 				() =>
 					new DomainStateMachine(
 						definition,
 						snapshot as DomainMachineSnapshot<CheckoutState, CheckoutContext>,
 					),
-			).toThrow(InvalidDomainMachineSnapshotError);
+			).toThrow(
+				expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_SNAPSHOT" }),
+			);
 		}
 
 		expect(stateAccessorInvoked).toBe(false);
@@ -713,7 +735,9 @@ describe("DomainStateMachine", () => {
 					...checkoutDefinition(),
 					initial: "missing" as CheckoutState,
 				}),
-		).toThrow(InvalidDomainMachineDefinitionError);
+		).toThrow(
+			expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_DEFINITION" }),
+		);
 
 		expect(
 			() =>
@@ -730,7 +754,9 @@ describe("DomainStateMachine", () => {
 						},
 					},
 				}),
-		).toThrow(InvalidDomainMachineDefinitionError);
+		).toThrow(
+			expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_DEFINITION" }),
+		);
 	});
 
 	it("rejects definition accessors without invoking them", () => {
@@ -808,7 +834,9 @@ describe("DomainStateMachine", () => {
 							{ readonly type: "Close" }
 						>,
 					),
-			).toThrow(InvalidDomainMachineDefinitionError);
+			).toThrow(
+				expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_DEFINITION" }),
+			);
 		}
 
 		expect(initialAccessorInvoked).toBe(false);
@@ -1085,9 +1113,15 @@ describe("DomainStateMachine", () => {
 
 			expect(() =>
 				canTransitionDomainState(definition, snapshot, { type: "Close" }),
-			).toThrow(InvalidDomainTransitionGuardResultError);
+			).toThrow(
+				expect.objectContaining({
+					code: "INVALID_DOMAIN_TRANSITION_GUARD_RESULT",
+				}),
+			);
 			expect(() => machine.dispatch({ type: "Close" })).toThrow(
-				InvalidDomainTransitionGuardResultError,
+				expect.objectContaining({
+					code: "INVALID_DOMAIN_TRANSITION_GUARD_RESULT",
+				}),
 			);
 			expect(machine.state).toBe("open");
 		}
@@ -1157,10 +1191,10 @@ describe("DomainStateMachine", () => {
 		};
 
 		expect(() => createInitialDomainMachineSnapshot(definition)).toThrow(
-			InvalidDomainMachineDefinitionError,
+			expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_DEFINITION" }),
 		);
 		expect(() => new DomainStateMachine(definition)).toThrow(
-			InvalidDomainMachineDefinitionError,
+			expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_DEFINITION" }),
 		);
 	});
 
@@ -1307,7 +1341,9 @@ describe("DomainStateMachine", () => {
 						{ readonly type: "Close" }
 					>,
 				);
-			}).toThrow(InvalidDomainMachineDefinitionError);
+			}).toThrow(
+				expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_DEFINITION" }),
+			);
 		}
 	});
 
@@ -1351,7 +1387,9 @@ describe("DomainStateMachine", () => {
 							{ readonly type: "Close" }
 						>,
 					),
-			).toThrow(InvalidDomainMachineDefinitionError);
+			).toThrow(
+				expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_DEFINITION" }),
+			);
 		}
 	});
 
@@ -1390,7 +1428,9 @@ describe("DomainStateMachine", () => {
 							{ readonly type: "Close" }
 						>,
 					),
-			).toThrow(InvalidDomainMachineDefinitionError);
+			).toThrow(
+				expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_DEFINITION" }),
+			);
 		}
 	});
 
@@ -1413,7 +1453,7 @@ describe("DomainStateMachine", () => {
 		>;
 
 		expect(() => new DomainStateMachine(definition)).toThrow(
-			InvalidDomainMachineDefinitionError,
+			expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_DEFINITION" }),
 		);
 	});
 
@@ -1424,7 +1464,7 @@ describe("DomainStateMachine", () => {
 		for (const input of malformedInputs) {
 			expect(machine.can(input as unknown as CheckoutInput)).toBe(false);
 			expect(() => machine.dispatch(input as unknown as CheckoutInput)).toThrow(
-				InvalidDomainMachineInputError,
+				expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_INPUT" }),
 			);
 		}
 	});
@@ -1468,7 +1508,9 @@ describe("DomainStateMachine", () => {
 					createInitialDomainMachineSnapshot(definition),
 					{ type: "Close" },
 				),
-			).toThrow(InvalidDomainTransitionResultError);
+			).toThrow(
+				expect.objectContaining({ code: "INVALID_DOMAIN_TRANSITION_RESULT" }),
+			);
 		}
 	});
 
@@ -1502,7 +1544,7 @@ describe("DomainStateMachine", () => {
 		const machine = new DomainStateMachine(definition);
 
 		expect(() => machine.dispatch({ type: "Close" })).toThrow(
-			InvalidDomainTransitionResultError,
+			expect.objectContaining({ code: "INVALID_DOMAIN_TRANSITION_RESULT" }),
 		);
 		expect(machine.state).toBe("open");
 		expect(machine.context.value).toBe(0);
@@ -1534,7 +1576,7 @@ describe("DomainStateMachine", () => {
 		const machine = new DomainStateMachine(definition);
 
 		expect(() => machine.dispatch({ type: "Close" })).toThrow(
-			InvalidDomainTransitionResultError,
+			expect.objectContaining({ code: "INVALID_DOMAIN_TRANSITION_RESULT" }),
 		);
 		expect(machine.state).toBe("open");
 	});
@@ -1581,7 +1623,9 @@ describe("DomainStateMachine", () => {
 					createInitialDomainMachineSnapshot(definition),
 					{ type: "Close" },
 				),
-			).toThrow(InvalidDomainTransitionResultError);
+			).toThrow(
+				expect.objectContaining({ code: "INVALID_DOMAIN_TRANSITION_RESULT" }),
+			);
 			expect(accessorInvoked).toBe(false);
 		}
 	});
@@ -1636,7 +1680,7 @@ describe("DomainStateMachine", () => {
 		const machine = new DomainStateMachine(definition);
 
 		expect(() => machine.dispatch({ type: "Close" })).toThrow(
-			InvalidDomainMachineSnapshotError,
+			expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_SNAPSHOT" }),
 		);
 		expect(machine.snapshot).toEqual({
 			state: "open",
@@ -2284,7 +2328,7 @@ describe("DomainStateMachine", () => {
 			};
 
 			expect(() => new DomainStateMachine(definition)).toThrow(
-				InvalidDomainMachineContextError,
+				expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_CONTEXT" }),
 			);
 		}
 	});
@@ -2318,7 +2362,7 @@ describe("DomainStateMachine", () => {
 			};
 
 			expect(() => new DomainStateMachine(definition)).toThrow(
-				InvalidDomainMachineContextError,
+				expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_CONTEXT" }),
 			);
 		}
 	});
@@ -2399,7 +2443,7 @@ describe("DomainStateMachine", () => {
 		};
 
 		expect(() => new DomainStateMachine(contextDefinition)).toThrow(
-			InvalidDomainMachineContextError,
+			expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_CONTEXT" }),
 		);
 		expect(() =>
 			transitionDomainState(
@@ -2407,14 +2451,18 @@ describe("DomainStateMachine", () => {
 				createInitialDomainMachineSnapshot(inputDefinition),
 				{ type: "Close", items: inputArray },
 			),
-		).toThrow(InvalidDomainMachineInputError);
+		).toThrow(
+			expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_INPUT" }),
+		);
 		expect(() =>
 			transitionDomainState(
 				outputDefinition,
 				createInitialDomainMachineSnapshot(outputDefinition),
 				{ type: "Close" },
 			),
-		).toThrow(InvalidDomainTransitionResultError);
+		).toThrow(
+			expect.objectContaining({ code: "INVALID_DOMAIN_TRANSITION_RESULT" }),
+		);
 
 		expect(contextArrayAccessorInvoked).toBe(false);
 		expect(inputArrayAccessorInvoked).toBe(false);
@@ -2537,13 +2585,13 @@ describe("DomainStateMachine", () => {
 		};
 
 		expect(() => new DomainStateMachine(contextDefinition)).toThrow(
-			InvalidDomainMachineContextError,
+			expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_CONTEXT" }),
 		);
 		expect(() => new DomainStateMachine(mapDefinition)).toThrow(
-			InvalidDomainMachineContextError,
+			expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_CONTEXT" }),
 		);
 		expect(() => new DomainStateMachine(alteredPrototypeDefinition)).toThrow(
-			InvalidDomainMachineContextError,
+			expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_CONTEXT" }),
 		);
 		expect(() =>
 			transitionDomainState(
@@ -2551,28 +2599,36 @@ describe("DomainStateMachine", () => {
 				createInitialDomainMachineSnapshot(inputDefinition),
 				{ type: "Close", secret: new SecretValue("input") },
 			),
-		).toThrow(InvalidDomainMachineInputError);
+		).toThrow(
+			expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_INPUT" }),
+		);
 		expect(() =>
 			transitionDomainState(
 				setInputDefinition,
 				createInitialDomainMachineSnapshot(setInputDefinition),
 				{ type: "Close", secret: new SecretSet() },
 			),
-		).toThrow(InvalidDomainMachineInputError);
+		).toThrow(
+			expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_INPUT" }),
+		);
 		expect(() =>
 			transitionDomainState(
 				regexpInputDefinition,
 				createInitialDomainMachineSnapshot(regexpInputDefinition),
 				{ type: "Close", secret: new SecretRegExp() },
 			),
-		).toThrow(InvalidDomainMachineInputError);
+		).toThrow(
+			expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_INPUT" }),
+		);
 		expect(() =>
 			transitionDomainState(
 				outputDefinition,
 				createInitialDomainMachineSnapshot(outputDefinition),
 				{ type: "Close" },
 			),
-		).toThrow(InvalidDomainTransitionResultError);
+		).toThrow(
+			expect.objectContaining({ code: "INVALID_DOMAIN_TRANSITION_RESULT" }),
+		);
 	});
 
 	it("copies a Date subclass in its data to a plain Date", () => {
@@ -2612,7 +2668,7 @@ describe("DomainStateMachine", () => {
 		};
 
 		expect(() => new DomainStateMachine(definition)).toThrow(
-			InvalidDomainMachineContextError,
+			expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_CONTEXT" }),
 		);
 	});
 
@@ -2645,7 +2701,9 @@ describe("DomainStateMachine", () => {
 					createInitialDomainMachineSnapshot(definition),
 					input,
 				),
-			).toThrow(InvalidDomainMachineInputError);
+			).toThrow(
+				expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_INPUT" }),
+			);
 		}
 	});
 
@@ -2897,7 +2955,9 @@ describe("DomainStateMachine", () => {
 					createInitialDomainMachineSnapshot(definition),
 					{ type: "Close" },
 				),
-			).toThrow(InvalidDomainTransitionResultError);
+			).toThrow(
+				expect.objectContaining({ code: "INVALID_DOMAIN_TRANSITION_RESULT" }),
+			);
 		}
 	});
 
@@ -2907,13 +2967,13 @@ describe("DomainStateMachine", () => {
 			"awaiting-payment",
 			"PaymentReceived",
 		);
-		const badDefinition = new InvalidDomainMachineDefinitionError("bad");
-		const badContext = new InvalidDomainMachineContextError("bad");
-		const badSnapshot = new InvalidDomainMachineSnapshotError("bad");
-		const badInput = new InvalidDomainMachineInputError("bad");
-		const badGuard = new InvalidDomainTransitionGuardResultError("bad");
-		const badResult = new InvalidDomainTransitionResultError("bad");
-		const reentrant = new ReentrantDomainStateMachineEvaluationError();
+		const badDefinition = invalidDomainMachineDefinitionError("bad");
+		const badContext = invalidDomainMachineContextError("bad");
+		const badSnapshot = invalidDomainMachineSnapshotError("bad");
+		const badInput = invalidDomainMachineInputError("bad");
+		const badGuard = invalidDomainTransitionGuardResultError("bad");
+		const badResult = invalidDomainTransitionResultError("bad");
+		const reentrant = reentrantDomainStateMachineEvaluationError();
 
 		expect(invalid).toBeInstanceOf(DomainError);
 		expect(rejected).toBeInstanceOf(DomainError);
@@ -3103,7 +3163,9 @@ describe("validate-then-copy is not Proxy-defeatable (single-read contract)", ()
 				);
 				expect(Object.hasOwn(prepared.states, prepared.initial)).toBe(true);
 			} catch (error) {
-				expect(error).toBeInstanceOf(InvalidDomainMachineDefinitionError);
+				expect(error).toMatchObject({
+					code: "INVALID_DOMAIN_MACHINE_DEFINITION",
+				});
 			}
 		}
 	});
@@ -3135,7 +3197,9 @@ describe("validate-then-copy is not Proxy-defeatable (single-read contract)", ()
 				);
 				expect(["draft", "done"]).toContain(restored.snapshot.state);
 			} catch (error) {
-				expect(error).toBeInstanceOf(InvalidDomainMachineSnapshotError);
+				expect(error).toMatchObject({
+					code: "INVALID_DOMAIN_MACHINE_SNAPSHOT",
+				});
 			}
 		}
 	});

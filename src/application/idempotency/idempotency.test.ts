@@ -10,7 +10,6 @@ import {
 import type { Id } from "../../domain/identity/id";
 import {
 	ConcurrencyConflictError,
-	EventCollectionError,
 	IdempotencyKeyReuseError,
 } from "../../errors/kit-errors";
 import type { EventCommitCandidate } from "../../messaging/committed-event";
@@ -261,7 +260,7 @@ describe("withIdempotentCommit with a transactional store", () => {
 		await completeStarted;
 
 		expect(() => leaked?.registerSaved(new Order("o-late" as OrderId))).toThrow(
-			EventCollectionError,
+			expect.objectContaining({ code: "EVENT_COLLECTION_FAILED" }),
 		);
 		releaseComplete();
 		await expect(execution).resolves.toEqual({ replayed: false, result: "ok" });
@@ -284,7 +283,9 @@ describe("withIdempotentCommit with a transactional store", () => {
 			},
 		);
 
-		await expect(execution).rejects.toBeInstanceOf(EventCollectionError);
+		await expect(execution).rejects.toMatchObject({
+			code: "EVENT_COLLECTION_FAILED",
+		});
 		expect(await deps.outbox.getPending()).toHaveLength(0);
 	});
 

@@ -1,4 +1,4 @@
-import { PrototypePollutionError } from "../../errors/kit-errors";
+import { prototypePollutionError } from "../../errors/kit-errors";
 
 /** Options for {@link copyPlainData}. */
 export interface CopyPlainDataOptions {
@@ -20,7 +20,7 @@ export interface CopyPlainDataOptions {
  * rule for plain data" in the design decisions). One walk builds the copy
  * and checks each value as it copies it. A value outside the rule throws a
  * `TypeError` that names the path. An own `__proto__` key throws
- * `PrototypePollutionError`. Cycles and shared references survive the copy.
+ * `PROTOTYPE_POLLUTION`. Cycles and shared references survive the copy.
  * The copy holds objects of the local realm only.
  */
 export function copyPlainData<T>(
@@ -165,7 +165,7 @@ function copyOwnProperties(
 		}
 		if (isArray && key === "length") continue;
 		if (key === "__proto__") {
-			throw new PrototypePollutionError(key, `${walk.subject}${pathOf(walk)}`);
+			throw prototypePollutionError(key, `${walk.subject}${pathOf(walk)}`);
 		}
 		walk.path.push(key);
 		const descriptor = Object.getOwnPropertyDescriptor(

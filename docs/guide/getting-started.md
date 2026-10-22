@@ -26,7 +26,7 @@ Load one copy of the kit per process. If you write an adapter package, for
 example a repository for your database, declare `@shirudo/ddd-kit` as a peer
 dependency and do not bundle it. The application then installs one copy, and
 the adapter uses it. An object that a second loaded copy built throws
-`DuplicateKitCopyError` (code `DUPLICATE_KIT_COPY`).
+`DUPLICATE_KIT_COPY`.
 
 ::: tip Module format
 The package is ESM-only. Node consumers need `"type": "module"` in

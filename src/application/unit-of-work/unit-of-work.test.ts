@@ -11,12 +11,9 @@ import {
 } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
 import {
-	AggregateDeletedError,
 	ConcurrencyConflictError,
-	EventCollectionError,
 	InfrastructureError,
-	UnmanagedInstanceError,
-	UnregisteredChangesError,
+	type KitWiringError,
 } from "../../errors/kit-errors";
 import type { EventCommitCandidate } from "../../messaging/committed-event";
 import type {
@@ -33,14 +30,10 @@ import type { TransactionScope } from "../../persistence/repository/scope";
 import { recordingOutbox } from "../../testing/recording-outbox";
 import { unattributedAggregate } from "../../testing/unattributed-aggregate";
 import {
-	AggregateTrackingError,
+	type AggregateTrackingReason,
 	CommitError,
-	InvalidFlushStatementError,
-	InvalidRepositoryAdapterError,
-	InvalidRepositoryDefinitionError,
-	NestedUnitOfWorkError,
+	invalidFlushStatementError,
 	RollbackError,
-	TransactionClosedError,
 } from "./errors";
 import type {
 	AggregatePersistenceWrite,
@@ -311,21 +304,23 @@ function stamped(
 
 async function expectTrackingFailure(
 	execution: Promise<unknown>,
-	reason: AggregateTrackingError["reason"],
+	reason: AggregateTrackingReason,
 ): Promise<void> {
 	const rejection = await execution.then(
 		() => undefined,
 		(error: unknown) => error,
 	);
-	expect(rejection).toBeInstanceOf(AggregateTrackingError);
+	expect(rejection).toMatchObject({ code: "AGGREGATE_TRACKING" });
 	expect(rejection).toMatchObject({
 		code: "AGGREGATE_TRACKING",
 		category: "WIRING",
 		retryable: false,
-		reason,
-		identity: {
-			aggregateType: expect.any(String),
-			aggregateId: expect.any(String),
+		details: {
+			reason,
+			identity: {
+				aggregateType: expect.any(String),
+				aggregateId: expect.any(String),
+			},
 		},
 	});
 }
@@ -448,9 +443,9 @@ describe("UnitOfWork", () => {
 					unregisteredState.changePersistenceOnly(2);
 				})
 				.catch((error: unknown) => error);
-			expect(unregistered).toBeInstanceOf(UnregisteredChangesError);
+			expect(unregistered).toMatchObject({ code: "UNREGISTERED_CHANGES" });
 			expect(unregistered).toMatchObject({
-				identity: unregisteredState.aggregateIdentity,
+				details: { identity: unregisteredState.aggregateIdentity },
 			});
 		});
 
@@ -525,7 +520,7 @@ describe("UnitOfWork", () => {
 					aggregate.change();
 					return undefined;
 				}),
-			).rejects.toBeInstanceOf(UnregisteredChangesError);
+			).rejects.toMatchObject({ code: "UNREGISTERED_CHANGES" });
 		});
 
 		it("registers add and update intent without performing durable I/O", async () => {
@@ -570,12 +565,14 @@ describe("UnitOfWork", () => {
 						(error: unknown) => error,
 					);
 
-				expect(rejection).toBeInstanceOf(InvalidRepositoryAdapterError);
+				expect(rejection).toMatchObject({ code: "INVALID_REPOSITORY_ADAPTER" });
 				expect(rejection).toMatchObject({
 					code: "INVALID_REPOSITORY_ADAPTER",
-					repository: "orders",
-					reason: "defines_lifecycle_operation",
-					operation,
+					details: {
+						repository: "orders",
+						reason: "defines_lifecycle_operation",
+						operation,
+					},
 				});
 			},
 		);
@@ -598,8 +595,7 @@ describe("UnitOfWork", () => {
 			});
 
 			await expect(uow.run(async () => undefined)).rejects.toMatchObject({
-				reason: "defines_lifecycle_operation",
-				operation: "update",
+				details: { reason: "defines_lifecycle_operation", operation: "update" },
 			});
 		});
 
@@ -703,7 +699,7 @@ describe("UnitOfWork", () => {
 						(error: unknown) => error,
 					);
 
-				expect(rejection).toBeInstanceOf(UnregisteredChangesError);
+				expect(rejection).toMatchObject({ code: "UNREGISTERED_CHANGES" });
 				expect((rejection as Error).message).toContain("append-only");
 				expect((rejection as Error).message).not.toContain("repository.update");
 			});
@@ -721,8 +717,10 @@ describe("UnitOfWork", () => {
 						(error: unknown) => error,
 					);
 
-				expect(rejection).toBeInstanceOf(AggregateTrackingError);
-				expect(rejection).toMatchObject({ reason: "loaded_as_new" });
+				expect(rejection).toMatchObject({ code: "AGGREGATE_TRACKING" });
+				expect(rejection).toMatchObject({
+					details: { reason: "loaded_as_new" },
+				});
 				expect((rejection as Error).message).toContain("append-only");
 				expect((rejection as Error).message).not.toContain("Use update");
 			});
@@ -753,7 +751,7 @@ describe("UnitOfWork", () => {
 			await expect(
 				uow.run(async ({ repositories }) => {
 					expect(() => repositories.orders.add(lookalike)).toThrow(
-						UnmanagedInstanceError,
+						expect.objectContaining({ code: "UNMANAGED_INSTANCE" }),
 					);
 					return "continued";
 				}),
@@ -815,11 +813,13 @@ describe("UnitOfWork", () => {
 					(error: unknown) => error,
 				);
 
-			expect(rejection).toBeInstanceOf(AggregateTrackingError);
+			expect(rejection).toMatchObject({ code: "AGGREGATE_TRACKING" });
 			expect(rejection).toMatchObject({
-				operation: "add",
-				reason: "identity_already_tracked",
-				registeredIntent: "add",
+				details: {
+					operation: "add",
+					reason: "identity_already_tracked",
+					registeredIntent: "add",
+				},
 			});
 		});
 
@@ -888,10 +888,9 @@ describe("UnitOfWork", () => {
 
 			// The violation is repository ownership during a LOAD, not a
 			// write registration of an unloaded aggregate.
-			expect(rejection).toBeInstanceOf(AggregateTrackingError);
+			expect(rejection).toMatchObject({ code: "AGGREGATE_TRACKING" });
 			expect(rejection).toMatchObject({
-				reason: "different_repository",
-				operation: "load",
+				details: { reason: "different_repository", operation: "load" },
 			});
 		});
 
@@ -952,7 +951,7 @@ describe("UnitOfWork", () => {
 
 				await uow.run(async ({ repositories }) => {
 					expect(() => repositories.orders[operation](impostor)).toThrow(
-						UnmanagedInstanceError,
+						expect.objectContaining({ code: "UNMANAGED_INSTANCE" }),
 					);
 					expect(
 						tracking.identityMap.get(MockAggregate, "o-1" as TestId),
@@ -1018,10 +1017,9 @@ describe("UnitOfWork", () => {
 					(error: unknown) => error,
 				);
 
-			expect(rejection).toBeInstanceOf(AggregateTrackingError);
+			expect(rejection).toMatchObject({ code: "AGGREGATE_TRACKING" });
 			expect(rejection).toMatchObject({
-				reason: "different_repository",
-				operation: "update",
+				details: { reason: "different_repository", operation: "update" },
 			});
 		});
 
@@ -1043,11 +1041,13 @@ describe("UnitOfWork", () => {
 			// The aggregate IS registered (via add); "load it through the
 			// repository" would be impossible advice for a row that does not
 			// exist yet.
-			expect(rejection).toBeInstanceOf(AggregateTrackingError);
+			expect(rejection).toMatchObject({ code: "AGGREGATE_TRACKING" });
 			expect(rejection).toMatchObject({
-				reason: "conflicting_intent",
-				operation: "update",
-				registeredIntent: "add",
+				details: {
+					reason: "conflicting_intent",
+					operation: "update",
+					registeredIntent: "add",
+				},
 			});
 		});
 
@@ -1160,8 +1160,10 @@ describe("UnitOfWork", () => {
 					(error: unknown) => error,
 				);
 
-			expect(rejection).toBeInstanceOf(UnmanagedInstanceError);
-			expect(rejection).toMatchObject({ operation: "repository.add" });
+			expect(rejection).toMatchObject({ code: "UNMANAGED_INSTANCE" });
+			expect(rejection).toMatchObject({
+				details: { operation: "repository.add" },
+			});
 		});
 
 		it("keeps the stamps of an instance that the retried attempt registers again", async () => {
@@ -1273,11 +1275,10 @@ describe("UnitOfWork", () => {
 						(error: unknown) => error,
 					);
 
-				expect(repeatedCall).toBeInstanceOf(AggregateTrackingError);
+				expect(repeatedCall).toMatchObject({ code: "AGGREGATE_TRACKING" });
 				expect(rejection).toBe(repeatedCall);
 				expect(rejection).toMatchObject({
-					operation,
-					reason: "mutated_after_registration",
+					details: { operation, reason: "mutated_after_registration" },
 				});
 			},
 		);
@@ -1433,11 +1434,9 @@ describe("UnitOfWork", () => {
 				});
 
 				await expect(uow.run(async () => undefined)).rejects.toMatchObject({
-					constructor: InvalidRepositoryAdapterError,
 					code: "INVALID_REPOSITORY_ADAPTER",
 					category: "WIRING",
-					repository: "orders",
-					receivedType,
+					details: { repository: "orders", receivedType },
 				});
 			},
 		);
@@ -1786,7 +1785,7 @@ describe("UnitOfWork", () => {
 				);
 
 				expect(() => escaped.add(createMockAggregate("order-1"))).toThrow(
-					TransactionClosedError,
+					expect.objectContaining({ code: "TRANSACTION_CLOSED" }),
 				);
 			});
 		});
@@ -2046,7 +2045,7 @@ describe("UnitOfWork", () => {
 			expect(flushCalls).toBe(1);
 		});
 
-		it("removing a second instance with the same id still throws AggregateDeletedError", async () => {
+		it("removing a second instance with the same id still throws AGGREGATE_DELETED", async () => {
 			const { uow } = createUow();
 			const first = createMockAggregate("o-1");
 			const second = createMockAggregate("o-1");
@@ -2059,11 +2058,13 @@ describe("UnitOfWork", () => {
 					return undefined;
 				})
 				.catch((error: unknown) => error);
-			expect(deleted).toBeInstanceOf(AggregateDeletedError);
-			expect(deleted).toMatchObject({ identity: second.aggregateIdentity });
+			expect(deleted).toMatchObject({ code: "AGGREGATE_DELETED" });
+			expect(deleted).toMatchObject({
+				details: { identity: second.aggregateIdentity },
+			});
 		});
 
-		it("saving an aggregate after deleting it in the same unit of work throws AggregateDeletedError", async () => {
+		it("saving an aggregate after deleting it in the same unit of work throws AGGREGATE_DELETED", async () => {
 			const { uow } = createUow();
 			const agg = createMockAggregate("o-1");
 
@@ -2074,7 +2075,7 @@ describe("UnitOfWork", () => {
 					repositories.orders.update(agg);
 					return undefined;
 				}),
-			).rejects.toBeInstanceOf(AggregateDeletedError);
+			).rejects.toMatchObject({ code: "AGGREGATE_DELETED" });
 
 			// The violation aborted the unit of work: nothing was committed.
 			expect(persistedVersionOf(agg)).toBeUndefined();
@@ -2137,7 +2138,7 @@ describe("UnitOfWork", () => {
 
 			await uow.run(async () => undefined);
 
-			expect(lateRegisterError).toBeInstanceOf(TransactionClosedError);
+			expect(lateRegisterError).toMatchObject({ code: "TRANSACTION_CLOSED" });
 		});
 
 		it("a retrying TransactionScope gets a FRESH session per attempt: rolled-back registrations never reach the outbox", async () => {
@@ -2226,11 +2227,11 @@ describe("UnitOfWork", () => {
 			});
 
 			expect(() => leaked.add({} as MockAggregate)).toThrow(
-				TransactionClosedError,
+				expect.objectContaining({ code: "TRANSACTION_CLOSED" }),
 			);
 		});
 
-		it("context.repositories access after run() settles throws TransactionClosedError", async () => {
+		it("context.repositories access after run() settles throws TRANSACTION_CLOSED", async () => {
 			const { uow } = createUow();
 			let leaked!: Parameters<Parameters<typeof uow.run>[0]>[0];
 
@@ -2239,7 +2240,9 @@ describe("UnitOfWork", () => {
 				return undefined;
 			});
 
-			expect(() => leaked.repositories).toThrow(TransactionClosedError);
+			expect(() => leaked.repositories).toThrow(
+				expect.objectContaining({ code: "TRANSACTION_CLOSED" }),
+			);
 		});
 
 		it("returning the facade from run() resolves the committed result instead of a retryable CommitError", async () => {
@@ -2253,7 +2256,9 @@ describe("UnitOfWork", () => {
 			});
 
 			// Real use of the leaked facade after close still fails loudly.
-			expect(() => facade.tx).toThrow(TransactionClosedError);
+			expect(() => facade.tx).toThrow(
+				expect.objectContaining({ code: "TRANSACTION_CLOSED" }),
+			);
 		});
 
 		it("answers absent-property probes on a closed facade without throwing", async () => {
@@ -2273,7 +2278,9 @@ describe("UnitOfWork", () => {
 			expect(() => String(facade)).not.toThrow();
 			expect(String(facade)).toBe("[object Object]");
 			// Existing members keep the loud invalidation.
-			expect(() => facade.tx).toThrow(TransactionClosedError);
+			expect(() => facade.tx).toThrow(
+				expect.objectContaining({ code: "TRANSACTION_CLOSED" }),
+			);
 		});
 
 		it("answers a constructor read on a closed class-based facade", async () => {
@@ -2294,10 +2301,12 @@ describe("UnitOfWork", () => {
 			});
 
 			expect("then" in facade).toBe(false);
-			expect(() => "tx" in facade).toThrow(TransactionClosedError);
+			expect(() => "tx" in facade).toThrow(
+				expect.objectContaining({ code: "TRANSACTION_CLOSED" }),
+			);
 		});
 
-		it("adapter tracking after rollback throws TransactionClosedError", async () => {
+		it("adapter tracking after rollback throws TRANSACTION_CLOSED", async () => {
 			let leakedTracking!: RepositoryTracking<MockAggregate>;
 			const { uow } = createUow({
 				onTracking: (tracking) => {
@@ -2313,7 +2322,7 @@ describe("UnitOfWork", () => {
 
 			expect(() =>
 				leakedTracking.trackLoaded(createMockAggregate("o-1")),
-			).toThrow(TransactionClosedError);
+			).toThrow(expect.objectContaining({ code: "TRANSACTION_CLOSED" }));
 		});
 
 		it("invalidates repository reads, cached methods, and getters after close", async () => {
@@ -2353,15 +2362,21 @@ describe("UnitOfWork", () => {
 			});
 
 			const callsWhileOpen = getterCalls;
-			expect(() => leaked.read()).toThrow(TransactionClosedError);
-			expect(() => cachedRead()).toThrow(TransactionClosedError);
-			expect(() => leaked.status).toThrow(TransactionClosedError);
+			expect(() => leaked.read()).toThrow(
+				expect.objectContaining({ code: "TRANSACTION_CLOSED" }),
+			);
+			expect(() => cachedRead()).toThrow(
+				expect.objectContaining({ code: "TRANSACTION_CLOSED" }),
+			);
+			expect(() => leaked.status).toThrow(
+				expect.objectContaining({ code: "TRANSACTION_CLOSED" }),
+			);
 			expect(getterCalls).toBe(callsWhileOpen);
 		});
 	});
 
 	describe("nesting + reuse", () => {
-		it("run() inside run() on the same instance throws NestedUnitOfWorkError and rolls back the outer work", async () => {
+		it("run() inside run() on the same instance throws NESTED_UNIT_OF_WORK and rolls back the outer work", async () => {
 			const { uow } = createUow();
 			const agg = createMockAggregate("o-1", [testEvent("o-1")]);
 
@@ -2372,7 +2387,7 @@ describe("UnitOfWork", () => {
 					await uow.run(async () => undefined);
 					return undefined;
 				}),
-			).rejects.toBeInstanceOf(NestedUnitOfWorkError);
+			).rejects.toMatchObject({ code: "NESTED_UNIT_OF_WORK" });
 
 			expect(persistedVersionOf(agg)).toBeUndefined();
 			expect(agg.pendingEvents).toHaveLength(1);
@@ -2550,10 +2565,9 @@ describe("UnitOfWork", () => {
 					(error: unknown) => error,
 				);
 
-			expect(rejection).toBeInstanceOf(AggregateTrackingError);
+			expect(rejection).toMatchObject({ code: "AGGREGATE_TRACKING" });
 			expect(rejection).toMatchObject({
-				operation: "load",
-				reason: "different_repository",
+				details: { operation: "load", reason: "different_repository" },
 			});
 		});
 
@@ -2607,7 +2621,7 @@ describe("UnitOfWork", () => {
 			expect(outbox.added).toEqual([[stamped(event, 2)]]);
 		});
 
-		it("tracking.identityMap access after close throws TransactionClosedError", async () => {
+		it("tracking.identityMap access after close throws TRANSACTION_CLOSED", async () => {
 			const { uow } = createCachingUow(new Map());
 			let repository!: Pick<CachingOrderRepository, "trackedIdentities">;
 
@@ -2617,7 +2631,7 @@ describe("UnitOfWork", () => {
 			});
 
 			expect(() => repository.trackedIdentities).toThrow(
-				TransactionClosedError,
+				expect.objectContaining({ code: "TRANSACTION_CLOSED" }),
 			);
 		});
 
@@ -2717,7 +2731,7 @@ describe("UnitOfWork", () => {
 					repositories.orders.update(resurrected);
 					return undefined;
 				}),
-			).rejects.toBeInstanceOf(AggregateDeletedError);
+			).rejects.toMatchObject({ code: "AGGREGATE_DELETED" });
 		});
 
 		it("a deleted aggregate's events are collected without saved acknowledgement or observation", async () => {
@@ -2793,7 +2807,7 @@ describe("UnitOfWork", () => {
 			expect((rejection as CommitError).cause).toBe(commitFailure);
 		});
 
-		it("a deterministic collection-guard violation surfaces as EventCollectionError, not a retryable CommitError", async () => {
+		it("a deterministic collection-guard violation surfaces as EVENT_COLLECTION_FAILED, not a retryable CommitError", async () => {
 			// An event missing aggregateId is a createDomainEvent misuse:
 			// deterministic, fails identically on every retry. It must NOT be
 			// wrapped in CommitError (an InfrastructureError a retry loop
@@ -2818,16 +2832,16 @@ describe("UnitOfWork", () => {
 					(e: unknown) => e,
 				);
 
-			expect(rejection).toBeInstanceOf(EventCollectionError);
+			expect(rejection).toMatchObject({ code: "EVENT_COLLECTION_FAILED" });
 			expect(rejection).not.toBeInstanceOf(CommitError);
 			expect(rejection).not.toBeInstanceOf(InfrastructureError);
 			expect(persistedVersionOf(agg)).toBeUndefined();
 		});
 
-		it("a wrapping scope that nests the collection-guard error still surfaces EventCollectionError, not CommitError", async () => {
+		it("a wrapping scope that nests the collection-guard error still surfaces EVENT_COLLECTION_FAILED, not CommitError", async () => {
 			// The collection guard throws inside scope.transactional(), so a
 			// scope that wraps its callback's rejection nests the
-			// EventCollectionError in its cause chain. run() must still treat it
+			// EVENT_COLLECTION_FAILED in its cause chain. run() must still treat it
 			// as the deterministic, non-retryable failure it is.
 			const scope: TransactionScope<undefined> = {
 				transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
@@ -2858,7 +2872,7 @@ describe("UnitOfWork", () => {
 					(e: unknown) => e,
 				);
 
-			expect(rejection).toBeInstanceOf(EventCollectionError);
+			expect(rejection).toMatchObject({ code: "EVENT_COLLECTION_FAILED" });
 			expect(rejection).not.toBeInstanceOf(InfrastructureError);
 		});
 
@@ -3014,9 +3028,9 @@ describe("UnitOfWork", () => {
 				);
 
 			expect(rejection).toBeInstanceOf(RollbackError);
-			expect((rejection as RollbackError).cause).toBeInstanceOf(
-				AggregateTrackingError,
-			);
+			expect((rejection as RollbackError).cause).toMatchObject({
+				code: "AGGREGATE_TRACKING",
+			});
 			expect((rejection as RollbackError).rollbackCause).toBe(rollbackFailure);
 		});
 
@@ -3268,7 +3282,7 @@ describe("UnitOfWork", () => {
 				return undefined;
 			});
 
-			expect(readDuringBackoff).toBeInstanceOf(TransactionClosedError);
+			expect(readDuringBackoff).toMatchObject({ code: "TRANSACTION_CLOSED" });
 		});
 
 		it("closes the facade of an attempt whose outbox write failed before the retry waits", async () => {
@@ -3306,7 +3320,7 @@ describe("UnitOfWork", () => {
 				return undefined;
 			});
 
-			expect(addDuringBackoff).toBeInstanceOf(TransactionClosedError);
+			expect(addDuringBackoff).toMatchObject({ code: "TRANSACTION_CLOSED" });
 		});
 
 		it("checks an abandoned attempt against its own session when the scope still commits it", async () => {
@@ -3359,7 +3373,7 @@ describe("UnitOfWork", () => {
 					(error: unknown) => error,
 				);
 
-			expect(rejection).toBeInstanceOf(UnregisteredChangesError);
+			expect(rejection).toMatchObject({ code: "UNREGISTERED_CHANGES" });
 		});
 
 		it("fails an abandoned attempt that the scope still commits when a late write reaches it", async () => {
@@ -3419,7 +3433,7 @@ describe("UnitOfWork", () => {
 					(error: unknown) => error,
 				);
 
-			expect(lateCall).toBeInstanceOf(AggregateTrackingError);
+			expect(lateCall).toMatchObject({ code: "AGGREGATE_TRACKING" });
 			expect(rejection).toBe(lateCall);
 		});
 
@@ -3474,7 +3488,7 @@ describe("UnitOfWork", () => {
 
 			expect(() =>
 				firstAttemptOrders.add(createMockAggregate("late-1")),
-			).toThrow(TransactionClosedError);
+			).toThrow(expect.objectContaining({ code: "TRANSACTION_CLOSED" }));
 		});
 
 		it("an abandoned attempt that throws late does not relabel the failure of the live attempt", async () => {
@@ -3716,7 +3730,7 @@ describe("UnitOfWork", () => {
 			});
 		}
 
-		it("throws UnregisteredChangesError when events are recorded after load and never registered", async () => {
+		it("throws UNREGISTERED_CHANGES when events are recorded after load and never registered", async () => {
 			const agg = loadable("o-1"); // loaded clean
 			const uow = createLoadableUow(agg);
 
@@ -3732,11 +3746,11 @@ describe("UnitOfWork", () => {
 					(e: unknown) => e,
 				);
 
-			expect(rejection).toBeInstanceOf(UnregisteredChangesError);
+			expect(rejection).toMatchObject({ code: "UNREGISTERED_CHANGES" });
 			expect(rejection).not.toBeInstanceOf(InfrastructureError);
 		});
 
-		it("throws UnregisteredChangesError when a decision is added after load without a version change", async () => {
+		it("throws UNREGISTERED_CHANGES when a decision is added after load without a version change", async () => {
 			// The version net cannot see this one: addDomainEvent alone leaves
 			// the version untouched, so only the pending-count net catches it.
 			const agg = loadable("o-1");
@@ -3754,7 +3768,7 @@ describe("UnitOfWork", () => {
 				);
 
 			expect(agg.version).toBe(1);
-			expect(rejection).toBeInstanceOf(UnregisteredChangesError);
+			expect(rejection).toMatchObject({ code: "UNREGISTERED_CHANGES" });
 		});
 
 		it("does not throw when the mutated aggregate was registered", async () => {
@@ -3916,10 +3930,10 @@ describe("UnitOfWork", () => {
 					(error: unknown) => error,
 				);
 
-			expect(rejection).toBeInstanceOf(EventCollectionError);
-			expect((rejection as EventCollectionError).message).toMatch(
-				/event source ended/,
-			);
+			expect(rejection).toMatchObject({ code: "EVENT_COLLECTION_FAILED" });
+			expect(
+				(rejection as KitWiringError<"EVENT_COLLECTION_FAILED">).message,
+			).toMatch(/event source ended/);
 			expect(persistedVersionOf(recreated)).toBeUndefined();
 		});
 	});
@@ -3988,10 +4002,9 @@ describe("UnitOfWork", () => {
 						(error: unknown) => error,
 					);
 
-				expect(lateCall).toBeInstanceOf(AggregateTrackingError);
+				expect(lateCall).toMatchObject({ code: "AGGREGATE_TRACKING" });
 				expect(lateCall).toMatchObject({
-					reason: "registered_during_flush",
-					operation,
+					details: { reason: "registered_during_flush", operation },
 				});
 				expect(rejection).toBe(lateCall);
 				expect(flushed).toEqual(["first-1"]);
@@ -4049,10 +4062,9 @@ describe("UnitOfWork", () => {
 						(error: unknown) => error,
 					);
 
-				expect(lateCall).toBeInstanceOf(AggregateTrackingError);
+				expect(lateCall).toMatchObject({ code: "AGGREGATE_TRACKING" });
 				expect(lateCall).toMatchObject({
-					reason: "registered_during_flush",
-					operation,
+					details: { reason: "registered_during_flush", operation },
 				});
 				expect(rejection).toBe(lateCall);
 			},
@@ -4106,7 +4118,7 @@ describe("UnitOfWork", () => {
 			});
 
 			expect(result).toBe("committed");
-			expect(lateCall).toBeInstanceOf(TransactionClosedError);
+			expect(lateCall).toMatchObject({ code: "TRANSACTION_CLOSED" });
 		});
 
 		it("keeps a repeated add of the same unchanged instance a no-op while the transaction commits", async () => {
@@ -4237,8 +4249,10 @@ describe("UnitOfWork", () => {
 					(error: unknown) => error,
 				);
 
-			expect(rejection).toBeInstanceOf(AggregateTrackingError);
-			expect(rejection).toMatchObject({ reason: "mutated_after_registration" });
+			expect(rejection).toMatchObject({ code: "AGGREGATE_TRACKING" });
+			expect(rejection).toMatchObject({
+				details: { reason: "mutated_after_registration" },
+			});
 			expect(persistedVersionOf(order)).toBeUndefined();
 		});
 
@@ -4260,8 +4274,10 @@ describe("UnitOfWork", () => {
 					(error: unknown) => error,
 				);
 
-			expect(rejection).toBeInstanceOf(AggregateTrackingError);
-			expect(rejection).toMatchObject({ reason: "mutated_after_registration" });
+			expect(rejection).toMatchObject({ code: "AGGREGATE_TRACKING" });
+			expect(rejection).toMatchObject({
+				details: { reason: "mutated_after_registration" },
+			});
 			expect(persistedVersionOf(order)).toBeUndefined();
 		});
 
@@ -4296,9 +4312,11 @@ describe("UnitOfWork", () => {
 						(error: unknown) => error,
 					);
 
-				expect(rejection).toBeInstanceOf(UnregisteredChangesError);
+				expect(rejection).toMatchObject({ code: "UNREGISTERED_CHANGES" });
 				expect(rejection).toMatchObject({
-					identity: { aggregateType: "MockOrder", aggregateId: "o-2" },
+					details: {
+						identity: { aggregateType: "MockOrder", aggregateId: "o-2" },
+					},
 				});
 				expect(persistedVersionOf(order)).toBeUndefined();
 			},
@@ -4551,7 +4569,7 @@ describe("UnitOfWork", () => {
 		});
 
 		it("names the intent on a statement defect that did not know the write", async () => {
-			const defect = new InvalidFlushStatementError({
+			const defect = invalidFlushStatementError({
 				identity,
 				reason: "no_version",
 				received: "3 (string)",
@@ -4568,7 +4586,7 @@ describe("UnitOfWork", () => {
 			);
 
 			expect(rejection).toBe(defect);
-			expect(defect.intent).toBe("update");
+			expect(defect.details.intent).toBe("update");
 			expect(defect.message).toContain("update of MockAggregate(o-1)");
 		});
 
@@ -4610,7 +4628,7 @@ describe("UnitOfWork", () => {
 
 	describe("cross-copy cooperation", () => {
 		it("passes a wiring error from flush to the caller, without the mapper", async () => {
-			const wiringDefect = new InvalidFlushStatementError({
+			const wiringDefect = invalidFlushStatementError({
 				identity: { aggregateType: "MockAggregate", aggregateId: "o-1" },
 				intent: "update",
 				reason: "statement_absent",
@@ -4659,7 +4677,7 @@ describe("UnitOfWork", () => {
 		});
 
 		it("passes a wiring error that the flush wrapped to the caller, without the mapper", async () => {
-			const wiringDefect = new InvalidFlushStatementError({
+			const wiringDefect = invalidFlushStatementError({
 				identity: { aggregateType: "MockAggregate", aggregateId: "o-1" },
 				intent: "update",
 				reason: "statement_absent",
@@ -4791,7 +4809,7 @@ describe("UnitOfWork", () => {
 				);
 
 			// The mapper behaved correctly; misclassifying its result as a
-			// RepositoryErrorMappingFailedError would turn a retryable
+			// REPOSITORY_ERROR_MAPPING_FAILED would turn a retryable
 			// conflict into a non-retryable wiring crash.
 			expect(rejection).toBe(foreign);
 		});
@@ -4810,9 +4828,9 @@ describe("UnitOfWork", () => {
 				repositories: { orders: handBuilt } as never,
 			});
 
-			await expect(uow.run(async () => undefined)).rejects.toBeInstanceOf(
-				InvalidRepositoryDefinitionError,
-			);
+			await expect(uow.run(async () => undefined)).rejects.toMatchObject({
+				code: "INVALID_REPOSITORY_DEFINITION",
+			});
 		});
 	});
 

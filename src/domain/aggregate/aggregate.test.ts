@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { InvalidVersionError } from "../../errors/kit-errors";
+import type { KitWiringError } from "../../errors/kit-errors";
 import type { Id } from "../identity/id";
 import { sameVersion, toVersion, type Version } from "./aggregate";
 
@@ -74,8 +74,10 @@ describe("Aggregate versions", () => {
 			["a fraction", 1.5],
 			["Infinity", Number.POSITIVE_INFINITY],
 			["a number beyond the safe range", Number.MAX_SAFE_INTEGER + 1],
-		])("rejects %s with InvalidVersionError", (_label, value) => {
-			expect(() => toVersion(value)).toThrow(InvalidVersionError);
+		])("rejects %s with INVALID_VERSION", (_label, value) => {
+			expect(() => toVersion(value)).toThrow(
+				expect.objectContaining({ code: "INVALID_VERSION" }),
+			);
 		});
 
 		it("names the rejected value and the wiring code", () => {
@@ -86,9 +88,13 @@ describe("Aggregate versions", () => {
 				caught = error;
 			}
 
-			expect(caught).toBeInstanceOf(InvalidVersionError);
-			expect((caught as InvalidVersionError).code).toBe("INVALID_VERSION");
-			expect((caught as InvalidVersionError).value).toBe(-3);
+			expect(caught).toMatchObject({ code: "INVALID_VERSION" });
+			expect((caught as KitWiringError<"INVALID_VERSION">).code).toBe(
+				"INVALID_VERSION",
+			);
+			expect((caught as KitWiringError<"INVALID_VERSION">).details.value).toBe(
+				-3,
+			);
 		});
 	});
 });

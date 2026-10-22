@@ -11,16 +11,17 @@ import {
 	ConcurrencyConflictError,
 	DomainError,
 	DuplicateAggregateError,
-	EventCollectionError,
+	eventCollectionError,
 	ForeignEventError,
 	InfrastructureError,
 	InvalidEventStreamPageError,
-	MisattributedEventError,
-	MissingFoldError,
-	MissingHandlerError,
+	KitWiringError,
+	misattributedEventError,
+	missingFoldError,
+	missingHandlerError,
 	ReplayRejectedError,
-	UnregisteredChangesError,
-	UnreplayableAggregateError,
+	unregisteredChangesError,
+	unreplayableAggregateError,
 } from "./kit-errors";
 
 describe("InvalidEventStreamPageError", () => {
@@ -217,7 +218,7 @@ describe("aggregate identity mismatch messages", () => {
 	});
 
 	it("names both aggregates of a misattributed new event in one format", () => {
-		const error = new MisattributedEventError(mismatch);
+		const error = misattributedEventError(mismatch);
 
 		expect(error.message).toContain(
 			"belongs to Order(o-2) but was applied on Order(o-1)",
@@ -295,53 +296,87 @@ describe("InfrastructureError", () => {
 	});
 });
 
-describe("MissingHandlerError", () => {
+describe("KitWiringError", () => {
+	it("carries its code as its name and freezes its details", () => {
+		const error = new KitWiringError({
+			code: "TRANSACTION_CLOSED",
+			message: "closed",
+			details: { operation: "add" },
+		});
+
+		expect(error.name).toBe("TRANSACTION_CLOSED");
+		expect(error.category).toBe("WIRING");
+		expect(error.retryable).toBe(false);
+		expect(error.details).toEqual({ operation: "add" });
+		expect(Object.isFrozen(error.details)).toBe(true);
+	});
+
+	it("keeps a second failure out of the details and in the log object", () => {
+		const mapperFailure = new Error("mapper threw");
+		const error = new KitWiringError({
+			code: "ERROR_MAPPER_FAILED",
+			message: "mapper failed",
+			details: { busKind: "command", count: 3n },
+			cause: new Error("handler threw"),
+			secondaryCause: mapperFailure,
+		});
+
+		const log = error.toLogObject();
+
+		expect(error.secondaryCause).toBe(mapperFailure);
+		expect(log.details).toEqual({ busKind: "command", count: "3" });
+		expect(log.secondaryCause).toMatchObject({ message: "mapper threw" });
+		expect(() => JSON.stringify(log)).not.toThrow();
+	});
+});
+
+describe("MISSING_HANDLER", () => {
 	it("is intentionally neither a DomainError nor an InfrastructureError", () => {
 		// `catch (e instanceof DomainError)` at the App layer must NOT
 		// swallow a forgotten projection handler: that's a programming bug
 		// that should crash loud during development.
-		const e = new MissingHandlerError("OrderShipped");
+		const e = missingHandlerError("OrderShipped");
 		expect(e).not.toBeInstanceOf(DomainError);
 		expect(e).not.toBeInstanceOf(InfrastructureError);
 		expect(isBaseError(e)).toBe(true);
 		expect(e.name).toBe("MISSING_HANDLER");
-		expect(e.eventType).toBe("OrderShipped");
+		expect(e.details.eventType).toBe("OrderShipped");
 		expect(e.message).toContain("OrderShipped");
 	});
 
 	it("accepts a cause and preserves it in the chain", () => {
 		const root = new Error("registry lookup failed");
-		const e = new MissingHandlerError("OrderShipped", root);
+		const e = missingHandlerError("OrderShipped", root);
 		expect(getRootCause(e)).toBe(root);
 	});
 });
 
-describe("MissingFoldError", () => {
+describe("MISSING_FOLD", () => {
 	it("is intentionally neither a DomainError nor an InfrastructureError", () => {
 		// `catch (e instanceof DomainError)` at the App layer must NOT
 		// swallow a forgotten fold: that's a programming bug that should
 		// crash loud during development.
-		const e = new MissingFoldError("OrderShipped");
+		const e = missingFoldError("OrderShipped");
 		expect(e).not.toBeInstanceOf(DomainError);
 		expect(e).not.toBeInstanceOf(InfrastructureError);
 		expect(isBaseError(e)).toBe(true);
 		expect(e.name).toBe("MISSING_FOLD");
-		expect(e.eventType).toBe("OrderShipped");
+		expect(e.details.eventType).toBe("OrderShipped");
 		expect(e.message).toContain("OrderShipped");
 	});
 
 	it("accepts a cause and preserves it in the chain", () => {
 		const root = new Error("registry lookup failed");
-		const e = new MissingFoldError("OrderShipped", root);
+		const e = missingFoldError("OrderShipped", root);
 		expect(getRootCause(e)).toBe(root);
 	});
 });
 
-describe("UnreplayableAggregateError", () => {
+describe("UNREPLAYABLE_AGGREGATE", () => {
 	it("keeps the class message focused on fresh-instance reconstitution", () => {
 		// Replay guards can add context while the class keeps the safe common
 		// remedy: discard the dirty target and reconstitute a fresh instance.
-		const error = new UnreplayableAggregateError({
+		const error = unreplayableAggregateError({
 			identity: { aggregateType: "Order", aggregateId: "agg-1" },
 			reason: "it carries 2 unflushed pending event(s)",
 		});
@@ -555,24 +590,24 @@ describe("ConcurrencyConflictError", () => {
 	});
 });
 
-describe("EventCollectionError", () => {
+describe("EVENT_COLLECTION_FAILED", () => {
 	it("is a BaseError but NOT an InfrastructureError (deterministic, not retryable)", () => {
-		const e = new EventCollectionError("bad event");
+		const e = eventCollectionError("bad event");
 		expect(isBaseError(e)).toBe(true);
 		expect(e).not.toBeInstanceOf(InfrastructureError);
 		expect(e.name).toBe("EVENT_COLLECTION_FAILED");
 	});
 });
 
-describe("UnregisteredChangesError", () => {
+describe("UNREGISTERED_CHANGES", () => {
 	it("is a BaseError but NOT an InfrastructureError (crash-loud programming bug)", () => {
-		const e = new UnregisteredChangesError({
+		const e = unregisteredChangesError({
 			identity: { aggregateType: "Order", aggregateId: "order-1" },
 		});
 		expect(isBaseError(e)).toBe(true);
 		expect(e).not.toBeInstanceOf(InfrastructureError);
 		expect(e.name).toBe("UNREGISTERED_CHANGES");
-		expect(e.identity).toEqual({
+		expect(e.details.identity).toEqual({
 			aggregateType: "Order",
 			aggregateId: "order-1",
 		});

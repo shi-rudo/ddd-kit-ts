@@ -92,17 +92,16 @@ Calling `createDomainEvent(...)` directly still works, but inside an aggregate
 decision when it registers the aggregate for persistence.
 
 Two wiring guards sit on the recording paths. An event that no kit
-constructor built throws `HandBuiltEventError` (code `HAND_BUILT_EVENT`). A
+constructor built throws `HAND_BUILT_EVENT`. A
 state or payload root that carries an own `__proto__` key throws
-`PrototypePollutionError` (code `PROTOTYPE_POLLUTION`). Both guard against
+`PROTOTYPE_POLLUTION`. Both guard against
 accidents, not against code in the same process. Validate and strip
 untrusted input at the application edge. An event that another loaded copy of
-the kit built throws `DuplicateKitCopyError`; see
+the kit built throws `DUPLICATE_KIT_COPY`; see
 [Domain Events -> Shape](./domain-events.md#shape).
 
 `AggregateConfig.maxPendingEvents` limits the pending list. A recording that
-would grow the list past the limit throws `PendingEventLimitExceededError`
-(code `PENDING_EVENT_LIMIT_EXCEEDED`) before the state moves, on `setState`,
+would grow the list past the limit throws `PENDING_EVENT_LIMIT_EXCEEDED` before the state moves, on `setState`,
 `apply`, and `addDomainEvent`. Replayed history does not count. The default
 is unlimited. Treat the limit as a modelling signal, not as a budget to
 raise: a decision that emits hundreds of facts in one command points at a
@@ -191,10 +190,8 @@ event. It does not remember a database baseline. The operation-scoped
 `UnitOfWork` owns that baseline.
 
 `markReconstituted` has two preconditions. The instance must carry no pending
-events, or it throws `UnreplayableAggregateError` (code
-`UNREPLAYABLE_AGGREGATE`). The current version must not be above the
-restored version, or it throws `InvalidVersionError` (code
-`INVALID_VERSION`). Two factory shapes break these rules:
+events, or it throws `UNREPLAYABLE_AGGREGATE`. The current version must not be above the
+restored version, or it throws `INVALID_VERSION`. Two factory shapes break these rules:
 
 - A factory that calls `setState(rowState)` before `markReconstituted`. Every
   `setState` advances the version, so the instance is at version 1 before
@@ -631,8 +628,7 @@ mutators the kit knows. See `deepFreeze` for the list.
 Reconstitution always creates a fresh aggregate through the model. It never
 mutates a live instance or records a new domain fact. A factory that forgets
 `markReconstituted(version)` returns an aggregate at the wrong version; the
-restore then throws `SnapshotVersionNotRestoredError` (code
-`SNAPSHOT_VERSION_NOT_RESTORED`).
+restore then throws `SNAPSHOT_VERSION_NOT_RESTORED`.
 
 Live aggregate state remains `protected`. The model captures the aggregate
 through its plain state (`order.plainState`) or through domain queries,

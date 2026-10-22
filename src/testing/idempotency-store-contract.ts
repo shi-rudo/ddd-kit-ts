@@ -126,7 +126,7 @@ export function createIdempotencyStoreContractTests<TCtx>(
 				assertChainContainsKitError(
 					rejection,
 					["IDEMPOTENCY_COMPLETED_WITHOUT_CLAIM"],
-					"complete() without claim() must throw IdempotencyCompletionWithoutClaimError",
+					"complete() without claim() must throw IDEMPOTENCY_COMPLETED_WITHOUT_CLAIM",
 				);
 			}),
 		},

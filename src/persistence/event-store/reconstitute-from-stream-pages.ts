@@ -75,7 +75,7 @@ export interface ReplayableStreamPages<Evt extends AnyDomainEvent> {
  *
  * The call then primes the replay target with an empty history, so the
  * aggregate runs its own guard even when the read holds no page: a replay
- * target with pending decisions throws `UnreplayableAggregateError`. The
+ * target with pending decisions throws `UNREPLAYABLE_AGGREGATE`. The
  * replay target must stand at `read.fromVersion`. A replay target at
  * another version throws {@link ReplayTargetMismatchError} before the
  * first page, even when it also rejected the empty history: a wiring

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
-	IdempotencyCompletionWithoutClaimError,
 	IdempotencyInFlightError,
 	IdempotencyKeyReuseError,
 } from "../../../errors/kit-errors";
@@ -117,7 +116,7 @@ describe("InMemoryIdempotencyStore", () => {
 			scope.transactional(() =>
 				store.complete(undefined, { key: "k", token: "missing" }, "x"),
 			),
-		).rejects.toBeInstanceOf(IdempotencyCompletionWithoutClaimError);
+		).rejects.toMatchObject({ code: "IDEMPOTENCY_COMPLETED_WITHOUT_CLAIM" });
 	});
 
 	it("throws a TypeError for a claim outside a transaction", async () => {

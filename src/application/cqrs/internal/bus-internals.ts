@@ -1,8 +1,9 @@
 import { err, type Result } from "@shirudo/result";
 import {
-	DuplicateHandlerRegistrationError,
-	ErrorMapperFailedError,
-	UnregisteredHandlerError,
+	duplicateHandlerRegistrationError,
+	errorMapperFailedError,
+	isWiringError,
+	unregisteredHandlerError,
 } from "../../../errors/kit-errors";
 
 /**
@@ -60,7 +61,7 @@ export function registerOnce<THandler>(
 	handler: THandler,
 ): void {
 	if (handlers.has(type)) {
-		throw new DuplicateHandlerRegistrationError({
+		throw duplicateHandlerRegistrationError({
 			busKind,
 			messageType: type,
 		});
@@ -70,8 +71,8 @@ export function registerOnce<THandler>(
 
 /**
  * Shared no-handler gate for dispatch: a wiring bug throws
- * `UnregisteredHandlerError` (crash-loud, same posture as
- * `MissingHandlerError`), it never rides the error channel. One
+ * `UNREGISTERED_HANDLER` (crash-loud, same posture as
+ * `MISSING_HANDLER`), it never rides the error channel. One
  * implementation so the buses and their unsafe paths cannot drift.
  */
 export function handlerOrThrow<THandler>(
@@ -81,7 +82,7 @@ export function handlerOrThrow<THandler>(
 ): THandler {
 	const handler = handlers.get(type);
 	if (!handler) {
-		throw new UnregisteredHandlerError({ busKind, messageType: type });
+		throw unregisteredHandlerError({ busKind, messageType: type });
 	}
 	return handler;
 }
@@ -100,8 +101,8 @@ export function mapHandlerFailure<E>(
 	busKind: "command" | "query",
 ): Result<never, E> {
 	if (
-		error instanceof UnregisteredHandlerError ||
-		error instanceof ErrorMapperFailedError
+		isWiringError(error, "UNREGISTERED_HANDLER") ||
+		isWiringError(error, "ERROR_MAPPER_FAILED")
 	) {
 		throw error;
 	}
@@ -111,7 +112,7 @@ export function mapHandlerFailure<E>(
 	try {
 		decision = mapExpectedError(error);
 	} catch (mapperError) {
-		throw new ErrorMapperFailedError({
+		throw errorMapperFailedError({
 			busKind,
 			handlerError: error,
 			mapperError,
@@ -133,7 +134,7 @@ export function mapHandlerFailure<E>(
 		}
 		mapped = (candidate as ExpectedErrorDecision<E>).error;
 	} catch (mapperError) {
-		throw new ErrorMapperFailedError({
+		throw errorMapperFailedError({
 			busKind,
 			handlerError: error,
 			mapperError,

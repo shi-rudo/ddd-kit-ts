@@ -1,7 +1,7 @@
 import type { Aggregate } from "../../domain/aggregate/aggregate";
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
-import { InvalidRepositoryAdapterError } from "./errors";
+import { invalidRepositoryAdapterError } from "./errors";
 import type { RuntimePersistenceDefinition } from "./persistence-contract";
 
 /**
@@ -43,7 +43,7 @@ export function bindRepositoryWrites<TRepository, Evt extends AnyDomainEvent>(
 	repository: string,
 ): TRepository {
 	if (adapter === null || typeof adapter !== "object") {
-		throw new InvalidRepositoryAdapterError({
+		throw invalidRepositoryAdapterError({
 			repository,
 			reason: "not_an_object",
 			receivedType: adapter === null ? "null" : typeof adapter,
@@ -54,7 +54,7 @@ export function bindRepositoryWrites<TRepository, Evt extends AnyDomainEvent>(
 	// members, such an adapter can only read.
 	for (const operation of REPOSITORY_LIFECYCLE_OPERATIONS) {
 		if (hasMemberBelowObjectPrototype(adapter, operation)) {
-			throw new InvalidRepositoryAdapterError({
+			throw invalidRepositoryAdapterError({
 				repository,
 				reason: "defines_lifecycle_operation",
 				operation,
@@ -274,7 +274,7 @@ function createRepositoryFacadeHandler<Evt extends AnyDomainEvent>(
 ): ProxyHandler<object> {
 	return {
 		get: (target, property, receiver) => {
-			// Member reads keep the loud TransactionClosedError: a probe
+			// Member reads keep the loud `TRANSACTION_CLOSED`: a probe
 			// cannot leak state, a member read can. An installed lifecycle
 			// operation stays readable while a late registration still fails
 			// the attempt, so that the call can record it.

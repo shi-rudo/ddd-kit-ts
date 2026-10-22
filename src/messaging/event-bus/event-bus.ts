@@ -13,7 +13,7 @@ import {
 	assertPositiveInteger,
 	assertTimerDelay,
 } from "../../internal/validate";
-import { EventBusClosedError, PublishDepthExceededError } from "./errors";
+import { eventBusClosedError, publishDepthExceededError } from "./errors";
 import type {
 	EventBus,
 	EventHandler,
@@ -153,7 +153,7 @@ export interface EventBusOptions {
 	 * A handler that publishes re-enters `publish`. An unbounded chain either
 	 * overflows the call stack or starves the event loop until the process runs
 	 * out of memory, and the publish timeout stops neither. Beyond this depth
-	 * the bus throws {@link PublishDepthExceededError}.
+	 * the bus throws `PUBLISH_DEPTH_EXCEEDED`.
 	 *
 	 * The bound counts one publish CHAIN, never the bus instance. Concurrent
 	 * publications on one shared bus never reach it.
@@ -211,7 +211,7 @@ export interface EventBusOptions {
  * overflows the call stack, or it starves the event loop until the process
  * runs out of memory. `timeoutMs` stops neither. A timer is a macrotask, and
  * a starved loop never runs one. Beyond `maxPublishDepth` (default 32) the
- * bus throws `PublishDepthExceededError` and names the event path. The
+ * bus throws `PUBLISH_DEPTH_EXCEEDED` and names the event path. The
  * aggregation contract still applies to it. If a second handler of the same
  * event also fails, the caller receives an `AggregateError` that carries the
  * depth error, not the depth error itself.
@@ -320,7 +320,7 @@ export class InProcessEventBus<Evt extends AnyDomainEvent>
 		this.pendingOnce.clear();
 		for (const settle of waiting) {
 			try {
-				settle(new EventBusClosedError("once"));
+				settle(eventBusClosedError("once"));
 			} catch {
 				// The waiters are already out of the set, so a throw here would
 				// strand every waiter after this one and no later close() could
@@ -331,7 +331,7 @@ export class InProcessEventBus<Evt extends AnyDomainEvent>
 	}
 
 	private assertOpen(operation: string): void {
-		if (this.closed) throw new EventBusClosedError(operation);
+		if (this.closed) throw eventBusClosedError(operation);
 	}
 
 	subscribe<K extends Evt["type"]>(
@@ -420,7 +420,7 @@ export class InProcessEventBus<Evt extends AnyDomainEvent>
 				assertTimerDelay("EventBus.once", "timeoutMs", timeoutMs);
 			}
 			if (this.closed) {
-				reject(new EventBusClosedError("once"));
+				reject(eventBusClosedError("once"));
 				return;
 			}
 			const signal = options?.signal;
@@ -468,7 +468,7 @@ export class InProcessEventBus<Evt extends AnyDomainEvent>
 			// on a closed bus with nothing left to settle it.
 			this.pendingOnce.add(settleAsClosed);
 			if (this.closed) {
-				settleAsClosed(new EventBusClosedError("once"));
+				settleAsClosed(eventBusClosedError("once"));
 				return;
 			}
 
@@ -525,7 +525,7 @@ export class InProcessEventBus<Evt extends AnyDomainEvent>
 		// reached it.
 		const [first] = events;
 		if (first !== undefined && depth > this.maxPublishDepth) {
-			throw new PublishDepthExceededError(depth, this.maxPublishDepth, [
+			throw publishDepthExceededError(depth, this.maxPublishDepth, [
 				...ancestry.map((link) => link.eventType).reverse(),
 				first.type,
 			]);

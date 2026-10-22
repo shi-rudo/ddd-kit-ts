@@ -24,7 +24,6 @@ vi.mock("./definition", async (importOriginal) => {
 import {
 	analyzeDomainMachineDefinition,
 	type DomainMachineDefinition,
-	InvalidDomainMachineDefinitionError,
 	prepareDomainMachineDefinition,
 } from "./domain-state-machine";
 
@@ -69,7 +68,7 @@ describe("analyzeDomainMachineDefinition prepared-definition fast path", () => {
 		} as unknown as DomainMachineDefinition<State, { count: number }, Input>;
 
 		expect(() => analyzeDomainMachineDefinition(invalid)).toThrow(
-			InvalidDomainMachineDefinitionError,
+			expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_DEFINITION" }),
 		);
 	});
 

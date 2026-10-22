@@ -404,7 +404,7 @@ Three facts decide how you write a handler:
 3. A handler that publishes must pass `context.publishChain` as
    `publishChain` into that publication. The chain links the nested
    publication to its parent, and the bus stops a cycle at `maxPublishDepth`
-   (default 32) with `PublishDepthExceededError`. If another handler of the
+   (default 32) with `PUBLISH_DEPTH_EXCEEDED`. If another handler of the
    same event also fails, that error arrives inside an `AggregateError`.
 
 Pass `context.signal` into every call a handler makes, for cancellation. Pass

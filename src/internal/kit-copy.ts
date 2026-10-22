@@ -1,4 +1,4 @@
-import { DuplicateKitCopyError } from "../errors/kit-errors";
+import { duplicateKitCopyError } from "../errors/kit-errors";
 
 /**
  * Each loaded copy of the kit keeps its capabilities in module-private maps,
@@ -21,7 +21,7 @@ export function markKitCopy(target: object): void {
 }
 
 /**
- * Throws {@link DuplicateKitCopyError} when another loaded copy of the kit
+ * Throws `DUPLICATE_KIT_COPY` when another loaded copy of the kit
  * built `value`. The kit calls it where a lookup of its own capability
  * failed, before it reports the value as hand-built.
  */
@@ -37,6 +37,6 @@ export function assertNotFromAnotherKitCopy(
 	}
 	const marker = Object.getOwnPropertyDescriptor(value, KIT_COPY_KEY)?.value;
 	if (marker !== undefined && marker !== THIS_COPY) {
-		throw new DuplicateKitCopyError(subject);
+		throw duplicateKitCopyError(subject);
 	}
 }

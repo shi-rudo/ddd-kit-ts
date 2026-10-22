@@ -1,6 +1,6 @@
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import {
-	EventCollectionError,
+	eventCollectionError,
 	IdempotencyReconciliationRequiredError,
 } from "../../errors/kit-errors";
 import { reportToObserver } from "../../internal/observer";
@@ -128,7 +128,7 @@ export interface IdempotencyStore<TCtx = unknown> {
 	/**
 	 * Stores the outcome for a key this execution claimed, in the same
 	 * transaction as the command's writes. The commit makes it durable and
-	 * replayable. Throws `IdempotencyCompletionWithoutClaimError` when no
+	 * replayable. Throws `IDEMPOTENCY_COMPLETED_WITHOUT_CLAIM` when no
 	 * claim exists.
 	 */
 	complete(
@@ -186,7 +186,7 @@ export interface LeasedIdempotencyStore<TCtx = unknown> {
 
 	/**
 	 * Stages the outcome for a key this execution claimed; {@link confirm}
-	 * makes it replayable. Throws `IdempotencyCompletionWithoutClaimError`
+	 * makes it replayable. Throws `IDEMPOTENCY_COMPLETED_WITHOUT_CLAIM`
 	 * when no claim exists, and `IdempotencyClaimLostError` when the receipt
 	 * is stale, already settled, or expired. A stale completion must fail
 	 * before the source transaction can commit.
@@ -366,7 +366,7 @@ function scopeWorkRegistration<Evt extends AnyDomainEvent>(
 	let open = true;
 	const assertOpen = (): void => {
 		if (!open) {
-			throw new EventCollectionError(
+			throw eventCollectionError(
 				"withIdempotentCommit: commit registration was used after the " +
 					"user work callback settled. Await every repository write before " +
 					"returning from the callback.",
@@ -640,7 +640,7 @@ async function withLeasedIdempotentCommit<Evt extends AnyDomainEvent, R, TCtx>(
 			| LeasedIdempotencyClaimHandle
 			| undefined;
 		if (!committedClaim) {
-			throw new EventCollectionError(
+			throw eventCollectionError(
 				"withIdempotentCommit: a fresh result committed without its claim receipt.",
 			);
 		}

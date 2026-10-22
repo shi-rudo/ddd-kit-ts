@@ -39,6 +39,10 @@ describe("specification factory", () => {
 		expect(() => specification(" overdue", () => true)).toThrow(/whitespace/);
 	});
 
+	it("rejects an invalid name with a RangeError", () => {
+		expect(() => specification("", () => true)).toThrow(RangeError);
+	});
+
 	it("is a leaf: no composite structure", () => {
 		expect(overdue.composite).toBeUndefined();
 	});

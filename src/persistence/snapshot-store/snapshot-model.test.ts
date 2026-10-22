@@ -10,10 +10,10 @@ import { SnapshotTimeValidationError } from "../../domain/event/domain-event-err
 import type { Id } from "../../domain/identity/id";
 import {
 	DomainError,
-	InvalidVersionError,
+	invalidVersionError,
+	type KitWiringError,
 	SnapshotCorruptedError,
 	type SnapshotSchemaMismatchError,
-	SnapshotVersionNotRestoredError,
 } from "../../errors/kit-errors";
 import {
 	captureAggregateSnapshot,
@@ -256,19 +256,19 @@ describe("adapter-owned snapshot models", () => {
 		}
 
 		expect(caught).toBeInstanceOf(SnapshotCorruptedError);
-		expect((caught as SnapshotCorruptedError).cause).toBeInstanceOf(
-			InvalidVersionError,
-		);
+		expect((caught as SnapshotCorruptedError).cause).toMatchObject({
+			code: "INVALID_VERSION",
+		});
 	});
 
-	it("lets an InvalidVersionError thrown by the factory itself propagate raw", () => {
+	it("lets an INVALID_VERSION thrown by the factory itself propagate raw", () => {
 		// A factory that advances the version before markReconstituted is a wiring
 		// bug; wrapping it as corruption would refold the stream on every
 		// load, forever.
 		const wiredWrongModel = defineSnapshotModel({
 			...model,
 			reconstitute: (): Order => {
-				throw new InvalidVersionError(0, "is below the current version 1");
+				throw invalidVersionError(0, "is below the current version 1");
 			},
 		});
 
@@ -279,7 +279,7 @@ describe("adapter-owned snapshot models", () => {
 				snapshotAt: new Date("2026-07-29T10:00:00.000Z"),
 				schemaVersion: 2,
 			}),
-		).toThrow(InvalidVersionError);
+		).toThrow(expect.objectContaining({ code: "INVALID_VERSION" }));
 	});
 
 	it("rejects a reconstitution that does not restore the snapshot version", () => {
@@ -307,14 +307,16 @@ describe("adapter-owned snapshot models", () => {
 			thrown = error;
 		}
 
-		expect(thrown).toBeInstanceOf(SnapshotVersionNotRestoredError);
-		const error = thrown as SnapshotVersionNotRestoredError;
+		expect(thrown).toMatchObject({ code: "SNAPSHOT_VERSION_NOT_RESTORED" });
+		const error = thrown as KitWiringError<"SNAPSHOT_VERSION_NOT_RESTORED">;
 		expect(error.code).toBe("SNAPSHOT_VERSION_NOT_RESTORED");
 		expect(error.message).toContain("markReconstituted");
 		expect(error).toMatchObject({
-			identity: { aggregateType: "Order", aggregateId: "order-1" },
-			snapshotVersion: 7,
-			restoredVersion: 0,
+			details: {
+				identity: { aggregateType: "Order", aggregateId: "order-1" },
+				snapshotVersion: 7,
+				restoredVersion: 0,
+			},
 		});
 	});
 

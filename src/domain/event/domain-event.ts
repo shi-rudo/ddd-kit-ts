@@ -463,7 +463,7 @@ export function isUnstampedDomainEvent(
 }
 
 /**
- * Throws `DuplicateKitCopyError` when another loaded copy of the kit built
+ * Throws `DUPLICATE_KIT_COPY` when another loaded copy of the kit built
  * `event`. A recording path calls it before it reports the event as
  * hand-built.
  */

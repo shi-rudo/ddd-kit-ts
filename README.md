@@ -34,7 +34,7 @@ once in the consuming app.
 
 Load one copy of the kit per process. An adapter package declares
 `@shirudo/ddd-kit` as a peer dependency and does not bundle it. An object that
-a second loaded copy built throws `DuplicateKitCopyError`.
+a second loaded copy built throws `DUPLICATE_KIT_COPY`.
 
 The package is ESM-only, requires TypeScript 5.9+, and supports Node 22+,
 Cloudflare Workers, Vercel Edge, Deno, and Bun.

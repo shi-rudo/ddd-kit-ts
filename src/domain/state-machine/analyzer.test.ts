@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
 	analyzeDomainMachineDefinition,
 	type DomainMachineDefinition,
-	InvalidDomainMachineDefinitionError,
 } from "./domain-state-machine";
 
 type State =
@@ -173,7 +172,9 @@ describe("analyzeDomainMachineDefinition", () => {
 					never
 				>,
 			),
-		).toThrow(InvalidDomainMachineDefinitionError);
+		).toThrow(
+			expect.objectContaining({ code: "INVALID_DOMAIN_MACHINE_DEFINITION" }),
+		);
 		expect(getter).not.toHaveBeenCalled();
 	});
 

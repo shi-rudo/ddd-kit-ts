@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import {
-	IdempotencyCompletionWithoutClaimError,
-	IdempotencyInFlightError,
-} from "../../../errors/kit-errors";
+import { IdempotencyInFlightError } from "../../../errors/kit-errors";
 import { InMemoryTransactionScope } from "../../../persistence/repository/adapters/in-memory-transaction-scope";
 import type {
 	IdempotencyReconciliation,
@@ -194,7 +191,7 @@ describe("InMemoryLeasedIdempotencyStore claims", () => {
 				},
 				"x",
 			),
-		).rejects.toBeInstanceOf(IdempotencyCompletionWithoutClaimError);
+		).rejects.toMatchObject({ code: "IDEMPOTENCY_COMPLETED_WITHOUT_CLAIM" });
 	});
 });
 

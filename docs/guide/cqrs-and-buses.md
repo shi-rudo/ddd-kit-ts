@@ -545,7 +545,7 @@ A concrete type map is the single source of truth for handler and execution resu
 
 ### Unregistered Commands
 
-Dispatching a command type with no registered handler throws `UnregisteredHandlerError`.
+Dispatching a command type with no registered handler throws `UNREGISTERED_HANDLER`.
 
 That is a wiring bug, not a domain failure. The command bus does not put it on the `Result` error channel and does not pass it through `mapExpectedError`. A missing registration means the application was bootstrapped incorrectly, so it should fail loudly at the boundary that turns programming bugs into 500s.
 
@@ -599,7 +599,7 @@ The bus gives you two execution styles:
 - `execute(...)` returns `Result<R, E>` and applies the optional selective `mapExpectedError` policy; unclassified handler failures throw.
 - `executeUnsafe(...)` returns `R` directly and lets handler failures throw.
 
-Both variants throw `UnregisteredHandlerError` for missing handlers. Missing query registration is still a wiring bug.
+Both variants throw `UNREGISTERED_HANDLER` for missing handlers. Missing query registration is still a wiring bug.
 
 As with commands, a concrete query type map owns the result of both execution styles. Explicit `<Query, Result>` arguments are available only with the default untyped map shape; they cannot override `Queries[query.type]`.
 

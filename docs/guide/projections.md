@@ -154,7 +154,7 @@ either a handler or the explicit `ignoreProjectionEvent` token.
 
 The runtime check is independent of the type proof. An undeclared event type,
 including object-prototype names such as `constructor` or `__proto__`, throws
-`MissingHandlerError`. The batch rejects and its checkpoint does not advance.
+`MISSING_HANDLER`. The batch rejects and its checkpoint does not advance.
 
 Implement `Projection` directly when partial routing is genuinely the desired
 contract. For example, an optional search-hint index may intentionally react to
@@ -502,7 +502,7 @@ await projector.project(committed);
 
 Use this when an event store's stream position and predecessor link are the
 authority. A missing or malformed envelope cursor rejects with
-`UnprojectableEventError` because it cannot be safely deduped. A valid cursor
+`UNPROJECTABLE_EVENT` because it cannot be safely deduped. A valid cursor
 that does not continue the stored chain rejects with `ProjectionGapError`
 (`INFRASTRUCTURE`) so retry/reconciliation can distinguish a delivery gap from
 bad projector wiring. Descending unseen positions inside one input batch reject

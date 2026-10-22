@@ -106,8 +106,8 @@ recording a new decision. Remove domain code that reads `persistedVersion`,
 `markReconstituted` accepts only a clean instance at a version not above the
 restored one. A factory that calls `setState` before `markReconstituted` puts the
 instance at version 1 first, so a row stored at version 0 fails with
-`InvalidVersionError`. A constructor that records a creation event fails
-with `UnreplayableAggregateError` on every load. Pass the stored state
+`INVALID_VERSION`. A constructor that records a creation event fails
+with `UNREPLAYABLE_AGGREGATE` on every load. Pass the stored state
 through the constructor, and record creation events in the business factory
 only. See
 [Aggregates -> State-Stored Aggregates](./aggregates.md#state-stored-aggregates).
@@ -217,7 +217,7 @@ aggregate after `add`, `update`, or `remove` is now a deterministic wiring
 error.
 
 Registration closes when the flush starts. Until the last check before the
-commit, a later `add`, `update`, or `remove` throws `AggregateTrackingError`
+commit, a later `add`, `update`, or `remove` throws `AGGREGATE_TRACKING`
 with the reason `registered_during_flush` and fails the run, also when the
 caller swallows the error. Await every repository call inside `run()`.
 
@@ -266,7 +266,7 @@ methods are not the durable write path.
 The Unit of Work installs `add` and `update`, and `remove` with
 `physicalRemoval: true`, on the facade. An adapter that still defines one of
 them does not compile against `defineRepository`. At runtime, it fails with
-`InvalidRepositoryAdapterError` when the run builds it. A member of the
+`INVALID_REPOSITORY_ADAPTER` when the run builds it. A member of the
 adapter that returns the adapter itself, for example a fluent finder,
 returns the facade, so a chained call keeps the writes of the Unit of Work.
 
@@ -430,6 +430,20 @@ if (error.code === "CONCURRENCY_CONFLICT") retry();
 `isStructuredError`, the public-error pipeline) works on every kit error, but
 the kit does not require it.
 
+The wiring errors of 2.x, one class per programming or configuration bug, are
+one class, `KitWiringError`. Its `code` names the bug, and its `details` hold
+the fields that the 2.x class carried:
+
+```ts
+// before
+if (error instanceof AggregateDeletedError) log(error.aggregateId);
+
+// after
+if (error instanceof KitWiringError && error.code === "AGGREGATE_DELETED") {
+  log(error.details.identity);
+}
+```
+
 #### A subclass passes its code in an options object
 
 A subclass of `DomainError` or `InfrastructureError` passes `code` and
@@ -467,9 +481,9 @@ that names one aggregate carries one `identity` field of the shape
 | `new ConcurrencyConflictError({ aggregateType, aggregateId, expectedVersion, actualVersion })` | `new ConcurrencyConflictError({ identity, expectedVersion, reason, actualVersion })` |
 | `new AggregateNotFoundError({ aggregateType, id })` | `new AggregateNotFoundError({ identity })` |
 | `new DuplicateAggregateError({ aggregateType, aggregateId })` | `new DuplicateAggregateError({ identity })` |
-| `new AggregateDeletedError(aggregateId)` | `new AggregateDeletedError({ identity })` |
-| `new UnenrolledChangesError(aggregateId)` | `new UnregisteredChangesError({ identity })` |
-| `new UnreplayableAggregateError(aggregateId, reason)` | `new UnreplayableAggregateError({ identity, reason })` |
+| `AggregateDeletedError`, `UnenrolledChangesError`, `UnreplayableAggregateError`, and every other wiring error class | one class, `KitWiringError`, with the code `AGGREGATE_DELETED`, `UNREGISTERED_CHANGES`, `UNREPLAYABLE_AGGREGATE`, and so on |
+| `error instanceof AggregateDeletedError` | `error instanceof KitWiringError && error.code === "AGGREGATE_DELETED"` |
+| `error.aggregateId` on a wiring error | `error.details.identity.aggregateId` |
 | `error.aggregateType`, `error.aggregateId` | `error.identity.aggregateType`, `error.identity.aggregateId` |
 | `error.id` on `AggregateNotFoundError` | `error.identity.aggregateId` |
 
@@ -550,7 +564,7 @@ classes. Every rename is a one-to-one replacement.
 | `loadFromHistory(history)` | `replayHistory(history)` |
 | `markRestored(version)` | `markReconstituted(version)` |
 | `protected readonly handlers` on an event-sourced aggregate | `protected readonly folds` |
-| `MissingHandlerError` from `apply()` or replay | `MissingFoldError` (code `MISSING_FOLD`) |
+| `MISSING_HANDLER` from `apply()` or replay | `MISSING_FOLD` |
 | `DomainEvent.version`, option `version` | `schemaVersion` |
 
 Apply the class and contract renames with one command over your TypeScript
@@ -583,10 +597,9 @@ literal with a `version` field; rename them to `schemaVersion`. Do not touch
 the `version` field of an `IntegrationMessage` or a `PublishedCommand`: those
 are wire contracts, and the boundary mappers translate.
 
-`MissingHandlerError` stays for `projectionFromHandlers`, so the compiler does
-not flag it. Search for `MissingHandlerError` and `MISSING_HANDLER`, and
-change the sites that guard an aggregate to `MissingFoldError` and
-`MISSING_FOLD`.
+`MISSING_HANDLER` stays for `projectionFromHandlers`, so the compiler does
+not flag it. Search for `MISSING_HANDLER`, and change the sites that guard an
+aggregate to `MISSING_FOLD`.
 
 `commit` names the transaction only: `withCommit`, `committedVersion`,
 `CommittedDomainEvent`.
@@ -611,7 +624,7 @@ the one-argument call for a domain mutation. Use `setStateWithoutVersionBump`
 only for state that tolerates loss under a concurrent write, for example a
 cosmetic cache. `apply()` records only new facts; replay goes through
 `replayHistory`. An event-sourced aggregate that calls `setState` throws
-`DirectStateMutationError`, because its state changes only through `apply()`.
+`DIRECT_STATE_MUTATION`, because its state changes only through `apply()`.
 
 #### The aggregate decides; the commit stamps
 
@@ -675,7 +688,7 @@ whose caller owns the identity and the time, outside an aggregate.
 
 Every field of `DomainEvent` is `readonly`. The recording paths accept only
 events that the kit constructors built. A hand-built object literal throws
-`HandBuiltEventError` (code `HAND_BUILT_EVENT`) before the state moves. The
+`HAND_BUILT_EVENT` before the state moves. The
 compiler does not flag a literal, because a literal satisfies the readonly
 interface. Search for event objects built by hand.
 
@@ -800,15 +813,15 @@ upcast old event shapes at the read boundary, as the
 In exchange, both paths check the aggregate identity of an event. On
 `apply()`, `setState`, and `addDomainEvent`, the aggregate stamps a missing
 `aggregateId` or `aggregateType`. An event that names another aggregate
-throws `MisattributedEventError` (code `MISATTRIBUTED_EVENT`) before the
+throws `MISATTRIBUTED_EVENT` before the
 state moves. On replay, a history event that names another aggregate throws
 `ForeignEventError` (code `FOREIGN_EVENT`), an `InfrastructureError`. History
 events without the optional fields pass.
 
 Two more rules apply on both paths. A fold that returns `undefined` throws
-`FoldReturnedNoStateError`; model an absent state as `null` or as a status
+`FOLD_RETURNED_NO_STATE`; model an absent state as `null` or as a status
 field. A fold result with an own `"__proto__"` key throws
-`PrototypePollutionError`, and `createDomainEvent` throws it for such a
+`PROTOTYPE_POLLUTION`, and `createDomainEvent` throws it for such a
 payload. Replay throws both errors after the rollback, instead of returning
 `Err`. Fix such folds before you load the streams that contain the events.
 
@@ -826,8 +839,8 @@ for the visited set is gone.
 | `deepFreeze(value, visited)` | `deepFreeze(value)` |
 
 Two inputs are now checked where they enter. The `Entity` constructor
-throws `MissingEntityIdError` for an id that is not a non-blank string.
-`markReconstituted` and `setVersion` throw `InvalidVersionError` for a
+throws `MISSING_ENTITY_ID` for an id that is not a non-blank string.
+`markReconstituted` and `setVersion` throw `INVALID_VERSION` for a
 version that is not a safe integer of at least zero. Brand a stored version
 with `toVersion(row.version)` in place of `row.version as Version`.
 
@@ -839,8 +852,7 @@ extends them needs no change. A hand-written implementation of `Aggregate`,
 for example a test stub, adds the property.
 
 The unit of work and the recording functions reject an instance that the
-kit did not construct with `UnmanagedInstanceError` (code
-`UNMANAGED_INSTANCE`): a repository DTO, a structural lookalike, or an
+kit did not construct with `UNMANAGED_INSTANCE`: a repository DTO, a structural lookalike, or an
 instance from a copy of the kit with an older capability shape. Extend
 `StateStoredAggregate` or `EventSourcedAggregate`. Run one kit version per
 process.
@@ -1021,7 +1033,7 @@ const bus: EventBus<OrderEvent> = {
 ```
 
 After `close()`, `publish`, `subscribe`, `subscribeAll`, and `once` throw
-`EventBusClosedError`. `publish` has a default time budget of 30 seconds;
+`EVENT_BUS_CLOSED`. `publish` has a default time budget of 30 seconds;
 set `timeoutMs` to change it. `createEventBusContractTests` proves an
 implementation.
 
@@ -1049,10 +1061,10 @@ record reads `position.aggregateVersion`, next to `commitSequence` and
 
 #### An unregistered message type throws
 
-`CommandBus.execute` and `QueryBus.execute` throw `UnregisteredHandlerError`
+`CommandBus.execute` and `QueryBus.execute` throw `UNREGISTERED_HANDLER`
 instead of returning it through the error channel. The compiler does not
 flag an old error branch; it becomes dead code. Remove branches that matched
-"No handler registered" or `UnregisteredHandlerError`. Catch the error only
+"No handler registered" or `UNREGISTERED_HANDLER`. Catch the error only
 at a deliberate seam.
 
 #### Map only the expected failures
@@ -1078,7 +1090,7 @@ const bus = new CommandBus<Commands, AppError>({
 total mapper mechanically: it rebuilds the old catch-all.
 
 If the mapper throws or returns an invalid decision, the call fails with
-`ErrorMapperFailedError`. Its `cause` is the original handler error, and
+`ERROR_MAPPER_FAILED`. Its `cause` is the original handler error, and
 `mapperCause` holds the failure of the mapper.
 
 #### A typed bus map owns the result type
@@ -1123,8 +1135,8 @@ reads the API as they expect. Each 2.2.0 name below changes:
 | `voValidated`, `voWithValidation` | `valueObjectOrIssues`, `valueObjectOrError` |
 | type `VO<T>` | `ValueObjectOf<T>` |
 | `EventBusImpl` | `InProcessEventBus` |
-| `EventHarvestError` | `EventCollectionError`, code `EVENT_COLLECTION_FAILED` |
-| `UnenrolledChangesError` | `UnregisteredChangesError`, code `UNREGISTERED_CHANGES` |
+| `EventHarvestError` | `KitWiringError`, code `EVENT_COLLECTION_FAILED` |
+| `UnenrolledChangesError` | `KitWiringError`, code `UNREGISTERED_CHANGES` |
 
 The renames are mechanical: an editor rename or a search and replace on the
 whole word is enough. A caller that matches an error code must change it.
@@ -1636,6 +1648,25 @@ The root entry no longer exports `capturePersistenceBaseline`,
   passes only `context.signal` now starts a new chain, so add `publishChain`
   next to `signal`. `EventHandler` receives an `EventHandlerContext`, which
   extends `ExecutionContext`.
+- The 41 wiring error classes are one class, `KitWiringError`. Every code
+  stays the same, and so do `error.code`, `error.name`, and `error.category`.
+  - Replace `error instanceof TransactionClosedError` with
+    `error instanceof KitWiringError && error.code === "TRANSACTION_CLOSED"`.
+    In a test, replace `toThrow(TransactionClosedError)` with
+    `toThrow(expect.objectContaining({ code: "TRANSACTION_CLOSED" }))`.
+  - The fields of a wiring error are in `error.details`, for example
+    `error.details.identity` and `error.details.reason`.
+  - `mapperCause` of `ERROR_MAPPER_FAILED` and
+    `REPOSITORY_ERROR_MAPPING_FAILED`, and `classifierCause` of
+    `INVALID_FLUSH_STATEMENT`, are `error.secondaryCause`.
+  - The options types of the classes and the reason unions
+    `AggregateTrackingReason`, `FlushStatementReason`, and
+    `InvalidRepositoryAdapterReason` are no longer exported.
+- `IdentityMap.set` with a second instance of an identity throws
+  `AGGREGATE_TRACKING` with the reason `identity_already_tracked`. In rc.15 it
+  threw a plain `Error`. A blank `specification()` name, an invalid numeric
+  option, and an invalid `limit` of `InMemoryDeadlineStore.due` throw a
+  `RangeError`; in rc.15 they threw a plain `Error`.
 - `DomainStateMachine.snapshot` returns the same deeply frozen snapshot until
   the next successful `dispatch`. In rc.15 every read returned a new copy.
 - `occurredAt` and the event clock accept a `Date` of another realm, for

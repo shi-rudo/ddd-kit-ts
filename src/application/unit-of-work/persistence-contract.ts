@@ -61,7 +61,7 @@ export type UnitOfWorkIdentityMap = Pick<
  * - Adapter objects have no lifecycle methods; the facade installs the
  *   Unit-of-Work-owned `add`, `update` unless the definition is append-only,
  *   and `remove` with `physicalRemoval`. An adapter that defines `add`,
- *   `update`, or `remove` fails with `InvalidRepositoryAdapterError`.
+ *   `update`, or `remove` fails with `INVALID_REPOSITORY_ADAPTER`.
  * - Other repository methods are reads. A custom method that performs a write
  *   would bypass the Unit of Work and violates the adapter contract.
  */
@@ -83,7 +83,7 @@ export interface RepositoryTracking<
 	 * Read-only view of the per-operation Identity Map (Fowler): one aggregate type+id,
 	 * one in-memory instance. Created fresh per `run()`, cleared on
 	 * close; accessing it after close throws
-	 * {@link TransactionClosedError}.
+	 * `TRANSACTION_CLOSED`.
 	 */
 	readonly identityMap: UnitOfWorkIdentityMap;
 }

@@ -11,7 +11,7 @@ import type { Id } from "../../domain/identity/id";
 import {
 	copyAggregateIdentity,
 	describeAggregateIdentity,
-	EventCollectionError,
+	eventCollectionError,
 } from "../../errors/kit-errors";
 import { abortReason } from "../../internal/async/abort";
 import {
@@ -222,7 +222,7 @@ function createCommitRegistry<Evt extends AnyDomainEvent>(
 		options?: CommitRegistrationOptions,
 	): void => {
 		if (!open) {
-			throw new EventCollectionError(
+			throw eventCollectionError(
 				"withCommit: commit registration was used after its work callback " +
 					"settled. Await every repository write before leaving the callback.",
 			);
@@ -231,7 +231,7 @@ function createCommitRegistry<Evt extends AnyDomainEvent>(
 		const existing = recordsByAggregate.get(aggregate);
 		if (existing) {
 			if (existing.disposition === "deleted" && disposition === "saved") {
-				throw new EventCollectionError(
+				throw eventCollectionError(
 					`withCommit: aggregate ${describeAggregateIdentity(aggregate.aggregateIdentity)} was registered as ` +
 						"saved after it was registered as deleted in the same transaction.",
 				);
@@ -243,7 +243,7 @@ function createCommitRegistry<Evt extends AnyDomainEvent>(
 				options?.expectedVersion !== undefined &&
 				options.expectedVersion !== existing.expectedVersion
 			) {
-				throw new EventCollectionError(
+				throw eventCollectionError(
 					`withCommit: aggregate ${describeAggregateIdentity(aggregate.aggregateIdentity)} was re-registered ` +
 						`with expectedVersion ${String(options.expectedVersion)}, but its ` +
 						`registration recorded ${String(existing.expectedVersion)}. Duplicate ` +
@@ -251,7 +251,7 @@ function createCommitRegistry<Evt extends AnyDomainEvent>(
 				);
 			}
 			if (registrationDiverged(existing)) {
-				throw new EventCollectionError(
+				throw eventCollectionError(
 					`withCommit: aggregate ${describeAggregateIdentity(aggregate.aggregateIdentity)} changed after its ` +
 						"commit batch was registered. Register persistence intent last.",
 				);
@@ -318,7 +318,7 @@ function createCommitRegistry<Evt extends AnyDomainEvent>(
 				// post-commit prefix acknowledgement. Divergence fails loudly
 				// inside the transaction instead.
 				if (registrationDiverged(record)) {
-					throw new EventCollectionError(
+					throw eventCollectionError(
 						`withCommit: aggregate ${describeAggregateIdentity(record.aggregate.aggregateIdentity)} changed ` +
 							"after its commit batch was registered; events recorded after " +
 							"registration are not part of the attested write and would be " +
@@ -535,7 +535,7 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 						record.persistedVersion !== undefined &&
 						(record.version as number) <= (record.persistedVersion as number)
 					) {
-						throw new EventCollectionError(
+						throw eventCollectionError(
 							`withCommit: aggregate ${describeAggregateIdentity(registered)} recorded events but ` +
 								`did not advance its version beyond the persisted version ` +
 								`(${String(record.persistedVersion)}). An eventful commit needs a unique ` +
@@ -553,7 +553,7 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 						if (!aggregateId) missing.push("aggregateId");
 						if (!aggregateType) missing.push("aggregateType");
 						if (!aggregateId || !aggregateType) {
-							throw new EventCollectionError(
+							throw eventCollectionError(
 								`withCommit: event "${event.type}" is missing ${missing.join(
 									" and ",
 								)}. ` +
@@ -571,7 +571,7 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 							aggregateId !== registeredId ||
 							aggregateType !== registeredType
 						) {
-							throw new EventCollectionError(
+							throw eventCollectionError(
 								`withCommit: event "${event.type}" belongs to ` +
 									`${describeAggregateIdentity({ aggregateType, aggregateId })} but ` +
 									"was registered under " +
@@ -618,7 +618,7 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 					// never written.
 					for (const record of commitRecords) {
 						if (registrationDiverged(record)) {
-							throw new EventCollectionError(
+							throw eventCollectionError(
 								`withCommit: aggregate ${describeAggregateIdentity(record.aggregate.aggregateIdentity)} ` +
 									"changed while its outbox write ran. Await every change " +
 									"inside the work callback.",

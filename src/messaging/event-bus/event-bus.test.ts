@@ -4,7 +4,6 @@ import {
 	type DomainEvent,
 } from "../../domain/event/domain-event";
 import type { ExecutionContext } from "../../internal/async/execution";
-import { EventBusClosedError, PublishDepthExceededError } from "./errors";
 import { type EventBusObservers, InProcessEventBus } from "./event-bus";
 
 /** Every observer is required. Tests override only the one they assert on. */
@@ -979,7 +978,7 @@ describe("InProcessEventBus", () => {
 			bus.close();
 
 			expect(() => bus.subscribeMany(["OrderCreated"], () => {})).toThrow(
-				EventBusClosedError,
+				expect.objectContaining({ code: "EVENT_BUS_CLOSED" }),
 			);
 		});
 	});
@@ -1073,14 +1072,16 @@ describe("InProcessEventBus", () => {
 			bus.close();
 
 			expect(() => bus.subscribe("OrderCreated", () => {})).toThrow(
-				EventBusClosedError,
+				expect.objectContaining({ code: "EVENT_BUS_CLOSED" }),
 			);
-			expect(() => bus.subscribeAll(() => {})).toThrow(EventBusClosedError);
+			expect(() => bus.subscribeAll(() => {})).toThrow(
+				expect.objectContaining({ code: "EVENT_BUS_CLOSED" }),
+			);
 			await expect(bus.publish([created()])).rejects.toThrow(
-				EventBusClosedError,
+				expect.objectContaining({ code: "EVENT_BUS_CLOSED" }),
 			);
 			await expect(bus.once("OrderCreated")).rejects.toThrow(
-				EventBusClosedError,
+				expect.objectContaining({ code: "EVENT_BUS_CLOSED" }),
 			);
 		});
 
@@ -1092,7 +1093,9 @@ describe("InProcessEventBus", () => {
 
 			bus.close();
 
-			await expect(waiting).rejects.toThrow(EventBusClosedError);
+			await expect(waiting).rejects.toThrow(
+				expect.objectContaining({ code: "EVENT_BUS_CLOSED" }),
+			);
 		});
 
 		it("releases the subscriptions it held", async () => {
@@ -1108,7 +1111,7 @@ describe("InProcessEventBus", () => {
 			bus.close();
 
 			await expect(bus.publish([created()])).rejects.toThrow(
-				EventBusClosedError,
+				expect.objectContaining({ code: "EVENT_BUS_CLOSED" }),
 			);
 			expect(called).toBe(0);
 		});
@@ -1135,7 +1138,9 @@ describe("InProcessEventBus", () => {
 			bus.close();
 
 			await expect(first).rejects.toThrow();
-			await expect(second).rejects.toThrow(EventBusClosedError);
+			await expect(second).rejects.toThrow(
+				expect.objectContaining({ code: "EVENT_BUS_CLOSED" }),
+			);
 		});
 
 		it("settles a waiter created while an observer closes the bus", async () => {
@@ -1155,8 +1160,12 @@ describe("InProcessEventBus", () => {
 			const first = bus.once("OrderCreated");
 			const second = bus.once("OrderCreated");
 
-			await expect(first).rejects.toThrow(EventBusClosedError);
-			await expect(second).rejects.toThrow(EventBusClosedError);
+			await expect(first).rejects.toThrow(
+				expect.objectContaining({ code: "EVENT_BUS_CLOSED" }),
+			);
+			await expect(second).rejects.toThrow(
+				expect.objectContaining({ code: "EVENT_BUS_CLOSED" }),
+			);
 		});
 
 		it("does nothing when called again", () => {
@@ -1181,7 +1190,7 @@ describe("InProcessEventBus", () => {
 			// is what the closed error exists to prevent.
 			await expect(
 				bus.publish([created(), created(), created()]),
-			).rejects.toThrow(EventBusClosedError);
+			).rejects.toThrow(expect.objectContaining({ code: "EVENT_BUS_CLOSED" }));
 			expect(seen).toEqual(["o-1"]);
 		});
 
@@ -1311,7 +1320,7 @@ describe("InProcessEventBus", () => {
 			});
 
 			await expect(bus.publish([created()])).rejects.toThrow(
-				PublishDepthExceededError,
+				expect.objectContaining({ code: "PUBLISH_DEPTH_EXCEEDED" }),
 			);
 			expect(depth).toBeLessThan(BRAKE);
 		});
@@ -1331,7 +1340,7 @@ describe("InProcessEventBus", () => {
 			});
 
 			await expect(bus.publish([created()])).rejects.toThrow(
-				PublishDepthExceededError,
+				expect.objectContaining({ code: "PUBLISH_DEPTH_EXCEEDED" }),
 			);
 			expect(depth).toBeLessThan(BRAKE);
 		});
@@ -1369,7 +1378,7 @@ describe("InProcessEventBus", () => {
 			bus.subscribe("OrderShipped", () => {});
 
 			await expect(bus.publish([created()])).rejects.toThrow(
-				PublishDepthExceededError,
+				expect.objectContaining({ code: "PUBLISH_DEPTH_EXCEEDED" }),
 			);
 			expect(hops).toBeLessThan(BRAKE);
 		});
@@ -1443,7 +1452,7 @@ describe("InProcessEventBus", () => {
 
 			const error = await bus.publish([created()]).catch((reason) => reason);
 
-			expect(error).toBeInstanceOf(PublishDepthExceededError);
+			expect(error).toMatchObject({ code: "PUBLISH_DEPTH_EXCEEDED" });
 			expect(error.code).toBe("PUBLISH_DEPTH_EXCEEDED");
 			expect(error.message).toContain("OrderCreated");
 			expect(error.message).toContain("OrderShipped");
@@ -1499,7 +1508,7 @@ describe("InProcessEventBus", () => {
 			});
 
 			await expect(bus.publish([created()])).rejects.toThrow(
-				PublishDepthExceededError,
+				expect.objectContaining({ code: "PUBLISH_DEPTH_EXCEEDED" }),
 			);
 			expect(depth).toBe(3);
 		});

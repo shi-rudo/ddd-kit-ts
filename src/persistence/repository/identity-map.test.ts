@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { Id } from "../../domain/identity/id";
-import { AggregateDeletedError } from "../../errors/kit-errors";
 import { type AggregateClass, IdentityMap } from "./identity-map";
 
 type RestaurantId = Id<"RestaurantId">;
@@ -75,6 +74,23 @@ describe("IdentityMap", () => {
 		);
 	});
 
+	it("reports a second instance as AGGREGATE_TRACKING with the identity", () => {
+		const map = new IdentityMap();
+		const id = "r-1" as RestaurantId;
+		map.set(Restaurant, new Restaurant(id));
+
+		expect(() => map.set(Restaurant, new Restaurant(id))).toThrow(
+			expect.objectContaining({
+				code: "AGGREGATE_TRACKING",
+				category: "WIRING",
+				details: expect.objectContaining({
+					identity: { aggregateType: "Restaurant", aggregateId: "r-1" },
+					reason: "identity_already_tracked",
+				}),
+			}),
+		);
+	});
+
 	it("different aggregate types with the same id do not collide", () => {
 		const map = new IdentityMap();
 		const restaurant = new Restaurant("123" as RestaurantId);
@@ -98,14 +114,14 @@ describe("IdentityMap", () => {
 		expect(map.get(Restaurant, id)).toBeUndefined();
 	});
 
-	it("set after delete of the same type+id throws AggregateDeletedError (deletion is final)", () => {
+	it("set after delete of the same type+id throws AGGREGATE_DELETED (deletion is final)", () => {
 		const map = new IdentityMap();
 		const id = "r-1" as RestaurantId;
 		map.set(Restaurant, new Restaurant(id));
 		map.delete(Restaurant, id);
 
 		expect(() => map.set(Restaurant, new Restaurant(id))).toThrow(
-			AggregateDeletedError,
+			expect.objectContaining({ code: "AGGREGATE_DELETED" }),
 		);
 	});
 
@@ -125,7 +141,7 @@ describe("IdentityMap", () => {
 
 		expect(() => map.delete(Restaurant, id)).not.toThrow();
 		expect(() => map.set(Restaurant, new Restaurant(id))).toThrow(
-			AggregateDeletedError,
+			expect.objectContaining({ code: "AGGREGATE_DELETED" }),
 		);
 	});
 
@@ -215,7 +231,7 @@ describe("clear() resets the pending-event baselines", () => {
 		// The instance was flushed elsewhere; a REUSED map must capture the
 		// new, lower baseline instead of keeping the stale count of 2,
 		// which would hide the next recorded event from the
-		// UnregisteredChangesError safety net.
+		// UNREGISTERED_CHANGES safety net.
 		aggregate.pendingEvents = [];
 		map.set(EventfulAggregate, aggregate);
 		aggregate.pendingEvents = [{}];

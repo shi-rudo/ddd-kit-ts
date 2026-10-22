@@ -5,8 +5,9 @@ import {
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import {
 	describeAggregateIdentity,
-	EventCollectionError,
+	eventCollectionError,
 	InMemoryCapacityExceededError,
+	type KitWiringError,
 } from "../../errors/kit-errors";
 import {
 	assertPositiveInteger,
@@ -125,9 +126,9 @@ type DispatchedEventReceipt = {
  * another aggregate version. Without an `InMemoryTransactionScope`, it keeps
  * the first add of a rolled-back attempt. Dead-lettered and acknowledged
  * retries must match the complete original candidate receipt. Reusing an `eventId` for another source or commit position
- * throws {@link EventCollectionError} while the pending, dead-letter, or bounded
+ * throws `EVENT_COLLECTION_FAILED` while the pending, dead-letter, or bounded
  * dispatched receipt still proves the collision. `add` also throws
- * {@link EventCollectionError} for a malformed candidate: a part that is not an
+ * `EVENT_COLLECTION_FAILED` for a malformed candidate: a part that is not an
  * object, an `eventId` or `type` that is not an own string data property, a
  * source field that is not a string, or a position that is not a valid
  * commit position. Insertion order is preserved:
@@ -142,7 +143,7 @@ type DispatchedEventReceipt = {
  * To link future eventful commits, the implementation also retains one
  * source cursor per qualified aggregate after dispatch. `endEventSources`
  * marks the cursor of a removed aggregate as ended, and a new event of that
- * source then throws {@link EventCollectionError}. Consequently a
+ * source then throws `EVENT_COLLECTION_FAILED`. Consequently a
  * long-lived instance is bounded only when `maxRecords` and `maxSources` are
  * configured, plus `maxRetainedDispatchedEventIds`; use a durable adapter with
  * an explicit source-head lifecycle and an event-id unique key for unbounded
@@ -174,7 +175,10 @@ type DispatchedEventReceipt = {
  *
  * @example
  * ```ts
- * import { InMemoryOutbox, InProcessEventBus } from "@shirudo/ddd-kit";
+ * import {
+	InMemoryOutbox,
+	InProcessEventBus,
+} from "@shirudo/ddd-kit";
  *
  * const outbox = new InMemoryOutbox<OrderEvent>();
  * const bus = new InProcessEventBus<OrderEvent>();
@@ -735,7 +739,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 		) {
 			return;
 		}
-		throw new EventCollectionError(
+		throw eventCollectionError(
 			`InMemoryOutbox rejected event "${event.eventId}" for ` +
 				`${describeAggregateIdentity(source)}: the aggregate was removed, so ` +
 				"its event source ended. The kit does not support an aggregate that " +
@@ -888,7 +892,7 @@ function assertReceiptShape(
 	) {
 		return;
 	}
-	throw new EventCollectionError(
+	throw eventCollectionError(
 		`InMemoryOutbox rejected event "${event.eventId}": its commit candidate ` +
 			`changed from (${recorded.aggregateVersion}, ${recorded.commitSequence}; ` +
 			`commitSize=${recorded.commitSize}) to (${received.aggregateVersion}, ` +
@@ -910,7 +914,7 @@ function ownCandidate<Evt extends AnyDomainEvent>(
 	let subject = `the candidate at index ${index}`;
 	let eventType: string | undefined;
 	const rejection = (field: string, expected: string, observed: string) =>
-		new EventCollectionError(
+		eventCollectionError(
 			`InMemoryOutbox rejected ${subject}: ${field} must be ${expected}, ` +
 				`but it is ${observed}. Pass the candidates that withCommit builds.`,
 			eventType,
@@ -1014,8 +1018,8 @@ function commitSizeMismatchError(
 	source: AggregateIdentity,
 	position: EventCommitCandidatePosition,
 	recordedCommitSize: number,
-): EventCollectionError {
-	return new EventCollectionError(
+): KitWiringError<"EVENT_COLLECTION_FAILED"> {
+	return eventCollectionError(
 		`InMemoryOutbox rejected event "${event.eventId}" for ` +
 			`${describeAggregateIdentity(source)}: aggregate version ` +
 			`${position.aggregateVersion} was already recorded with commitSize ` +
@@ -1031,8 +1035,8 @@ function positionOwnedError(
 	source: AggregateIdentity,
 	position: EventCommitCandidatePosition,
 	positionOwner: string,
-): EventCollectionError {
-	return new EventCollectionError(
+): KitWiringError<"EVENT_COLLECTION_FAILED"> {
+	return eventCollectionError(
 		`InMemoryOutbox rejected event "${event.eventId}" for ` +
 			`${describeAggregateIdentity(source)}: source position ` +
 			`(${position.aggregateVersion}, ${position.commitSequence}) is ` +
@@ -1050,8 +1054,8 @@ function staleHeadError(
 	source: AggregateIdentity,
 	position: EventCommitCandidatePosition,
 	staleHeadVersion: number,
-): EventCollectionError {
-	return new EventCollectionError(
+): KitWiringError<"EVENT_COLLECTION_FAILED"> {
+	return eventCollectionError(
 		`InMemoryOutbox rejected stale event "${event.eventId}" for ` +
 			`${describeAggregateIdentity(source)} at aggregate version ` +
 			`${position.aggregateVersion}: the event-source head is already ` +
@@ -1077,7 +1081,7 @@ function assertSameEventSource(
 	) {
 		return;
 	}
-	throw new EventCollectionError(
+	throw eventCollectionError(
 		`InMemoryOutbox rejected eventId collision for "${event.eventId}": ` +
 			`it already belongs to ${describeAggregateIdentity(recorded)}, ` +
 			`but was received for ${describeAggregateIdentity(received)}. ` +

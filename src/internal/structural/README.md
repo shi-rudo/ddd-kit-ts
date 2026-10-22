@@ -63,7 +63,7 @@ Returns a copy of `value` under the plain-data rule of the kit (see "One rule fo
 
 - Kept: `string`, `number`, `boolean`, `bigint`, `undefined`, `null`
 - Copied: a record whose prototype is `null` or an `Object.prototype` of any realm, an array (holes stay holes), a `Date` of any realm (also a subclass, such as the `Date` of fake timers), a `Map`, and a `Set`
-- Throws: a function, a symbol, a class instance (also a subclass of an array, a `Map`, or a `Set`), a `RegExp`, binary data, an `Error`, a `Promise`, a `WeakMap`, a `WeakSet`, a boxed primitive, an accessor, an enumerable symbol-keyed property, a non-enumerable string-keyed property, an object as a `Map` key or a `Set` member, and an own `__proto__` key (`PrototypePollutionError`)
+- Throws: a function, a symbol, a class instance (also a subclass of an array, a `Map`, or a `Set`), a `RegExp`, binary data, an `Error`, a `Promise`, a `WeakMap`, a `WeakSet`, a boxed primitive, an accessor, an enumerable symbol-keyed property, a non-enumerable string-keyed property, an object as a `Map` key or a `Set` member, and an own `__proto__` key (`PROTOTYPE_POLLUTION`)
 - Left out: a non-enumerable symbol-keyed property
 
 Cycles and shared references survive the copy. The copy holds objects of the local realm only.

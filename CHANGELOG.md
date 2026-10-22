@@ -42,7 +42,7 @@ immutable. Run one kit version per process during a cutover.
   `defineRepository<Port>()({ aggregate, persistence, create, flush, mapError })`.
   The port type argument is explicit, and the Unit of Work installs `add`,
   `update`, and `remove` on the facade, and an adapter that defines them
-  itself fails with `InvalidRepositoryAdapterError`. A member of the adapter
+  itself fails with `INVALID_REPOSITORY_ADAPTER`. A member of the adapter
   that returns the adapter itself returns the facade. A read adapter returns the result of
   `tracking.trackLoaded`: when two loads of one id overlap, the first tracked
   instance wins. `UnitOfWorkSession`,
@@ -87,7 +87,7 @@ immutable. Run one kit version per process during a cutover.
   `ReplayableAggregate`. `commit(state, events)` is `setState(state, events)`,
   `loadFromHistory` is `replayHistory`, and `markRestored` is
   `markReconstituted`. The `handlers` of an event-sourced aggregate are
-  `folds`, and a missing fold throws `MissingFoldError`. `DomainEvent.version`
+  `folds`, and a missing fold throws `MISSING_FOLD`. `DomainEvent.version`
   is `schemaVersion`. Both aggregate classes take `<TState, TId, TEvent>`.
   See
   [One lifecycle vocabulary](docs/guide/migrating-to-v3.md#one-lifecycle-vocabulary).
@@ -95,7 +95,7 @@ immutable. Run one kit version per process during a cutover.
   `setStateWithoutVersionBump(state)` is the named exception, and the
   `autoVersionBump` option is gone. `apply(event)` loses its `isNew` flag. An
   event-sourced aggregate that calls `setState` throws
-  `DirectStateMutationError`. The compiler does not flag a one-argument
+  `DIRECT_STATE_MUTATION`. The compiler does not flag a one-argument
   `setState` that now bumps; the guide says how to audit the call sites.
 - The aggregate decides, and the commit stamps. A domain method creates an
   unstamped event with `createEvent`. When a repository write registers the
@@ -114,7 +114,7 @@ immutable. Run one kit version per process during a cutover.
   order events by aggregate version or stream position.
   Code that expects version 4 in the id must pass its own `eventIdFactory`.
 - Events are readonly and kit-built. A recording path accepts only an event
-  that a kit constructor built and throws `HandBuiltEventError` for a hand-built
+  that a kit constructor built and throws `HAND_BUILT_EVENT` for a hand-built
   object. The event constructors copy the payload and the metadata under the
   plain-data rule of the kit: records, arrays, `Date`, `Map`, `Set`, and
   primitives (see "One rule for plain data" in the design decisions). A value
@@ -122,7 +122,7 @@ immutable. Run one kit version per process during a cutover.
   function, a symbol, a class instance, a `RegExp`, binary data, an `Error`,
   an accessor, or a symbol-keyed or hidden property. A key of a `Map` and a
   member of a `Set` must be a primitive, and an own `__proto__` key throws
-  `PrototypePollutionError` at any depth. A value object with a private field
+  `PROTOTYPE_POLLUTION` at any depth. A value object with a private field
   no longer becomes an empty record without an error. Map a value object to
   plain data first. `toJSON()` of a kit `ValueObject` is shallow, so map a
   nested value object too. The metadata
@@ -143,21 +143,21 @@ immutable. Run one kit version per process during a cutover.
 - Replay trusts history: it runs no `validateEvent`. Both paths check the
   aggregate identity of an event. `apply()`, `setState`, and `addDomainEvent`
   attribute the event: they fill in missing fields and throw
-  `MisattributedEventError` for an event of another aggregate. Replay throws
+  `MISATTRIBUTED_EVENT` for an event of another aggregate. Replay throws
   `ForeignEventError`. A fold that returns `undefined` throws
-  `FoldReturnedNoStateError`, and an own `"__proto__"` key in a fold result or
-  a payload throws `PrototypePollutionError`. See [Replay trusts history, and
+  `FOLD_RETURNED_NO_STATE`, and an own `"__proto__"` key in a fold result or
+  a payload throws `PROTOTYPE_POLLUTION`. See [Replay trusts history, and
   events name their
   aggregate](docs/guide/migrating-to-v3.md#replay-trusts-history-and-events-name-their-aggregate).
 - The `Aggregate` interface has `aggregateIdentity`, the aggregate type and
   the id as one frozen `AggregateIdentity` value. A hand-written
   implementation adds it. An instance that the kit did not construct is
-  rejected with `UnmanagedInstanceError`.
+  rejected with `UNMANAGED_INSTANCE`.
 - `updateEntityById`, `replaceEntityById`, and `removeEntityById` return
   `ReadonlyArray<T>`, and they return the input array when nothing changed.
   `deepFreeze` takes one argument. The `Entity` constructor rejects a blank
-  id with `MissingEntityIdError`, and a version that is not a safe integer of
-  at least zero throws `InvalidVersionError`.
+  id with `MISSING_ENTITY_ID`, and a version that is not a safe integer of
+  at least zero throws `INVALID_VERSION`.
 - `valueObjectEquals` and `deepEqual` compare the class of a value object
   instance. Two instances of different classes with the same props are not
   equal.
@@ -193,6 +193,14 @@ immutable. Run one kit version per process during a cutover.
   [Match an error on its code](docs/guide/migrating-to-v3.md#match-an-error-on-its-code).
 - A subclass of `DomainError` or `InfrastructureError` passes `code` and
   `message` in an options object.
+- The wiring errors, the programming and configuration bugs, are one class,
+  `KitWiringError`, with a closed code union `KitWiringErrorCode`. The classes
+  of 2.x, such as `MissingHandlerError` and `AggregateDeletedError`, are gone;
+  match `error.code`. The fields of a wiring error are in `error.details`, and
+  a second failure that occurred while the kit handled `cause` is
+  `error.secondaryCause`. `DomainError` and `InfrastructureError` stay typed
+  classes. See
+  [Match an error on its code](docs/guide/migrating-to-v3.md#match-an-error-on-its-code).
 - Every kit error that names one aggregate carries one `identity` field of
   the shape `{ aggregateType, aggregateId }`, and every kit error takes an
   options object. Every kit message renders an aggregate as `Type(id)`.
@@ -214,7 +222,7 @@ immutable. Run one kit version per process during a cutover.
   members. `publish` accepts `PublishOptions` with a `signal` and a
   `timeoutMs` that defaults to 30 seconds. An `EventHandler` receives an
   `ExecutionContext` as its second argument. After `close()`, the bus throws
-  `EventBusClosedError`.
+  `EVENT_BUS_CLOSED`.
 - `OutboxWriter.add` takes `EventCommitCandidate` values. An `OutboxRecord`
   is a `CommittedDomainEvent` with a `dispatchId`: `event`, the `source`
   identity, and the commit `position`. `DispatchTrackingOutbox.markFailed`
@@ -226,11 +234,11 @@ immutable. Run one kit version per process during a cutover.
 
 #### Command and query buses
 
-- `execute` throws `UnregisteredHandlerError` for a message type without a
+- `execute` throws `UNREGISTERED_HANDLER` for a message type without a
   handler, instead of returning it through the error channel.
 - The total `errorMapper` option is gone. `mapExpectedError` classifies only
   the failures it names; every other throw propagates unchanged. A mapper
-  that fails throws `ErrorMapperFailedError`.
+  that fails throws `ERROR_MAPPER_FAILED`.
 - With a concrete message map, the map entry is the result type of
   `execute` and `executeUnsafe`.
 
@@ -277,9 +285,8 @@ immutable. Run one kit version per process during a cutover.
   `valueObjectOrIssues`. The names say what a failure returns: one error
   message, or all issues in a `ValidationError`.
 - `EventBusImpl` is `InProcessEventBus`.
-- `EventHarvestError` is `EventCollectionError` with the code
-  `EVENT_COLLECTION_FAILED`, and `UnenrolledChangesError` is
-  `UnregisteredChangesError` with the code `UNREGISTERED_CHANGES`. A caller
+- `EventHarvestError` is `EVENT_COLLECTION_FAILED`, and `UnenrolledChangesError` is
+  `UNREGISTERED_CHANGES`. A caller
   that matches a code must change it.
 
 ### Added
@@ -291,13 +298,13 @@ immutable. Run one kit version per process during a cutover.
   `DuplicateAggregateError`, and a compare-and-set that matches no row
   becomes `ConcurrencyConflictError` with its reason. `VersionedWrite` and
   `MatchedRows` type the statements. A defect in a statement throws
-  `InvalidFlushStatementError`, a wiring error that reaches the caller
+  `INVALID_FLUSH_STATEMENT`, a wiring error that reaches the caller
   unchanged.
 - `classifyConcurrencyConflict` builds the conflict of a compare-and-set
   that matched no row. It reads the stored version with the same
   `currentVersion` statement that `versionedFlush` takes, names the reason,
   and turns a read that fails into the cause. A read that returns no version
-  throws `InvalidFlushStatementError` with the reason `no_version`.
+  throws `INVALID_FLUSH_STATEMENT` with the reason `no_version`.
   `versionedFlush` uses it, and a hand-written flush throws its result.
 - `ConcurrencyConflictError` names the write that failed in `intent`: `add`,
   `update`, or `remove`. The unit of work sets it on every conflict that
@@ -321,11 +328,11 @@ immutable. Run one kit version per process during a cutover.
   names it. A port whose `add`, `update`, or `remove` returns a value, for
   example a promise, is such a violation, and so is an adapter type that
   defines one of them. The runtime checks the definition
-  and the adapter and throws `InvalidRepositoryDefinitionError`,
-  `InvalidRepositoryAdapterError`, `AggregateTrackingError`, or
-  `RepositoryErrorMappingFailedError`. `defineRepository` throws a
+  and the adapter and throws `INVALID_REPOSITORY_DEFINITION`,
+  `INVALID_REPOSITORY_ADAPTER`, `AGGREGATE_TRACKING`, or
+  `REPOSITORY_ERROR_MAPPING_FAILED`. `defineRepository` throws a
   `TypeError` for a persistence model without its members and for a
-  lifecycle flag that is not a boolean. `AggregateTrackingError` has the
+  lifecycle flag that is not a boolean. `AGGREGATE_TRACKING` has the
   reasons `registered_during_flush` and `identity_already_tracked`, and it
   names the operation that failed.
 - `SnapshotModel` with `defineSnapshotModel`, `captureAggregateSnapshot`, and
@@ -385,8 +392,8 @@ immutable. Run one kit version per process during a cutover.
   options for a batch. `createStampedDomainEvent` builds an event whose
   identity and time the caller owns.
 - `AggregateConfig.maxPendingEvents` limits the pending list with
-  `PendingEventLimitExceededError`. `DuplicateEventIdError` and
-  `ReentrantEventRecordingError` protect the recording.
+  `PENDING_EVENT_LIMIT_EXCEEDED`. `DUPLICATE_EVENT_ID` and
+  `REENTRANT_EVENT_RECORDING` protect the recording.
 - `EntityConfig.trustInitialState`, `copyPlainData`, `toVersion`, and
   `reconstituteAggregateFromHistory`.
 - `DomainEventValidationError` and `SnapshotTimeValidationError` carry a
@@ -395,8 +402,7 @@ immutable. Run one kit version per process during a cutover.
   recognize the error families by class or by their `category` field.
 - One copy of the kit per process. An aggregate, an entity, an event, an
   event definition, a value object, or a repository definition that a second
-  loaded copy built throws `DuplicateKitCopyError` (code
-  `DUPLICATE_KIT_COPY`) at the first lookup that fails. Declare the kit as a
+  loaded copy built throws `DUPLICATE_KIT_COPY` at the first lookup that fails. Declare the kit as a
   peer dependency of an adapter package. The kit keeps no registry on
   `globalThis`.
 
@@ -427,7 +433,7 @@ immutable. Run one kit version per process during a cutover.
   and `createCommandOutboxContractTests`.
 - `InProcessEventBus` reports handler failures, aborted publications, and
   accumulating subscriptions through optional observers. It bounds one
-  publish chain with `maxPublishDepth` and `PublishDepthExceededError`. A
+  publish chain with `maxPublishDepth` and `PUBLISH_DEPTH_EXCEEDED`. A
   handler receives its chain as `context.publishChain` and passes it on as the
   `publishChain` option of `publish`, `withCommit`, or `UnitOfWork.run`.
   `createEventBusContractTests` proves an implementation of the port.
@@ -455,7 +461,7 @@ immutable. Run one kit version per process during a cutover.
   `InMemoryDeadlineStore`, and `createDeadlineStoreContractTests`.
 - `domainErrorToResult` turns the listed `DomainError` classes into `Err` and
   rethrows everything else.
-- `DuplicateHandlerRegistrationError` names a second handler for one message
+- `DUPLICATE_HANDLER_REGISTRATION` names a second handler for one message
   type on a bus.
 - A state-stored and an event-sourced checkout process manager in
   `examples/saga`.
@@ -538,7 +544,7 @@ immutable. Run one kit version per process during a cutover.
   a second registration of the same aggregate with a contradicting OCC
   baseline passed without an error.
 - `InMemoryOutbox.add` rejects a malformed candidate with
-  `EventCollectionError`: a part that is not an object, an `eventId` or `type`
+  `EVENT_COLLECTION_FAILED`: a part that is not an object, an `eventId` or `type`
   that is not a string, a source field that is
   not a string, or a position that is not a valid commit position. The message
   names the event, the field, and the value. Before, such a candidate could
@@ -550,8 +556,8 @@ immutable. Run one kit version per process during a cutover.
   smoke now checks a clone and an event-store append.
 - `UnitOfWork.run` also closes the repository facades of an attempt whose
   step after the work failed, for example the outbox write, before a retry
-  waits. A leaked write then gets `TransactionClosedError`. Before, it got
-  `AggregateTrackingError` with the reason `registered_during_flush`.
+  waits. A leaked write then gets `TRANSACTION_CLOSED`. Before, it got
+  `AGGREGATE_TRACKING` with the reason `registered_during_flush`.
 - `InMemoryEventStore.append` writes all of a batch or nothing, and it stores
   only plain data. It copies each event under the plain-data rule of the
   event constructors. An event outside the rule rejects with a `TypeError`
@@ -567,7 +573,7 @@ immutable. Run one kit version per process during a cutover.
   failure inside the transaction as its cause and the scope's error as
   `rollbackCause`.
 - An own `"__proto__"` key in an entity state, or in event metadata passed to
-  `mergeMetadata` or `copyMetadata`, throws `PrototypePollutionError`. Before,
+  `mergeMetadata` or `copyMetadata`, throws `PROTOTYPE_POLLUTION`. Before,
   the state copy replaced its prototype, and the key vanished.
 - A value object accepts a nested value object again. Version 2.2.0 rejected
   it as a class instance.

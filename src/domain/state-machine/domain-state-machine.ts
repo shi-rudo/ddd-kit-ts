@@ -6,7 +6,7 @@ import type {
 	DomainTransitionOutcome,
 } from "./contracts";
 import { ensureStableDomainMachineDefinition } from "./definition";
-import { ReentrantDomainStateMachineEvaluationError } from "./errors";
+import { reentrantDomainStateMachineEvaluationError } from "./errors";
 import { prepareDomainMachineSnapshot } from "./snapshot";
 import {
 	canTransitionPreparedDomainState,
@@ -37,14 +37,7 @@ export {
 } from "./definition";
 export {
 	DomainTransitionGuardRejectedError,
-	InvalidDomainMachineContextError,
-	InvalidDomainMachineDefinitionError,
-	InvalidDomainMachineInputError,
-	InvalidDomainMachineSnapshotError,
 	InvalidDomainTransitionError,
-	InvalidDomainTransitionGuardResultError,
-	InvalidDomainTransitionResultError,
-	ReentrantDomainStateMachineEvaluationError,
 } from "./errors";
 export {
 	canTransitionDomainState,
@@ -151,7 +144,7 @@ export class DomainStateMachine<
 
 	private evaluate<TResult>(operation: () => TResult): TResult {
 		if (this.#evaluating) {
-			throw new ReentrantDomainStateMachineEvaluationError();
+			throw reentrantDomainStateMachineEvaluationError();
 		}
 
 		this.#evaluating = true;

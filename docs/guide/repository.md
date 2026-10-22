@@ -380,7 +380,7 @@ declare `remove` with `physicalRemoval: true`.
 The adapter itself defines no `add`, `update`, or `remove`: the Unit of Work
 installs them on the facade. A typed adapter with one of them fails to compile
 on `create`, also as one member of a union or as a private member. Any other
-adapter fails on the first run with `InvalidRepositoryAdapterError` and the
+adapter fails on the first run with `INVALID_REPOSITORY_ADAPTER` and the
 reason `defines_lifecycle_operation`, for example a JavaScript object or a
 union that TypeScript reduces to its base class. The run reads the adapter's
 property descriptors, as the facade does: a Proxy adapter reports its members
@@ -422,11 +422,11 @@ such as `DuplicateAggregateError` and `ConcurrencyConflictError` pass through.
 An unknown driver failure becomes an application-defined
 `InfrastructureError`, here `OrderStoreUnavailableError`. If the mapper throws
 or returns a raw value, the Unit of Work raises
-`RepositoryErrorMappingFailedError` and preserves both failures for diagnosis.
+`REPOSITORY_ERROR_MAPPING_FAILED` and preserves both failures for diagnosis.
 That keeps ORM error types out of use cases without hiding the original cause.
 
 The mapper never sees a wiring error. A flush that raises one, for example
-`InvalidFlushStatementError`, reaches the caller unchanged. Do not wrap a kit
+`INVALID_FLUSH_STATEMENT`, reaches the caller unchanged. Do not wrap a kit
 wiring error in the flush: let it propagate. If a flush wraps it anyway, the
 Unit of Work throws the wiring error and drops the wrapper with its context.
 Such an error
@@ -480,7 +480,7 @@ statements that carry `update` or `remove` without `currentVersion` when it
 is built.
 
 A defect in the statements is a wiring error, not a store failure. The helper
-raises `InvalidFlushStatementError` for it, with a `reason` that names the
+raises `INVALID_FLUSH_STATEMENT` for it, with a `details.reason` that names the
 defect:
 
 - `statement_absent`: the write needs a statement that the statements do not
@@ -603,7 +603,7 @@ of the conflict: `stale_version`, `version_unchanged`, `aggregate_absent`, or
 `version_unknown` when the read fails. The zero row count already proves the
 conflict, so a failed read travels as the cause and never replaces it. A read
 that returns neither a version nor `undefined` is a defect of the statement
-and throws `InvalidFlushStatementError` with the reason `no_version`.
+and throws `INVALID_FLUSH_STATEMENT` with the reason `no_version`.
 `versionedFlush` uses the same function. Do not classify by hand: the
 `version_unchanged` case is the one a copy forgets, and it is the one that
 stops a retry of a write that can never succeed.

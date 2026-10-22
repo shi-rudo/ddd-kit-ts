@@ -11,7 +11,7 @@ import {
 	isDomainErrorLike,
 	SnapshotCorruptedError,
 	SnapshotSchemaMismatchError,
-	SnapshotVersionNotRestoredError,
+	snapshotVersionNotRestoredError,
 } from "../../errors/kit-errors";
 import { copyPlainData } from "../../internal/structural/plain-data";
 import { assertPositiveSafeInteger } from "../../internal/validate";
@@ -131,9 +131,9 @@ export function captureAggregateSnapshot<
  * escaping `getById` after a rule change. A stored version that is not a
  * valid `Version` is surfaced the same way. `SnapshotSchemaMismatchError`
  * (a configuration gap, not corruption) and non-domain throws propagate,
- * including an `InvalidVersionError` the factory itself throws. A factory
+ * including an `INVALID_VERSION` the factory itself throws. A factory
  * that returns an aggregate at a version other than the snapshot version
- * fails with a {@link SnapshotVersionNotRestoredError}.
+ * fails with a `SNAPSHOT_VERSION_NOT_RESTORED`.
  */
 export function reconstituteAggregateFromSnapshot<
 	TAggregate extends SnapshotAggregate,
@@ -147,7 +147,7 @@ export function reconstituteAggregateFromSnapshot<
 	const storedSchemaVersion = snapshot.schemaVersion ?? 1;
 	// A corrupt stored version is derived-data corruption like a bad blob:
 	// surfaced as SnapshotCorruptedError so the load recipe discards and
-	// refolds. Checked BEFORE the factory runs, so an InvalidVersionError
+	// refolds. Checked BEFORE the factory runs, so an `INVALID_VERSION`
 	// thrown by the factory itself (a wiring bug such as a restore below a
 	// version the factory already advanced) propagates unwrapped, like the
 	// version post-condition below.
@@ -204,7 +204,7 @@ export function reconstituteAggregateFromSnapshot<
 	// bug. Routing it into the discard-and-refold channel would mask it as
 	// perpetual silent refolding, so it surfaces as a wiring error instead.
 	if (aggregate.version !== snapshot.version) {
-		throw new SnapshotVersionNotRestoredError({
+		throw snapshotVersionNotRestoredError({
 			identity: {
 				aggregateType: model.aggregateType,
 				aggregateId: String(id),

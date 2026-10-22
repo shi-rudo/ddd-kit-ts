@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import {
-	MissingEntityIdError,
-	PrototypePollutionError,
-	UnmanagedInstanceError,
-} from "../../errors/kit-errors";
+import type { KitWiringError } from "../../errors/kit-errors";
 import type { Id } from "../identity/id";
 import {
 	entityIds,
@@ -184,11 +180,11 @@ describe("Entity", () => {
 		it("rejects a null or undefined id with a coded wiring error", () => {
 			// @ts-expect-error - testing invalid input
 			expect(() => new OrderItemEntity(null, "p1", 1)).toThrow(
-				MissingEntityIdError,
+				expect.objectContaining({ code: "MISSING_ENTITY_ID" }),
 			);
 			// @ts-expect-error - testing invalid input
 			expect(() => new OrderItemEntity(undefined, "p1", 1)).toThrow(
-				MissingEntityIdError,
+				expect.objectContaining({ code: "MISSING_ENTITY_ID" }),
 			);
 
 			let caught: unknown;
@@ -198,7 +194,9 @@ describe("Entity", () => {
 			} catch (error) {
 				caught = error;
 			}
-			expect((caught as MissingEntityIdError).code).toBe("MISSING_ENTITY_ID");
+			expect((caught as KitWiringError<"MISSING_ENTITY_ID">).code).toBe(
+				"MISSING_ENTITY_ID",
+			);
 		});
 
 		it("rejects an empty-string id", () => {
@@ -209,9 +207,13 @@ describe("Entity", () => {
 				caught = error;
 			}
 
-			expect(caught).toBeInstanceOf(MissingEntityIdError);
-			expect((caught as MissingEntityIdError).code).toBe("MISSING_ENTITY_ID");
-			expect((caught as MissingEntityIdError).message).toContain('received ""');
+			expect(caught).toMatchObject({ code: "MISSING_ENTITY_ID" });
+			expect((caught as KitWiringError<"MISSING_ENTITY_ID">).code).toBe(
+				"MISSING_ENTITY_ID",
+			);
+			expect((caught as KitWiringError<"MISSING_ENTITY_ID">).message).toContain(
+				'received ""',
+			);
 		});
 
 		it("rejects a non-string id", () => {
@@ -223,9 +225,11 @@ describe("Entity", () => {
 				caught = error;
 			}
 
-			expect(caught).toBeInstanceOf(MissingEntityIdError);
-			expect((caught as MissingEntityIdError).code).toBe("MISSING_ENTITY_ID");
-			expect((caught as MissingEntityIdError).message).toContain(
+			expect(caught).toMatchObject({ code: "MISSING_ENTITY_ID" });
+			expect((caught as KitWiringError<"MISSING_ENTITY_ID">).code).toBe(
+				"MISSING_ENTITY_ID",
+			);
+			expect((caught as KitWiringError<"MISSING_ENTITY_ID">).message).toContain(
 				"received number 0",
 			);
 		});
@@ -238,9 +242,11 @@ describe("Entity", () => {
 				caught = error;
 			}
 
-			expect(caught).toBeInstanceOf(MissingEntityIdError);
-			expect((caught as MissingEntityIdError).code).toBe("MISSING_ENTITY_ID");
-			expect((caught as MissingEntityIdError).message).toContain(
+			expect(caught).toMatchObject({ code: "MISSING_ENTITY_ID" });
+			expect((caught as KitWiringError<"MISSING_ENTITY_ID">).code).toBe(
+				"MISSING_ENTITY_ID",
+			);
+			expect((caught as KitWiringError<"MISSING_ENTITY_ID">).message).toContain(
 				'received "   "',
 			);
 		});
@@ -253,9 +259,11 @@ describe("Entity", () => {
 				caught = error;
 			}
 
-			expect(caught).toBeInstanceOf(MissingEntityIdError);
-			expect((caught as MissingEntityIdError).code).toBe("MISSING_ENTITY_ID");
-			expect((caught as MissingEntityIdError).message).toContain(
+			expect(caught).toMatchObject({ code: "MISSING_ENTITY_ID" });
+			expect((caught as KitWiringError<"MISSING_ENTITY_ID">).code).toBe(
+				"MISSING_ENTITY_ID",
+			);
+			expect((caught as KitWiringError<"MISSING_ENTITY_ID">).message).toContain(
 				"received object",
 			);
 		});
@@ -271,12 +279,16 @@ describe("Entity", () => {
 				caught = error;
 			}
 
-			expect(caught).toBeInstanceOf(UnmanagedInstanceError);
-			expect((caught as UnmanagedInstanceError).code).toBe(
+			expect(caught).toMatchObject({ code: "UNMANAGED_INSTANCE" });
+			expect((caught as KitWiringError<"UNMANAGED_INSTANCE">).code).toBe(
 				"UNMANAGED_INSTANCE",
 			);
-			expect((caught as UnmanagedInstanceError).subject).toBe("entity");
-			expect((caught as UnmanagedInstanceError).instanceId).toBe("id-1");
+			expect(
+				(caught as KitWiringError<"UNMANAGED_INSTANCE">).details.subject,
+			).toBe("entity");
+			expect(
+				(caught as KitWiringError<"UNMANAGED_INSTANCE">).details.instanceId,
+			).toBe("id-1");
 			expect(entity.state.quantity).toBe(1);
 		});
 
@@ -481,14 +493,14 @@ describe("Entity", () => {
 		it("rejects a JSON-parsed own __proto__ key at construction", () => {
 			expect(
 				() => new RawStateEntity("item-1" as ItemId, hostileState()),
-			).toThrow(PrototypePollutionError);
+			).toThrow(expect.objectContaining({ code: "PROTOTYPE_POLLUTION" }));
 		});
 
 		it("rejects the key on the setState path and keeps the previous state", () => {
 			const entity = new RawStateEntity("item-1" as ItemId, { qty: 0 });
 
 			expect(() => entity.replace(hostileState())).toThrow(
-				PrototypePollutionError,
+				expect.objectContaining({ code: "PROTOTYPE_POLLUTION" }),
 			);
 
 			expect(entity.state.qty).toBe(0);
@@ -506,7 +518,7 @@ describe("Entity", () => {
 			});
 
 			expect(() => new RawStateEntity("item-1" as ItemId, state)).toThrow(
-				PrototypePollutionError,
+				expect.objectContaining({ code: "PROTOTYPE_POLLUTION" }),
 			);
 		});
 
@@ -525,7 +537,7 @@ describe("Entity", () => {
 			});
 
 			expect(() => new ListEntity("item-1" as ItemId, state)).toThrow(
-				PrototypePollutionError,
+				expect.objectContaining({ code: "PROTOTYPE_POLLUTION" }),
 			);
 		});
 
