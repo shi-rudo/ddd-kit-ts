@@ -5,7 +5,6 @@ import {
 } from "../../internal/kit-copy";
 import { deepEqual } from "../../internal/structural/deep-equal";
 import { deepEqualExcept } from "../../internal/structural/deep-equal-except";
-import type { DeepOmitOptions } from "../../internal/structural/deep-omit";
 import { builtInTag } from "../../internal/structural/is-built-in";
 import { copyPlainData } from "../../internal/structural/plain-data";
 import { installMutatorShadows } from "../../internal/structural/shadowed-mutators";
@@ -210,6 +209,23 @@ export function valueObjectEquals<T>(
 	return deepEqual(a, b);
 }
 
+/** The keys that {@link valueObjectEqualsExcept} leaves out of the comparison. */
+export interface ValueObjectEqualsExceptOptions {
+	/**
+	 * Keys to ignore everywhere in the props. The contents of a `Map`, a
+	 * `Set`, and a typed array keep every key.
+	 */
+	readonly ignoreKeys?: readonly (string | symbol)[];
+	/**
+	 * Ignores a key at one place. The path leads to the key and does not
+	 * include it, for example `["user", "meta", 0, "data"]`.
+	 */
+	readonly ignoreKeyPredicate?: (
+		key: string | symbol,
+		path: readonly (string | number | symbol)[],
+	) => boolean;
+}
+
 /**
  * Compares two value objects for equality while ignoring specified keys.
  * Useful for comparing value objects that contain metadata or optional fields
@@ -255,7 +271,7 @@ export function valueObjectEquals<T>(
 export function valueObjectEqualsExcept<T>(
 	a: ValueObjectOf<T>,
 	b: ValueObjectOf<T>,
-	options: DeepOmitOptions,
+	options: ValueObjectEqualsExceptOptions,
 ): boolean {
 	return deepEqualExcept(a, b, options);
 }

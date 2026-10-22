@@ -716,12 +716,12 @@ update.
 import {
   CommandBus,
   InProcessEventBus,
-  InMemoryOutbox,
   OutboxDispatcher,
   Projector,
   QueryBus,
   withCommit,
 } from "@shirudo/ddd-kit";
+import { InMemoryOutbox } from "@shirudo/ddd-kit/testing";
 import { ok } from "@shirudo/result";
 
 const outbox = new InMemoryOutbox<OrderEvent>();

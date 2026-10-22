@@ -1092,10 +1092,10 @@ default `Record<string, unknown>` map.
 
 | Before | After |
 | --- | --- |
-| `import { deepOmit } from "@shirudo/ddd-kit/utils"` | `import { deepOmit } from "@shirudo/ddd-kit"` |
+| `import { deepEqual } from "@shirudo/ddd-kit/utils"` | `import { deepEqual } from "@shirudo/ddd-kit"` |
 | `import { toPublicErrorView } from "@shirudo/ddd-kit/presentation"` | `import { toPublicErrorView } from "@shirudo/ddd-kit/public-errors"` |
-| type `Key` of `deepOmit` | `DeepOmitKey` |
-| type `PathSegment` of `deepOmit` | `DeepOmitPathSegment` |
+| `deepOmit` and its types `Key` and `PathSegment` | not exported; for a value object use `valueObjectEqualsExcept`, whose options type is `ValueObjectEqualsExceptOptions` |
+| `import { InMemoryOutbox } from "@shirudo/ddd-kit"`, also the other in-memory adapters and `InMemoryTransactionScope` | `import { InMemoryOutbox } from "@shirudo/ddd-kit/testing"` |
 | `computeBackoffDelay` | not exported; the retry behavior is unchanged |
 | `engines.node` `>=20` | `>=22` |
 | peer `@shirudo/base-error` `^7.1.1` | `^8.3.0` |
@@ -1643,6 +1643,13 @@ The root entry no longer exports `capturePersistenceBaseline`,
   `EVENT_OCCURRED_AT_INVALID`.
 - `createMoneyFactory().scaleOf` throws `INVALID_MONEY` when the resolver
   returns an invalid scale. In rc.15 it returned the value unchecked.
+- The in-memory reference adapters, `InMemoryTransactionScope`, and the
+  `InMemoryTransactionParticipant` and `InMemoryTransaction` types come from
+  `@shirudo/ddd-kit/testing`. Change the import path; the classes are the
+  same.
+- `deepOmit`, `DeepOmitKey`, `DeepOmitOptions`, and `DeepOmitPathSegment`
+  are no longer exported. `valueObjectEqualsExcept` takes a
+  `ValueObjectEqualsExceptOptions` with the same fields.
 - `toPublicErrorView` accepts an `onCatalogError` observer. A failure of the
   catalog still returns the fallback view, and the observer now receives the
   failure.

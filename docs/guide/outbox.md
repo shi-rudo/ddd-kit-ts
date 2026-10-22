@@ -20,7 +20,8 @@ The kit gives you five pieces:
 The main path looks like this:
 
 ```ts
-import { InMemoryOutbox, UnitOfWork } from "@shirudo/ddd-kit";
+import { UnitOfWork } from "@shirudo/ddd-kit";
+import { InMemoryOutbox } from "@shirudo/ddd-kit/testing";
 
 const outbox = new InMemoryOutbox<OrderEvent>();
 
@@ -360,7 +361,8 @@ retries; see [In-memory transactions](./unit-of-work.md#in-memory-transactions).
 While a transaction is open, `getPending` returns only committed records.
 
 ```ts
-import { InMemoryOutbox, type DomainEvent } from "@shirudo/ddd-kit";
+import { type DomainEvent } from "@shirudo/ddd-kit";
+import { InMemoryOutbox } from "@shirudo/ddd-kit/testing";
 
 type OrderCreated = DomainEvent<"OrderCreated", { orderId: string }>;
 

@@ -4,11 +4,11 @@ import {
 	createDomainEvent,
 	createDomainEventFactory,
 	defineDomainEvent,
-	InMemoryEventStore,
 	StateStoredAggregate,
 	stampPendingEvents,
 } from "@shirudo/ddd-kit";
 import { addMoney, moneyOfMinor, moneyToDto } from "@shirudo/ddd-kit/money";
+import { InMemoryEventStore } from "@shirudo/ddd-kit/testing";
 import { ok } from "@shirudo/result";
 
 class EdgeOrder extends StateStoredAggregate {

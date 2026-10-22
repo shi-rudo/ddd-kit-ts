@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
-import {
-	type AnyDomainEvent,
-	createDomainEvent,
-	InMemoryEventStore,
-} from "../../src";
+import { type AnyDomainEvent, createDomainEvent } from "../../src";
+import { InMemoryEventStore } from "../../src/testing";
 
 describe("events that createDomainEvent builds", () => {
 	it("pass the plain-data rule of the in-memory event store", async () => {
