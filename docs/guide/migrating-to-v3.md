@@ -1524,3 +1524,27 @@ The root entry no longer exports `capturePersistenceBaseline`,
   `withCommit` callback appends before its registration.
 - The repository contract suites accept a harness that records unstamped
   events. They read the registered batch after `add`, inside the run.
+
+**rc.16.**
+
+- With a tracking outbox, a record whose publication runs past
+  `deliveryTimeoutMs` consumes an attempt and can reach the dead letter. In
+  rc.15 it stayed pending without an attempt. Raise `maxDeliveryAttempts` of
+  your adapter if a slow sink reaches the dead letter too early.
+- The default delivery classifier takes the nearest `retryable` marker in the
+  cause chain. An outer `retryable: false` over a retryable cause now counts
+  as permanent. In rc.15 the deeper `retryable: true` won.
+- `routeEventsToCommandOutbox` drops an invalid `traceparent` or
+  `tracestate` instead of throwing `InvalidCommandMessageError`. A kept
+  `tracestate` is stored without empty list-members and their white space.
+- A command message and an integration message store a negative zero as
+  `0`. In rc.15 they threw.
+- `onPollError` of `OutboxDispatcher` can receive the new
+  `AcknowledgedRecordPendingError`. It means that `getPending` returned a
+  record that the pass already acknowledged.
+- On a leased idempotency store, a failure at commit time keeps the staged
+  outcome. A retry of the same key rejects with `IdempotencyInFlightError`
+  until the lease expires. After that, `reconcileIdempotency` decides. In
+  rc.15 the retry ran the command again. If you use a leased store without
+  `reconcileIdempotency`, add the callback: without it, such a key stays
+  blocked, also after a commit that surely failed.

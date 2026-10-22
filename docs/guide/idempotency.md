@@ -12,7 +12,7 @@ There are two valid adapter families, but they do not provide the same proof.
 | Family | Commit boundary | Recovery model | Recommendation |
 | --- | --- | --- | --- |
 | Transactional | Idempotency row, aggregate write, and outbox commit in one transaction | Database rollback removes failed claims; committed outcomes replay immediately | Production default |
-| Leased non-transactional | Idempotency record lives outside the source transaction | Heartbeat, token fencing, and source-of-truth reconciliation | Use only when one transaction is impossible |
+| Leased non-transactional | Idempotency record lives outside the source transaction | Heartbeat, token fencing, and source-of-truth reconciliation | Use only when one transaction is impossible, and always with `reconcileIdempotency` |
 
 The transactional pattern is the only one that makes command effect and
 idempotency completion atomic. `confirm`, `abandon`, `renew`, and `reconcile`
@@ -84,6 +84,18 @@ For a non-transactional store, `complete` first stages the result. The source
 transaction then commits, and `confirm` makes the result replayable. A process
 crash between those last two actions leaves a staged result whose effect may or
 may not exist.
+
+A failure at commit time leaves the same state. If the scope rejects after the
+callback resolved, for example because the connection dropped after `COMMIT`
+was sent, the effect can exist. The wrapper does not release the staged
+result, so a retry cannot run the command a second time. The wrapper cannot
+tell this case from a commit that surely failed, such as a serialization
+failure. Both leave the staged result.
+
+**A leased store needs `reconcileIdempotency`.** Without the callback, a
+staged result that expired stays blocked: every retry of its key rejects with
+`IdempotencyReconciliationRequiredError`. Only a `committed` or
+`not-committed` decision releases it.
 
 The safe state machine is:
 

@@ -473,6 +473,37 @@ immutable. Run one kit version per process during a cutover.
 
 ### Fixed
 
+- `OutboxDispatcher` ends a pass when `getPending` returns a record that the
+  same pass already acknowledged, and reports
+  `AcknowledgedRecordPendingError` (code `ACKNOWLEDGED_RECORD_PENDING`) to
+  `onPollError`. Before, an acknowledgement that removed nothing, or a read
+  that lagged behind it, made the pass deliver the same records again in a
+  loop without backoff.
+- A command message and an integration message accept negative zero and
+  store it as `0`. Before, `Math.round(-0.4)` or `0 * -5` in a payload threw,
+  although the kit's equality treats `-0` and `0` as equal.
+- `routeEventsToCommandOutbox` drops an invalid trace context and keeps the
+  command. Before, a malformed `traceparent` or `tracestate` threw
+  `InvalidCommandMessageError` inside the transaction, so an observability
+  header failed the business write. An invalid `traceparent` drops both
+  fields, as W3C Trace Context tells a receiver. An invalid `tracestate`
+  drops only itself, and a kept one is stored without empty list-members.
+- The default delivery classifier of `OutboxDispatcher` and
+  `DeadlineProcessor` takes the nearest `retryable` marker in the cause chain.
+  Before, a deeper `retryable: true` won over an outer `retryable: false`, so
+  a wrapper that marked a failure permanent was retried instead.
+- `OutboxDispatcher` counts the expiry of its own `deliveryTimeoutMs` as a
+  failed attempt, as `DeadlineProcessor` already did. Before, the default
+  classifier called the timeout transient. A record that made the sink hang
+  then never reached the dead letter, and it blocked every later record. The
+  deadlines guide now states the rule of the processor correctly.
+- `withIdempotentCommit` keeps a staged outcome when the commit itself fails.
+  Before, it released the outcome on a leased store, and the retry ran the
+  command a second time, although the failed commit could have written its
+  effect. The key now answers `IdempotencyInFlightError` until the lease
+  expires, and then `reconciliation-required`. A leased store therefore needs
+  `reconcileIdempotency`: without it, the key stays blocked, also after a
+  commit that surely failed.
 - `withIdempotentCommit` passes the options of `registerSaved` and
   `registerRemoved` to `withCommit`. Before, it dropped `expectedVersion`, so
   a second registration of the same aggregate with a contradicting OCC

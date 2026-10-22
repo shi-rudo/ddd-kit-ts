@@ -240,7 +240,7 @@ describe("routeEventsToCommandOutbox", () => {
 		expect(commandOutbox.added).toEqual([]);
 	});
 
-	it("rejects negative zero instead of silently storing it as 0", async () => {
+	it("stores a negative zero from ordinary arithmetic as 0", async () => {
 		const commandOutbox = recordingCommandOutbox<PublishedCommand>();
 		const writer = routeEventsToCommandOutbox(commandOutbox, () => [
 			{
@@ -248,17 +248,15 @@ describe("routeEventsToCommandOutbox", () => {
 				command: {
 					type: "AdjustBalance",
 					version: 1,
-					// JSON.stringify(-0) produces "0"; the exactness contract
-					// must reject the payload instead of mutating it.
-					payload: { delta: -0 },
+					payload: { delta: Math.round(-0.4) },
 				},
 			},
 		]);
 
-		await expect(writer.add([processEventCandidate()])).rejects.toThrow(
-			/negative zero/,
-		);
-		expect(commandOutbox.added).toEqual([]);
+		await writer.add([processEventCandidate()]);
+
+		const payload = commandOutbox.added[0]?.[0]?.messages[0]?.command.payload;
+		expect(Object.is((payload as { delta: number }).delta, 0)).toBe(true);
 	});
 
 	it("rejects a command without an explicit positive schema version", async () => {
@@ -298,7 +296,7 @@ describe("routeEventsToCommandOutbox", () => {
 		expect(commandOutbox.added).toEqual([]);
 	});
 
-	it("rejects malformed W3C trace context before calling the adapter", async () => {
+	it("drops a malformed traceparent with its tracestate and keeps the command", async () => {
 		const commandOutbox = recordingCommandOutbox<PublishedCommand>();
 		const writer = routeEventsToCommandOutbox(commandOutbox, () => [
 			{
@@ -309,13 +307,37 @@ describe("routeEventsToCommandOutbox", () => {
 					payload: {},
 				},
 				traceparent: "not-a-traceparent",
+				tracestate: "vendor=opaque",
 			},
 		]);
 
-		await expect(writer.add([processEventCandidate()])).rejects.toThrow(
-			InvalidCommandMessageError,
+		await writer.add([processEventCandidate()]);
+
+		const message = commandOutbox.added[0]?.[0]?.messages[0];
+		expect(message?.command.type).toBe("RequestShipping");
+		expect(message).not.toHaveProperty("traceparent");
+		expect(message).not.toHaveProperty("tracestate");
+	});
+
+	it("drops a tracestate without a traceparent", async () => {
+		const commandOutbox = recordingCommandOutbox<PublishedCommand>();
+		const writer = routeEventsToCommandOutbox(commandOutbox, () => [
+			{
+				destination: "shipping.commands",
+				command: {
+					type: "RequestShipping",
+					version: 1,
+					payload: {},
+				},
+				tracestate: "vendor=opaque",
+			},
+		]);
+
+		await writer.add([processEventCandidate()]);
+
+		expect(commandOutbox.added[0]?.[0]?.messages[0]).not.toHaveProperty(
+			"tracestate",
 		);
-		expect(commandOutbox.added).toEqual([]);
 	});
 
 	it("preserves a structurally valid future traceparent version", async () => {
@@ -358,11 +380,14 @@ describe("routeEventsToCommandOutbox", () => {
 			},
 		]);
 
-		await expect(writer.add([processEventCandidate()])).resolves.not.toThrow();
-		expect(commandOutbox.added).toHaveLength(1);
+		await writer.add([processEventCandidate()]);
+
+		expect(commandOutbox.added[0]?.[0]?.messages[0]?.tracestate).toBe(
+			"vendor1=abc,vendor2=def",
+		);
 	});
 
-	it("rejects duplicate tracestate keys before calling the adapter", async () => {
+	it("drops a tracestate with duplicate keys and keeps the traceparent", async () => {
 		const commandOutbox = recordingCommandOutbox<PublishedCommand>();
 		const writer = routeEventsToCommandOutbox(commandOutbox, () => [
 			{
@@ -377,9 +402,12 @@ describe("routeEventsToCommandOutbox", () => {
 			},
 		]);
 
-		await expect(writer.add([processEventCandidate()])).rejects.toThrow(
-			InvalidCommandMessageError,
+		await writer.add([processEventCandidate()]);
+
+		const message = commandOutbox.added[0]?.[0]?.messages[0];
+		expect(message?.traceparent).toBe(
+			"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
 		);
-		expect(commandOutbox.added).toEqual([]);
+		expect(message).not.toHaveProperty("tracestate");
 	});
 });

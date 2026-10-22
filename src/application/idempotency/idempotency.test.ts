@@ -120,10 +120,19 @@ describe("withIdempotentCommit", () => {
 		).resolves.toEqual({ replayed: false, result: "retry" });
 	});
 
-	it("abandons the staged claim when the commit itself fails", async () => {
-		const deps = createDeps();
-		// A driver that rejects AFTER the callback resolved: the classic
-		// COMMIT-time serialization failure or dropped connection.
+	it("keeps the staged outcome when the commit itself fails, so a retry cannot run the command again", async () => {
+		let nowMs = 0;
+		const deps = {
+			...createDeps(),
+			idempotency: new InMemoryIdempotencyStore<undefined>({
+				clock: () => new Date(nowMs),
+				leaseDurationMs: 1_000,
+			}),
+			reconcileIdempotency: async () => "committed" as const,
+		};
+		// A driver that rejects AFTER the callback resolved, for example a
+		// dropped connection after COMMIT was sent: the commit outcome is
+		// unknown, and the command effect can exist.
 		let commits = 0;
 		deps.scope = {
 			transactional: async (fn) => {
@@ -134,7 +143,6 @@ describe("withIdempotentCommit", () => {
 			},
 		};
 		let executions = 0;
-
 		const run = () =>
 			withIdempotentCommit(deps, request, async () => {
 				executions += 1;
@@ -142,10 +150,12 @@ describe("withIdempotentCommit", () => {
 			});
 
 		await expect(run()).rejects.toThrow("commit failed");
-		// Without the abandon, the staged claim wedges the key and this
-		// retry would reject with IdempotencyInFlightError.
-		await expect(run()).resolves.toEqual({ replayed: false, result: 2 });
-		expect(executions).toBe(2);
+		await expect(run()).rejects.toBeInstanceOf(IdempotencyInFlightError);
+		nowMs = 1_000;
+		const settled = await run();
+
+		expect(settled).toEqual({ replayed: true, result: 1 });
+		expect(executions).toBe(1);
 	});
 
 	it("seals the user registration capability before idempotency completion", async () => {

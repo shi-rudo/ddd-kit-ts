@@ -516,9 +516,42 @@ describe("OutboxDispatcher", () => {
 		expect(await cronPass).toBe("drained");
 	});
 
-	it("times out a never-settling sink without consuming the poison ceiling", async () => {
+	it("ends the pass when a record that it acknowledged comes back", async () => {
+		const inner = new InMemoryOutbox<TestEvent>();
+		await inner.add([makeCommitted(1)]);
+		let polls = 0;
+		const outbox: Outbox<TestEvent> = {
+			add: (events) => inner.add(events),
+			endEventSources: (sources) => inner.endEventSources(sources),
+			getPending: async (limit) => {
+				polls += 1;
+				return polls <= 3 ? inner.getPending(limit) : [];
+			},
+			markDispatched: async () => {},
+		};
+		let publishes = 0;
+		const pollErrors: unknown[] = [];
+		const dispatcher = fastDispatcher({
+			outbox,
+			sink: {
+				publish: async () => {
+					publishes += 1;
+				},
+			},
+			observers: { onPollError: (error) => pollErrors.push(error) },
+		});
+
+		const outcome = await dispatcher.drainOnce();
+
+		expect(outcome).toBe("stopped");
+		expect(publishes).toBe(1);
+		expect(pollErrors).toHaveLength(1);
+		expect(String(pollErrors[0])).toContain("evt-1");
+	});
+
+	it("dead-letters a record whose delivery keeps running past the delivery budget", async () => {
 		vi.useFakeTimers();
-		const outbox = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 99 });
+		const outbox = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 1 });
 		await outbox.add([makeCommitted(1)]);
 		let context: ExecutionContext | undefined;
 		let sinkStarted!: () => void;
@@ -555,8 +588,10 @@ describe("OutboxDispatcher", () => {
 			expect(context?.deadlineAt).toBeTypeOf("number");
 			expect(errors).toHaveLength(1);
 			expect(errors[0]).toMatchObject({ name: "TimeoutError" });
-			const [pending] = await outbox.getPending();
-			expect(pending).toMatchObject({ dispatchId: "evt-1", attempts: 0 });
+			expect(await outbox.getPending()).toEqual([]);
+			expect(await outbox.deadLetters()).toMatchObject([
+				{ dispatchId: "evt-1", attempts: 1 },
+			]);
 		} finally {
 			vi.useRealTimers();
 		}

@@ -537,6 +537,24 @@ export class InvalidIntegrationMessageError extends InfrastructureError<"INVALID
 	}
 }
 
+/**
+ * Reported to `onPollError` when `getPending` returns a record that the
+ * same dispatch pass already acknowledged with `markDispatched`. The
+ * acknowledgement did not take effect, or the read lags behind it. The pass
+ * ends and backs off instead of delivering the record again in a hot loop.
+ */
+export class AcknowledgedRecordPendingError extends InfrastructureError<"ACKNOWLEDGED_RECORD_PENDING"> {
+	constructor(public readonly dispatchId: string) {
+		super({
+			code: "ACKNOWLEDGED_RECORD_PENDING",
+			message:
+				`OutboxDispatcher: getPending returned record ${dispatchId}, which ` +
+				"this pass already acknowledged with markDispatched. The " +
+				"acknowledgement did not take effect, or the read lags behind it.",
+		});
+	}
+}
+
 /** A malformed or non-JSON-safe command selected for durable delivery. */
 export class InvalidCommandMessageError extends InfrastructureError<"INVALID_COMMAND_MESSAGE"> {
 	constructor(
@@ -2149,6 +2167,7 @@ export class IdempotencyCompletionWithoutClaimError extends KitWiringError<"IDEM
  * together, without importing anything from base-error.
  */
 export type KitErrorCode =
+	| "ACKNOWLEDGED_RECORD_PENDING"
 	| "AGGREGATE_DELETED"
 	| "AGGREGATE_NOT_FOUND"
 	| "AGGREGATE_TRACKING"

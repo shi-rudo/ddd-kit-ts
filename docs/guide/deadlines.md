@@ -127,16 +127,18 @@ Pass `context.signal` all the way to the I/O client—for example,
 `AbortSignal`, configure its native timeout from the remaining budget:
 `Math.max(0, context.deadlineAt - Date.now())`. A handler that does neither is
 not production-safe: abandoned I/O can continue as zombie work and overlap the
-retry. A timeout is transient by default: it backs off and leaves the deadline
-pending without consuming its poison ceiling.
+retry. The expiry of `deliveryTimeoutMs` consumes an attempt, whatever the
+classifier says, so a handler that hangs on one deadline reaches the dead
+letter. A `TimeoutError` that the handler raises before that budget expires
+follows the classifier.
 Worker shutdown is different: it aborts a never-settling handler, leaves the
 deadline pending, and does not consume the poison-message ceiling.
 
 `classifyFailure` uses the same policy as the outbox dispatcher. Return
 `"transient"`, `"permanent"`, or `"unknown"`; permanent and unknown failures
-consume attempts. Without a custom classifier, native `TimeoutError` and a
-`retryable: true` marker anywhere in the cause chain are transient,
-`retryable: false` is permanent, and unmapped errors are unknown. A broken
+consume attempts. Without a custom classifier, the nearest marker in the
+cause chain decides: native `TimeoutError` and `retryable: true` are
+transient, `retryable: false` is permanent, and unmapped errors are unknown. A broken
 classifier cannot break the worker: the original handler error is preserved,
 the assessment falls back to unknown, and `onDeliveryError` receives the
 classifier failure in its optional third argument.

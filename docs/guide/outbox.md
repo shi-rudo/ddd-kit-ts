@@ -454,12 +454,19 @@ The dispatcher has a narrow contract:
 - It stops the batch on the first delivery failure.
 - It aborts each sink through its `ExecutionContext` after `deliveryTimeoutMs`
   (30 seconds by default). A sink that ignores the signal cannot keep the
-  dispatcher pending, but its foreign I/O can continue as zombie work.
+  dispatcher pending, but its foreign I/O can continue as zombie work. With a
+  tracking outbox, the expiry of this budget consumes an attempt, whatever the
+  classifier says. So a record that makes the sink hang reaches the dead
+  letter instead of blocking the outbox forever.
 - It bounds `getPending`, `markDispatched`, and `markFailed` through
   `storageTimeoutMs` (30 seconds by default) and passes the same context to the
   store.
 - It never rejects from `run()` or `drainOnce()`. Failures go to observers
   and the loop backs off.
+- It ends a pass when `getPending` returns a record that the same pass
+  already acknowledged. `onPollError` then receives
+  `AcknowledgedRecordPendingError`, and the loop backs off. The cause is an
+  acknowledgement that did not take effect, or a read that lags behind it.
 - It does not coordinate multiple process instances. If several dispatchers
   poll the same outbox, your adapter must claim records in `getPending`
   (`FOR UPDATE SKIP LOCKED`, leases, visibility timeouts, or equivalent).
@@ -539,9 +546,11 @@ const dispatcher = new OutboxDispatcher({
 
 `transient` failures back off but do not consume the poison-message budget.
 `permanent` and safely conservative `unknown` failures do. The shared default
-walks the error cause chain: native `TimeoutError` and `retryable: true` are
-transient, while `retryable: false` is permanent. Unmapped errors remain
-unknown. If a custom classifier throws or returns an invalid value, the
+walks the error cause chain, and the nearest marker decides: native
+`TimeoutError` and `retryable: true` are transient, while `retryable: false`
+is permanent. Unmapped errors remain unknown. The expiry of the dispatcher's own `deliveryTimeoutMs` consumes an
+attempt in every case. A `TimeoutError` that the sink raises before that
+budget expires follows the classifier. If a custom classifier throws or returns an invalid value, the
 original delivery error remains the primary error, the failure counts as
 unknown, and `onDispatchError` receives a third assessment argument containing
 `classifierError`.

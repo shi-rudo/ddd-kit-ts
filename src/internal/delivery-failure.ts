@@ -1,3 +1,5 @@
+import { findInCauseChain } from "@shirudo/base-error";
+
 /** Operational classification applied to one failed background delivery. */
 export type DeliveryFailureKind = "transient" | "permanent" | "unknown";
 
@@ -18,44 +20,31 @@ const KINDS = new Set<DeliveryFailureKind>([
 	"unknown",
 ]);
 
+interface FailureMarkers {
+	readonly name?: unknown;
+	readonly retryable?: unknown;
+}
+
 /**
- * Default delivery classification. A retryable marker anywhere in the cause
- * chain, or a native `TimeoutError`, is transient. An explicit
- * `retryable: false` marker is permanent. Unmapped errors stay unknown and use
- * the shell's safe accounting default.
+ * Default delivery classification. The nearest error in the cause chain that
+ * carries a `retryable` marker or is a native `TimeoutError` decides. So a
+ * wrapper that marks a failure permanent wins over a retryable cause.
+ * `retryable: true` and a `TimeoutError` are transient, `retryable: false` is
+ * permanent. Unmapped errors stay unknown and use the shell's safe accounting
+ * default.
  */
 export function classifyDeliveryFailure(error: unknown): DeliveryFailureKind {
-	// Not findInCauseChain: there, a throwing cause getter ends the walk as
-	// no-match, so an earlier `retryable: false` would read as permanent. A
-	// hostile link here makes the whole failure unknown instead.
-	let current = error;
-	let sawNonRetryable = false;
-	const seen = new Set<object>();
+	const decisive = findInCauseChain(error, isDecisiveFailure) as
+		| FailureMarkers
+		| undefined;
+	if (decisive === undefined) return "unknown";
+	return decisive.retryable === false ? "permanent" : "transient";
+}
 
-	while (
-		current !== null &&
-		(typeof current === "object" || typeof current === "function")
-	) {
-		const node = current as object;
-		if (seen.has(node)) break;
-		seen.add(node);
-
-		try {
-			const candidate = current as {
-				readonly name?: unknown;
-				readonly retryable?: unknown;
-				readonly cause?: unknown;
-			};
-			if (candidate.name === "TimeoutError") return "transient";
-			if (candidate.retryable === true) return "transient";
-			if (candidate.retryable === false) sawNonRetryable = true;
-			current = candidate.cause;
-		} catch {
-			return "unknown";
-		}
-	}
-
-	return sawNonRetryable ? "permanent" : "unknown";
+function isDecisiveFailure(node: unknown): boolean {
+	if (node === null || typeof node !== "object") return false;
+	const { name, retryable } = node as FailureMarkers;
+	return typeof retryable === "boolean" || name === "TimeoutError";
 }
 
 /** Applies a custom/default classifier without letting it break the worker. */
