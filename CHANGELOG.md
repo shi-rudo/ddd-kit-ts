@@ -420,8 +420,9 @@ immutable. Run one kit version per process during a cutover.
   and `createCommandOutboxContractTests`.
 - `InProcessEventBus` reports handler failures, aborted publications, and
   accumulating subscriptions through optional observers. It bounds one
-  publish chain with `maxPublishDepth` and `PublishDepthExceededError`, and an
-  optional `chainStore` follows a chain across async work.
+  publish chain with `maxPublishDepth` and `PublishDepthExceededError`. A
+  handler receives its chain as `context.publishChain` and passes it on as the
+  `publishChain` option of `publish`, `withCommit`, or `UnitOfWork.run`.
   `createEventBusContractTests` proves an implementation of the port.
 - `ExecutionContext` carries a `signal` and a `deadlineAt` to delivery
   handlers, and every delivery has a default bound of 30 seconds.

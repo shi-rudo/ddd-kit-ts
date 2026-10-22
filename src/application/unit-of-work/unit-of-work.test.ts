@@ -19,7 +19,11 @@ import {
 	UnregisteredChangesError,
 } from "../../errors/kit-errors";
 import type { EventCommitCandidate } from "../../messaging/committed-event";
-import type { EventBus } from "../../messaging/event-bus/ports";
+import type {
+	EventBus,
+	PublishChain,
+	PublishOptions,
+} from "../../messaging/event-bus/ports";
 import { InMemoryOutbox } from "../../messaging/outbox/outbox";
 import type { Outbox } from "../../messaging/outbox/ports";
 import type { AggregateClass } from "../../persistence/repository/identity-map";
@@ -4053,6 +4057,29 @@ describe("UnitOfWork", () => {
 				expect(rejection).toBe(lateCall);
 			},
 		);
+
+		it("passes the publish chain of the run to the post-commit publication", async () => {
+			const bus = createMockBus();
+			const publish = bus.publish;
+			let received: PublishOptions | undefined;
+			bus.publish = async (events, options) => {
+				received = options;
+				await publish(events, options);
+			};
+			const { uow } = createUow({ bus });
+			const publishChain = {} as PublishChain;
+
+			await uow.run(
+				async ({ repositories }) => {
+					repositories.orders.add(
+						createMockAggregate("first-1", [testEvent("first-1")]),
+					);
+				},
+				{ publishChain },
+			);
+
+			expect(received?.publishChain).toBe(publishChain);
+		});
 
 		it("reports a closed unit of work to a write after the last check before the commit", async () => {
 			let leakedOrders!: { add(order: MockAggregate): void };

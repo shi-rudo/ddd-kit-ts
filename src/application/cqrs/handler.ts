@@ -22,7 +22,7 @@ import {
 import { reportToObserver } from "../../internal/observer";
 import { assertTimerDelay } from "../../internal/validate";
 import type { EventCommitCandidate } from "../../messaging/committed-event";
-import type { EventBus } from "../../messaging/event-bus/ports";
+import type { EventBus, PublishChain } from "../../messaging/event-bus/ports";
 import type { OutboxWriter } from "../../messaging/outbox/ports";
 import type { TransactionScope } from "../../persistence/repository/scope";
 import {
@@ -46,6 +46,12 @@ export interface WithCommitDeps<Evt extends AnyDomainEvent, TCtx> {
 	 */
 	outbox: OutboxWriter<Evt>;
 	bus?: EventBus<Evt>;
+	/**
+	 * The chain of the event handler that runs this commit, from
+	 * `context.publishChain`. The post-commit `bus.publish` continues it, so
+	 * the bus can bound a publish cycle through the commit.
+	 */
+	publishChain?: PublishChain;
 	scope: TransactionScope<TCtx>;
 	/**
 	 * Observer for post-commit `bus.publish` failures. Called with the
@@ -696,6 +702,7 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 				(context) =>
 					bus.publish(events, {
 						signal: context.signal,
+						publishChain: deps.publishChain,
 						timeoutMs: Math.max(0, context.deadlineAt - Date.now()),
 					}),
 			);

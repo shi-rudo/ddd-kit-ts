@@ -14,7 +14,9 @@ import {
 	UnmanagedInstanceError,
 } from "../../errors/kit-errors";
 import type { EventCommitCandidate } from "../../messaging/committed-event";
-import type { EventBus } from "../../messaging/event-bus/ports";
+import { PublishDepthExceededError } from "../../messaging/event-bus/errors";
+import { InProcessEventBus } from "../../messaging/event-bus/event-bus";
+import type { EventBus, PublishChain } from "../../messaging/event-bus/ports";
 import type { TransactionScope } from "../../persistence/repository/scope";
 import { recordingOutbox } from "../../testing/recording-outbox";
 import { unattributedAggregate } from "../../testing/unattributed-aggregate";
@@ -679,6 +681,43 @@ describe("withCommit", () => {
 
 		expect(bus.published).toHaveLength(1);
 		expect(bus.published[0]).toEqual([event]);
+	});
+
+	it("continues the publish chain of the handler that runs the commit, so a cycle through the commit is bounded", async () => {
+		const bus = new InProcessEventBus<TestEvent>({ maxPublishDepth: 4 });
+		const publishErrors: unknown[] = [];
+		let hops = 0;
+		const commitOrder = (publishChain?: PublishChain) =>
+			withCommit(
+				{
+					outbox: recordingOutbox<TestEvent>(),
+					bus,
+					publishChain,
+					scope: createMockScope(),
+					onPublishError: (error) => {
+						publishErrors.push(error);
+					},
+				},
+				async (_ctx, registration) => {
+					const id = `agg-${hops}`;
+					const event = createDomainEvent(
+						"OrderCreated",
+						{ orderId: id },
+						{ aggregateId: id, aggregateType: "MockOrder" },
+					);
+					registration.registerSaved(createMockAggregate([event]));
+				},
+			);
+		bus.subscribe("OrderCreated", async (_event, context) => {
+			if (hops >= 50) return;
+			hops++;
+			await commitOrder(context.publishChain);
+		});
+
+		await commitOrder();
+
+		expect(hops).toBe(4);
+		expect(publishErrors).toEqual([expect.any(PublishDepthExceededError)]);
 	});
 
 	it("works without a bus", async () => {

@@ -140,12 +140,15 @@ live commit concern and never runs during replay.
 ### EventBus subscribers as the saga's reflexes
 
 ```ts
-eventBus.subscribe("PaymentReceived", async (event) => {
-  await uow.run(async ({ repositories }) => {
-    const saga = await repositories.sagas.getById(event.payload.orderId);
-    saga.advanceToShipping();
-    repositories.sagas.update(saga);
-  });
+eventBus.subscribe("PaymentReceived", async (event, context) => {
+  await uow.run(
+    async ({ repositories }) => {
+      const saga = await repositories.sagas.getById(event.payload.orderId);
+      saga.advanceToShipping();
+      repositories.sagas.update(saga);
+    },
+    { signal: context.signal, publishChain: context.publishChain },
+  );
   await commandBus.execute({
     type: "RequestShipping",
     orderId: event.payload.orderId,
@@ -154,7 +157,7 @@ eventBus.subscribe("PaymentReceived", async (event) => {
 });
 ```
 
-Each subscriber: load saga, transition, save, dispatch next command. The chain is linear and per-event; recursion happens through the bus (each command's `withCommit` triggers more events that trigger more subscribers).
+Each subscriber: load saga, transition, save, dispatch next command. The chain is linear and per-event; recursion happens through the bus (each command's `withCommit` triggers more events that trigger more subscribers). Passing `context.publishChain` on lets the bus stop a cycle at `maxPublishDepth`.
 
 ### Compensation = additional subscribers, not rollback
 

@@ -1626,3 +1626,12 @@ The root entry no longer exports `capturePersistenceBaseline`,
   and the harness has no `family` field. Its environment requires
   `runRolledBack`, and the leased environment requires `expireLease` and
   `advanceTimeTo`. The suites skip no tests.
+- The event bus follows a publish chain through one explicit value. A handler
+  receives it as `context.publishChain` and passes it as `publishChain` to
+  `publish`, `withCommit`, or `UnitOfWork.run`. In rc.15 the bus followed
+  the chain through `context.signal`, the synchronous part of a handler, and
+  an optional `chainStore`. The `chainStore` option and the
+  `PublishChainState` and `PublishChainStore` types are gone. A handler that
+  passes only `context.signal` now starts a new chain, so add `publishChain`
+  next to `signal`. `EventHandler` receives an `EventHandlerContext`, which
+  extends `ExecutionContext`.
