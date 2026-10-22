@@ -66,6 +66,10 @@ export {
 	type InMemoryIdempotencyStoreOptions,
 } from "./application/idempotency/adapters/in-memory-idempotency-store";
 export {
+	InMemoryLeasedIdempotencyStore,
+	type InMemoryLeasedIdempotencyStoreOptions,
+} from "./application/idempotency/adapters/in-memory-leased-idempotency-store";
+export {
 	type IdempotencyClaim,
 	type IdempotencyClaimHandle,
 	type IdempotencyLease,
@@ -76,7 +80,11 @@ export {
 	type IdempotentCommitRequest,
 	type IdempotentCommitResult,
 	type IdempotentExecution,
+	type LeasedIdempotencyClaim,
+	type LeasedIdempotencyClaimHandle,
+	type LeasedIdempotencyStore,
 	type WithIdempotentCommitDeps,
+	type WithLeasedIdempotentCommitDeps,
 	withIdempotentCommit,
 } from "./application/idempotency/idempotency";
 // Projections: checkpoint port, runner, in-memory reference

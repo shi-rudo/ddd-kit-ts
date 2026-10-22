@@ -665,6 +665,7 @@ In-memory adapters are useful for tests, but they are still memory-only:
 - `InMemoryEventStore`
 - `InMemorySnapshotStore`
 - `InMemoryIdempotencyStore`
+- `InMemoryLeasedIdempotencyStore`
 - `InMemoryDeadlineStore`
 - `InMemoryProjectionCheckpointStore`
 

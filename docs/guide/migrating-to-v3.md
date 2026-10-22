@@ -1602,6 +1602,27 @@ The root entry no longer exports `capturePersistenceBaseline`,
 - On a leased idempotency store, a failure at commit time keeps the staged
   outcome. A retry of the same key rejects with `IdempotencyInFlightError`
   until the lease expires. After that, `reconcileIdempotency` decides. In
-  rc.15 the retry ran the command again. If you use a leased store without
-  `reconcileIdempotency`, add the callback: without it, such a key stays
-  blocked, also after a commit that surely failed.
+  rc.15 the retry ran the command again.
+- The idempotency port has two families, each with its own port. Every store
+  declares its family in a `family` field.
+  - A transactional adapter implements `IdempotencyStore` with
+    `family: "transactional"` and only `claim` and `complete`. Delete its
+    no-op `renew`, `confirm`, `abandon`, and `reconcile`.
+    `withIdempotentCommit` no longer calls them.
+  - A leased adapter implements `LeasedIdempotencyStore` with
+    `family: "leased"`. Its claim handle is a `LeasedIdempotencyClaimHandle`
+    with a required `lease`, and `renew` returns an `IdempotencyLease`.
+  - With a leased store, `withIdempotentCommit` takes
+    `WithLeasedIdempotentCommitDeps`, which requires `reconcileIdempotency`.
+    A call without the callback no longer compiles.
+- `InMemoryIdempotencyStore` is the transactional reference now. Register it
+  with an `InMemoryTransactionScope`; outside a transaction of that scope,
+  `claim` and `complete` throw a `TypeError`. The leased reference of rc.15
+  is `InMemoryLeasedIdempotencyStore`, with the same options. A test that
+  uses the store without a scope switches to the leased store and passes
+  `reconcileIdempotency`.
+- A leased adapter runs the new `createLeasedIdempotencyStoreContractTests`.
+  `createIdempotencyStoreContractTests` covers only the transactional family,
+  and the harness has no `family` field. Its environment requires
+  `runRolledBack`, and the leased environment requires `expireLease` and
+  `advanceTimeTo`. The suites skip no tests.
