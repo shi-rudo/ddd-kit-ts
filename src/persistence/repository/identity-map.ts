@@ -2,8 +2,10 @@ import type { AggregateIdentity } from "../../domain/aggregate/aggregate-identit
 import { pendingEventLifecycleReadViewFor } from "../../domain/aggregate/pending-event-lifecycle";
 import type { Id } from "../../domain/identity/id";
 import {
-	AggregateDeletedError,
+	aggregateDeletedError,
+	copyAggregateIdentity,
 	describeAggregateIdentity,
+	KitWiringError,
 } from "../../errors/kit-errors";
 
 /**
@@ -60,7 +62,7 @@ export type AggregateClass<TAgg> =
  *
  * Deletion is final within an operation: {@link delete} removes the
  * entry AND records a tombstone, so a later {@link set} of the same
- * type+id throws `AggregateDeletedError`: a second instance of a
+ * type+id throws `AGGREGATE_DELETED`: a second instance of a
  * deleted aggregate can never sneak back into the unit of work, even
  * through a repository whose row delete is deferred.
  *
@@ -117,7 +119,7 @@ export class IdentityMap {
 	 *   {@link get} first), and letting it pass would double-collect
 	 *   events downstream.
 	 * - Registering a type+id that was {@link delete}d in this unit of
-	 *   work throws `AggregateDeletedError`: deletion is final within
+	 *   work throws `AGGREGATE_DELETED`: deletion is final within
 	 *   the operation.
 	 */
 	public set<TAgg extends { readonly aggregateIdentity: AggregateIdentity }>(
@@ -126,7 +128,7 @@ export class IdentityMap {
 	): void {
 		const id = aggregate.aggregateIdentity.aggregateId;
 		if (this._deleted.get(type)?.has(id)) {
-			throw new AggregateDeletedError({
+			throw aggregateDeletedError({
 				identity: aggregate.aggregateIdentity,
 			});
 		}
@@ -137,13 +139,22 @@ export class IdentityMap {
 		}
 		const existing = store.get(id);
 		if (existing !== undefined && existing !== aggregate) {
-			throw new Error(
-				"IdentityMap: a different instance is already registered for " +
+			// The details are those of the unit of work's tracking error for the
+			// same defect; the persistence area does not import the application.
+			throw new KitWiringError({
+				code: "AGGREGATE_TRACKING",
+				message:
+					"IdentityMap: a different instance is already registered for " +
 					`${describeAggregateIdentity(aggregate.aggregateIdentity)}. Check get() ` +
 					"before hydrating: two live instances of one aggregate break the " +
 					"one-instance-per-unit-of-work contract that exactly-once event " +
 					"collection relies on.",
-			);
+				details: {
+					identity: copyAggregateIdentity(aggregate.aggregateIdentity),
+					operation: "load",
+					reason: "identity_already_tracked",
+				},
+			});
 		}
 		store.set(id, aggregate);
 		// Capture the load-time pending count once (idempotent re-set keeps
@@ -211,7 +222,7 @@ export class IdentityMap {
 	/**
 	 * Removes the entry for type+id and records a tombstone: subsequent
 	 * {@link get} / {@link has} report absence, and a subsequent
-	 * {@link set} of the same type+id throws `AggregateDeletedError`.
+	 * {@link set} of the same type+id throws `AGGREGATE_DELETED`.
 	 * The Unit of Work calls this as part of `repository.remove(aggregate)`;
 	 * repository adapters receive only the read-only
 	 * identity-map view.
@@ -233,7 +244,7 @@ export class IdentityMap {
 		// A WeakMap cannot be emptied in place; replace it so a reused map
 		// captures FRESH pending-event baselines. A stale (higher) baseline
 		// would make instancesWithNewPendingEvents under-report and defeat
-		// the UnregisteredChangesError safety net.
+		// the `UNREGISTERED_CHANGES` safety net.
 		this._pendingAtRegistration = new WeakMap<object, number>();
 	}
 }

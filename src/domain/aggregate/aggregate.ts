@@ -1,5 +1,5 @@
 import type { Result } from "@shirudo/result";
-import { type DomainError, InvalidVersionError } from "../../errors/kit-errors";
+import { type DomainError, invalidVersionError } from "../../errors/kit-errors";
 import type { AnyDomainEvent, PendingDomainEvent } from "../event/domain-event";
 import type { Id } from "../identity/id";
 import type { AggregateIdentity } from "./aggregate-identity";
@@ -11,15 +11,12 @@ export type Version = number & { readonly __v: true };
 /**
  * Brands a stored number as an aggregate {@link Version}. A version is a
  * safe integer of at least zero. Use it in repository adapters instead of
- * a cast, so a corrupt row value fails here with {@link InvalidVersionError}
+ * a cast, so a corrupt row value fails here with `INVALID_VERSION`
  * and never reaches the optimistic-concurrency cursor.
  */
 export function toVersion(value: number): Version {
 	if (!Number.isSafeInteger(value) || value < 0) {
-		throw new InvalidVersionError(
-			value,
-			"is not a safe integer of at least zero",
-		);
+		throw invalidVersionError(value, "is not a safe integer of at least zero");
 	}
 	return value as Version;
 }
@@ -110,11 +107,11 @@ export interface ReplayableAggregate<
 	 * for an empty history as well; an empty history is otherwise a no-op.
 	 *
 	 * @throws ForeignEventError when a history event names another aggregate
-	 * @throws UnreplayableAggregateError when the target carries pending
+	 * @throws `UNREPLAYABLE_AGGREGATE` when the target carries pending
 	 *   decisions, or a fold records one
-	 * @throws MissingFoldError when no fold is declared for an event type
-	 * @throws FoldReturnedNoStateError when a fold returns `undefined`
-	 * @throws PrototypePollutionError when the folded state carries an own
+	 * @throws `MISSING_FOLD` when no fold is declared for an event type
+	 * @throws `FOLD_RETURNED_NO_STATE` when a fold returns `undefined`
+	 * @throws `PROTOTYPE_POLLUTION` when the folded state carries an own
 	 *   `__proto__` key
 	 */
 	replayHistory(history: ReadonlyArray<TEvent>): Result<void, DomainError>;

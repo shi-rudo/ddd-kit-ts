@@ -1,7 +1,6 @@
 // @ts-expect-error Node's VM exists in the test runtime; the package stays Node-type-free.
 import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { PrototypePollutionError } from "../../errors/kit-errors";
 import { copyPlainData } from "./plain-data";
 
 const options = { subject: "state" };
@@ -230,7 +229,7 @@ describe("copyPlainData", () => {
 		);
 
 		expect(() => copyPlainData(value, options)).toThrow(
-			PrototypePollutionError,
+			expect.objectContaining({ code: "PROTOTYPE_POLLUTION" }),
 		);
 		expect(() => copyPlainData(value, options)).toThrow("state.nested");
 	});

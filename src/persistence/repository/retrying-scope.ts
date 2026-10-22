@@ -83,7 +83,7 @@ function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
  *
  * **Classification is by error, not by guesswork.** Only errors the
  * `isRetryable` predicate accepts are retried; everything else (a
- * `DomainError`, `EventCollectionError`, `UnregisteredChangesError`,
+ * `DomainError`, `EVENT_COLLECTION_FAILED`, `UNREGISTERED_CHANGES`,
  * `DuplicateAggregateError`, a non-Error throw) surfaces immediately.
  * After `maxAttempts` the last error is rethrown unchanged, so a caller
  * can still match `ConcurrencyConflictError` and map it to HTTP 409.

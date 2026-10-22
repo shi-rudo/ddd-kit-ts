@@ -1,4 +1,4 @@
-import { UnmanagedInstanceError } from "../../errors/kit-errors";
+import { unmanagedInstanceError } from "../../errors/kit-errors";
 import { assertNotFromAnotherKitCopy } from "../../internal/kit-copy";
 import type { AnyDomainEvent, PendingDomainEvent } from "../event/domain-event";
 import type { Version } from "./aggregate";
@@ -52,8 +52,8 @@ export interface PendingEventLifecycleCapability
 const capabilities = new WeakMap<object, PendingEventLifecycleCapability>();
 
 /**
- * Resolves the lifecycle authority. Throws `DuplicateKitCopyError` for an
- * aggregate of another loaded kit copy and `UnmanagedInstanceError` for any
+ * Resolves the lifecycle authority. Throws `DUPLICATE_KIT_COPY` for an
+ * aggregate of another loaded kit copy and `UNMANAGED_INSTANCE` for any
  * other object.
  */
 export function requirePendingEventLifecycleCapability(
@@ -63,7 +63,7 @@ export function requirePendingEventLifecycleCapability(
 	const capability = capabilities.get(aggregate);
 	if (capability !== undefined) return capability;
 	assertNotFromAnotherKitCopy(aggregate, "The aggregate");
-	throw new UnmanagedInstanceError(
+	throw unmanagedInstanceError(
 		operation,
 		"aggregate",
 		(aggregate as { id?: unknown } | null | undefined)?.id,
@@ -87,7 +87,7 @@ export function pendingEventLifecycleCapabilityFor(
 // The read-view accessors narrow the same registration to the read type.
 // A reader that resolves through them cannot reach acknowledge or discard.
 
-/** Resolves the lifecycle read view or throws `UnmanagedInstanceError`. */
+/** Resolves the lifecycle read view or throws `UNMANAGED_INSTANCE`. */
 export function requirePendingEventLifecycleReadView(
 	aggregate: object,
 	operation: string,

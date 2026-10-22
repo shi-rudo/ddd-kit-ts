@@ -1,4 +1,4 @@
-import { UnmanagedInstanceError } from "../../errors/kit-errors";
+import { unmanagedInstanceError } from "../../errors/kit-errors";
 import { assertNotFromAnotherKitCopy } from "../../internal/kit-copy";
 import type {
 	AnyDomainEvent,
@@ -20,8 +20,8 @@ export interface PendingEventRecordingCapability {
 const capabilities = new WeakMap<object, PendingEventRecordingCapability>();
 
 /**
- * Resolves the recording capability. Throws `DuplicateKitCopyError` for an
- * aggregate of another loaded kit copy and `UnmanagedInstanceError` for any
+ * Resolves the recording capability. Throws `DUPLICATE_KIT_COPY` for an
+ * aggregate of another loaded kit copy and `UNMANAGED_INSTANCE` for any
  * other object.
  */
 export function requirePendingEventRecordingCapability(
@@ -31,7 +31,7 @@ export function requirePendingEventRecordingCapability(
 	const capability = capabilities.get(aggregate);
 	if (capability !== undefined) return capability;
 	assertNotFromAnotherKitCopy(aggregate, "The aggregate");
-	throw new UnmanagedInstanceError(
+	throw unmanagedInstanceError(
 		operation,
 		"aggregate",
 		(aggregate as { id?: unknown } | null | undefined)?.id,

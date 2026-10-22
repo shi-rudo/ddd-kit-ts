@@ -345,7 +345,7 @@ no-op without touching the source head. Unbounded production
 workloads need a durable adapter with an explicit source-head retention policy
 that keeps ended heads, and a transactional unique key on `eventId`.
 
-`add` rejects a malformed candidate with `EventCollectionError`: a part that
+`add` rejects a malformed candidate with `EVENT_COLLECTION_FAILED`: a part that
 is not an object, an `eventId` or `type` that is not a string, a source field
 that is not a string, or a position that is not a valid commit
 position. A valid position has integer fields, an `aggregateVersion` of at
@@ -388,9 +388,9 @@ dedupes exact pending, dead-lettered, and recently dispatched re-adds by
 `eventId`, and implements dispatch tracking. A contradictory source or commit
 position rejects instead of being mistaken for a retry. Once a dispatched
 receipt is evicted, a candidate behind the current source head fails with
-`EventCollectionError` rather than rewinding the head. `endEventSources` marks the
+`EVENT_COLLECTION_FAILED` rather than rewinding the head. `endEventSources` marks the
 cursor of a removed aggregate as ended, and a new event of that source fails
-with `EventCollectionError` too. A retry of an event at the
+with `EVENT_COLLECTION_FAILED` too. A retry of an event at the
 current source head still dedupes, because the source cursor names it. This is
 intentionally fail-safe, not an unbounded idempotency promise. Durable outboxes keep the
 event-ID receipt in storage.

@@ -237,7 +237,7 @@ mapExpectedError: (thrown) =>
 ```
 
 An unregistered command or query type always throws
-`UnregisteredHandlerError`. A nested bus wiring error and a failure thrown by
+`UNREGISTERED_HANDLER`. A nested bus wiring error and a failure thrown by
 `mapExpectedError` also stay crash-loud. Do not use a total conversion such as
 `(thrown) => ({ error: toStructuredError(thrown) })`: that would explicitly
 classify programming errors, cancellation, and unknown infrastructure failures
@@ -324,11 +324,12 @@ const orderId = await uow.run(async ({ repositories }) => {
 Kit errors are structured errors from `@shirudo/base-error`. Each has one
 stable identifier: `error.code`, and `error.name === error.code`.
 
-The important bases are:
+The important classes are:
 
 ```ts
 abstract class DomainError<Code>
 abstract class InfrastructureError<Code>
+class KitWiringError<Code extends KitWiringErrorCode>
 ```
 
 Use them like this:
@@ -337,7 +338,26 @@ Use them like this:
 | --- | --- | --- |
 | `DomainError` | business invariant failed | 400-shaped domain response |
 | `InfrastructureError` | not found, duplicate id, OCC conflict | 404 or 409-shaped response |
-| Wiring errors | missing handler, closed transaction, deleted aggregate reused | rethrow, alert, 500 |
+| `KitWiringError` | missing handler, closed transaction, deleted aggregate reused | rethrow, alert, 500 |
+
+A wiring error is a programming or configuration bug, so the kit does not
+model each case as a class. One class, `KitWiringError`, carries every wiring
+code, for example `AGGREGATE_TRACKING` or `TRANSACTION_CLOSED`. Match on the
+code, never on the message:
+
+```ts
+import { KitWiringError } from "@shirudo/ddd-kit";
+
+if (error instanceof KitWiringError && error.code === "TRANSACTION_CLOSED") {
+  logger.error(error.toLogObject());
+}
+```
+
+`error.details` holds safe diagnostic data, for example the aggregate
+identity, the operation, or a reason code, and the log object carries it. If a
+second failure occurred while the kit handled the first one, for example a
+mapper that threw while it classified a handler error, the second failure is
+`error.secondaryCause`. The first one stays `error.cause`.
 
 Common repository errors:
 

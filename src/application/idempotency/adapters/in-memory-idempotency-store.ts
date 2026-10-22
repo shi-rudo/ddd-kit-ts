@@ -1,8 +1,8 @@
 import {
-	IdempotencyCompletionWithoutClaimError,
 	IdempotencyInFlightError,
 	IdempotencyKeyReuseError,
 	InMemoryCapacityExceededError,
+	idempotencyCompletionWithoutClaimError,
 } from "../../../errors/kit-errors";
 import { assertPositiveSafeInteger } from "../../../internal/validate";
 import type {
@@ -134,7 +134,7 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 		const { key, token } = claim;
 		const existing = this.entries.get(key);
 		if (existing?.status !== "pending" || existing.token !== token) {
-			throw new IdempotencyCompletionWithoutClaimError(key);
+			throw idempotencyCompletionWithoutClaimError(key);
 		}
 		this.writeInTransaction(key, {
 			fingerprint: existing.fingerprint,

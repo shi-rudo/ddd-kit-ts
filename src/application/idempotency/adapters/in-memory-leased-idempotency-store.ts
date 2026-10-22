@@ -1,9 +1,9 @@
 import {
 	IdempotencyClaimLostError,
-	IdempotencyCompletionWithoutClaimError,
 	IdempotencyInFlightError,
 	IdempotencyKeyReuseError,
 	InMemoryCapacityExceededError,
+	idempotencyCompletionWithoutClaimError,
 } from "../../../errors/kit-errors";
 import {
 	assertPositiveSafeInteger,
@@ -183,7 +183,7 @@ export class InMemoryLeasedIdempotencyStore<TCtx = unknown>
 		const now = this.nowMs();
 		const existing = this.entries.get(key);
 		if (existing === undefined) {
-			throw new IdempotencyCompletionWithoutClaimError(key);
+			throw idempotencyCompletionWithoutClaimError(key);
 		}
 		if (
 			existing.status !== "pending" ||

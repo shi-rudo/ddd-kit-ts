@@ -1,12 +1,12 @@
 import {
-	DuplicateEventIdError,
-	HandBuiltEventError,
-	InvalidVersionError,
-	MisattributedEventError,
-	PendingEventBatchMismatchError,
-	PendingEventLimitExceededError,
-	ReentrantEventRecordingError,
-	UnreplayableAggregateError,
+	duplicateEventIdError,
+	handBuiltEventError,
+	invalidVersionError,
+	misattributedEventError,
+	pendingEventBatchMismatchError,
+	pendingEventLimitExceededError,
+	reentrantEventRecordingError,
+	unreplayableAggregateError,
 } from "../../errors/kit-errors";
 import { assertPositiveSafeInteger } from "../../internal/validate";
 import { Entity, type EntityConfig } from "../entity/entity";
@@ -42,7 +42,7 @@ export interface AggregateConfig<TState = unknown>
 	extends EntityConfig<TState> {
 	/**
 	 * Limit on the pending list. A recording that would grow the list
-	 * past it throws {@link PendingEventLimitExceededError} before the
+	 * past it throws `PENDING_EVENT_LIMIT_EXCEEDED` before the
 	 * state moves, so the rejected decision records nothing and moves
 	 * nothing. Defaults to unlimited. The limit is a modelling signal: a
 	 * decision that emits hundreds of facts points at a missing aggregate
@@ -179,10 +179,10 @@ export abstract class BaseAggregate<
 	 * and time from `createStamp`, passes an already stamped event through,
 	 * and replaces the list atomically. Three guards run before the
 	 * assignment: an event that no kit constructor built is rejected
-	 * ({@link HandBuiltEventError}); a stamp provider that recorded a new
+	 * (`HAND_BUILT_EVENT`); a stamp provider that recorded a new
 	 * decision on this aggregate mid-map is rejected
-	 * ({@link ReentrantEventRecordingError}); and two decisions that
-	 * received one eventId are rejected ({@link DuplicateEventIdError}).
+	 * (`REENTRANT_EVENT_RECORDING`); and two decisions that
+	 * received one eventId are rejected (`DUPLICATE_EVENT_ID`).
 	 * When a guard fires, every decision stays unstamped.
 	 */
 	private recordPendingDecisions(
@@ -195,9 +195,7 @@ export abstract class BaseAggregate<
 			if (isStampedDomainEvent(candidate)) return candidate as TEvent;
 			if (!isUnstampedDomainEvent(candidate)) {
 				assertEventNotFromAnotherKitCopy(candidate);
-				throw new HandBuiltEventError(
-					(event as { readonly type: string }).type,
-				);
+				throw handBuiltEventError((event as { readonly type: string }).type);
 			}
 			return stampDomainEvent(
 				candidate,
@@ -211,7 +209,7 @@ export abstract class BaseAggregate<
 			this._pendingEvents !== stamped ||
 			this._pendingEvents.length !== stampedCount
 		) {
-			throw new ReentrantEventRecordingError({
+			throw reentrantEventRecordingError({
 				identity: this.aggregateIdentity,
 			});
 		}
@@ -222,7 +220,7 @@ export abstract class BaseAggregate<
 		for (const event of recorded) {
 			const eventId = (event as AnyDomainEvent).eventId;
 			if (seenEventIds.has(eventId)) {
-				throw new DuplicateEventIdError({
+				throw duplicateEventIdError({
 					identity: this.aggregateIdentity,
 					eventId,
 				});
@@ -266,7 +264,7 @@ export abstract class BaseAggregate<
 			events.length > this._pendingEvents.length ||
 			events.some((event, index) => event !== this._pendingEvents[index])
 		) {
-			throw new PendingEventBatchMismatchError({
+			throw pendingEventBatchMismatchError({
 				identity: this.aggregateIdentity,
 				batchLength: events.length,
 				pendingLength: this._pendingEvents.length,
@@ -322,9 +320,9 @@ export abstract class BaseAggregate<
 	 * Three guards keep the marker honest. The instance must carry no
 	 * pending decisions, because a restore on a dirty instance would later
 	 * commit facts against a baseline they were never part of
-	 * ({@link UnreplayableAggregateError}). The version must be a safe
+	 * (`UNREPLAYABLE_AGGREGATE`). The version must be a safe
 	 * integer of at least zero, and it must not lie below the current
-	 * version ({@link InvalidVersionError}); a catch-up replay only moves
+	 * version (`INVALID_VERSION`); a catch-up replay only moves
 	 * forward.
 	 *
 	 * The Factory-vs-Reconstitution distinction (Vernon §11) is honoured
@@ -352,7 +350,7 @@ export abstract class BaseAggregate<
 		);
 		const restored = toVersion(version);
 		if (restored < this._version) {
-			throw new InvalidVersionError(
+			throw invalidVersionError(
 				version,
 				`is below the current version ${this._version}`,
 			);
@@ -365,11 +363,11 @@ export abstract class BaseAggregate<
 	 * Appends a domain event to the pending list. The event must be kit-built
 	 * by a kit constructor; a missing `aggregateId` or `aggregateType` is
 	 * stamped from this aggregate, and an aggregate identity that names another
-	 * aggregate throws {@link MisattributedEventError} before anything is
+	 * aggregate throws `MISATTRIBUTED_EVENT` before anything is
 	 * recorded. Each append is one fact. A decision appended twice becomes
 	 * two facts with distinct ids. A stamped event that is already pending
-	 * throws {@link DuplicateEventIdError}, and a list at `maxPendingEvents`
-	 * throws {@link PendingEventLimitExceededError}, before anything is
+	 * throws `DUPLICATE_EVENT_ID`, and a list at `maxPendingEvents`
+	 * throws `PENDING_EVENT_LIMIT_EXCEEDED`, before anything is
 	 * recorded. Prefer the higher-level `StateStoredAggregate.setState()`
 	 * (state-stored) or `EventSourcedAggregate.apply()` (event-sourced) call
 	 * sites, both of which wrap `addDomainEvent` in the canonical
@@ -389,7 +387,7 @@ export abstract class BaseAggregate<
 	/**
 	 * One identity per fact, checked before the change becomes observable:
 	 * a stamped event whose `eventId` is already pending, or appears twice
-	 * in one batch, throws {@link DuplicateEventIdError}. A decision has no
+	 * in one batch, throws `DUPLICATE_EVENT_ID`. A decision has no
 	 * `eventId` yet, so a stamp provider that reuses one is caught at
 	 * recording instead.
 	 */
@@ -403,7 +401,7 @@ export abstract class BaseAggregate<
 		for (const event of batch) {
 			if (!isStampedDomainEvent(event)) continue;
 			if (pendingIds.has(event.eventId)) {
-				throw new DuplicateEventIdError({
+				throw duplicateEventIdError({
 					identity: this.aggregateIdentity,
 					eventId: event.eventId,
 				});
@@ -415,7 +413,7 @@ export abstract class BaseAggregate<
 	/**
 	 * The pending list stays within `maxPendingEvents`, checked before the
 	 * change becomes observable: a batch that would grow the list past the
-	 * limit throws {@link PendingEventLimitExceededError}. Without a limit
+	 * limit throws `PENDING_EVENT_LIMIT_EXCEEDED`. Without a limit
 	 * the check is a no-op.
 	 */
 	protected assertPendingEventLimit(added: number): void {
@@ -423,7 +421,7 @@ export abstract class BaseAggregate<
 		if (limit === undefined) return;
 		const pending = this._pendingEvents.length;
 		if (pending + added <= limit) return;
-		throw new PendingEventLimitExceededError({
+		throw pendingEventLimitExceededError({
 			identity: this.aggregateIdentity,
 			limit,
 			pending,
@@ -454,7 +452,7 @@ export abstract class BaseAggregate<
 	/**
 	 * Aggregate identity discipline for NEW facts, shared by both flavours: a
 	 * present-but-foreign `aggregateId` / `aggregateType` is a wiring bug and
-	 * throws {@link MisattributedEventError}; missing fields are filled in
+	 * throws `MISATTRIBUTED_EVENT`; missing fields are filled in
 	 * from the aggregate, so a recorded event always carries its full
 	 * aggregate identity and can never fail the collection or the replay guard
 	 * later. The kit-built check
@@ -472,7 +470,7 @@ export abstract class BaseAggregate<
 		const typeForeign =
 			aggregateType !== undefined && aggregateType !== this.aggregateType;
 		if (idForeign || typeForeign) {
-			throw new MisattributedEventError({
+			throw misattributedEventError({
 				expected: { aggregateType: this.aggregateType, aggregateId: this.id },
 				actual: { aggregateType, aggregateId },
 				eventType: event.type,
@@ -511,7 +509,7 @@ export abstract class BaseAggregate<
 	protected assertKitBuiltEvent(event: PendingDomainEvent<TEvent>): void {
 		if (!isStampedDomainEvent(event) && !isUnstampedDomainEvent(event)) {
 			assertEventNotFromAnotherKitCopy(event);
-			throw new HandBuiltEventError(
+			throw handBuiltEventError(
 				(event as AnyDomainEvent | AnyUnstampedDomainEvent).type,
 			);
 		}
@@ -559,7 +557,7 @@ export abstract class BaseAggregate<
 /**
  * Restore-target guard used by `markReconstituted` and by
  * `EventSourcedAggregate.replayHistory`: a target carrying unflushed
- * `pendingEvents` throws {@link UnreplayableAggregateError} BEFORE anything
+ * `pendingEvents` throws `UNREPLAYABLE_AGGREGATE` BEFORE anything
  * moves. A restore advances the aggregate's current version, so unflushed
  * events recorded against the old version would later be collected claiming
  * a version baseline they were never part of. When the discard is
@@ -581,7 +579,7 @@ export function assertReplayTargetHasNoPendingEvents(
 	pending: number,
 ): void {
 	if (pending > 0) {
-		throw new UnreplayableAggregateError({
+		throw unreplayableAggregateError({
 			identity,
 			reason:
 				`it carries ${pending} unflushed pending event(s) that are not ` +

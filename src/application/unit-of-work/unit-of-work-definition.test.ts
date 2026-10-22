@@ -3,11 +3,13 @@ import type { Version } from "../../domain/aggregate/aggregate";
 import { StateStoredAggregate } from "../../domain/aggregate/state-stored-aggregate";
 import type { DomainEvent } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
-import { InfrastructureError } from "../../errors/kit-errors";
+import {
+	InfrastructureError,
+	type KitWiringError,
+} from "../../errors/kit-errors";
 import type { PersistenceModel } from "../../persistence/repository/persistence-model";
 import type { TransactionScope } from "../../persistence/repository/scope";
 import { recordingOutbox } from "../../testing/recording-outbox";
-import { RepositoryErrorMappingFailedError } from "./errors";
 import type { RepositoryTracking } from "./persistence-contract";
 import {
 	defineRepository,
@@ -185,7 +187,7 @@ describe("UnitOfWork repository definition", () => {
 		await expect(unitOfWork.run(async () => undefined)).rejects.toMatchObject({
 			code: "INVALID_REPOSITORY_DEFINITION",
 			category: "WIRING",
-			repository: "orders",
+			details: { repository: "orders" },
 		});
 	});
 
@@ -207,7 +209,7 @@ describe("UnitOfWork repository definition", () => {
 
 		await expect(unitOfWork.run(async () => undefined)).rejects.toMatchObject({
 			code: "INVALID_REPOSITORY_DEFINITION",
-			repository: "orders",
+			details: { repository: "orders" },
 		});
 	});
 
@@ -346,13 +348,11 @@ describe("UnitOfWork repository definition", () => {
 			.catch((error: unknown) => error);
 
 		expect(rejection).toMatchObject({
-			constructor: RepositoryErrorMappingFailedError,
 			code: "REPOSITORY_ERROR_MAPPING_FAILED",
 			category: "WIRING",
 			cause: driverError,
-			mapperCause: mapperError,
-			identity: order.aggregateIdentity,
-			intent: "add",
+			secondaryCause: mapperError,
+			details: { identity: order.aggregateIdentity, intent: "add" },
 		});
 	});
 
@@ -367,13 +367,16 @@ describe("UnitOfWork repository definition", () => {
 			.catch((error: unknown) => error);
 
 		expect(rejection).toMatchObject({
-			constructor: RepositoryErrorMappingFailedError,
 			cause: driverError,
-			identity: { aggregateType: "Order", aggregateId: "order-1" },
-			intent: "add",
+			code: "REPOSITORY_ERROR_MAPPING_FAILED",
+			details: {
+				identity: { aggregateType: "Order", aggregateId: "order-1" },
+				intent: "add",
+			},
 		});
 		expect(
-			(rejection as RepositoryErrorMappingFailedError).mapperCause,
+			(rejection as KitWiringError<"REPOSITORY_ERROR_MAPPING_FAILED">)
+				.secondaryCause,
 		).toBeInstanceOf(TypeError);
 	});
 });

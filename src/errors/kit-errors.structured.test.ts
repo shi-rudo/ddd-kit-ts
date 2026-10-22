@@ -1,57 +1,54 @@
 import { isStructuredError, matchError } from "@shirudo/base-error";
 import { describe, expect, it } from "vite-plus/test";
 import {
-	InvalidFlushStatementError,
+	invalidFlushStatementError,
 	RollbackError,
 } from "../application/unit-of-work/errors";
 import type { AggregateWriteIntent } from "../application/unit-of-work/persistence-contract";
 import type { AggregateIdentity } from "../domain/aggregate/aggregate-identity";
 import { InvalidDomainTransitionError } from "../domain/state-machine/errors";
-import type {
-	EventBusClosedError,
-	PublishDepthExceededError,
-} from "../messaging/event-bus/errors";
 import {
 	AcknowledgedRecordPendingError,
-	AggregateDeletedError,
 	type AggregateDeletedErrorOptions,
 	type AggregateIdentityMismatchOptions,
 	AggregateNotFoundError,
 	type AggregateNotFoundErrorOptions,
+	aggregateDeletedError,
 	ConcurrencyConflictError,
 	type ConcurrencyConflictErrorOptions,
-	DirectStateMutationError,
 	type DirectStateMutationErrorOptions,
 	DomainError,
 	DuplicateAggregateError,
 	type DuplicateAggregateErrorOptions,
 	type DuplicateEventIdErrorOptions,
-	DuplicateKitCopyError,
-	ErrorMapperFailedError,
-	EventCollectionError,
-	FoldReturnedNoStateError,
+	directStateMutationError,
+	duplicateKitCopyError,
+	errorMapperFailedError,
+	eventCollectionError,
 	ForeignEventError,
+	foldReturnedNoStateError,
 	InfrastructureError,
 	InMemoryCapacityExceededError,
 	InvalidCommandMessageError,
 	InvalidEventStreamPageError,
 	type InvalidEventStreamPageErrorOptions,
 	InvalidIntegrationMessageError,
-	InvalidVersionError,
+	invalidVersionError,
 	type KitErrorCode,
-	MisattributedEventError,
-	MissingEntityIdError,
-	MissingFoldError,
-	MissingHandlerError,
-	PendingEventBatchMismatchError,
+	KitWiringError,
+	misattributedEventError,
+	missingEntityIdError,
+	missingFoldError,
+	missingHandlerError,
 	type PendingEventBatchMismatchErrorOptions,
-	PendingEventLimitExceededError,
 	type PendingEventLimitExceededErrorOptions,
 	ProjectionGapError,
 	ProjectionIdentityViolationError,
 	ProjectionOrderViolationError,
 	ProjectionReceiptViolationError,
-	PrototypePollutionError,
+	pendingEventBatchMismatchError,
+	pendingEventLimitExceededError,
+	prototypePollutionError,
 	type ReentrantEventRecordingErrorOptions,
 	ReplayRejectedError,
 	type ReplayRejectedErrorOptions,
@@ -59,15 +56,15 @@ import {
 	type ReplayTargetMismatchErrorOptions,
 	SnapshotSchemaMismatchError,
 	type SnapshotSchemaMismatchErrorOptions,
-	SnapshotVersionNotRestoredError,
 	type SnapshotVersionNotRestoredErrorOptions,
-	UnmanagedInstanceError,
-	UnprojectableEventError,
-	UnregisteredChangesError,
+	snapshotVersionNotRestoredError,
 	type UnregisteredChangesErrorOptions,
-	UnregisteredHandlerError,
-	UnreplayableAggregateError,
 	type UnreplayableAggregateErrorOptions,
+	unmanagedInstanceError,
+	unprojectableEventError,
+	unregisteredChangesError,
+	unregisteredHandlerError,
+	unreplayableAggregateError,
 } from "./kit-errors";
 
 // The structured-error contract for every kit error (decided 2026-07-05):
@@ -136,7 +133,7 @@ const concreteCases: ReadonlyArray<{
 	},
 	{
 		error: () =>
-			new SnapshotVersionNotRestoredError({
+			snapshotVersionNotRestoredError({
 				identity: { aggregateType: "Order", aggregateId: "o-1" },
 				snapshotVersion: 7,
 				restoredVersion: 0,
@@ -146,14 +143,14 @@ const concreteCases: ReadonlyArray<{
 		retryable: false,
 	},
 	{
-		error: () => new MissingHandlerError("OrderConfirmed"),
+		error: () => missingHandlerError("OrderConfirmed"),
 		code: "MISSING_HANDLER",
 		category: "WIRING",
 		retryable: false,
 	},
 	{
 		error: () =>
-			new MisattributedEventError({
+			misattributedEventError({
 				expected: { aggregateType: "Order", aggregateId: "o-1" },
 				actual: { aggregateId: "o-2" },
 				eventType: "OrderConfirmed",
@@ -163,20 +160,20 @@ const concreteCases: ReadonlyArray<{
 		retryable: false,
 	},
 	{
-		error: () => new MissingFoldError("OrderConfirmed"),
+		error: () => missingFoldError("OrderConfirmed"),
 		code: "MISSING_FOLD",
 		category: "WIRING",
 		retryable: false,
 	},
 	{
-		error: () => new FoldReturnedNoStateError("OrderConfirmed"),
+		error: () => foldReturnedNoStateError("OrderConfirmed"),
 		code: "FOLD_RETURNED_NO_STATE",
 		category: "WIRING",
 		retryable: false,
 	},
 	{
 		error: () =>
-			new DirectStateMutationError({
+			directStateMutationError({
 				identity: { aggregateType: "Order", aggregateId: "order-1" },
 			}),
 		code: "DIRECT_STATE_MUTATION",
@@ -184,14 +181,14 @@ const concreteCases: ReadonlyArray<{
 		retryable: false,
 	},
 	{
-		error: () => new MissingEntityIdError(undefined),
+		error: () => missingEntityIdError(undefined),
 		code: "MISSING_ENTITY_ID",
 		category: "WIRING",
 		retryable: false,
 	},
 	{
 		error: () =>
-			new PendingEventBatchMismatchError({
+			pendingEventBatchMismatchError({
 				identity: { aggregateType: "Order", aggregateId: "order-1" },
 				batchLength: 2,
 				pendingLength: 1,
@@ -202,7 +199,7 @@ const concreteCases: ReadonlyArray<{
 	},
 	{
 		error: () =>
-			new PendingEventLimitExceededError({
+			pendingEventLimitExceededError({
 				identity: { aggregateType: "Order", aggregateId: "order-1" },
 				limit: 2,
 				pending: 2,
@@ -214,19 +211,19 @@ const concreteCases: ReadonlyArray<{
 	},
 	{
 		error: () =>
-			new UnmanagedInstanceError("stampPendingEvents", "aggregate", "order-1"),
+			unmanagedInstanceError("stampPendingEvents", "aggregate", "order-1"),
 		code: "UNMANAGED_INSTANCE",
 		category: "WIRING",
 		retryable: false,
 	},
 	{
-		error: () => new DuplicateKitCopyError("The aggregate"),
+		error: () => duplicateKitCopyError("The aggregate"),
 		code: "DUPLICATE_KIT_COPY",
 		category: "WIRING",
 		retryable: false,
 	},
 	{
-		error: () => new InvalidVersionError(-1, "is not a safe integer"),
+		error: () => invalidVersionError(-1, "is not a safe integer"),
 		code: "INVALID_VERSION",
 		category: "WIRING",
 		retryable: false,
@@ -280,7 +277,7 @@ const concreteCases: ReadonlyArray<{
 		retryable: false,
 	},
 	{
-		error: () => new UnprojectableEventError("orders", "evt-1", "is invalid"),
+		error: () => unprojectableEventError("orders", "evt-1", "is invalid"),
 		code: "UNPROJECTABLE_EVENT",
 		category: "WIRING",
 		retryable: false,
@@ -351,7 +348,7 @@ const concreteCases: ReadonlyArray<{
 	},
 	{
 		error: () =>
-			new UnregisteredHandlerError({
+			unregisteredHandlerError({
 				busKind: "command",
 				messageType: "CreateOrder",
 			}),
@@ -361,7 +358,7 @@ const concreteCases: ReadonlyArray<{
 	},
 	{
 		error: () =>
-			new ErrorMapperFailedError({
+			errorMapperFailedError({
 				busKind: "command",
 				handlerError: new Error("x"),
 				mapperError: new Error("y"),
@@ -371,14 +368,14 @@ const concreteCases: ReadonlyArray<{
 		retryable: false,
 	},
 	{
-		error: () => new PrototypePollutionError("__proto__"),
+		error: () => prototypePollutionError("__proto__"),
 		code: "PROTOTYPE_POLLUTION",
 		category: "WIRING",
 		retryable: false,
 	},
 	{
 		error: () =>
-			new UnreplayableAggregateError({
+			unreplayableAggregateError({
 				identity: { aggregateType: "Order", aggregateId: "o-1" },
 				reason: "it is dirty",
 			}),
@@ -421,16 +418,15 @@ describe("kit errors are StructuredErrors (code = name = the one identifier)", (
 
 	it("further structured kit errors carry their codes", () => {
 		expect(
-			new EventCollectionError("event without aggregateId", "OrderConfirmed")
-				.code,
+			eventCollectionError("event without aggregateId", "OrderConfirmed").code,
 		).toBe("EVENT_COLLECTION_FAILED");
 		expect(
-			new UnregisteredChangesError({
+			unregisteredChangesError({
 				identity: { aggregateType: "Order", aggregateId: "o-1" },
 			}).code,
 		).toBe("UNREGISTERED_CHANGES");
 		expect(
-			new AggregateDeletedError({
+			aggregateDeletedError({
 				identity: { aggregateType: "Order", aggregateId: "o-1" },
 			}).code,
 		).toBe("AGGREGATE_DELETED");
@@ -542,7 +538,7 @@ describe("a serialized kit error keeps the fields it declares", () => {
 	});
 
 	it("carries the fields of a wiring error", () => {
-		const error = new InvalidFlushStatementError({
+		const error = invalidFlushStatementError({
 			identity: { aggregateType: "Order", aggregateId: "order-1" },
 			intent: "update",
 			reason: "no_row_count",
@@ -553,9 +549,11 @@ describe("a serialized kit error keeps the fields it declares", () => {
 			code: "INVALID_FLUSH_STATEMENT",
 			category: "WIRING",
 			retryable: false,
-			intent: "update",
-			reason: "no_row_count",
-			received: "1 (bigint)",
+			details: {
+				intent: "update",
+				reason: "no_row_count",
+				received: "1 (bigint)",
+			},
 		});
 	});
 
@@ -583,7 +581,7 @@ describe("a serialized kit error keeps the fields it declares", () => {
 	});
 
 	it("keeps name, message and code of a field that holds an error", () => {
-		const rollbackCause = new AggregateDeletedError({
+		const rollbackCause = aggregateDeletedError({
 			identity: { aggregateType: "Order", aggregateId: "order-1" },
 		});
 		const error = new RollbackError(
@@ -641,43 +639,43 @@ describe("KitErrorCode stays in sync with the classes", () => {
 		type AssertKitCode<T extends KitErrorCode> = T;
 		type _Checks = [
 			AssertKitCode<AcknowledgedRecordPendingError["code"]>,
-			AssertKitCode<AggregateDeletedError["code"]>,
+			AssertKitCode<KitWiringError<"AGGREGATE_DELETED">["code"]>,
 			AssertKitCode<AggregateNotFoundError["code"]>,
-			AssertKitCode<DuplicateKitCopyError["code"]>,
+			AssertKitCode<KitWiringError<"DUPLICATE_KIT_COPY">["code"]>,
 			AssertKitCode<ConcurrencyConflictError["code"]>,
-			AssertKitCode<DirectStateMutationError["code"]>,
+			AssertKitCode<KitWiringError<"DIRECT_STATE_MUTATION">["code"]>,
 			AssertKitCode<DuplicateAggregateError["code"]>,
-			AssertKitCode<ErrorMapperFailedError["code"]>,
-			AssertKitCode<EventCollectionError["code"]>,
-			AssertKitCode<FoldReturnedNoStateError["code"]>,
+			AssertKitCode<KitWiringError<"ERROR_MAPPER_FAILED">["code"]>,
+			AssertKitCode<KitWiringError<"EVENT_COLLECTION_FAILED">["code"]>,
+			AssertKitCode<KitWiringError<"FOLD_RETURNED_NO_STATE">["code"]>,
 			AssertKitCode<ForeignEventError["code"]>,
-			AssertKitCode<PrototypePollutionError["code"]>,
+			AssertKitCode<KitWiringError<"PROTOTYPE_POLLUTION">["code"]>,
 			AssertKitCode<InMemoryCapacityExceededError["code"]>,
 			AssertKitCode<InvalidCommandMessageError["code"]>,
 			AssertKitCode<InvalidIntegrationMessageError["code"]>,
-			AssertKitCode<InvalidVersionError["code"]>,
-			AssertKitCode<MisattributedEventError["code"]>,
-			AssertKitCode<MissingEntityIdError["code"]>,
-			AssertKitCode<MissingFoldError["code"]>,
-			AssertKitCode<MissingHandlerError["code"]>,
+			AssertKitCode<KitWiringError<"INVALID_VERSION">["code"]>,
+			AssertKitCode<KitWiringError<"MISATTRIBUTED_EVENT">["code"]>,
+			AssertKitCode<KitWiringError<"MISSING_ENTITY_ID">["code"]>,
+			AssertKitCode<KitWiringError<"MISSING_FOLD">["code"]>,
+			AssertKitCode<KitWiringError<"MISSING_HANDLER">["code"]>,
 			AssertKitCode<InvalidEventStreamPageError["code"]>,
 			AssertKitCode<ReplayTargetMismatchError["code"]>,
 			AssertKitCode<ReplayRejectedError["code"]>,
-			AssertKitCode<PendingEventBatchMismatchError["code"]>,
-			AssertKitCode<PendingEventLimitExceededError["code"]>,
+			AssertKitCode<KitWiringError<"PENDING_EVENT_BATCH_MISMATCH">["code"]>,
+			AssertKitCode<KitWiringError<"PENDING_EVENT_LIMIT_EXCEEDED">["code"]>,
 			AssertKitCode<ProjectionGapError["code"]>,
-			AssertKitCode<EventBusClosedError["code"]>,
-			AssertKitCode<PublishDepthExceededError["code"]>,
+			AssertKitCode<KitWiringError<"EVENT_BUS_CLOSED">["code"]>,
+			AssertKitCode<KitWiringError<"PUBLISH_DEPTH_EXCEEDED">["code"]>,
 			AssertKitCode<ProjectionIdentityViolationError["code"]>,
 			AssertKitCode<ProjectionOrderViolationError["code"]>,
 			AssertKitCode<ProjectionReceiptViolationError["code"]>,
 			AssertKitCode<SnapshotSchemaMismatchError["code"]>,
-			AssertKitCode<SnapshotVersionNotRestoredError["code"]>,
-			AssertKitCode<UnregisteredChangesError["code"]>,
-			AssertKitCode<UnmanagedInstanceError["code"]>,
-			AssertKitCode<UnprojectableEventError["code"]>,
-			AssertKitCode<UnregisteredHandlerError["code"]>,
-			AssertKitCode<UnreplayableAggregateError["code"]>,
+			AssertKitCode<KitWiringError<"SNAPSHOT_VERSION_NOT_RESTORED">["code"]>,
+			AssertKitCode<KitWiringError<"UNREGISTERED_CHANGES">["code"]>,
+			AssertKitCode<KitWiringError<"UNMANAGED_INSTANCE">["code"]>,
+			AssertKitCode<KitWiringError<"UNPROJECTABLE_EVENT">["code"]>,
+			AssertKitCode<KitWiringError<"UNREGISTERED_HANDLER">["code"]>,
+			AssertKitCode<KitWiringError<"UNREPLAYABLE_AGGREGATE">["code"]>,
 		];
 		const witness: _Checks | undefined = undefined;
 		expect(witness).toBeUndefined();
@@ -693,12 +691,7 @@ describe("an error that names an aggregate keeps its own copy of the identity", 
 
 	const identityCarriers: ReadonlyArray<{
 		name: string;
-		build: (identity: { aggregateType: string; aggregateId: string }) => {
-			readonly identity: {
-				readonly aggregateType: string;
-				readonly aggregateId: string;
-			};
-		};
+		build: (identity: { aggregateType: string; aggregateId: string }) => object;
 	}> = [
 		{
 			name: "ConcurrencyConflictError",
@@ -728,18 +721,18 @@ describe("an error that names an aggregate keeps its own copy of the identity", 
 				}),
 		},
 		{
-			name: "SnapshotVersionNotRestoredError",
+			name: "SNAPSHOT_VERSION_NOT_RESTORED",
 			build: (identity) =>
-				new SnapshotVersionNotRestoredError({
+				snapshotVersionNotRestoredError({
 					identity,
 					snapshotVersion: 3,
 					restoredVersion: 0,
 				}),
 		},
 		{
-			name: "PendingEventLimitExceededError",
+			name: "PENDING_EVENT_LIMIT_EXCEEDED",
 			build: (identity) =>
-				new PendingEventLimitExceededError({
+				pendingEventLimitExceededError({
 					identity,
 					limit: 1,
 					pending: 1,
@@ -747,9 +740,9 @@ describe("an error that names an aggregate keeps its own copy of the identity", 
 				}),
 		},
 		{
-			name: "InvalidFlushStatementError",
+			name: "INVALID_FLUSH_STATEMENT",
 			build: (identity) =>
-				new InvalidFlushStatementError({
+				invalidFlushStatementError({
 					identity,
 					intent: "update",
 					reason: "no_row_count",
@@ -799,19 +792,45 @@ describe("an error that names an aggregate keeps its own copy of the identity", 
 
 			const error = build(identity);
 			identity.aggregateId = "o-2";
+			const carried =
+				error instanceof KitWiringError
+					? error.details.identity
+					: (error as { readonly identity: unknown }).identity;
 
-			expect(error.identity).toStrictEqual({
+			expect(carried).toStrictEqual({
 				aggregateType: "Order",
 				aggregateId: "o-1",
 			});
-			expect(Object.isFrozen(error.identity)).toBe(true);
+			expect(Object.isFrozen(carried)).toBe(true);
 		},
 	);
 
-	it.each([
-		["ForeignEventError", ForeignEventError],
-		["MisattributedEventError", MisattributedEventError],
-	] as const)(
+	it("MISATTRIBUTED_EVENT holds frozen copies of the expected and the actual identity", () => {
+		const expected = {
+			aggregateType: "Order",
+			aggregateId: "o-1",
+			extra: "x",
+		};
+		const actual = { aggregateId: "o-2" };
+
+		const error = misattributedEventError({
+			expected,
+			actual,
+			eventType: "OrderPlaced",
+		});
+		expected.aggregateId = "changed";
+		actual.aggregateId = "changed";
+
+		expect(error.details.expected).toStrictEqual({
+			aggregateType: "Order",
+			aggregateId: "o-1",
+		});
+		expect(error.details.actual).toStrictEqual({ aggregateId: "o-2" });
+		expect(Object.isFrozen(error.details.expected)).toBe(true);
+		expect(Object.isFrozen(error.details.actual)).toBe(true);
+	});
+
+	it.each([["ForeignEventError", ForeignEventError]] as const)(
 		"%s holds frozen copies of the expected and the actual identity",
 		(_, ErrorClass) => {
 			const expected = {

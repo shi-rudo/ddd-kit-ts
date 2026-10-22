@@ -31,7 +31,7 @@ module-private maps. A second loaded copy, for example from an adapter
 package that bundles the kit, cannot see them. So an object that one copy
 built does not work in the other. The kit marks the objects that it builds,
 and when a lookup fails, it checks the mark. An object of another copy then
-throws `DuplicateKitCopyError` and names the fix: load one copy, and declare
+throws `DUPLICATE_KIT_COPY` and names the fix: load one copy, and declare
 the kit as a peer dependency of an adapter package. A hand-built object keeps
 its own error.
 

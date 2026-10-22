@@ -376,7 +376,7 @@ callers and storage.
 The wrapper also rejects reentrant evaluation. A guard, reducer,
 `validateContext`, or `validateSnapshot` must not call `can(...)` or
 `dispatch(...)` on the same machine instance. That throws
-`ReentrantDomainStateMachineEvaluationError`, leaves the current snapshot
+`REENTRANT_DOMAIN_STATE_MACHINE_EVALUATION`, leaves the current snapshot
 unchanged, and releases the evaluation lock even if callback code throws.
 
 ## Persist snapshots, not machines
@@ -657,19 +657,20 @@ Missing transitions and rejected guards are domain-rule violations:
 - a concrete `DomainError` returned by a guard is thrown unchanged
 
 Broken definitions, invalid restored snapshots, malformed inputs, bad reducer
-results, and reentrant calls are wiring or reconstitution failures:
+results, and reentrant calls are wiring or reconstitution failures. They throw
+a `KitWiringError` with one of these codes:
 
-- `InvalidDomainMachineDefinitionError extends BaseError`
-- `InvalidDomainMachineContextError extends BaseError`
-- `InvalidDomainMachineSnapshotError extends BaseError`
-- `InvalidDomainMachineInputError extends BaseError`
-- `InvalidDomainTransitionGuardResultError extends BaseError`
-- `InvalidDomainTransitionResultError extends BaseError`
-- `ReentrantDomainStateMachineEvaluationError extends BaseError`
+- `INVALID_DOMAIN_MACHINE_DEFINITION`
+- `INVALID_DOMAIN_MACHINE_CONTEXT`
+- `INVALID_DOMAIN_MACHINE_SNAPSHOT`
+- `INVALID_DOMAIN_MACHINE_INPUT`
+- `INVALID_DOMAIN_TRANSITION_GUARD_RESULT`
+- `INVALID_DOMAIN_TRANSITION_RESULT`
+- `REENTRANT_DOMAIN_STATE_MACHINE_EVALUATION`
 
 That split is the same one the rest of the kit uses. Domain operations throw
 `DomainError` for rejected business moves. Broken code and corrupted data fail
-loudly as structured `BaseError` instances.
+loudly as a `KitWiringError`.
 
 ## DomainStateMachine vs XState
 

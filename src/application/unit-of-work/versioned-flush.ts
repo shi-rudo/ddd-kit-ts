@@ -8,7 +8,7 @@ import {
 } from "../../errors/kit-errors";
 import {
 	type FlushStatementReason,
-	InvalidFlushStatementError,
+	invalidFlushStatementError,
 } from "./errors";
 import type { AggregatePersistenceWrite } from "./persistence-contract";
 
@@ -124,7 +124,7 @@ type VersionedWriteStatements<
  * reason names what the version read found. A stale update never becomes an
  * insert. Every other error propagates to `mapError` unchanged.
  *
- * A defect in the statements becomes {@link InvalidFlushStatementError}: an
+ * A defect in the statements becomes `INVALID_FLUSH_STATEMENT`: an
  * absent statement, a statement that returns no row count, and an
  * `isDuplicate` that throws. Statements that update or remove without
  * `currentVersion` fail here, when the flush is built.
@@ -180,7 +180,7 @@ function insertWriter<
 			try {
 				duplicate = isDuplicate(error);
 			} catch (classifierCause) {
-				throw new InvalidFlushStatementError({
+				throw invalidFlushStatementError({
 					identity: write.aggregateIdentity,
 					intent: "add",
 					reason: "duplicate_check_failed",
@@ -262,7 +262,7 @@ function versionedWriter<
 		reason: FlushStatementReason,
 		received?: string,
 	) =>
-		new InvalidFlushStatementError({
+		invalidFlushStatementError({
 			identity: write.aggregateIdentity,
 			intent,
 			reason,
@@ -331,7 +331,7 @@ export interface ClassifyConcurrencyConflictOptions<
  *
  * A version read that returns neither a stored version nor `undefined`, and
  * an expected version that is no version, are defects of the statements. They
- * throw {@link InvalidFlushStatementError}.
+ * throw `INVALID_FLUSH_STATEMENT`.
  */
 export async function classifyConcurrencyConflict<
 	TCtx,
@@ -341,7 +341,7 @@ export async function classifyConcurrencyConflict<
 ): Promise<ConcurrencyConflictError> {
 	const { identity, expectedVersion } = options;
 	if (!isStoredVersion(expectedVersion)) {
-		throw new InvalidFlushStatementError({
+		throw invalidFlushStatementError({
 			identity,
 			reason: "no_expected_version",
 			received: describeReceived(expectedVersion),
@@ -355,7 +355,7 @@ export async function classifyConcurrencyConflict<
 		stored.currentVersion !== undefined &&
 		!isStoredVersion(stored.currentVersion)
 	) {
-		throw new InvalidFlushStatementError({
+		throw invalidFlushStatementError({
 			identity,
 			reason: "no_version",
 			received: describeReceived(stored.currentVersion),

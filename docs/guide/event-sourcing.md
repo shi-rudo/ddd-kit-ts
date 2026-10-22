@@ -155,14 +155,14 @@ replay performs over the stream.
 `apply(event)` runs in this order:
 
 1. The aggregate identity check runs. The aggregate supplies a missing `aggregateId` or
-   `aggregateType`. A foreign aggregate identity throws `MisattributedEventError` before
+   `aggregateType`. A foreign aggregate identity throws `MISATTRIBUTED_EVENT` before
    recording. `ForeignEventError` is the replay error for persisted rows.
 2. `validateEvent(event)` decides whether this event is allowed in the current
    state.
 3. The fold for `event.type` is found. A missing fold throws
-   `MissingFoldError`.
+   `MISSING_FOLD`.
 4. The fold computes the next state. A fold that returns `undefined`
-   throws `FoldReturnedNoStateError`.
+   throws `FOLD_RETURNED_NO_STATE`.
 5. The `validateState` function from the constructor config checks the next
    state. This is the same check that `setState` runs on a state-stored
    aggregate.
@@ -509,10 +509,10 @@ stream, so its `Err` is the `DomainError` of the aggregate itself.
 `replayHistory(...)` returns `Result<void, DomainError>` because a persisted
 stream can be corrupt in ways the domain can name (a fold that rejects a
 payload it cannot map). Two groups of failures deliberately do NOT ride the
-`Result`. The wiring errors `MissingFoldError`, `FoldReturnedNoStateError`,
-`PrototypePollutionError`, and `UnreplayableAggregateError` throw, after the
+`Result`. The wiring errors `MISSING_FOLD`, `FOLD_RETURNED_NO_STATE`,
+`PROTOTYPE_POLLUTION`, and `UNREPLAYABLE_AGGREGATE` throw, after the
 rollback, because a code bug must not look like a corrupt stream.
-`HandBuiltEventError` belongs to `apply()` only: replay input comes from
+`HAND_BUILT_EVENT` belongs to `apply()` only: replay input comes from
 storage rows, and the kit-built check does not run on it. And an
 event that belongs to a different aggregate (`ForeignEventError`,
 when a history event carries an `aggregateId` or `aggregateType` that does not
@@ -545,7 +545,7 @@ replay from the stream. Rules and structure are different questions, and only
 the first one is frozen in history.
 
 Only `DomainError` is caught into the `Result`. Programmer errors still throw.
-`MissingFoldError` and `FoldReturnedNoStateError` also throw, because a
+`MISSING_FOLD` and `FOLD_RETURNED_NO_STATE` also throw, because a
 forgotten fold or a fold without a `return` is a code bug, not a
 recoverable domain rejection.
 
@@ -572,7 +572,7 @@ On a mismatch it throws `ReplayTargetMismatchError` (code
 `REPLAY_TARGET_MISMATCH`).
 
 The replay target must be clean. If it carries unflushed `pendingEvents`,
-`replayHistory(...)` throws `UnreplayableAggregateError` before anything
+`replayHistory(...)` throws `UNREPLAYABLE_AGGREGATE` before anything
 moves. The Unit of Work owns the factory-versus-load lifecycle, so the
 aggregate carries no persistence flag and replay does not check one.
 
@@ -717,7 +717,7 @@ an adapter that pages on its own broke its paging. A replay from zero
 cannot see such a defect, because position zero has no off-by-one. A
 discard would hide it behind a snapshot that the recipe deletes and
 rebuilds on every load. Every other error escapes too.
-`SnapshotVersionNotRestoredError` is a wiring bug in the model. A
+`SNAPSHOT_VERSION_NOT_RESTORED` is a wiring bug in the model. A
 `ForeignEventError` is a wrong stream read. A failure of the store itself
 is not a snapshot problem.
 

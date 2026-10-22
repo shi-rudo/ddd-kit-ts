@@ -108,7 +108,7 @@ class OrderItem extends Entity<OrderItemState, ItemId> {
 The important details:
 
 - `id` is readonly and must be a non-blank string; the constructor throws
-  `MissingEntityIdError` (code `MISSING_ENTITY_ID`) for anything else
+  `MISSING_ENTITY_ID` for anything else
 - `state` is protected; consumers use explicit domain queries
 - `setState(...)` validates the next state and only then replaces the old one
 - if validation throws, the previous state remains in place

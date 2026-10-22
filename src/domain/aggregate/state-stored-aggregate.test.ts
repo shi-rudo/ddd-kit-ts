@@ -1,14 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import {
-	DuplicateEventIdError,
-	HandBuiltEventError,
-	InvalidVersionError,
-	MisattributedEventError,
-	MissingEntityIdError,
-	PendingEventBatchMismatchError,
-	PendingEventLimitExceededError,
-	UnreplayableAggregateError,
-} from "../../errors/kit-errors";
+import type { KitWiringError } from "../../errors/kit-errors";
 import {
 	type AnyDomainEvent,
 	createDomainEvent,
@@ -95,7 +86,9 @@ describe("version guards", () => {
 		(_label, value) => {
 			const aggregate = fresh();
 
-			expect(() => aggregate.restore(value)).toThrow(InvalidVersionError);
+			expect(() => aggregate.restore(value)).toThrow(
+				expect.objectContaining({ code: "INVALID_VERSION" }),
+			);
 
 			expect(aggregate.version).toBe(0);
 			expect(lifecycleOf(aggregate).persistedVersion()).toBeUndefined();
@@ -107,7 +100,9 @@ describe("version guards", () => {
 		aggregate.advance();
 		aggregate.advance();
 
-		expect(() => aggregate.restore(1)).toThrow(InvalidVersionError);
+		expect(() => aggregate.restore(1)).toThrow(
+			expect.objectContaining({ code: "INVALID_VERSION" }),
+		);
 
 		expect(aggregate.version).toBe(2);
 	});
@@ -135,7 +130,9 @@ describe("version guards", () => {
 		const aggregate = fresh();
 		aggregate.note(1);
 
-		expect(() => aggregate.restore(5)).toThrow(UnreplayableAggregateError);
+		expect(() => aggregate.restore(5)).toThrow(
+			expect.objectContaining({ code: "UNREPLAYABLE_AGGREGATE" }),
+		);
 
 		expect(aggregate.version).toBe(0);
 		expect(aggregate.pendingEvents).toHaveLength(1);
@@ -153,7 +150,9 @@ describe("version guards", () => {
 	it("rejects an invalid version on setVersion", () => {
 		const aggregate = fresh();
 
-		expect(() => aggregate.force(Number.NaN)).toThrow(InvalidVersionError);
+		expect(() => aggregate.force(Number.NaN)).toThrow(
+			expect.objectContaining({ code: "INVALID_VERSION" }),
+		);
 
 		expect(aggregate.version).toBe(0);
 	});
@@ -168,7 +167,7 @@ describe("version guards", () => {
 				aggregate.pendingEvents,
 				Number.NaN as Version,
 			),
-		).toThrow(InvalidVersionError);
+		).toThrow(expect.objectContaining({ code: "INVALID_VERSION" }));
 
 		expect(aggregate.pendingEvents).toHaveLength(1);
 		expect(lifecycleOf(aggregate).persistedVersion()).toBeUndefined();
@@ -581,7 +580,9 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 			const built = agg.valueUpdated(42);
 			const literal = { ...built, payload: { newValue: 42 } } as ValueUpdated;
 
-			expect(() => agg.update(42, literal)).toThrow(HandBuiltEventError);
+			expect(() => agg.update(42, literal)).toThrow(
+				expect.objectContaining({ code: "HAND_BUILT_EVENT" }),
+			);
 			expect(agg.state.value).toBe(10);
 			expect(agg.version).toBe(0);
 			expect(agg.pendingEvents).toHaveLength(0);
@@ -761,11 +762,17 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 
 			expect(() =>
 				lifecycleOf(aggregate).acknowledge(reversed, 1 as Version),
-			).toThrow(PendingEventBatchMismatchError);
+			).toThrow(
+				expect.objectContaining({ code: "PENDING_EVENT_BATCH_MISMATCH" }),
+			);
 			expect(() =>
 				lifecycleOf(aggregate).acknowledge(reversed, 1 as Version),
 			).toThrow(
-				expect.objectContaining({ identity: aggregate.aggregateIdentity }),
+				expect.objectContaining({
+					details: expect.objectContaining({
+						identity: aggregate.aggregateIdentity,
+					}),
+				}),
 			);
 
 			expect(aggregate.pendingEvents).toHaveLength(2);
@@ -789,12 +796,14 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 				caught = error;
 			}
 
-			expect(caught).toBeInstanceOf(PendingEventBatchMismatchError);
-			const mismatch = caught as PendingEventBatchMismatchError;
+			expect(caught).toMatchObject({ code: "PENDING_EVENT_BATCH_MISMATCH" });
+			const mismatch = caught as KitWiringError<"PENDING_EVENT_BATCH_MISMATCH">;
 			expect(mismatch.code).toBe("PENDING_EVENT_BATCH_MISMATCH");
-			expect(mismatch.identity.aggregateId).toBe("test-1");
-			expect(mismatch.batchLength).toBe(2);
-			expect(mismatch.pendingLength).toBe(1);
+			expect(mismatch.details.identity).toMatchObject({
+				aggregateId: "test-1",
+			});
+			expect(mismatch.details.batchLength).toBe(2);
+			expect(mismatch.details.pendingLength).toBe(1);
 			expect(aggregate.pendingEvents).toHaveLength(1);
 		});
 
@@ -808,7 +817,9 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 
 			expect(() =>
 				lifecycleOf(aggregate).discardPendingEvents([foreign]),
-			).toThrow(PendingEventBatchMismatchError);
+			).toThrow(
+				expect.objectContaining({ code: "PENDING_EVENT_BATCH_MISMATCH" }),
+			);
 
 			expect(aggregate.pendingEvents).toHaveLength(1);
 		});
@@ -848,11 +859,11 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 			const state = { value: 10, status: "inactive" as const };
 			// @ts-expect-error - testing invalid input
 			expect(() => new TestAggregate(null, state)).toThrow(
-				MissingEntityIdError,
+				expect.objectContaining({ code: "MISSING_ENTITY_ID" }),
 			);
 			// @ts-expect-error - testing invalid input
 			expect(() => new TestAggregate(undefined, state)).toThrow(
-				MissingEntityIdError,
+				expect.objectContaining({ code: "MISSING_ENTITY_ID" }),
 			);
 		});
 	});
@@ -1120,7 +1131,7 @@ describe("createEvent options and pending-event bookkeeping", () => {
 				payload: { value: 1 },
 				schemaVersion: 1,
 			}),
-		).toThrow(HandBuiltEventError);
+		).toThrow(expect.objectContaining({ code: "HAND_BUILT_EVENT" }));
 
 		expect(aggregate.pendingEvents).toHaveLength(0);
 	});
@@ -1140,7 +1151,7 @@ describe("createEvent options and pending-event bookkeeping", () => {
 				eventId: `event-${index}`,
 				occurredAt: new Date("2027-04-05T06:07:08.000Z"),
 			})),
-		).toThrow(HandBuiltEventError);
+		).toThrow(expect.objectContaining({ code: "HAND_BUILT_EVENT" }));
 	});
 
 	it("reports the pending count across add, record, and acknowledge", () => {
@@ -1212,7 +1223,7 @@ describe("event identity on the state-stored path", () => {
 		);
 
 		expect(() => aggregate.commitWith(foreign)).toThrow(
-			MisattributedEventError,
+			expect.objectContaining({ code: "MISATTRIBUTED_EVENT" }),
 		);
 
 		expect(aggregate.state.value).toBe(0);
@@ -1228,7 +1239,9 @@ describe("event identity on the state-stored path", () => {
 			{ aggregateId: "test-1", aggregateType: "Other" },
 		);
 
-		expect(() => aggregate.record(foreign)).toThrow(MisattributedEventError);
+		expect(() => aggregate.record(foreign)).toThrow(
+			expect.objectContaining({ code: "MISATTRIBUTED_EVENT" }),
+		);
 
 		expect(aggregate.pendingEvents).toHaveLength(0);
 	});
@@ -1310,7 +1323,7 @@ describe("one identity per pending fact on the state-stored path", () => {
 		const recorded = noted("fact-1");
 
 		expect(() => aggregate.commitWith(recorded, recorded)).toThrow(
-			DuplicateEventIdError,
+			expect.objectContaining({ code: "DUPLICATE_EVENT_ID" }),
 		);
 		expect(() => aggregate.commitWith(recorded, recorded)).toThrow(
 			/append a stamped event once/,
@@ -1342,8 +1355,10 @@ describe("one identity per pending fact on the state-stored path", () => {
 
 		expect(() => aggregate.record(recorded)).toThrow(
 			expect.objectContaining({
-				constructor: DuplicateEventIdError,
-				identity: aggregate.aggregateIdentity,
+				code: "DUPLICATE_EVENT_ID",
+				details: expect.objectContaining({
+					identity: aggregate.aggregateIdentity,
+				}),
 			}),
 		);
 
@@ -1394,14 +1409,21 @@ describe("maxPendingEvents on the state-stored path", () => {
 		const aggregate = limited(2);
 		aggregate.note(1);
 
-		expect(() => aggregate.note(2)).toThrow(PendingEventLimitExceededError);
+		expect(() => aggregate.note(2)).toThrow(
+			expect.objectContaining({ code: "PENDING_EVENT_LIMIT_EXCEEDED" }),
+		);
 		expect(() => aggregate.note(2)).toThrow(
 			expect.objectContaining({
 				code: "PENDING_EVENT_LIMIT_EXCEEDED",
-				identity: { aggregateType: "LimitedAggregate", aggregateId: "test-1" },
-				limit: 2,
-				pending: 1,
-				added: 2,
+				details: expect.objectContaining({
+					identity: {
+						aggregateType: "LimitedAggregate",
+						aggregateId: "test-1",
+					},
+					limit: 2,
+					pending: 1,
+					added: 2,
+				}),
 			}),
 		);
 
@@ -1424,7 +1446,9 @@ describe("maxPendingEvents on the state-stored path", () => {
 		const aggregate = limited(1);
 		aggregate.record();
 
-		expect(() => aggregate.record()).toThrow(PendingEventLimitExceededError);
+		expect(() => aggregate.record()).toThrow(
+			expect.objectContaining({ code: "PENDING_EVENT_LIMIT_EXCEEDED" }),
+		);
 
 		expect(aggregate.pendingEvents).toHaveLength(1);
 	});
@@ -1539,7 +1563,9 @@ describe("one version write path", () => {
 			Number.MAX_SAFE_INTEGER as Version,
 		);
 
-		expect(() => aggregate.change(2)).toThrow(InvalidVersionError);
+		expect(() => aggregate.change(2)).toThrow(
+			expect.objectContaining({ code: "INVALID_VERSION" }),
+		);
 
 		expect(aggregate.state.value).toBe(1);
 		expect(aggregate.version).toBe(Number.MAX_SAFE_INTEGER);

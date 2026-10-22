@@ -1,17 +1,10 @@
 import { isBaseError } from "@shirudo/base-error";
 import { describe, expect, it } from "vite-plus/test";
 import {
-	DirectStateMutationError,
 	DomainError,
-	DuplicateEventIdError,
-	FoldReturnedNoStateError,
 	ForeignEventError,
-	HandBuiltEventError,
-	MisattributedEventError,
-	MissingFoldError,
-	PendingEventLimitExceededError,
-	PrototypePollutionError,
-	UnreplayableAggregateError,
+	type KitWiringError,
+	missingFoldError,
 } from "../../errors/kit-errors";
 import {
 	type AnyDomainEvent,
@@ -242,7 +235,7 @@ describe("EventSourcedAggregate", () => {
 				10,
 			);
 			// Catch-up replay requires a persisted baseline; a fresh
-			// factory-created target throws UnreplayableAggregateError.
+			// factory-created target throws UNREPLAYABLE_AGGREGATE.
 			acknowledgePersisted(aggregate, aggregate.version);
 			const initialVersion = aggregate.version; // 1 after creation
 
@@ -333,7 +326,7 @@ describe("EventSourcedAggregate", () => {
 			}).toThrow(AlreadyActiveError);
 		});
 
-		it("should throw MissingFoldError when no fold is declared", () => {
+		it("should throw MISSING_FOLD when no fold is declared", () => {
 			class FoldlessAggregate extends EventSourcedAggregate<
 				TestState,
 				TestId,
@@ -365,21 +358,21 @@ describe("EventSourcedAggregate", () => {
 						newValue: 1,
 					}) as TestEventUpdated,
 				);
-			}).toThrow(MissingFoldError);
+			}).toThrow(expect.objectContaining({ code: "MISSING_FOLD" }));
 		});
 
-		it("MissingFoldError is a BaseError but NOT a DomainError (programming bug)", () => {
-			// MissingFoldError signals a subclass forgot to declare a
+		it("MISSING_FOLD is a BaseError but NOT a DomainError (programming bug)", () => {
+			// MISSING_FOLD signals a subclass forgot to declare a
 			// fold: that's a configuration / programming error, not a
 			// domain-invariant violation. It must not be catchable via
 			// `instanceof DomainError` at the App-Service boundary, so a
 			// 'catch domain errors → HTTP 400' handler can't mask the bug.
-			const error = new MissingFoldError("Foo");
+			const error = missingFoldError("Foo");
 			expect(isBaseError(error)).toBe(true);
 			expect(error).not.toBeInstanceOf(DomainError);
 		});
 
-		it("MissingFoldError thrown during replayHistory propagates (not caught as DomainError)", () => {
+		it("MISSING_FOLD thrown during replayHistory propagates (not caught as DomainError)", () => {
 			class FoldlessReplay extends EventSourcedAggregate<
 				TestState,
 				TestId,
@@ -398,7 +391,7 @@ describe("EventSourcedAggregate", () => {
 				status: "inactive",
 			});
 
-			// replayHistory only catches DomainError; a MissingFoldError
+			// replayHistory only catches DomainError; a MISSING_FOLD
 			// (programming bug) should propagate up unwrapped, not get
 			// silently wrapped into Result.Err.
 			expect(() => {
@@ -407,7 +400,7 @@ describe("EventSourcedAggregate", () => {
 						value: 1,
 					}) as TestEventCreated,
 				]);
-			}).toThrow(MissingFoldError);
+			}).toThrow(expect.objectContaining({ code: "MISSING_FOLD" }));
 		});
 
 		it("should not mutate state if the fold throws", () => {
@@ -468,7 +461,7 @@ describe("EventSourcedAggregate", () => {
 		// The folds map is an object literal, so a naive property get for
 		// event.type === "toString" returns Object.prototype.toString, which
 		// passes a truthiness check and gets invoked as a fold, silently
-		// corrupting state. All such types must yield MissingFoldError.
+		// corrupting state. All such types must yield MISSING_FOLD.
 		class TrapAggregate extends EventSourcedAggregate<
 			TestState,
 			TestId,
@@ -498,7 +491,7 @@ describe("EventSourcedAggregate", () => {
 		] as const;
 
 		for (const corruptType of corruptTypes) {
-			it(`throws MissingFoldError for event.type "${corruptType}" and leaves state intact`, () => {
+			it(`throws MISSING_FOLD for event.type "${corruptType}" and leaves state intact`, () => {
 				const aggregate = new TrapAggregate("test-1" as TestId, {
 					value: 7,
 					status: "inactive",
@@ -508,13 +501,15 @@ describe("EventSourcedAggregate", () => {
 					evil: true,
 				}) as unknown as TestEvent;
 
-				expect(() => aggregate.testApply(corrupt)).toThrow(MissingFoldError);
+				expect(() => aggregate.testApply(corrupt)).toThrow(
+					expect.objectContaining({ code: "MISSING_FOLD" }),
+				);
 				expect(aggregate.state).toEqual({ value: 7, status: "inactive" });
 				expect(aggregate.version).toBe(0);
 			});
 		}
 
-		it("propagates MissingFoldError from replayHistory for a corrupt stream row", () => {
+		it("propagates MISSING_FOLD from replayHistory for a corrupt stream row", () => {
 			const aggregate = new TrapAggregate("test-1" as TestId, {
 				value: 7,
 				status: "inactive",
@@ -525,7 +520,7 @@ describe("EventSourcedAggregate", () => {
 			}) as unknown as TestEvent;
 
 			expect(() => aggregate.replayHistory([corrupt])).toThrow(
-				MissingFoldError,
+				expect.objectContaining({ code: "MISSING_FOLD" }),
 			);
 			expect(aggregate.state).toEqual({ value: 7, status: "inactive" });
 		});
@@ -562,10 +557,10 @@ describe("EventSourcedAggregate", () => {
 					createDomainEvent("TestEventUpdated", {
 						newValue: 99,
 					}) as TestEventUpdated,
-					// Unregistered type → MissingFoldError (propagates, not err)
+					// Unregistered type → MISSING_FOLD (propagates, not err)
 					createDomainEvent("Bogus", {}) as unknown as TestEvent,
 				]),
-			).toThrow(MissingFoldError);
+			).toThrow(expect.objectContaining({ code: "MISSING_FOLD" }));
 
 			expect(aggregate.state).toEqual({ value: 10, status: "inactive" });
 		});
@@ -595,7 +590,7 @@ describe("EventSourcedAggregate", () => {
 			expect(aggregate.state.status).toBe("active");
 		});
 
-		it("throws UnreplayableAggregateError when the aggregate carries pending events", () => {
+		it("throws UNREPLAYABLE_AGGREGATE when the aggregate carries pending events", () => {
 			// A factory-created aggregate holds an unpersisted creation event.
 			// Replaying stored history onto the same object would mix an
 			// unstamped decision with facts from a different stream baseline.
@@ -619,8 +614,10 @@ describe("EventSourcedAggregate", () => {
 					return e;
 				}
 			})();
-			expect(thrown).toBeInstanceOf(UnreplayableAggregateError);
-			expect(thrown).toMatchObject({ identity: aggregate.aggregateIdentity });
+			expect(thrown).toMatchObject({ code: "UNREPLAYABLE_AGGREGATE" });
+			expect(thrown).toMatchObject({
+				details: { identity: aggregate.aggregateIdentity },
+			});
 			expect((thrown as Error).message).toContain(
 				"discard this dirty instance",
 			);
@@ -710,7 +707,7 @@ describe("EventSourcedAggregate", () => {
 			expect(aggregate.version).toBe(1);
 
 			expect(() => aggregate.replayHistory([])).toThrow(
-				UnreplayableAggregateError,
+				expect.objectContaining({ code: "UNREPLAYABLE_AGGREGATE" }),
 			);
 		});
 
@@ -935,7 +932,7 @@ describe("replay trusts history", () => {
 		// Without the guard, a hand-built event with a foreign aggregate identity
 		// would be recorded and committed, and the NEXT load of this
 		// stream would reject it, poisoning the stream. A wiring error
-		// (MisattributedEventError), not ForeignEventError: a wrong new
+		// (MISATTRIBUTED_EVENT), not ForeignEventError: a wrong new
 		// event is a bug in today's code, not corrupted infrastructure.
 		const agg = new RuleTighteningAggregate("test-1" as TestId, {
 			value: 10,
@@ -950,7 +947,7 @@ describe("replay trusts history", () => {
 					{ aggregateId: "someone-else" },
 				) as TestEventUpdated,
 			);
-		}).toThrow(MisattributedEventError);
+		}).toThrow(expect.objectContaining({ code: "MISATTRIBUTED_EVENT" }));
 		expect(() => {
 			agg.testApply(
 				createDomainEvent(
@@ -959,7 +956,7 @@ describe("replay trusts history", () => {
 					{ aggregateId: "test-1", aggregateType: "SomeoneElse" },
 				) as TestEventUpdated,
 			);
-		}).toThrow(MisattributedEventError);
+		}).toThrow(expect.objectContaining({ code: "MISATTRIBUTED_EVENT" }));
 		// Nothing recorded, nothing bumped: the stream stays clean.
 		expect(agg.pendingEvents).toHaveLength(0);
 		expect(agg.version).toBe(0);
@@ -1048,7 +1045,9 @@ describe("replay trusts history", () => {
 				newValue: 99,
 			}) as TestEventUpdated;
 
-			expect(() => agg.testApply(copyOf(built))).toThrow(HandBuiltEventError);
+			expect(() => agg.testApply(copyOf(built))).toThrow(
+				expect.objectContaining({ code: "HAND_BUILT_EVENT" }),
+			);
 
 			expect(agg.state.value).toBe(10);
 			expect(agg.version).toBe(0);
@@ -1072,7 +1071,9 @@ describe("replay trusts history", () => {
 		}) as TestEventUpdated;
 
 		expect(isStampedDomainEvent(lookalike)).toBe(false);
-		expect(() => agg.testApply(lookalike)).toThrow(HandBuiltEventError);
+		expect(() => agg.testApply(lookalike)).toThrow(
+			expect.objectContaining({ code: "HAND_BUILT_EVENT" }),
+		);
 		expect(agg.state.value).toBe(10);
 		expect(agg.pendingEvents).toHaveLength(0);
 	});
@@ -1090,7 +1091,9 @@ describe("replay trusts history", () => {
 		}) as unknown as TestEventUpdated;
 
 		expect(isUnstampedDomainEvent(lookalike)).toBe(false);
-		expect(() => agg.testApply(lookalike)).toThrow(HandBuiltEventError);
+		expect(() => agg.testApply(lookalike)).toThrow(
+			expect.objectContaining({ code: "HAND_BUILT_EVENT" }),
+		);
 		expect(agg.state.value).toBe(10);
 		expect(agg.pendingEvents).toHaveLength(0);
 	});
@@ -1121,7 +1124,7 @@ describe("replay trusts history", () => {
 
 		expect(isStampedDomainEvent(literal)).toBe(false);
 		expect(() => agg.testApply(literal as TestEventUpdated)).toThrow(
-			HandBuiltEventError,
+			expect.objectContaining({ code: "HAND_BUILT_EVENT" }),
 		);
 		expect(agg.state.value).toBe(10);
 		expect(agg.pendingEvents).toHaveLength(0);
@@ -1363,13 +1366,15 @@ describe("a fold that returns no state", () => {
 		};
 	}
 
-	it("throws FoldReturnedNoStateError from apply() and leaves the aggregate untouched", () => {
+	it("throws FOLD_RETURNED_NO_STATE from apply() and leaves the aggregate untouched", () => {
 		const agg = new ForgetfulAggregate("test-1" as TestId, {
 			value: 1,
 			status: "inactive",
 		});
 
-		expect(() => agg.updateValue(2)).toThrow(FoldReturnedNoStateError);
+		expect(() => agg.updateValue(2)).toThrow(
+			expect.objectContaining({ code: "FOLD_RETURNED_NO_STATE" }),
+		);
 
 		expect(agg.state).toEqual({ value: 1, status: "inactive" });
 		expect(agg.version).toBe(0);
@@ -1389,18 +1394,18 @@ describe("a fold that returns no state", () => {
 			caught = error;
 		}
 
-		expect(caught).toBeInstanceOf(FoldReturnedNoStateError);
+		expect(caught).toMatchObject({ code: "FOLD_RETURNED_NO_STATE" });
 		expect(isBaseError(caught)).toBe(true);
 		expect(caught).not.toBeInstanceOf(DomainError);
-		expect((caught as FoldReturnedNoStateError).code).toBe(
+		expect((caught as KitWiringError<"FOLD_RETURNED_NO_STATE">).code).toBe(
 			"FOLD_RETURNED_NO_STATE",
 		);
-		expect((caught as FoldReturnedNoStateError).eventType).toBe(
-			"TestEventUpdated",
-		);
+		expect(
+			(caught as KitWiringError<"FOLD_RETURNED_NO_STATE">).details.eventType,
+		).toBe("TestEventUpdated");
 	});
 
-	it("propagates FoldReturnedNoStateError from replayHistory after rolling back", () => {
+	it("propagates FOLD_RETURNED_NO_STATE from replayHistory after rolling back", () => {
 		const agg = new ForgetfulAggregate("test-1" as TestId, {
 			value: 1,
 			status: "inactive",
@@ -1413,7 +1418,7 @@ describe("a fold that returns no state", () => {
 					newValue: 2,
 				}) as TestEventUpdated,
 			]),
-		).toThrow(FoldReturnedNoStateError);
+		).toThrow(expect.objectContaining({ code: "FOLD_RETURNED_NO_STATE" }));
 
 		expect(agg.state).toEqual({ value: 1, status: "inactive" });
 		expect(agg.version).toBe(0);
@@ -1441,7 +1446,9 @@ describe("hostile own keys on the fold result", () => {
 			status: "inactive",
 		});
 
-		expect(() => agg.updateValue(1)).toThrow(PrototypePollutionError);
+		expect(() => agg.updateValue(1)).toThrow(
+			expect.objectContaining({ code: "PROTOTYPE_POLLUTION" }),
+		);
 
 		expect(agg.state).toEqual({ value: 0, status: "inactive" });
 		expect(agg.version).toBe(0);
@@ -1462,7 +1469,7 @@ describe("hostile own keys on the fold result", () => {
 					newValue: 1,
 				}) as TestEventUpdated,
 			]),
-		).toThrow(PrototypePollutionError);
+		).toThrow(expect.objectContaining({ code: "PROTOTYPE_POLLUTION" }));
 
 		expect(agg.state).toEqual({ value: 0, status: "inactive" });
 		expect(agg.version).toBe(0);
@@ -1533,7 +1540,9 @@ describe("markReconstituted on an event-sourced aggregate", () => {
 		});
 		agg.updateValue(2);
 
-		expect(() => agg.restore(7)).toThrow(UnreplayableAggregateError);
+		expect(() => agg.restore(7)).toThrow(
+			expect.objectContaining({ code: "UNREPLAYABLE_AGGREGATE" }),
+		);
 
 		expect(agg.version).toBe(1);
 		expect(agg.pendingEvents).toHaveLength(1);
@@ -1562,7 +1571,7 @@ describe("markReconstituted on an event-sourced aggregate", () => {
 			agg.replayHistory([
 				createDomainEvent("TestEventActivated", {}) as TestEventActivated,
 			]),
-		).toThrow(UnreplayableAggregateError);
+		).toThrow(expect.objectContaining({ code: "UNREPLAYABLE_AGGREGATE" }));
 
 		expect(agg.state).toEqual({ value: 1, status: "inactive" });
 		expect(agg.version).toBe(0);
@@ -1583,9 +1592,13 @@ describe("state changes only through events", () => {
 			status: "inactive",
 		});
 
-		expect(() => agg.overwrite(2)).toThrow(DirectStateMutationError);
 		expect(() => agg.overwrite(2)).toThrow(
-			expect.objectContaining({ identity: agg.aggregateIdentity }),
+			expect.objectContaining({ code: "DIRECT_STATE_MUTATION" }),
+		);
+		expect(() => agg.overwrite(2)).toThrow(
+			expect.objectContaining({
+				details: expect.objectContaining({ identity: agg.aggregateIdentity }),
+			}),
 		);
 
 		expect(agg.state).toEqual({ value: 1, status: "inactive" });
@@ -1606,14 +1619,14 @@ describe("state changes only through events", () => {
 			caught = error;
 		}
 
-		expect(caught).toBeInstanceOf(DirectStateMutationError);
+		expect(caught).toMatchObject({ code: "DIRECT_STATE_MUTATION" });
 		expect(caught).not.toBeInstanceOf(DomainError);
-		expect((caught as DirectStateMutationError).code).toBe(
+		expect((caught as KitWiringError<"DIRECT_STATE_MUTATION">).code).toBe(
 			"DIRECT_STATE_MUTATION",
 		);
-		expect((caught as DirectStateMutationError).identity.aggregateId).toBe(
-			"test-1",
-		);
+		expect(caught).toMatchObject({
+			details: { identity: { aggregateId: "test-1" } },
+		});
 	});
 });
 
@@ -1661,7 +1674,9 @@ describe("apply and replay bookkeeping", () => {
 		) as TestEventUpdated;
 		agg.applyEvent(event);
 
-		expect(() => agg.applyEvent(event)).toThrow(DuplicateEventIdError);
+		expect(() => agg.applyEvent(event)).toThrow(
+			expect.objectContaining({ code: "DUPLICATE_EVENT_ID" }),
+		);
 
 		expect(agg.state.value).toBe(2);
 		expect(agg.version).toBe(1);
@@ -1840,14 +1855,12 @@ describe("maxPendingEvents on the apply path", () => {
 		aggregate.updateValue(1);
 
 		expect(() => aggregate.updateValue(2)).toThrow(
-			PendingEventLimitExceededError,
+			expect.objectContaining({ code: "PENDING_EVENT_LIMIT_EXCEEDED" }),
 		);
 		expect(() => aggregate.updateValue(2)).toThrow(
 			expect.objectContaining({
 				code: "PENDING_EVENT_LIMIT_EXCEEDED",
-				limit: 1,
-				pending: 1,
-				added: 1,
+				details: expect.objectContaining({ limit: 1, pending: 1, added: 1 }),
 			}),
 		);
 

@@ -2,10 +2,7 @@ import { someCauseChain } from "@shirudo/base-error";
 import type { Aggregate, Version } from "../../domain/aggregate/aggregate";
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
-import {
-	AggregateDeletedError,
-	type InfrastructureError,
-} from "../../errors/kit-errors";
+import type { InfrastructureError } from "../../errors/kit-errors";
 import { abortReason } from "../../internal/async/abort";
 import type { ExecutionContext } from "../../internal/async/execution";
 import {
@@ -20,10 +17,9 @@ import type { TransactionScope } from "../../persistence/repository/scope";
 import { withCheckedCommit } from "../cqrs/handler";
 import {
 	CommitError,
-	InvalidRepositoryDefinitionError,
-	NestedUnitOfWorkError,
+	invalidRepositoryDefinitionError,
+	nestedUnitOfWorkError,
 	RollbackError,
-	TransactionClosedError,
 	wiringErrorInCauseChain,
 } from "./errors";
 import type {
@@ -648,9 +644,9 @@ export interface UnitOfWorkDeps<
  * - **Unit-of-Work-owned writes.** Standard `add`, `update`, and `remove`
  *   methods register lifecycle intent. Adapter implementations with those
  *   names are not invoked through the facade.
- * - **Lifecycle errors.** {@link NestedUnitOfWorkError},
- *   {@link TransactionClosedError}, {@link CommitError},
- *   {@link RollbackError}, {@link AggregateDeletedError}.
+ * - **Lifecycle errors.** `NESTED_UNIT_OF_WORK`,
+ *   `TRANSACTION_CLOSED`, {@link CommitError},
+ *   {@link RollbackError}, `AGGREGATE_DELETED`.
  *
  * - **A per-operation Identity Map and expected-version receipt.** Read paths
  *   call `trackLoaded` before returning an aggregate. The Unit of Work then
@@ -663,7 +659,7 @@ export interface UnitOfWorkDeps<
  *
  * **Instance discipline:** one instance owns one logical operation at
  * a time. `run()` while a run is active throws
- * {@link NestedUnitOfWorkError} - that covers genuine nesting AND two
+ * `NESTED_UNIT_OF_WORK` - that covers genuine nesting AND two
  * concurrent requests sharing one instance, which is the same bug in
  * different clothes. Construct one `UnitOfWork` per operation
  * (construction stores one reference; the shareable singleton is the
@@ -730,7 +726,7 @@ export class UnitOfWork<
 			);
 		}
 		if (this._active) {
-			throw new NestedUnitOfWorkError();
+			throw nestedUnitOfWorkError();
 		}
 		this._active = true;
 
@@ -789,7 +785,7 @@ export class UnitOfWork<
 						s.assertReadyToCommit();
 						current.workCompleted = true;
 						// After close, any use of the session throws
-						// TransactionClosedError.
+						// `TRANSACTION_CLOSED`.
 						s.close();
 						// The outbox write can yield, and leaked work can change a
 						// tracked aggregate meanwhile. The same check runs again
@@ -845,7 +841,7 @@ export class UnitOfWork<
 					candidate,
 					`The repository definition "${String(key)}"`,
 				);
-				throw new InvalidRepositoryDefinitionError(String(key));
+				throw invalidRepositoryDefinitionError(String(key));
 			}
 			const definition = candidate as RuntimeRepositoryDefinition<Evt, TCtx>;
 			const adapter = definition.create(tx, session.trackingFor(definition));

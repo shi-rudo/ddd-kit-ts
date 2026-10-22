@@ -72,11 +72,11 @@ export interface IQueryBus<
 	 *
 	 * @param query - The query to execute
 	 * @returns Result containing the query result if successful, or an error of type `E`
-	 * @throws UnregisteredHandlerError when no handler is registered for
+	 * @throws `UNREGISTERED_HANDLER` when no handler is registered for
 	 *   `query.type` (a wiring bug; never delivered through the channel)
 	 * @throws The exact handler failure when `mapExpectedError` is absent or
 	 *   returns `undefined`
-	 * @throws ErrorMapperFailedError when `mapExpectedError` fails
+	 * @throws `ERROR_MAPPER_FAILED` when `mapExpectedError` fails
 	 */
 	execute<Q extends Query & { type: keyof TMap & string }>(
 		query: Q,
@@ -92,7 +92,7 @@ export interface IQueryBus<
 	 *
 	 * @param query - The query to execute
 	 * @returns The query result
-	 * @throws The exact handler failure or UnregisteredHandlerError
+	 * @throws The exact handler failure or `UNREGISTERED_HANDLER`
 	 */
 	executeUnsafe<Q extends Query & { type: keyof TMap & string }>(
 		query: Q,

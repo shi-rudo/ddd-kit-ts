@@ -159,25 +159,127 @@ export abstract class DomainError<
 	}
 }
 
+/** The code of a kit error in the crash-loud **WIRING** family. */
+export type KitWiringErrorCode =
+	| "AGGREGATE_DELETED"
+	| "AGGREGATE_TRACKING"
+	| "DIRECT_STATE_MUTATION"
+	| "DUPLICATE_EVENT_ID"
+	| "DUPLICATE_HANDLER_REGISTRATION"
+	| "DUPLICATE_KIT_COPY"
+	| "ERROR_MAPPER_FAILED"
+	| "EVENT_BUS_CLOSED"
+	| "EVENT_COLLECTION_FAILED"
+	| "FOLD_RETURNED_NO_STATE"
+	| "HAND_BUILT_EVENT"
+	| "IDEMPOTENCY_COMPLETED_WITHOUT_CLAIM"
+	| "INVALID_DOMAIN_MACHINE_CONTEXT"
+	| "INVALID_DOMAIN_MACHINE_DEFINITION"
+	| "INVALID_DOMAIN_MACHINE_INPUT"
+	| "INVALID_DOMAIN_MACHINE_SNAPSHOT"
+	| "INVALID_DOMAIN_TRANSITION_GUARD_RESULT"
+	| "INVALID_DOMAIN_TRANSITION_RESULT"
+	| "INVALID_FLUSH_STATEMENT"
+	| "INVALID_REPOSITORY_ADAPTER"
+	| "INVALID_REPOSITORY_DEFINITION"
+	| "INVALID_VERSION"
+	| "MISATTRIBUTED_EVENT"
+	| "MISSING_ENTITY_ID"
+	| "MISSING_FOLD"
+	| "MISSING_HANDLER"
+	| "NESTED_UNIT_OF_WORK"
+	| "PENDING_EVENT_BATCH_MISMATCH"
+	| "PENDING_EVENT_LIMIT_EXCEEDED"
+	| "PROTOTYPE_POLLUTION"
+	| "PUBLISH_DEPTH_EXCEEDED"
+	| "REENTRANT_DOMAIN_STATE_MACHINE_EVALUATION"
+	| "REENTRANT_EVENT_RECORDING"
+	| "REPOSITORY_ERROR_MAPPING_FAILED"
+	| "SNAPSHOT_VERSION_NOT_RESTORED"
+	| "TRANSACTION_CLOSED"
+	| "UNMANAGED_INSTANCE"
+	| "UNPROJECTABLE_EVENT"
+	| "UNREGISTERED_CHANGES"
+	| "UNREGISTERED_HANDLER"
+	| "UNREPLAYABLE_AGGREGATE";
+
+/** Options for {@link KitWiringError}. */
+export interface KitWiringErrorOptions<TCode extends KitWiringErrorCode> {
+	/** Stable SCREAMING_SNAKE identifier; also becomes `error.name`. */
+	readonly code: TCode;
+	/** Technical message for logs and debugging, never for clients. */
+	readonly message: string;
+	/**
+	 * Safe diagnostic data, for example an aggregate identity, an operation,
+	 * an event type, or a reason code. Never an error object or raw input.
+	 */
+	readonly details?: Readonly<Record<string, unknown>>;
+	/** The failure that the kit handled when it found the defect. */
+	readonly cause?: unknown;
+	/** A second failure that occurred while the kit handled `cause`. */
+	readonly secondaryCause?: unknown;
+}
+
 /**
- * Internal base for the kit's crash-loud **WIRING** family: deterministic
- * programming/configuration bugs that must fail the operation loudly and
- * never be absorbed by generic domain or infrastructure handlers. One
- * implementation of the `{ category: "WIRING", retryable: false }` shape
- * so the family cannot drift. Exported for the kit's own modules only;
- * not part of the package entries.
+ * The kit's crash-loud **WIRING** family: deterministic programming and
+ * configuration bugs. Such an error must fail the operation loudly, and no
+ * generic domain or infrastructure handler may absorb it. One class carries
+ * every wiring code: match on `code`, never on the message.
+ *
+ * `details` holds safe diagnostic data only, and the log object carries it.
+ * A second failure that occurred while the kit handled `cause`, for example
+ * a mapper that threw while it classified the error, is `secondaryCause`.
  */
-export abstract class KitWiringError<
-	TCode extends string,
-> extends StructuredError<TCode, "WIRING"> {
-	protected constructor(code: TCode, message: string, cause?: unknown) {
-		super({ code, category: "WIRING", retryable: false, message, cause });
+export class KitWiringError<
+	TCode extends KitWiringErrorCode = KitWiringErrorCode,
+> extends StructuredError<TCode, "WIRING", Readonly<Record<string, unknown>>> {
+	declare readonly details: Readonly<Record<string, unknown>>;
+	readonly secondaryCause?: unknown;
+
+	constructor(options: KitWiringErrorOptions<TCode>) {
+		super({
+			code: options.code,
+			category: "WIRING",
+			retryable: false,
+			message: options.message,
+			cause: options.cause,
+			details: Object.freeze({ ...options.details }),
+		});
+		if (options.secondaryCause !== undefined) {
+			this.secondaryCause = options.secondaryCause;
+		}
 	}
 
-	/** Carries the fields the concrete error declares into the log object. */
+	/** Carries `secondaryCause` and log-safe details into the log object. */
 	protected override buildLogObject(): Record<string, unknown> {
-		return { ...ownFields(this), ...super.buildLogObject() };
+		return {
+			...ownFields(this),
+			...super.buildLogObject(),
+			details: logSafeDetails(this.details),
+		};
 	}
+}
+
+/**
+ * Whether `value` is a kit wiring error with the given code. Kit modules
+ * only; not part of the package entries.
+ */
+export function isWiringError<TCode extends KitWiringErrorCode>(
+	value: unknown,
+	code: TCode,
+): value is KitWiringError<TCode> {
+	return value instanceof KitWiringError && value.code === code;
+}
+
+function logSafeDetails(
+	details: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+	const safe: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(details)) {
+		const projected = logSafeValue(value);
+		if (projected !== undefined) safe[key] = projected;
+	}
+	return safe;
 }
 
 /**
@@ -325,34 +427,36 @@ export class InMemoryCapacityExceededError extends InfrastructureError<"IN_MEMOR
  * "any structured error from the kit or any other BaseError-using
  * library" at the App boundary.
  */
-export class MissingHandlerError extends KitWiringError<"MISSING_HANDLER"> {
-	constructor(
-		public readonly eventType: string,
-		cause?: unknown,
-	) {
-		super(
-			"MISSING_HANDLER",
-			`Missing handler for event type: ${eventType}`,
-			cause,
-		);
-	}
+export function missingHandlerError(
+	eventType: string,
+	cause?: unknown,
+): KitWiringError<"MISSING_HANDLER"> {
+	return new KitWiringError({
+		code: "MISSING_HANDLER",
+		message: `Missing handler for event type: ${eventType}`,
+		details: { eventType },
+		cause,
+	});
 }
 
 /**
  * Thrown by an event-sourced aggregate when `apply()` or replay reaches an
  * event type with no own entry in the `folds` map: the declared event union
  * and the map disagree at runtime. Same posture as
- * {@link MissingHandlerError}: a deterministic bug, never a domain
+ * `MISSING_HANDLER`: a deterministic bug, never a domain
  * rejection, so it propagates through `replayHistory` instead of riding its
  * `Result`.
  */
-export class MissingFoldError extends KitWiringError<"MISSING_FOLD"> {
-	constructor(
-		public readonly eventType: string,
-		cause?: unknown,
-	) {
-		super("MISSING_FOLD", `Missing fold for event type: ${eventType}`, cause);
-	}
+export function missingFoldError(
+	eventType: string,
+	cause?: unknown,
+): KitWiringError<"MISSING_FOLD"> {
+	return new KitWiringError({
+		code: "MISSING_FOLD",
+		message: `Missing fold for event type: ${eventType}`,
+		details: { eventType },
+		cause,
+	});
 }
 
 /**
@@ -360,22 +464,24 @@ export class MissingFoldError extends KitWiringError<"MISSING_FOLD"> {
  * for an event, which is almost always a fold without a `return` statement.
  * Storing that result would set the aggregate state to `undefined`, record
  * the fact anyway on the apply path, and leave every later fold working on
- * nothing. Same posture as {@link MissingFoldError}: a deterministic bug
+ * nothing. Same posture as `MISSING_FOLD`: a deterministic bug
  * in the folds map, never a domain rejection, so it propagates through
  * `replayHistory` instead of riding its `Result`.
  */
-export class FoldReturnedNoStateError extends KitWiringError<"FOLD_RETURNED_NO_STATE"> {
-	constructor(public readonly eventType: string) {
-		super(
-			"FOLD_RETURNED_NO_STATE",
+export function foldReturnedNoStateError(
+	eventType: string,
+): KitWiringError<"FOLD_RETURNED_NO_STATE"> {
+	return new KitWiringError({
+		code: "FOLD_RETURNED_NO_STATE",
+		message:
 			`The fold for event type "${eventType}" returned no state. ` +
-				"A fold must return the next state; check for a missing " +
-				"return statement.",
-		);
-	}
+			"A fold must return the next state; check for a missing " +
+			"return statement.",
+		details: { eventType },
+	});
 }
 
-/** Constructor options for {@link DirectStateMutationError}. */
+/** Options of the `DIRECT_STATE_MUTATION` error. */
 export interface DirectStateMutationErrorOptions {
 	/** The aggregate the error names. */
 	readonly identity: AggregateIdentity;
@@ -389,18 +495,17 @@ export interface DirectStateMutationErrorOptions {
  * deterministic bug in the aggregate's own code, the remedy is an event
  * and a handler.
  */
-export class DirectStateMutationError extends KitWiringError<"DIRECT_STATE_MUTATION"> {
-	readonly identity: DirectStateMutationErrorOptions["identity"];
-
-	constructor(options: DirectStateMutationErrorOptions) {
-		super(
-			"DIRECT_STATE_MUTATION",
+export function directStateMutationError(
+	options: DirectStateMutationErrorOptions,
+): KitWiringError<"DIRECT_STATE_MUTATION"> {
+	return new KitWiringError({
+		code: "DIRECT_STATE_MUTATION",
+		message:
 			`Aggregate ${describeAggregateIdentity(options.identity)} is event-sourced: its state changes only ` +
-				"through apply(). Record the fact as an event and fold it in a " +
-				"handler instead of calling setState.",
-		);
-		this.identity = copyAggregateIdentity(options.identity);
-	}
+			"through apply(). Record the fact as an event and fold it in a " +
+			"handler instead of calling setState.",
+		details: { identity: copyAggregateIdentity(options.identity) },
+	});
 }
 
 /**
@@ -412,22 +517,21 @@ export class DirectStateMutationError extends KitWiringError<"DIRECT_STATE_MUTAT
  * envelope. A well-formed cursor that does not continue the stored chain
  * instead throws {@link ProjectionGapError}.
  *
- * A wiring error, not a `DomainError`: see {@link MissingHandlerError}
+ * A wiring error, not a `DomainError`: see `MISSING_HANDLER`
  * for the rationale of crashing loud at the App layer.
  */
-export class UnprojectableEventError extends KitWiringError<"UNPROJECTABLE_EVENT"> {
-	constructor(
-		public readonly projection: string,
-		public readonly eventId: string,
-		reason: string,
-		cause?: unknown,
-	) {
-		super(
-			"UNPROJECTABLE_EVENT",
-			`Projector(${projection}): event ${eventId} ${reason}`,
-			cause,
-		);
-	}
+export function unprojectableEventError(
+	projection: string,
+	eventId: string,
+	reason: string,
+	cause?: unknown,
+): KitWiringError<"UNPROJECTABLE_EVENT"> {
+	return new KitWiringError({
+		code: "UNPROJECTABLE_EVENT",
+		message: `Projector(${projection}): event ${eventId} ${reason}`,
+		details: { projection, eventId },
+		cause,
+	});
 }
 
 /**
@@ -593,24 +697,24 @@ export class InvalidCommandMessageError extends InfrastructureError<"INVALID_COM
  * that passes.
  *
  * Deliberately **not** a `DomainError` or `InfrastructureError` (same
- * posture as {@link MissingHandlerError}): untrusted input reaching the
+ * posture as `MISSING_HANDLER`): untrusted input reaching the
  * domain layer unvalidated is a boundary bug, and a generic
  * business-rule handler must not absorb it. Validate and strip untrusted
  * input at the application edge; model genuinely arbitrary keys with a
  * `Map`, not a plain object.
  */
-export class PrototypePollutionError extends KitWiringError<"PROTOTYPE_POLLUTION"> {
-	constructor(
-		public readonly key: string,
-		subject: string = "Entity state",
-	) {
-		super(
-			"PROTOTYPE_POLLUTION",
+export function prototypePollutionError(
+	key: string,
+	subject = "Entity state",
+): KitWiringError<"PROTOTYPE_POLLUTION"> {
+	return new KitWiringError({
+		code: "PROTOTYPE_POLLUTION",
+		message:
 			`${subject} carries an own "${key}" key, a prototype-pollution ` +
-				"payload that can never be legitimate domain data. Validate and strip untrusted input " +
-				"at the boundary, or model arbitrary keys with a Map.",
-		);
-	}
+			"payload that can never be legitimate domain data. Validate and strip untrusted input " +
+			"at the boundary, or model arbitrary keys with a Map.",
+		details: { key },
+	});
 }
 
 /**
@@ -622,16 +726,14 @@ export class PrototypePollutionError extends KitWiringError<"PROTOTYPE_POLLUTION
  * wiring error: a deterministic bug at the call site, never a domain
  * rejection.
  */
-export class MissingEntityIdError extends KitWiringError<"MISSING_ENTITY_ID"> {
-	constructor(
-		/** The rejected value, for the message only; never a usable id. */
-		received: unknown,
-	) {
-		super(
-			"MISSING_ENTITY_ID",
-			`Entity ID must be a non-blank string; received ${describeRejectedId(received)}.`,
-		);
-	}
+export function missingEntityIdError(
+	/** The rejected value, for the message only; never a usable id. */
+	received: unknown,
+): KitWiringError<"MISSING_ENTITY_ID"> {
+	return new KitWiringError({
+		code: "MISSING_ENTITY_ID",
+		message: `Entity ID must be a non-blank string; received ${describeRejectedId(received)}.`,
+	});
 }
 
 // Never throws: an object with no primitive conversion is described by
@@ -654,22 +756,22 @@ function describeRejectedId(value: unknown): string {
  * error: an adapter passed a corrupt row value or a wrong number, and
  * the optimistic-concurrency cursor must not carry it. Not retryable.
  */
-export class InvalidVersionError extends KitWiringError<"INVALID_VERSION"> {
-	constructor(
-		public readonly value: unknown,
-		/** Why the value was rejected, for example "is not a safe integer". */
-		public readonly reason: string,
-	) {
-		super(
-			"INVALID_VERSION",
+export function invalidVersionError(
+	value: unknown,
+	/** Why the value was rejected, for example "is not a safe integer". */
+	reason: string,
+): KitWiringError<"INVALID_VERSION"> {
+	return new KitWiringError({
+		code: "INVALID_VERSION",
+		message:
 			`Version ${String(value)} ${reason}. A version is a safe integer of ` +
-				"at least zero; create one with toVersion(n) from the stored " +
-				"row value.",
-		);
-	}
+			"at least zero; create one with toVersion(n) from the stored " +
+			"row value.",
+		details: { value, reason },
+	});
 }
 
-/** Constructor options for {@link UnreplayableAggregateError}. */
+/** Options of the `UNREPLAYABLE_AGGREGATE` error. */
 export interface UnreplayableAggregateErrorOptions {
 	/** The aggregate the error names. */
 	readonly identity: AggregateIdentity;
@@ -684,7 +786,7 @@ export interface UnreplayableAggregateErrorOptions {
  * older state and could later claim history the stream does not carry.
  *
  * Deliberately **not** a `DomainError` or `InfrastructureError` (same
- * posture as {@link MissingHandlerError}): a deterministic programming
+ * posture as `MISSING_HANDLER`): a deterministic programming
  * bug in how the aggregate was constructed before the restore. It
  * propagates as a throw instead of riding the replay methods' `Result`
  * channel, so a generic corrupted-stream handler cannot absorb it.
@@ -696,22 +798,21 @@ export interface UnreplayableAggregateErrorOptions {
  * commit an actually saved instance through application orchestration, or
  * discard a dirty instance and replay into a fresh one.
  */
-export class UnreplayableAggregateError extends KitWiringError<"UNREPLAYABLE_AGGREGATE"> {
-	readonly identity: UnreplayableAggregateErrorOptions["identity"];
-
-	constructor(options: UnreplayableAggregateErrorOptions) {
-		super(
-			"UNREPLAYABLE_AGGREGATE",
+export function unreplayableAggregateError(
+	options: UnreplayableAggregateErrorOptions,
+): KitWiringError<"UNREPLAYABLE_AGGREGATE"> {
+	return new KitWiringError({
+		code: "UNREPLAYABLE_AGGREGATE",
+		message:
 			`Cannot replay onto aggregate ${describeAggregateIdentity(options.identity)}: ` +
-				`${options.reason}. Reconstitute on a fresh instance ` +
-				"(no factory-recorded events, no unpersisted mutations).",
-		);
-		this.identity = copyAggregateIdentity(options.identity);
-	}
+			`${options.reason}. Reconstitute on a fresh instance ` +
+			"(no factory-recorded events, no unpersisted mutations).",
+		details: { identity: copyAggregateIdentity(options.identity) },
+	});
 }
 
 /**
- * Constructor options for {@link MisattributedEventError} and
+ * Options of the `MISATTRIBUTED_EVENT` error and
  * {@link ForeignEventError}: the identity of the aggregate that received the
  * event, and the aggregate identity fields the event carries. A missing
  * field on the event matches by default, so `actual` names only what the
@@ -786,28 +887,25 @@ function describeEventIdentity(
  * bug in today's code, a wrong PERSISTED row is corrupted or miswired
  * infrastructure, and handlers for one must not absorb the other.
  */
-export class MisattributedEventError extends KitWiringError<"MISATTRIBUTED_EVENT"> {
-	/** Identity of the aggregate that received the event. */
-	readonly expected: AggregateIdentityMismatchOptions["expected"];
-	/** Aggregate identity fields the event carries. */
-	readonly actual: AggregateIdentityMismatchOptions["actual"];
-	readonly eventType: string;
-
-	constructor(options: AggregateIdentityMismatchOptions) {
-		super(
-			"MISATTRIBUTED_EVENT",
+export function misattributedEventError(
+	options: AggregateIdentityMismatchOptions,
+): KitWiringError<"MISATTRIBUTED_EVENT"> {
+	return new KitWiringError({
+		code: "MISATTRIBUTED_EVENT",
+		message:
 			`New event "${options.eventType}" belongs to ` +
-				`${describeEventIdentity(options)} but was applied on ` +
-				`${describeAggregateIdentity(options.expected)}: ` +
-				"fix the call site (createEvent stamps the right identity).",
-		);
-		this.expected = copyAggregateIdentity(options.expected);
-		this.actual = copyPartialAggregateIdentity(options.actual);
-		this.eventType = options.eventType;
-	}
+			`${describeEventIdentity(options)} but was applied on ` +
+			`${describeAggregateIdentity(options.expected)}: ` +
+			"fix the call site (createEvent stamps the right identity).",
+		details: {
+			expected: copyAggregateIdentity(options.expected),
+			actual: copyPartialAggregateIdentity(options.actual),
+			eventType: options.eventType,
+		},
+	});
 }
 
-/** Constructor options for {@link SnapshotVersionNotRestoredError}. */
+/** Options of the `SNAPSHOT_VERSION_NOT_RESTORED` error. */
 export interface SnapshotVersionNotRestoredErrorOptions {
 	/** The aggregate the error names. */
 	readonly identity: AggregateIdentity;
@@ -825,25 +923,24 @@ export interface SnapshotVersionNotRestoredErrorOptions {
  * never snapshot corruption: routing it into the discard-and-refold
  * channel would mask it as perpetual silent refolding.
  */
-export class SnapshotVersionNotRestoredError extends KitWiringError<"SNAPSHOT_VERSION_NOT_RESTORED"> {
-	readonly identity: SnapshotVersionNotRestoredErrorOptions["identity"];
-	readonly snapshotVersion: number;
-	readonly restoredVersion: number;
-
-	constructor(options: SnapshotVersionNotRestoredErrorOptions) {
-		super(
-			"SNAPSHOT_VERSION_NOT_RESTORED",
+export function snapshotVersionNotRestoredError(
+	options: SnapshotVersionNotRestoredErrorOptions,
+): KitWiringError<"SNAPSHOT_VERSION_NOT_RESTORED"> {
+	return new KitWiringError({
+		code: "SNAPSHOT_VERSION_NOT_RESTORED",
+		message:
 			`SnapshotModel.reconstitute for ${describeAggregateIdentity(options.identity)} ` +
-				"returned an aggregate at version " +
-				`${options.restoredVersion} for a snapshot at version ` +
-				`${options.snapshotVersion}. Reconstitution must restore ` +
-				"the persisted version; call markReconstituted(version) inside " +
-				"the aggregate factory.",
-		);
-		this.identity = copyAggregateIdentity(options.identity);
-		this.snapshotVersion = options.snapshotVersion;
-		this.restoredVersion = options.restoredVersion;
-	}
+			"returned an aggregate at version " +
+			`${options.restoredVersion} for a snapshot at version ` +
+			`${options.snapshotVersion}. Reconstitution must restore ` +
+			"the persisted version; call markReconstituted(version) inside " +
+			"the aggregate factory.",
+		details: {
+			identity: copyAggregateIdentity(options.identity),
+			snapshotVersion: options.snapshotVersion,
+			restoredVersion: options.restoredVersion,
+		},
+	});
 }
 
 /**
@@ -873,22 +970,24 @@ export class SnapshotCorruptedError extends InfrastructureError<"SNAPSHOT_CORRUP
  * event recorded next to a state change can silently diverge from it
  * afterwards. A wiring error: deterministic bug at the call site, the
  * remedy is building through the constructors. An event of another loaded
- * copy of the kit throws `DuplicateKitCopyError` instead.
+ * copy of the kit throws `DUPLICATE_KIT_COPY` instead.
  */
-export class HandBuiltEventError extends KitWiringError<"HAND_BUILT_EVENT"> {
-	constructor(eventType: string) {
-		super(
-			"HAND_BUILT_EVENT",
+export function handBuiltEventError(
+	eventType: string,
+): KitWiringError<"HAND_BUILT_EVENT"> {
+	return new KitWiringError({
+		code: "HAND_BUILT_EVENT",
+		message:
 			`Event "${eventType}" was not built by a domain-event constructor ` +
-				"or aggregate createEvent(...) helper. Those " +
-				"constructors deep-freeze the event " +
-				"and defensively copy payload and metadata; a mutable event " +
-				"could diverge from the state change it records.",
-		);
-	}
+			"or aggregate createEvent(...) helper. Those " +
+			"constructors deep-freeze the event " +
+			"and defensively copy payload and metadata; a mutable event " +
+			"could diverge from the state change it records.",
+		details: { eventType },
+	});
 }
 
-/** Constructor options for {@link ReentrantEventRecordingError}. */
+/** Options of the `REENTRANT_EVENT_RECORDING` error. */
 export interface ReentrantEventRecordingErrorOptions {
 	/** The aggregate the error names. */
 	readonly identity: AggregateIdentity;
@@ -904,23 +1003,22 @@ export interface ReentrantEventRecordingErrorOptions {
  * wiring error: deterministic bug at the call site, the remedy is keeping
  * stamp providers free of domain decisions.
  */
-export class ReentrantEventRecordingError extends KitWiringError<"REENTRANT_EVENT_RECORDING"> {
-	readonly identity: ReentrantEventRecordingErrorOptions["identity"];
-
-	constructor(options: ReentrantEventRecordingErrorOptions) {
-		super(
-			"REENTRANT_EVENT_RECORDING",
+export function reentrantEventRecordingError(
+	options: ReentrantEventRecordingErrorOptions,
+): KitWiringError<"REENTRANT_EVENT_RECORDING"> {
+	return new KitWiringError({
+		code: "REENTRANT_EVENT_RECORDING",
+		message:
 			"Pending events of aggregate " +
-				`${describeAggregateIdentity(options.identity)} changed while ` +
-				"they were stamped. A stamp provider must not trigger new " +
-				"decisions on the aggregate that it stamps; make every " +
-				"domain decision first, then stamp.",
-		);
-		this.identity = copyAggregateIdentity(options.identity);
-	}
+			`${describeAggregateIdentity(options.identity)} changed while ` +
+			"they were stamped. A stamp provider must not trigger new " +
+			"decisions on the aggregate that it stamps; make every " +
+			"domain decision first, then stamp.",
+		details: { identity: copyAggregateIdentity(options.identity) },
+	});
 }
 
-/** Constructor options for {@link DuplicateEventIdError}. */
+/** Options of the `DUPLICATE_EVENT_ID` error. */
 export interface DuplicateEventIdErrorOptions {
 	/** The aggregate the error names. */
 	readonly identity: AggregateIdentity;
@@ -939,26 +1037,25 @@ export interface DuplicateEventIdErrorOptions {
  * the append site or in the stamp provider, the remedy is one fresh
  * identity per fact.
  */
-export class DuplicateEventIdError extends KitWiringError<"DUPLICATE_EVENT_ID"> {
-	readonly identity: DuplicateEventIdErrorOptions["identity"];
-	/** The event id two pending events would have shared. */
-	readonly eventId: string;
-
-	constructor(options: DuplicateEventIdErrorOptions) {
-		super(
-			"DUPLICATE_EVENT_ID",
+export function duplicateEventIdError(
+	options: DuplicateEventIdErrorOptions,
+): KitWiringError<"DUPLICATE_EVENT_ID"> {
+	return new KitWiringError({
+		code: "DUPLICATE_EVENT_ID",
+		message:
 			"Two pending events of aggregate " +
-				`${describeAggregateIdentity(options.identity)} carry the same ` +
-				`eventId "${options.eventId}". Each fact needs its own event id: ` +
-				"append a stamped event once, and return a fresh stamp per " +
-				"decision from the stamp provider.",
-		);
-		this.identity = copyAggregateIdentity(options.identity);
-		this.eventId = options.eventId;
-	}
+			`${describeAggregateIdentity(options.identity)} carry the same ` +
+			`eventId "${options.eventId}". Each fact needs its own event id: ` +
+			"append a stamped event once, and return a fresh stamp per " +
+			"decision from the stamp provider.",
+		details: {
+			identity: copyAggregateIdentity(options.identity),
+			eventId: options.eventId,
+		},
+	});
 }
 
-/** Constructor options for {@link PendingEventLimitExceededError}. */
+/** Options of the `PENDING_EVENT_LIMIT_EXCEEDED` error. */
 export interface PendingEventLimitExceededErrorOptions {
 	/** The aggregate the error names. */
 	readonly identity: AggregateIdentity;
@@ -979,29 +1076,27 @@ export interface PendingEventLimitExceededErrorOptions {
  * repeats it. A wiring error: split the aggregate, or emit fewer facts
  * per decision.
  */
-export class PendingEventLimitExceededError extends KitWiringError<"PENDING_EVENT_LIMIT_EXCEEDED"> {
-	readonly identity: PendingEventLimitExceededErrorOptions["identity"];
-	readonly limit: number;
-	readonly pending: number;
-	readonly added: number;
-
-	constructor(options: PendingEventLimitExceededErrorOptions) {
-		super(
-			"PENDING_EVENT_LIMIT_EXCEEDED",
+export function pendingEventLimitExceededError(
+	options: PendingEventLimitExceededErrorOptions,
+): KitWiringError<"PENDING_EVENT_LIMIT_EXCEEDED"> {
+	return new KitWiringError({
+		code: "PENDING_EVENT_LIMIT_EXCEEDED",
+		message:
 			`Aggregate ${describeAggregateIdentity(options.identity)} holds ` +
-				`${options.pending} pending event(s) and cannot record ` +
-				`${options.added} more: maxPendingEvents is ${options.limit}. ` +
-				"A decision that emits this many facts points at a missing " +
-				"aggregate boundary.",
-		);
-		this.identity = copyAggregateIdentity(options.identity);
-		this.limit = options.limit;
-		this.pending = options.pending;
-		this.added = options.added;
-	}
+			`${options.pending} pending event(s) and cannot record ` +
+			`${options.added} more: maxPendingEvents is ${options.limit}. ` +
+			"A decision that emits this many facts points at a missing " +
+			"aggregate boundary.",
+		details: {
+			identity: copyAggregateIdentity(options.identity),
+			limit: options.limit,
+			pending: options.pending,
+			added: options.added,
+		},
+	});
 }
 
-/** Constructor options for {@link PendingEventBatchMismatchError}. */
+/** Options of the `PENDING_EVENT_BATCH_MISMATCH` error. */
 export interface PendingEventBatchMismatchErrorOptions {
 	/** The aggregate the error names. */
 	readonly identity: AggregateIdentity;
@@ -1020,23 +1115,22 @@ export interface PendingEventBatchMismatchErrorOptions {
  * pending list stays untouched. A wiring error in application commit
  * orchestration: acknowledge exactly the batch that was registered, once.
  */
-export class PendingEventBatchMismatchError extends KitWiringError<"PENDING_EVENT_BATCH_MISMATCH"> {
-	readonly identity: PendingEventBatchMismatchErrorOptions["identity"];
-	readonly batchLength: number;
-	readonly pendingLength: number;
-
-	constructor(options: PendingEventBatchMismatchErrorOptions) {
-		super(
-			"PENDING_EVENT_BATCH_MISMATCH",
+export function pendingEventBatchMismatchError(
+	options: PendingEventBatchMismatchErrorOptions,
+): KitWiringError<"PENDING_EVENT_BATCH_MISMATCH"> {
+	return new KitWiringError({
+		code: "PENDING_EVENT_BATCH_MISMATCH",
+		message:
 			`The committed batch of ${options.batchLength} event(s) is no longer ` +
-				"the pending prefix of aggregate " +
-				`${describeAggregateIdentity(options.identity)} (${options.pendingLength} ` +
-				"pending). Acknowledge exactly the batch that was registered, once.",
-		);
-		this.identity = copyAggregateIdentity(options.identity);
-		this.batchLength = options.batchLength;
-		this.pendingLength = options.pendingLength;
-	}
+			"the pending prefix of aggregate " +
+			`${describeAggregateIdentity(options.identity)} (${options.pendingLength} ` +
+			"pending). Acknowledge exactly the batch that was registered, once.",
+		details: {
+			identity: copyAggregateIdentity(options.identity),
+			batchLength: options.batchLength,
+			pendingLength: options.pendingLength,
+		},
+	});
 }
 
 /**
@@ -1054,7 +1148,7 @@ export class PendingEventBatchMismatchError extends KitWiringError<"PENDING_EVEN
  * after the usual all-or-nothing rollback. History events without the
  * optional aggregate identity fields pass unchecked (the fields are optional on
  * the event shape); new events are covered by
- * {@link MisattributedEventError}.
+ * `MISATTRIBUTED_EVENT`.
  */
 export class ForeignEventError extends InfrastructureError<"FOREIGN_EVENT"> {
 	/** Identity of the aggregate that received the event. */
@@ -1376,7 +1470,7 @@ export class ReplayRejectedError extends InfrastructureError<"REPLAY_REJECTED"> 
  * deterministic and fail identically on every retry.
  *
  * Deliberately **not** an {@link InfrastructureError} (same reasoning as
- * {@link MissingHandlerError}): this is a deterministic programming error,
+ * `MISSING_HANDLER`): this is a deterministic programming error,
  * not a transient storage failure. A `catch (e instanceof InfrastructureError)`
  * retry handler, or a retrying `TransactionScope`, must NOT mask it or loop on
  * it forever; it should crash loud so the caller misuse surfaces in
@@ -1384,14 +1478,16 @@ export class ReplayRejectedError extends InfrastructureError<"REPLAY_REJECTED"> 
  * `UnitOfWork.run` passes it through unchanged instead of wrapping it in
  * `CommitError`.
  */
-export class EventCollectionError extends KitWiringError<"EVENT_COLLECTION_FAILED"> {
-	constructor(
-		message: string,
-		/** The `type` of the offending event, for programmatic routing. */
-		public readonly eventType?: string,
-	) {
-		super("EVENT_COLLECTION_FAILED", message);
-	}
+export function eventCollectionError(
+	message: string,
+	/** The `type` of the offending event, for programmatic routing. */
+	eventType?: string,
+): KitWiringError<"EVENT_COLLECTION_FAILED"> {
+	return new KitWiringError({
+		code: "EVENT_COLLECTION_FAILED",
+		message,
+		details: eventType === undefined ? {} : { eventType },
+	});
 }
 
 /**
@@ -1402,18 +1498,18 @@ export class EventCollectionError extends KitWiringError<"EVENT_COLLECTION_FAILE
  * copy per process, and declare the kit as a peerDependency of an adapter
  * package.
  */
-export class DuplicateKitCopyError extends KitWiringError<"DUPLICATE_KIT_COPY"> {
-	constructor(
-		/** What was rejected, for example "aggregate" or "domain event". */
-		public readonly subject: string,
-	) {
-		super(
-			"DUPLICATE_KIT_COPY",
+export function duplicateKitCopyError(
+	/** What was rejected, for example "aggregate" or "domain event". */
+	subject: string,
+): KitWiringError<"DUPLICATE_KIT_COPY"> {
+	return new KitWiringError({
+		code: "DUPLICATE_KIT_COPY",
+		message:
 			`${subject} was built by another loaded copy of @shirudo/ddd-kit. ` +
-				"Load one copy per process: dedupe the dependency, and declare " +
-				"the kit as a peerDependency of an adapter package.",
-		);
-	}
+			"Load one copy per process: dedupe the dependency, and declare " +
+			"the kit as a peerDependency of an adapter package.",
+		details: { subject },
+	});
 }
 
 /**
@@ -1422,23 +1518,26 @@ export class DuplicateKitCopyError extends KitWiringError<"DUPLICATE_KIT_COPY"> 
  * instance carries none of the kit-managed capabilities the operation
  * needs. A wiring error: extend the kit's base classes.
  */
-export class UnmanagedInstanceError extends KitWiringError<"UNMANAGED_INSTANCE"> {
-	constructor(
-		/** The kit operation that rejected the instance. */
-		public readonly operation: string,
-		/** What was rejected: "aggregate", "entity", "the persistence baseline". */
-		public readonly subject: string,
-		/** The rejected instance's id, when it has one. */
-		public readonly instanceId?: unknown,
-	) {
-		super(
-			"UNMANAGED_INSTANCE",
+export function unmanagedInstanceError(
+	/** The kit operation that rejected the instance. */
+	operation: string,
+	/** What was rejected: "aggregate", "entity", "the persistence baseline". */
+	subject: string,
+	/** The rejected instance's id, when it has one. */
+	instanceId?: unknown,
+): KitWiringError<"UNMANAGED_INSTANCE"> {
+	return new KitWiringError({
+		code: "UNMANAGED_INSTANCE",
+		message:
 			`${operation} requires an instance constructed by this package; ` +
-				`${instanceId === undefined ? subject : `${subject} ${String(instanceId)}`} ` +
-				"carries no kit-managed capability. Construct it through this " +
-				"package; a structural lookalike cannot be managed.",
-		);
-	}
+			`${instanceId === undefined ? subject : `${subject} ${String(instanceId)}`} ` +
+			"carries no kit-managed capability. Construct it through this " +
+			"package; a structural lookalike cannot be managed.",
+		details:
+			instanceId === undefined
+				? { operation, subject }
+				: { operation, subject, instanceId },
+	});
 }
 
 /**
@@ -1450,11 +1549,11 @@ export class UnmanagedInstanceError extends KitWiringError<"UNMANAGED_INSTANCE">
  */
 export function assertNoOwnProtoKey(value: object, subject: string): void {
 	if (Object.hasOwn(value, "__proto__")) {
-		throw new PrototypePollutionError("__proto__", subject);
+		throw prototypePollutionError("__proto__", subject);
 	}
 }
 
-/** Constructor options for {@link UnregisteredHandlerError}. */
+/** Options of the `UNREGISTERED_HANDLER` error. */
 export interface UnregisteredHandlerErrorOptions {
 	/** Which bus rejected the dispatch. */
 	readonly busKind: "command" | "query";
@@ -1469,27 +1568,23 @@ export interface UnregisteredHandlerErrorOptions {
  * a domain or infrastructure failure.
  *
  * Carries the `WIRING` category (same crash-loud family as
- * {@link MissingHandlerError}), and since v3 it is THROWN by `execute`
+ * `MISSING_HANDLER`), and since v3 it is THROWN by `execute`
  * and `executeUnsafe` alike, never delivered through the error channel:
  * the channel carries expected failures a registered handler produced,
  * and a generic err-branch must not absorb a mis-wired bus. Catch it
  * only at a boundary that turns bugs into 500s.
  */
-export class UnregisteredHandlerError extends KitWiringError<"UNREGISTERED_HANDLER"> {
-	readonly busKind: "command" | "query";
-	readonly messageType: string;
-
-	constructor(options: UnregisteredHandlerErrorOptions) {
-		super(
-			"UNREGISTERED_HANDLER",
-			`No handler registered for ${options.busKind} type: ${options.messageType}`,
-		);
-		this.busKind = options.busKind;
-		this.messageType = options.messageType;
-	}
+export function unregisteredHandlerError(
+	options: UnregisteredHandlerErrorOptions,
+): KitWiringError<"UNREGISTERED_HANDLER"> {
+	return new KitWiringError({
+		code: "UNREGISTERED_HANDLER",
+		message: `No handler registered for ${options.busKind} type: ${options.messageType}`,
+		details: { busKind: options.busKind, messageType: options.messageType },
+	});
 }
 
-/** Constructor options for {@link DuplicateHandlerRegistrationError}. */
+/** Options of the `DUPLICATE_HANDLER_REGISTRATION` error. */
 export interface DuplicateHandlerRegistrationErrorOptions {
 	/** Which bus rejected the registration. */
 	readonly busKind: "command" | "query";
@@ -1502,26 +1597,23 @@ export interface DuplicateHandlerRegistrationErrorOptions {
  * is registered for a type that already has one: silent replacement would
  * turn the first handler into dead code with no signal, so the wiring bug
  * surfaces at registration time. Same crash-loud family as
- * {@link UnregisteredHandlerError}; catch it only at a boundary that
+ * `UNREGISTERED_HANDLER`; catch it only at a boundary that
  * turns bugs into 500s.
  */
-export class DuplicateHandlerRegistrationError extends KitWiringError<"DUPLICATE_HANDLER_REGISTRATION"> {
-	readonly busKind: "command" | "query";
-	readonly messageType: string;
-
-	constructor(options: DuplicateHandlerRegistrationErrorOptions) {
-		super(
-			"DUPLICATE_HANDLER_REGISTRATION",
+export function duplicateHandlerRegistrationError(
+	options: DuplicateHandlerRegistrationErrorOptions,
+): KitWiringError<"DUPLICATE_HANDLER_REGISTRATION"> {
+	return new KitWiringError({
+		code: "DUPLICATE_HANDLER_REGISTRATION",
+		message:
 			`A handler for ${options.busKind} type "${options.messageType}" is ` +
-				"already registered; the duplicate would silently shadow the " +
-				"first. Register each type exactly once at bootstrap.",
-		);
-		this.busKind = options.busKind;
-		this.messageType = options.messageType;
-	}
+			"already registered; the duplicate would silently shadow the " +
+			"first. Register each type exactly once at bootstrap.",
+		details: { busKind: options.busKind, messageType: options.messageType },
+	});
 }
 
-/** Constructor options for {@link ErrorMapperFailedError}. */
+/** Options of the `ERROR_MAPPER_FAILED` error. */
 export interface ErrorMapperFailedErrorOptions {
 	/** Which bus was mapping the failure. */
 	readonly busKind: "command" | "query";
@@ -1545,29 +1637,26 @@ export interface ErrorMapperFailedErrorOptions {
  * the mapper's own failure rides along as {@link mapperCause}.
  *
  * Carries the `WIRING` category (same crash-loud family as
- * {@link MissingHandlerError} and {@link UnregisteredHandlerError}): it is
+ * `MISSING_HANDLER` and `UNREGISTERED_HANDLER`): it is
  * thrown, never delivered through the error channel.
  */
-export class ErrorMapperFailedError extends KitWiringError<"ERROR_MAPPER_FAILED"> {
-	readonly busKind: "command" | "query";
-	/** The mapper failure or invalid-decision diagnostic. */
-	readonly mapperCause: unknown;
-
-	constructor(options: ErrorMapperFailedErrorOptions) {
-		super(
-			"ERROR_MAPPER_FAILED",
+export function errorMapperFailedError(
+	options: ErrorMapperFailedErrorOptions,
+): KitWiringError<"ERROR_MAPPER_FAILED"> {
+	return new KitWiringError({
+		code: "ERROR_MAPPER_FAILED",
+		message:
 			`The ${options.busKind} bus mapExpectedError policy failed while ` +
-				"classifying a " +
-				"handler failure. The original handler error is preserved as " +
-				"cause; the mapper's own failure as mapperCause.",
-			options.handlerError,
-		);
-		this.busKind = options.busKind;
-		this.mapperCause = options.mapperError;
-	}
+			"classifying a " +
+			"handler failure. The original handler error is preserved as " +
+			"cause; the mapper's own failure as secondaryCause.",
+		details: { busKind: options.busKind },
+		cause: options.handlerError,
+		secondaryCause: options.mapperError,
+	});
 }
 
-/** Constructor options for {@link UnregisteredChangesError}. */
+/** Options of the `UNREGISTERED_CHANGES` error. */
 export interface UnregisteredChangesErrorOptions {
 	/** The aggregate the error names. */
 	readonly identity: AggregateIdentity;
@@ -1582,7 +1671,7 @@ export interface UnregisteredChangesErrorOptions {
  * dropped.
  *
  * Deliberately **not** an `InfrastructureError` (same posture as
- * {@link MissingHandlerError}): a programming bug that must crash loud,
+ * `MISSING_HANDLER`): a programming bug that must crash loud,
  * not be absorbed by a generic infrastructure-error handler. The throw
  * happens inside the transaction, so the unit of work rolls back and
  * leaves no partial state.
@@ -1598,24 +1687,23 @@ export interface UnregisteredChangesErrorOptions {
  * message names the rule instead: a loaded append-only aggregate must not
  * change.
  */
-export class UnregisteredChangesError extends KitWiringError<"UNREGISTERED_CHANGES"> {
-	readonly identity: UnregisteredChangesErrorOptions["identity"];
-
-	constructor(options: UnregisteredChangesErrorOptions) {
-		super(
-			"UNREGISTERED_CHANGES",
+export function unregisteredChangesError(
+	options: UnregisteredChangesErrorOptions,
+): KitWiringError<"UNREGISTERED_CHANGES"> {
+	return new KitWiringError({
+		code: "UNREGISTERED_CHANGES",
+		message:
 			`Aggregate ${describeAggregateIdentity(options.identity)} was loaded and changed in this unit of work, ` +
-				(options.appendOnly
-					? "but its repository is append-only and installs no update. " +
-						"An append-only aggregate must not change after add."
-					: "but no update intent was registered. Call repository.update(aggregate) " +
-						"after the final domain decision so state and events flush together."),
-		);
-		this.identity = copyAggregateIdentity(options.identity);
-	}
+			(options.appendOnly
+				? "but its repository is append-only and installs no update. " +
+					"An append-only aggregate must not change after add."
+				: "but no update intent was registered. Call repository.update(aggregate) " +
+					"after the final domain decision so state and events flush together."),
+		details: { identity: copyAggregateIdentity(options.identity) },
+	});
 }
 
-/** Constructor options for {@link AggregateDeletedError}. */
+/** Options of the `AGGREGATE_DELETED` error. */
 export interface AggregateDeletedErrorOptions {
 	/** The aggregate the error names. */
 	readonly identity: AggregateIdentity;
@@ -1628,23 +1716,22 @@ export interface AggregateDeletedErrorOptions {
  * use-case bug.
  *
  * Carries the `WIRING` category (same reasoning as
- * {@link MissingHandlerError}): a programming bug that should crash
+ * `MISSING_HANDLER`): a programming bug that should crash
  * loud, not be absorbed by a generic infrastructure-error handler.
  */
-export class AggregateDeletedError extends KitWiringError<"AGGREGATE_DELETED"> {
-	readonly identity: AggregateDeletedErrorOptions["identity"];
-
-	constructor(options: AggregateDeletedErrorOptions) {
-		super(
-			"AGGREGATE_DELETED",
+export function aggregateDeletedError(
+	options: AggregateDeletedErrorOptions,
+): KitWiringError<"AGGREGATE_DELETED"> {
+	return new KitWiringError({
+		code: "AGGREGATE_DELETED",
+		message:
 			`Aggregate ${describeAggregateIdentity(options.identity)} was removed in this unit of work and ` +
-				"cannot be added, updated, tracked, or removed through another " +
-				"instance again. Removal is final within an operation. A repeated " +
-				"remove of the SAME instance is an accepted no-op; if the " +
-				"aggregate must remain, do not remove it.",
-		);
-		this.identity = copyAggregateIdentity(options.identity);
-	}
+			"cannot be added, updated, tracked, or removed through another " +
+			"instance again. Removal is final within an operation. A repeated " +
+			"remove of the SAME instance is an accepted no-op; if the " +
+			"aggregate must remain, do not remove it.",
+		details: { identity: copyAggregateIdentity(options.identity) },
+	});
 }
 
 /**
@@ -2100,14 +2187,16 @@ export class IdempotencyReconciliationRequiredError extends InfrastructureError<
  * orchestration (`withIdempotentCommit` cannot produce it), hence the
  * crash-loud category.
  */
-export class IdempotencyCompletionWithoutClaimError extends KitWiringError<"IDEMPOTENCY_COMPLETED_WITHOUT_CLAIM"> {
-	constructor(public readonly key: string) {
-		super(
-			"IDEMPOTENCY_COMPLETED_WITHOUT_CLAIM",
+export function idempotencyCompletionWithoutClaimError(
+	key: string,
+): KitWiringError<"IDEMPOTENCY_COMPLETED_WITHOUT_CLAIM"> {
+	return new KitWiringError({
+		code: "IDEMPOTENCY_COMPLETED_WITHOUT_CLAIM",
+		message:
 			`IdempotencyStore.complete() called for key "${key}" without a ` +
-				"pending claim; call claim() first (or use withIdempotentCommit)",
-		);
-	}
+			"pending claim; call claim() first (or use withIdempotentCommit)",
+		details: { key },
+	});
 }
 
 /**

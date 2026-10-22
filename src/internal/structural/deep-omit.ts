@@ -110,7 +110,7 @@ function omitInternal(
 	}
 
 	if (budget && ++budget.visits > PATH_SENSITIVE_VISIT_BUDGET) {
-		throw new Error(
+		throw new RangeError(
 			`deepOmit: exceeded ${PATH_SENSITIVE_VISIT_BUDGET} node visits. ` +
 				`With ignoreKeyPredicate, objects reached via shared references ` +
 				`are cloned once per path (the predicate may decide differently ` +

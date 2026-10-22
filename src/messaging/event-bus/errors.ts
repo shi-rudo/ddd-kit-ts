@@ -27,20 +27,20 @@ function formatChain(eventTypeChain: readonly string[]): string {
  * The guard follows the publish chain, never the bus instance. Concurrent
  * publications on one shared bus are correct usage and never reach it.
  */
-export class PublishDepthExceededError extends KitWiringError<"PUBLISH_DEPTH_EXCEEDED"> {
-	constructor(
-		public readonly depth: number,
-		public readonly maxPublishDepth: number,
-		public readonly eventTypeChain: readonly string[],
-	) {
-		super(
-			"PUBLISH_DEPTH_EXCEEDED",
+export function publishDepthExceededError(
+	depth: number,
+	maxPublishDepth: number,
+	eventTypeChain: readonly string[],
+): KitWiringError<"PUBLISH_DEPTH_EXCEEDED"> {
+	return new KitWiringError({
+		code: "PUBLISH_DEPTH_EXCEEDED",
+		message:
 			`EventBus.publish reached depth ${depth} of ${maxPublishDepth}: ` +
-				`${formatChain(eventTypeChain)}. A handler publishes an event that ` +
-				"leads back into the same chain. Break the cycle, or raise " +
-				"maxPublishDepth when the nesting is intended.",
-		);
-	}
+			`${formatChain(eventTypeChain)}. A handler publishes an event that ` +
+			"leads back into the same chain. Break the cycle, or raise " +
+			"maxPublishDepth when the nesting is intended.",
+		details: { depth, maxPublishDepth, eventTypeChain: [...eventTypeChain] },
+	});
 }
 
 /**
@@ -56,13 +56,15 @@ export class PublishDepthExceededError extends KitWiringError<"PUBLISH_DEPTH_EXC
  * `WIRING` category and crashes loud rather than dropping the work in
  * silence.
  */
-export class EventBusClosedError extends KitWiringError<"EVENT_BUS_CLOSED"> {
-	constructor(public readonly operation: string) {
-		super(
-			"EVENT_BUS_CLOSED",
+export function eventBusClosedError(
+	operation: string,
+): KitWiringError<"EVENT_BUS_CLOSED"> {
+	return new KitWiringError({
+		code: "EVENT_BUS_CLOSED",
+		message:
 			`Event bus is closed: ${operation} was called after close(). ` +
-				"Create one bus per scope and close it when that scope ends, " +
-				"instead of holding a reference past it.",
-		);
-	}
+			"Create one bus per scope and close it when that scope ends, " +
+			"instead of holding a reference past it.",
+		details: { operation },
+	});
 }

@@ -8,13 +8,8 @@ import {
 	type DomainEvent,
 } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
-import {
-	EventCollectionError,
-	InfrastructureError,
-	UnmanagedInstanceError,
-} from "../../errors/kit-errors";
+import { InfrastructureError } from "../../errors/kit-errors";
 import type { EventCommitCandidate } from "../../messaging/committed-event";
-import { PublishDepthExceededError } from "../../messaging/event-bus/errors";
 import { InProcessEventBus } from "../../messaging/event-bus/event-bus";
 import type { EventBus, PublishChain } from "../../messaging/event-bus/ports";
 import type { TransactionScope } from "../../persistence/repository/scope";
@@ -428,7 +423,7 @@ describe("withCommit", () => {
 				registration.registerSaved(lookalike);
 				return "must not commit";
 			}),
-		).rejects.toBeInstanceOf(UnmanagedInstanceError);
+		).rejects.toMatchObject({ code: "UNMANAGED_INSTANCE" });
 
 		expect(committed).toBe(false);
 		expect(outbox.added).toEqual([]);
@@ -608,7 +603,7 @@ describe("withCommit", () => {
 		await outboxStarted;
 
 		expect(() => leaked?.registerSaved(createMockAggregate([]))).toThrow(
-			EventCollectionError,
+			expect.objectContaining({ code: "EVENT_COLLECTION_FAILED" }),
 		);
 		releaseOutbox();
 		await expect(execution).resolves.toBe("ok");
@@ -717,7 +712,9 @@ describe("withCommit", () => {
 		await commitOrder();
 
 		expect(hops).toBe(4);
-		expect(publishErrors).toEqual([expect.any(PublishDepthExceededError)]);
+		expect(publishErrors).toEqual([
+			expect.objectContaining({ code: "PUBLISH_DEPTH_EXCEEDED" }),
+		]);
 	});
 
 	it("works without a bus", async () => {
@@ -1219,7 +1216,7 @@ describe("withCommit", () => {
 		).rejects.toThrow(/aggregateId/);
 	});
 
-	it("the collection guard throws EventCollectionError, not a retryable InfrastructureError", async () => {
+	it("the collection guard throws EVENT_COLLECTION_FAILED, not a retryable InfrastructureError", async () => {
 		const badEvent = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "x" },
@@ -1234,7 +1231,7 @@ describe("withCommit", () => {
 			async (_ctx, registration) => registeredResult(registration, "ok", [agg]),
 		).catch((e) => e);
 
-		expect(rejection).toBeInstanceOf(EventCollectionError);
+		expect(rejection).toMatchObject({ code: "EVENT_COLLECTION_FAILED" });
 		expect(rejection).not.toBeInstanceOf(InfrastructureError);
 	});
 
@@ -2229,7 +2226,7 @@ describe("commit registration lifecycle", () => {
 					return "r";
 				},
 			),
-		).rejects.toBeInstanceOf(EventCollectionError);
+		).rejects.toMatchObject({ code: "EVENT_COLLECTION_FAILED" });
 
 		expect(outbox.added).toHaveLength(0);
 		expect(aggregate.pendingEvents).toHaveLength(1);

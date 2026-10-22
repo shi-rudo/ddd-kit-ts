@@ -1,5 +1,5 @@
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
-import { MissingHandlerError } from "../../errors/kit-errors";
+import { missingHandlerError } from "../../errors/kit-errors";
 import type { Projection } from "./ports";
 
 /**
@@ -51,7 +51,7 @@ export interface ProjectionFromHandlersOptions<
  *
  * The compile-time proof is only as complete as the supplied `Evt` union.
  * At runtime, an undeclared type (including object-prototype names such as
- * `constructor`) throws {@link MissingHandlerError}; the projector rejects the
+ * `constructor`) throws `MISSING_HANDLER`; the projector rejects the
  * batch without advancing its checkpoint.
  *
  * @example
@@ -80,7 +80,7 @@ export function projectionFromHandlers<Evt extends AnyDomainEvent, TCtx>(
 						| undefined)
 				: undefined;
 			if (entry === undefined) {
-				throw new MissingHandlerError(event.type);
+				throw missingHandlerError(event.type);
 			}
 			if (entry === ignoreProjectionEvent) return;
 			await entry(ctx, event);

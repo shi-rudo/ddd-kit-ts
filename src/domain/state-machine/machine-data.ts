@@ -1,19 +1,20 @@
+import type { KitWiringError } from "../../errors/kit-errors";
 import { copyPlainData } from "../../internal/structural/plain-data";
 import { deepFreeze } from "../value-object/value-object";
 import type { DomainMachineInput, DomainMachineReadonly } from "./contracts";
 import {
-	InvalidDomainMachineContextError,
-	InvalidDomainMachineInputError,
-	InvalidDomainTransitionResultError,
+	invalidDomainMachineContextError,
+	invalidDomainMachineInputError,
+	invalidDomainTransitionResultError,
 } from "./errors";
 
 type DomainMachineDataErrorFactory = (
 	message: string,
 	cause: unknown,
 ) =>
-	| InvalidDomainMachineContextError
-	| InvalidDomainMachineInputError
-	| InvalidDomainTransitionResultError;
+	| KitWiringError<"INVALID_DOMAIN_MACHINE_CONTEXT">
+	| KitWiringError<"INVALID_DOMAIN_MACHINE_INPUT">
+	| KitWiringError<"INVALID_DOMAIN_TRANSITION_RESULT">;
 
 export function copyDomainMachineOutputs<TOutput>(
 	outputs: readonly (TOutput | DomainMachineReadonly<TOutput>)[] | undefined,
@@ -21,7 +22,7 @@ export function copyDomainMachineOutputs<TOutput>(
 	return freezeDomainMachineData(
 		outputs ?? [],
 		"Domain transition result outputs",
-		(message, cause) => new InvalidDomainTransitionResultError(message, cause),
+		(message, cause) => invalidDomainTransitionResultError(message, cause),
 	) as readonly DomainMachineReadonly<TOutput>[];
 }
 
@@ -31,7 +32,7 @@ export function copyDomainMachineInput<TInput extends DomainMachineInput>(
 	return freezeDomainMachineData(
 		input,
 		"Domain machine input",
-		(message, cause) => new InvalidDomainMachineInputError(message, cause),
+		(message, cause) => invalidDomainMachineInputError(message, cause),
 	) as DomainMachineReadonly<TInput>;
 }
 
@@ -41,7 +42,7 @@ export function copyDomainMachineContext<TContext>(
 	return freezeDomainMachineData(
 		context,
 		"Domain machine context",
-		(message, cause) => new InvalidDomainMachineContextError(message, cause),
+		(message, cause) => invalidDomainMachineContextError(message, cause),
 	) as DomainMachineReadonly<TContext>;
 }
 

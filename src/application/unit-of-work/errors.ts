@@ -18,7 +18,7 @@ import type { AggregateWriteIntent } from "./persistence-contract";
  *
  * Both are contract violations, not recoverable infrastructure
  * failures, so this carries the `WIRING` category (same reasoning as
- * `MissingHandlerError`): a generic `catch (e instanceof
+ * `MISSING_HANDLER`): a generic `catch (e instanceof
  * InfrastructureError)` handler must not mask it.
  *
  * A nested `run()` would NOT join the outer transaction; it would open
@@ -28,16 +28,15 @@ import type { AggregateWriteIntent } from "./persistence-contract";
  * construct one `UnitOfWork` per operation (construction is trivially
  * cheap; the dependency object is the thing you share).
  */
-export class NestedUnitOfWorkError extends KitWiringError<"NESTED_UNIT_OF_WORK"> {
-	constructor() {
-		super(
-			"NESTED_UNIT_OF_WORK",
+export function nestedUnitOfWorkError(): KitWiringError<"NESTED_UNIT_OF_WORK"> {
+	return new KitWiringError({
+		code: "NESTED_UNIT_OF_WORK",
+		message:
 			"UnitOfWork.run() was called while this instance is already running. " +
-				"A nested run() would open an independent transaction, not join the " +
-				"outer one - merge the work into a single run() callback. For " +
-				"concurrent operations, construct one UnitOfWork per operation.",
-		);
-	}
+			"A nested run() would open an independent transaction, not join the " +
+			"outer one - merge the work into a single run() callback. For " +
+			"concurrent operations, construct one UnitOfWork per operation.",
+	});
 }
 
 /**
@@ -46,7 +45,7 @@ export class NestedUnitOfWorkError extends KitWiringError<"NESTED_UNIT_OF_WORK">
  * `tracking.trackLoaded`, or using a repository facade after the flush of its
  * attempt, while the transaction commits, or after it committed or rolled
  * back. An `add`, `update`, or `remove` between the start of the flush and the
- * last check before the commit fails the attempt with `AggregateTrackingError`
+ * last check before the commit fails the attempt with `AGGREGATE_TRACKING`
  * instead.
  *
  * Use-after-close is a programming bug (typically a leaked context
@@ -60,16 +59,18 @@ export class NestedUnitOfWorkError extends KitWiringError<"NESTED_UNIT_OF_WORK">
  * whether the driver rejects after close is ORM-specific. Adapter factories
  * must not let that handle escape into application code.
  */
-export class TransactionClosedError extends KitWiringError<"TRANSACTION_CLOSED"> {
-	constructor(public readonly operation: string) {
-		super(
-			"TRANSACTION_CLOSED",
+export function transactionClosedError(
+	operation: string,
+): KitWiringError<"TRANSACTION_CLOSED"> {
+	return new KitWiringError({
+		code: "TRANSACTION_CLOSED",
+		message:
 			`Unit of work is closed: ${operation} was called after its attempt ` +
-				"ended. Do not use the context, the repository facade, or the " +
-				"tracking capability outside the run() callback, and await all " +
-				"work inside it.",
-		);
-	}
+			"ended. Do not use the context, the repository facade, or the " +
+			"tracking capability outside the run() callback, and await all " +
+			"work inside it.",
+		details: { operation },
+	});
 }
 
 /** Why a repository factory result cannot become a facade. */
@@ -77,7 +78,7 @@ export type InvalidRepositoryAdapterReason =
 	| "not_an_object"
 	| "defines_lifecycle_operation";
 
-/** Constructor options for {@link InvalidRepositoryAdapterError}. */
+/** Options of the `INVALID_REPOSITORY_ADAPTER` error. */
 export type InvalidRepositoryAdapterErrorOptions =
 	| {
 			readonly repository: string;
@@ -93,68 +94,69 @@ export type InvalidRepositoryAdapterErrorOptions =
 	  };
 
 /** A repository factory returned a value that cannot be wrapped as a facade. */
-export class InvalidRepositoryAdapterError extends KitWiringError<"INVALID_REPOSITORY_ADAPTER"> {
-	readonly repository: string;
-	readonly reason: InvalidRepositoryAdapterReason;
-	readonly receivedType: string | undefined;
-	readonly operation: AggregateWriteIntent | undefined;
-
-	constructor(options: InvalidRepositoryAdapterErrorOptions) {
-		super(
-			"INVALID_REPOSITORY_ADAPTER",
+export function invalidRepositoryAdapterError(
+	options: InvalidRepositoryAdapterErrorOptions,
+): KitWiringError<"INVALID_REPOSITORY_ADAPTER"> {
+	return new KitWiringError({
+		code: "INVALID_REPOSITORY_ADAPTER",
+		message:
 			options.reason === "not_an_object"
 				? `Repository factory "${options.repository}" returned ` +
-						`${options.receivedType}; it must return an adapter object.`
+					`${options.receivedType}; it must return an adapter object.`
 				: `Repository factory "${options.repository}" returned an adapter ` +
-						`that defines ${options.operation}. The unit of work installs ` +
-						"add, update, and remove on the facade, so an adapter must not " +
-						`define them. Remove ${options.operation} from the adapter.`,
-		);
-		this.repository = options.repository;
-		this.reason = options.reason;
-		this.receivedType =
-			options.reason === "not_an_object" ? options.receivedType : undefined;
-		this.operation =
-			options.reason === "defines_lifecycle_operation"
-				? options.operation
-				: undefined;
-	}
+					`that defines ${options.operation}. The unit of work installs ` +
+					"add, update, and remove on the facade, so an adapter must not " +
+					`define them. Remove ${options.operation} from the adapter.`,
+		details:
+			options.reason === "not_an_object"
+				? {
+						repository: options.repository,
+						reason: options.reason,
+						receivedType: options.receivedType,
+					}
+				: {
+						repository: options.repository,
+						reason: options.reason,
+						operation: options.operation,
+					},
+	});
 }
 
 /** A Unit of Work received repository wiring that bypassed {@link defineRepository}. */
-export class InvalidRepositoryDefinitionError extends KitWiringError<"INVALID_REPOSITORY_DEFINITION"> {
-	constructor(public readonly repository: string) {
-		super(
-			"INVALID_REPOSITORY_DEFINITION",
+export function invalidRepositoryDefinitionError(
+	repository: string,
+): KitWiringError<"INVALID_REPOSITORY_DEFINITION"> {
+	return new KitWiringError({
+		code: "INVALID_REPOSITORY_DEFINITION",
+		message:
 			`Repository "${repository}" was not created by defineRepository. ` +
-				"Declare the application port explicitly and pass the helper-created " +
-				"definition to UnitOfWork.",
-		);
-	}
+			"Declare the application port explicitly and pass the helper-created " +
+			"definition to UnitOfWork.",
+		details: { repository },
+	});
 }
 
 /** A repository's persistence-error policy threw or returned a non-kit error. */
-export class RepositoryErrorMappingFailedError extends KitWiringError<"REPOSITORY_ERROR_MAPPING_FAILED"> {
-	readonly identity: AggregateIdentity;
-	readonly intent: AggregateWriteIntent;
-	readonly mapperCause: unknown;
-
-	constructor(options: RepositoryErrorMappingFailedErrorOptions) {
-		super(
-			"REPOSITORY_ERROR_MAPPING_FAILED",
+export function repositoryErrorMappingFailedError(
+	options: RepositoryErrorMappingFailedErrorOptions,
+): KitWiringError<"REPOSITORY_ERROR_MAPPING_FAILED"> {
+	return new KitWiringError({
+		code: "REPOSITORY_ERROR_MAPPING_FAILED",
+		message:
 			`The repository error mapper failed for ${options.intent} of aggregate ` +
-				`${describeAggregateIdentity(options.identity)}. The original persistence ` +
-				"failure is preserved as cause; the mapper failure is available as " +
-				"mapperCause.",
-			options.persistenceError,
-		);
-		this.identity = copyAggregateIdentity(options.identity);
-		this.intent = options.intent;
-		this.mapperCause = options.mapperError;
-	}
+			`${describeAggregateIdentity(options.identity)}. The original persistence ` +
+			"failure is preserved as cause; the mapper failure is available as " +
+			"secondaryCause.",
+		details: {
+			identity: copyAggregateIdentity(options.identity),
+			intent: options.intent,
+		},
+		cause: options.persistenceError,
+		secondaryCause: options.mapperError,
+	});
 }
 
-/** Constructor options for {@link RepositoryErrorMappingFailedError}. */
+/** Options of the `REPOSITORY_ERROR_MAPPING_FAILED` error. */
 export interface RepositoryErrorMappingFailedErrorOptions {
 	/** The aggregate the error names. */
 	readonly identity: AggregateIdentity;
@@ -182,28 +184,35 @@ export type FlushStatementReason =
  * repository's `mapError`, because a mapper returns an `InfrastructureError`
  * and would relabel the defect as a store failure.
  */
-export class InvalidFlushStatementError extends KitWiringError<"INVALID_FLUSH_STATEMENT"> {
-	readonly identity: InvalidFlushStatementErrorOptions["identity"];
-	/** The write, or `null` when the code that found the defect does not know it. */
+export function invalidFlushStatementError(
+	options: InvalidFlushStatementErrorOptions,
+): KitWiringError<"INVALID_FLUSH_STATEMENT"> {
+	return new KitWiringError({
+		code: "INVALID_FLUSH_STATEMENT",
+		message: flushStatementReasonMessage(options),
+		details: flushStatementDetails(options),
+		cause: options.cause,
+		secondaryCause: options.classifierCause,
+	});
+}
+
+/** The details of an `INVALID_FLUSH_STATEMENT` error. */
+type FlushStatementDetails = {
+	readonly identity: AggregateIdentity;
 	readonly intent: AggregateWriteIntent | null;
 	readonly reason: FlushStatementReason;
-	/** The value that the flush received in place of a valid one. */
-	readonly received: string | undefined;
-	/** The failure of `isDuplicate`, when the classifier itself threw. */
-	readonly classifierCause: unknown;
+	readonly received?: string;
+};
 
-	constructor(options: InvalidFlushStatementErrorOptions) {
-		super(
-			"INVALID_FLUSH_STATEMENT",
-			flushStatementReasonMessage(options),
-			options.cause,
-		);
-		this.identity = copyAggregateIdentity(options.identity);
-		this.intent = options.intent ?? null;
-		this.reason = options.reason;
-		this.received = options.received;
-		this.classifierCause = options.classifierCause;
-	}
+function flushStatementDetails(
+	options: InvalidFlushStatementErrorOptions,
+): FlushStatementDetails {
+	return {
+		identity: copyAggregateIdentity(options.identity),
+		intent: options.intent ?? null,
+		reason: options.reason,
+		received: options.received,
+	};
 }
 
 /** The fields that describe one defect of the flush statements. */
@@ -223,19 +232,15 @@ export interface InvalidFlushStatementErrorOptions {
  * name, and renders the message again.
  */
 export function attributeFlushStatementIntent(
-	defect: InvalidFlushStatementError,
+	defect: KitWiringError<"INVALID_FLUSH_STATEMENT">,
 	intent: AggregateWriteIntent,
 ): void {
-	if (defect.intent === intent) return;
-	Reflect.set(defect, "intent", intent);
+	const details = defect.details as FlushStatementDetails;
+	if (details.intent === intent) return;
+	Reflect.set(defect, "details", Object.freeze({ ...details, intent }));
 	rewriteErrorMessage(
 		defect,
-		flushStatementReasonMessage({
-			identity: defect.identity,
-			intent,
-			reason: defect.reason,
-			received: defect.received,
-		}),
+		flushStatementReasonMessage({ ...details, intent }),
 	);
 }
 
@@ -280,7 +285,7 @@ function flushStatementReasonMessage(
 			return (
 				`The isDuplicate check of the ${site} threw. It must classify the ` +
 				"error of insert, never fail. The insert failure is the cause; the " +
-				"failure of the check is in classifierCause."
+				"failure of the check is the secondaryCause."
 			);
 	}
 }
@@ -302,22 +307,24 @@ export type AggregateTrackingReason =
  * application registered persistence intent in an order the Unit of Work
  * cannot execute truthfully. Retrying the same callback cannot repair it.
  */
-export class AggregateTrackingError extends KitWiringError<"AGGREGATE_TRACKING"> {
-	readonly identity: AggregateIdentity;
-	readonly operation: AggregateWriteIntent | "load" | "commit";
-	readonly reason: AggregateTrackingReason;
-	readonly registeredIntent: AggregateWriteIntent | undefined;
-
-	constructor(options: AggregateTrackingErrorOptions) {
-		super("AGGREGATE_TRACKING", trackingReasonMessage(options));
-		this.identity = copyAggregateIdentity(options.identity);
-		this.operation = options.operation;
-		this.reason = options.reason;
-		this.registeredIntent = options.registeredIntent;
-	}
+export function aggregateTrackingError(
+	options: AggregateTrackingErrorOptions,
+): KitWiringError<"AGGREGATE_TRACKING"> {
+	return new KitWiringError({
+		code: "AGGREGATE_TRACKING",
+		message: trackingReasonMessage(options),
+		details: {
+			identity: copyAggregateIdentity(options.identity),
+			operation: options.operation,
+			reason: options.reason,
+			...(options.registeredIntent === undefined
+				? {}
+				: { registeredIntent: options.registeredIntent }),
+		},
+	});
 }
 
-/** Constructor options for {@link AggregateTrackingError}. */
+/** Options of the `AGGREGATE_TRACKING` error. */
 export interface AggregateTrackingErrorOptions {
 	/** The aggregate the error names. */
 	readonly identity: AggregateIdentity;
@@ -400,8 +407,8 @@ function trackingReasonMessage(options: AggregateTrackingErrorOptions): string {
  * deterministic post-completion failure, a collection-guard violation (an
  * event missing `aggregateId` / `aggregateType`, or an eventful persisted
  * aggregate that did not advance its version), is a programming bug and surfaces as
- * {@link EventCollectionError} instead, which does NOT extend
- * `InfrastructureError`, so it stays out of retry paths by construction.
+ * a `KitWiringError` with the code `EVENT_COLLECTION_FAILED` instead. That
+ * class does NOT extend `InfrastructureError`, so it stays out of retry paths by construction.
  */
 export class CommitError extends InfrastructureError<"COMMIT_FAILED"> {
 	constructor(cause: unknown) {

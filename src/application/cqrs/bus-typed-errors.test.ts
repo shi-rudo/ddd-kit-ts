@@ -1,9 +1,6 @@
 import { err, type Result } from "@shirudo/result";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
-import {
-	DuplicateHandlerRegistrationError,
-	ErrorMapperFailedError,
-} from "../../errors/kit-errors";
+import type { KitWiringError } from "../../errors/kit-errors";
 import { CommandBus } from "./command/command-bus";
 import { QueryBus } from "./query/query-bus";
 
@@ -131,7 +128,7 @@ describe("a throwing mapExpectedError must not destroy the handler's failure", (
 		throw mapperFailure;
 	};
 
-	it("CommandBus: execute rejects with ErrorMapperFailedError carrying both causes", async () => {
+	it("CommandBus: execute rejects with ERROR_MAPPER_FAILED carrying both causes", async () => {
 		const bus = new CommandBus<Commands, AppError>({
 			mapExpectedError: throwingMapper,
 		});
@@ -144,15 +141,15 @@ describe("a throwing mapExpectedError must not destroy the handler's failure", (
 			.then(() => undefined)
 			.catch((thrown: unknown) => thrown);
 
-		expect(rejection).toBeInstanceOf(ErrorMapperFailedError);
-		const failed = rejection as ErrorMapperFailedError;
+		expect(rejection).toMatchObject({ code: "ERROR_MAPPER_FAILED" });
+		const failed = rejection as KitWiringError<"ERROR_MAPPER_FAILED">;
 		expect(failed.cause).toBe(handlerFailure);
-		expect(failed.mapperCause).toBe(mapperFailure);
-		expect(failed.busKind).toBe("command");
+		expect(failed.secondaryCause).toBe(mapperFailure);
+		expect(failed.details.busKind).toBe("command");
 	});
 
-	it("a NESTED dispatch's ErrorMapperFailedError stays a throw (never mapped by the outer bus)", async () => {
-		// Same posture as a nested UnregisteredHandlerError: a mis-wired
+	it("a NESTED dispatch's ERROR_MAPPER_FAILED stays a throw (never mapped by the outer bus)", async () => {
+		// Same posture as a nested UNREGISTERED_HANDLER: a mis-wired
 		// inner bus is a wiring bug and must not surface as an ordinary
 		// err value of the outer channel.
 		const inner = new CommandBus<Commands, AppError>({
@@ -173,11 +170,13 @@ describe("a throwing mapExpectedError must not destroy the handler's failure", (
 			.then(() => undefined)
 			.catch((thrown: unknown) => thrown);
 
-		expect(rejection).toBeInstanceOf(ErrorMapperFailedError);
-		expect((rejection as ErrorMapperFailedError).busKind).toBe("command");
+		expect(rejection).toMatchObject({ code: "ERROR_MAPPER_FAILED" });
+		expect(
+			(rejection as KitWiringError<"ERROR_MAPPER_FAILED">).details.busKind,
+		).toBe("command");
 	});
 
-	it("QueryBus: execute rejects with ErrorMapperFailedError carrying both causes", async () => {
+	it("QueryBus: execute rejects with ERROR_MAPPER_FAILED carrying both causes", async () => {
 		const bus = new QueryBus<Queries, AppError>({
 			mapExpectedError: throwingMapper,
 		});
@@ -190,11 +189,11 @@ describe("a throwing mapExpectedError must not destroy the handler's failure", (
 			.then(() => undefined)
 			.catch((thrown: unknown) => thrown);
 
-		expect(rejection).toBeInstanceOf(ErrorMapperFailedError);
-		const failed = rejection as ErrorMapperFailedError;
+		expect(rejection).toMatchObject({ code: "ERROR_MAPPER_FAILED" });
+		const failed = rejection as KitWiringError<"ERROR_MAPPER_FAILED">;
 		expect(failed.cause).toBe(handlerFailure);
-		expect(failed.mapperCause).toBe(mapperFailure);
-		expect(failed.busKind).toBe("query");
+		expect(failed.secondaryCause).toBe(mapperFailure);
+		expect(failed.details.busKind).toBe("query");
 	});
 });
 
@@ -229,7 +228,7 @@ describe("QueryBus typed error channel", () => {
 });
 
 describe("duplicate handler registration is a named wiring error", () => {
-	it("CommandBus.register throws DuplicateHandlerRegistrationError with busKind and messageType", () => {
+	it("CommandBus.register throws DUPLICATE_HANDLER_REGISTRATION with busKind and messageType", () => {
 		const bus = new CommandBus<Commands>();
 		bus.register("Create", async () => err("first"));
 
@@ -242,11 +241,11 @@ describe("duplicate handler registration is a named wiring error", () => {
 			}
 		})();
 
-		expect(thrown).toBeInstanceOf(DuplicateHandlerRegistrationError);
-		const error = thrown as DuplicateHandlerRegistrationError;
+		expect(thrown).toMatchObject({ code: "DUPLICATE_HANDLER_REGISTRATION" });
+		const error = thrown as KitWiringError<"DUPLICATE_HANDLER_REGISTRATION">;
 		expect(error.code).toBe("DUPLICATE_HANDLER_REGISTRATION");
-		expect(error.busKind).toBe("command");
-		expect(error.messageType).toBe("Create");
+		expect(error.details.busKind).toBe("command");
+		expect(error.details.messageType).toBe("Create");
 		// Boundaries matching the historical message keep working.
 		expect(error.message).toContain("already registered");
 	});
@@ -264,7 +263,10 @@ describe("duplicate handler registration is a named wiring error", () => {
 			}
 		})();
 
-		expect(thrown).toBeInstanceOf(DuplicateHandlerRegistrationError);
-		expect((thrown as DuplicateHandlerRegistrationError).busKind).toBe("query");
+		expect(thrown).toMatchObject({ code: "DUPLICATE_HANDLER_REGISTRATION" });
+		expect(
+			(thrown as KitWiringError<"DUPLICATE_HANDLER_REGISTRATION">).details
+				.busKind,
+		).toBe("query");
 	});
 });

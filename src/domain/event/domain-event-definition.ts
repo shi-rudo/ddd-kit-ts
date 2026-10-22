@@ -96,7 +96,7 @@ export function defineDomainEvent<
 
 /**
  * Whether `value` came out of {@link defineDomainEvent} of this kit copy.
- * Throws `DuplicateKitCopyError` for a definition of another loaded copy.
+ * Throws `DUPLICATE_KIT_COPY` for a definition of another loaded copy.
  */
 export function isDomainEventDefinition(
 	value: unknown,

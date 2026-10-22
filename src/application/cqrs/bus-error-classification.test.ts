@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
-	ErrorMapperFailedError,
 	InfrastructureError,
+	type KitWiringError,
 } from "../../errors/kit-errors";
 import { CommandBus } from "./command/command-bus";
 import { QueryBus } from "./query/query-bus";
@@ -130,9 +130,9 @@ describe("bus handler failure classification", () => {
 			(thrown: unknown) => thrown,
 		);
 
-		expect(rejection).toBeInstanceOf(ErrorMapperFailedError);
-		const mapperFailure = rejection as ErrorMapperFailedError;
+		expect(rejection).toMatchObject({ code: "ERROR_MAPPER_FAILED" });
+		const mapperFailure = rejection as KitWiringError<"ERROR_MAPPER_FAILED">;
 		expect(mapperFailure.cause).toBe(failure);
-		expect(mapperFailure.mapperCause).toBeInstanceOf(TypeError);
+		expect(mapperFailure.secondaryCause).toBeInstanceOf(TypeError);
 	});
 });

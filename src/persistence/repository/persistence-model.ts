@@ -1,4 +1,4 @@
-import { UnmanagedInstanceError } from "../../errors/kit-errors";
+import { unmanagedInstanceError } from "../../errors/kit-errors";
 import { deepEqual } from "../../internal/structural/deep-equal";
 
 /** Whether a baseline represents an existing row or a pending insert. */
@@ -203,7 +203,7 @@ function capabilityFor<TAggregate, TChangeSet>(
 ): BaselineCapability {
 	const capability = capabilities.get(baseline as object);
 	if (!capability) {
-		throw new UnmanagedInstanceError(operation, "the persistence baseline");
+		throw unmanagedInstanceError(operation, "the persistence baseline");
 	}
 	return capability;
 }

@@ -4,8 +4,8 @@ import {
 	type DomainEvent,
 } from "../../domain/event/domain-event";
 import {
-	EventCollectionError,
 	InMemoryCapacityExceededError,
+	type KitWiringError,
 } from "../../errors/kit-errors";
 import { InMemoryTransactionScope } from "../../persistence/repository/adapters/in-memory-transaction-scope";
 import type { EventCommitCandidate } from "../committed-event";
@@ -57,12 +57,12 @@ describe("InMemoryOutbox with a malformed candidate", () => {
 			},
 		};
 
-		await expect(outbox.add([badSource])).rejects.toBeInstanceOf(
-			EventCollectionError,
-		);
-		await expect(outbox.add([badPosition])).rejects.toBeInstanceOf(
-			EventCollectionError,
-		);
+		await expect(outbox.add([badSource])).rejects.toMatchObject({
+			code: "EVENT_COLLECTION_FAILED",
+		});
+		await expect(outbox.add([badPosition])).rejects.toMatchObject({
+			code: "EVENT_COLLECTION_FAILED",
+		});
 		expect(await outbox.getPending()).toEqual([]);
 	});
 
@@ -90,9 +90,9 @@ describe("InMemoryOutbox with a malformed candidate", () => {
 			},
 		};
 
-		await expect(outbox.add([malformed])).rejects.toBeInstanceOf(
-			EventCollectionError,
-		);
+		await expect(outbox.add([malformed])).rejects.toMatchObject({
+			code: "EVENT_COLLECTION_FAILED",
+		});
 		expect(await outbox.getPending()).toEqual([]);
 	});
 
@@ -106,7 +106,7 @@ describe("InMemoryOutbox with a malformed candidate", () => {
 
 		await expect(
 			outbox.add([candidate(event as unknown as OrderCreated, 1)]),
-		).rejects.toBeInstanceOf(EventCollectionError);
+		).rejects.toMatchObject({ code: "EVENT_COLLECTION_FAILED" });
 		expect(await outbox.getPending()).toEqual([]);
 	});
 
@@ -124,14 +124,14 @@ describe("InMemoryOutbox with a malformed candidate", () => {
 			"a null position",
 			() => ({ ...candidate(orderEvent("evt-1")), position: null }),
 		],
-	])("rejects %s with EventCollectionError", async (_case, malformed) => {
+	])("rejects %s with EVENT_COLLECTION_FAILED", async (_case, malformed) => {
 		const outbox = new InMemoryOutbox<OrderCreated>();
 
 		await expect(
 			outbox.add([
 				malformed() as unknown as EventCommitCandidate<OrderCreated>,
 			]),
-		).rejects.toBeInstanceOf(EventCollectionError);
+		).rejects.toMatchObject({ code: "EVENT_COLLECTION_FAILED" });
 		expect(await outbox.getPending()).toEqual([]);
 	});
 
@@ -148,7 +148,7 @@ describe("InMemoryOutbox with a malformed candidate", () => {
 
 		await expect(outbox.add([malformed])).rejects.toMatchObject({
 			code: "EVENT_COLLECTION_FAILED",
-			eventType: "OrderCreated",
+			details: { eventType: "OrderCreated" },
 		});
 	});
 });
@@ -628,9 +628,9 @@ describe("InMemoryOutbox", () => {
 			const collision = eventFor("evt-collision", "Invoice", "i-1");
 			await outbox.add([candidate(original, 1)]);
 
-			await expect(
-				outbox.add([candidate(collision, 1)]),
-			).rejects.toBeInstanceOf(EventCollectionError);
+			await expect(outbox.add([candidate(collision, 1)])).rejects.toMatchObject(
+				{ code: "EVENT_COLLECTION_FAILED" },
+			);
 
 			const foreignNext = eventFor("evt-invoice-next", "Invoice", "i-1");
 			await outbox.add([candidate(foreignNext, 2)]);
@@ -656,9 +656,9 @@ describe("InMemoryOutbox", () => {
 			await outbox.add([candidate(original)]);
 			await outbox.markFailed(original.eventId, new Error("poison"));
 
-			await expect(outbox.add([candidate(collision)])).rejects.toBeInstanceOf(
-				EventCollectionError,
-			);
+			await expect(outbox.add([candidate(collision)])).rejects.toMatchObject({
+				code: "EVENT_COLLECTION_FAILED",
+			});
 
 			expect(await outbox.getPending()).toEqual([]);
 			expect(await outbox.deadLetters()).toMatchObject([
@@ -676,9 +676,9 @@ describe("InMemoryOutbox", () => {
 			await outbox.add([candidate(original)]);
 			await outbox.markDispatched([original.eventId]);
 
-			await expect(outbox.add([candidate(collision)])).rejects.toBeInstanceOf(
-				EventCollectionError,
-			);
+			await expect(outbox.add([candidate(collision)])).rejects.toMatchObject({
+				code: "EVENT_COLLECTION_FAILED",
+			});
 
 			expect(await outbox.getPending()).toEqual([]);
 		});
@@ -705,9 +705,9 @@ describe("InMemoryOutbox", () => {
 			const collision = eventAt("evt-position-collision", 1);
 
 			await outbox.add([original]);
-			await expect(outbox.add([collision])).rejects.toBeInstanceOf(
-				EventCollectionError,
-			);
+			await expect(outbox.add([collision])).rejects.toMatchObject({
+				code: "EVENT_COLLECTION_FAILED",
+			});
 
 			const next = eventAt("evt-position-next", 2);
 			await outbox.add([next]);
@@ -724,9 +724,9 @@ describe("InMemoryOutbox", () => {
 			const original = eventAt("evt-intra-add-original", 1);
 			const collision = eventAt("evt-intra-add-collision", 1);
 
-			await expect(outbox.add([original, collision])).rejects.toBeInstanceOf(
-				EventCollectionError,
-			);
+			await expect(outbox.add([original, collision])).rejects.toMatchObject({
+				code: "EVENT_COLLECTION_FAILED",
+			});
 			expect(await outbox.getPending()).toEqual([]);
 
 			const afterRejectedBatch = eventAt("evt-after-rejected-batch", 2);
@@ -754,7 +754,7 @@ describe("InMemoryOutbox", () => {
 						position: { ...original.position, commitSequence: 1 },
 					},
 				]),
-			).rejects.toBeInstanceOf(EventCollectionError);
+			).rejects.toMatchObject({ code: "EVENT_COLLECTION_FAILED" });
 
 			const [record] = await outbox.getPending();
 			expect(record?.position.commitSequence).toBe(0);
@@ -845,9 +845,9 @@ describe("InMemoryOutbox", () => {
 		await outbox.add([candidate(event, 1)]);
 		await outbox.markDispatched([event.eventId]);
 
-		await expect(outbox.add([candidate(event, 2)])).rejects.toBeInstanceOf(
-			EventCollectionError,
-		);
+		await expect(outbox.add([candidate(event, 2)])).rejects.toMatchObject({
+			code: "EVENT_COLLECTION_FAILED",
+		});
 		expect(await outbox.getPending()).toEqual([]);
 	});
 
@@ -884,7 +884,7 @@ describe("InMemoryOutbox", () => {
 					},
 				},
 			]),
-		).rejects.toBeInstanceOf(EventCollectionError);
+		).rejects.toMatchObject({ code: "EVENT_COLLECTION_FAILED" });
 
 		expect(await outbox.getPending()).toEqual([]);
 		const successor = event("evt-successor-after-rejection");
@@ -919,9 +919,9 @@ describe("InMemoryOutbox", () => {
 			position: { ...first.position, commitSequence: 1 },
 		};
 
-		await expect(outbox.add([first, reassigned])).rejects.toBeInstanceOf(
-			EventCollectionError,
-		);
+		await expect(outbox.add([first, reassigned])).rejects.toMatchObject({
+			code: "EVENT_COLLECTION_FAILED",
+		});
 		expect(await outbox.getPending()).toEqual([]);
 
 		await outbox.add([candidate(event("evt-after-self-collision"), 2)]);
@@ -1094,10 +1094,10 @@ describe("InMemoryOutbox", () => {
 				(error: unknown) => error,
 			);
 
-		expect(rejection).toBeInstanceOf(EventCollectionError);
-		expect((rejection as EventCollectionError).message).toMatch(
-			/removed and created again under the same identity/,
-		);
+		expect(rejection).toMatchObject({ code: "EVENT_COLLECTION_FAILED" });
+		expect(
+			(rejection as KitWiringError<"EVENT_COLLECTION_FAILED">).message,
+		).toMatch(/removed and created again under the same identity/);
 	});
 
 	it("names both causes when a retry with an expired receipt reaches an ended source below its head", async () => {
@@ -1125,11 +1125,13 @@ describe("InMemoryOutbox", () => {
 			(error: unknown) => error,
 		);
 
-		expect(rejection).toBeInstanceOf(EventCollectionError);
-		expect((rejection as EventCollectionError).message).toMatch(/receipt/);
-		expect((rejection as EventCollectionError).message).toMatch(
-			/removed and created again/,
-		);
+		expect(rejection).toMatchObject({ code: "EVENT_COLLECTION_FAILED" });
+		expect(
+			(rejection as KitWiringError<"EVENT_COLLECTION_FAILED">).message,
+		).toMatch(/receipt/);
+		expect(
+			(rejection as KitWiringError<"EVENT_COLLECTION_FAILED">).message,
+		).toMatch(/removed and created again/);
 	});
 
 	it("names a re-created identity as a cause when a new event of an ended source takes an owned head position with another commit size", async () => {
@@ -1154,10 +1156,10 @@ describe("InMemoryOutbox", () => {
 			(error: unknown) => error,
 		);
 
-		expect(rejection).toBeInstanceOf(EventCollectionError);
-		expect((rejection as EventCollectionError).message).toMatch(
-			/removed and created again under the same identity/,
-		);
+		expect(rejection).toMatchObject({ code: "EVENT_COLLECTION_FAILED" });
+		expect(
+			(rejection as KitWiringError<"EVENT_COLLECTION_FAILED">).message,
+		).toMatch(/removed and created again under the same identity/);
 	});
 
 	it("names a re-created identity as a cause when a new event lands below the source head", async () => {
@@ -1179,11 +1181,13 @@ describe("InMemoryOutbox", () => {
 				(error: unknown) => error,
 			);
 
-		expect(rejection).toBeInstanceOf(EventCollectionError);
-		expect((rejection as EventCollectionError).message).toMatch(
-			/removed and created again under the same identity/,
-		);
-		expect((rejection as EventCollectionError).message).toMatch(/new id/);
+		expect(rejection).toMatchObject({ code: "EVENT_COLLECTION_FAILED" });
+		expect(
+			(rejection as KitWiringError<"EVENT_COLLECTION_FAILED">).message,
+		).toMatch(/removed and created again under the same identity/);
+		expect(
+			(rejection as KitWiringError<"EVENT_COLLECTION_FAILED">).message,
+		).toMatch(/new id/);
 	});
 
 	it("rejects an evicted stale candidate without changing the source head", async () => {
@@ -1204,9 +1208,9 @@ describe("InMemoryOutbox", () => {
 		await outbox.add([candidate(second, 2)]);
 		await outbox.markDispatched([second.eventId]);
 
-		await expect(outbox.add([candidate(first, 1)])).rejects.toBeInstanceOf(
-			EventCollectionError,
-		);
+		await expect(outbox.add([candidate(first, 1)])).rejects.toMatchObject({
+			code: "EVENT_COLLECTION_FAILED",
+		});
 		await outbox.add([candidate(third, 3)]);
 
 		const [record] = await outbox.getPending();
@@ -1226,9 +1230,9 @@ describe("InMemoryOutbox", () => {
 		const next = event("evt-next");
 		await outbox.add([candidate(pending, 3)]);
 
-		await expect(outbox.add([candidate(pending, 1)])).rejects.toBeInstanceOf(
-			EventCollectionError,
-		);
+		await expect(outbox.add([candidate(pending, 1)])).rejects.toMatchObject({
+			code: "EVENT_COLLECTION_FAILED",
+		});
 		await outbox.add([candidate(next, 4)]);
 
 		expect(
@@ -1492,9 +1496,9 @@ describe("InMemoryOutbox", () => {
 			await outbox.add([candidate(event, 1)]);
 			await outbox.markFailed(event.eventId, new Error("poison"));
 
-			await expect(outbox.add([candidate(event, 2)])).rejects.toBeInstanceOf(
-				EventCollectionError,
-			);
+			await expect(outbox.add([candidate(event, 2)])).rejects.toMatchObject({
+				code: "EVENT_COLLECTION_FAILED",
+			});
 			expect(await outbox.getPending()).toEqual([]);
 			expect(await outbox.deadLetters()).toHaveLength(1);
 		});

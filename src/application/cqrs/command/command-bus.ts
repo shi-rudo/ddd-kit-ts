@@ -73,11 +73,11 @@ export interface ICommandBus<
 	 *
 	 * @param command - The command to execute
 	 * @returns Result containing the success value or an error of type `E`
-	 * @throws UnregisteredHandlerError when no handler is registered for
+	 * @throws `UNREGISTERED_HANDLER` when no handler is registered for
 	 *   `command.type` (a wiring bug; never delivered through the channel)
 	 * @throws The exact handler failure when `mapExpectedError` is absent or
 	 *   returns `undefined`
-	 * @throws ErrorMapperFailedError when `mapExpectedError` fails
+	 * @throws `ERROR_MAPPER_FAILED` when `mapExpectedError` fails
 	 */
 	execute<C extends Command & { type: keyof TMap & string }>(
 		command: C,

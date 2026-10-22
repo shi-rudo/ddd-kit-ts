@@ -1,7 +1,6 @@
 // @ts-expect-error Node's VM exists in the test runtime; the package stays Node-type-free.
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vite-plus/test";
-import { PrototypePollutionError } from "../../errors/kit-errors";
 import {
 	type CreateDomainEventOptions,
 	type CreateStampedDomainEventOptions,
@@ -781,7 +780,7 @@ describe("DomainEvent", () => {
 			// would be silent mutation. Loud rejection is the one safe
 			// contract, and the global prototype stays clean.
 			expect(() => mergeMetadata({ correlationId: "corr-1" }, hostile)).toThrow(
-				PrototypePollutionError,
+				expect.objectContaining({ code: "PROTOTYPE_POLLUTION" }),
 			);
 			expect(({} as Record<string, unknown>).isAdmin).toBeUndefined();
 		});
@@ -796,11 +795,11 @@ describe("DomainEvent", () => {
 
 		it("rejects a payload carrying an own __proto__ key at construction", () => {
 			expect(() => createDomainEvent("OrderPlaced", hostilePayload())).toThrow(
-				PrototypePollutionError,
+				expect.objectContaining({ code: "PROTOTYPE_POLLUTION" }),
 			);
 			expect(() =>
 				createUnstampedDomainEvent("OrderPlaced", hostilePayload()),
-			).toThrow(PrototypePollutionError);
+			).toThrow(expect.objectContaining({ code: "PROTOTYPE_POLLUTION" }));
 			expect(({} as Record<string, unknown>).isAdmin).toBeUndefined();
 		});
 
@@ -812,7 +811,7 @@ describe("DomainEvent", () => {
 			});
 
 			expect(() => createDomainEvent("OrderPlaced", payload)).toThrow(
-				PrototypePollutionError,
+				expect.objectContaining({ code: "PROTOTYPE_POLLUTION" }),
 			);
 		});
 
@@ -825,7 +824,7 @@ describe("DomainEvent", () => {
 			};
 
 			expect(() => createDomainEvent("OrderPlaced", payload)).toThrow(
-				PrototypePollutionError,
+				expect.objectContaining({ code: "PROTOTYPE_POLLUTION" }),
 			);
 		});
 	});
@@ -876,10 +875,10 @@ describe("createDomainEvent metadata is guarded at the source", () => {
 	it("rejects options.metadata carrying an own __proto__ key", () => {
 		expect(() =>
 			createDomainEvent("Ticked", {}, { metadata: hostileMetadata() }),
-		).toThrow(PrototypePollutionError);
+		).toThrow(expect.objectContaining({ code: "PROTOTYPE_POLLUTION" }));
 		expect(() =>
 			createDomainEvent("Ticked", {}, { metadata: hostileMetadata() }),
-		).toThrow(PrototypePollutionError);
+		).toThrow(expect.objectContaining({ code: "PROTOTYPE_POLLUTION" }));
 	});
 
 	it("createStampedDomainEvent rejects metadata carrying an own __proto__ key", () => {
@@ -890,16 +889,24 @@ describe("createDomainEvent metadata is guarded at the source", () => {
 				metadata: hostileMetadata(),
 			});
 
-		expect(build).toThrow(PrototypePollutionError);
-		expect(build).toThrow(PrototypePollutionError);
+		expect(build).toThrow(
+			expect.objectContaining({ code: "PROTOTYPE_POLLUTION" }),
+		);
+		expect(build).toThrow(
+			expect.objectContaining({ code: "PROTOTYPE_POLLUTION" }),
+		);
 	});
 
 	it("createStamp rejects metadata carrying an own __proto__ key", () => {
 		const factory = createDomainEventFactory();
 		const stamp = () => factory.createStamp({ metadata: hostileMetadata() });
 
-		expect(stamp).toThrow(PrototypePollutionError);
-		expect(stamp).toThrow(PrototypePollutionError);
+		expect(stamp).toThrow(
+			expect.objectContaining({ code: "PROTOTYPE_POLLUTION" }),
+		);
+		expect(stamp).toThrow(
+			expect.objectContaining({ code: "PROTOTYPE_POLLUTION" }),
+		);
 	});
 
 	it("stampDomainEvent rejects a caller-built stamp whose metadata carries an own __proto__ key", () => {
@@ -911,8 +918,12 @@ describe("createDomainEvent metadata is guarded at the source", () => {
 				metadata: hostileMetadata(),
 			});
 
-		expect(record).toThrow(PrototypePollutionError);
-		expect(record).toThrow(PrototypePollutionError);
+		expect(record).toThrow(
+			expect.objectContaining({ code: "PROTOTYPE_POLLUTION" }),
+		);
+		expect(record).toThrow(
+			expect.objectContaining({ code: "PROTOTYPE_POLLUTION" }),
+		);
 	});
 
 	it.each([
@@ -953,7 +964,9 @@ describe("createDomainEvent metadata is guarded at the source", () => {
 			'{"correlationId":"c-1","__proto__":{"isAdmin":true}}',
 		) as Record<string, unknown>;
 
-		expect(() => copyMetadata(event, hostile)).toThrow(PrototypePollutionError);
+		expect(() => copyMetadata(event, hostile)).toThrow(
+			expect.objectContaining({ code: "PROTOTYPE_POLLUTION" }),
+		);
 	});
 
 	it("copyMetadata also rejects a hostile SOURCE event (hand-built, not via createDomainEvent)", () => {
@@ -971,7 +984,7 @@ describe("createDomainEvent metadata is guarded at the source", () => {
 		};
 
 		expect(() => copyMetadata(handBuilt as never)).toThrow(
-			PrototypePollutionError,
+			expect.objectContaining({ code: "PROTOTYPE_POLLUTION" }),
 		);
 	});
 });

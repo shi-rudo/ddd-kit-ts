@@ -5,7 +5,7 @@ import type {
 	DomainStateNode,
 	DomainTransition,
 } from "./contracts";
-import { InvalidDomainMachineDefinitionError } from "./errors";
+import { invalidDomainMachineDefinitionError } from "./errors";
 import { hasOwn, isPlainRecord } from "./machine-data";
 
 const DOMAIN_MACHINE_DEFINITION_KEYS: ReadonlySet<PropertyKey> = new Set([
@@ -253,7 +253,7 @@ export function validateDomainMachineDefinition<
 ): void {
 	const candidate = definition as unknown;
 	if (!isPlainRecord(candidate)) {
-		throw new InvalidDomainMachineDefinitionError(
+		throw invalidDomainMachineDefinitionError(
 			"Domain machine definition must be a plain object.",
 		);
 	}
@@ -264,7 +264,7 @@ export function validateDomainMachineDefinition<
 
 	const initial = readDomainMachineDefinitionProperty(candidate, "initial");
 	if (typeof initial !== "string") {
-		throw new InvalidDomainMachineDefinitionError(
+		throw invalidDomainMachineDefinitionError(
 			"Domain machine initial state must be a string data property.",
 		);
 	}
@@ -273,7 +273,7 @@ export function validateDomainMachineDefinition<
 		typeof readDomainMachineDefinitionProperty(candidate, "initialContext") !==
 		"function"
 	) {
-		throw new InvalidDomainMachineDefinitionError(
+		throw invalidDomainMachineDefinitionError(
 			"Domain machine initialContext must be a function data property.",
 		);
 	}
@@ -286,7 +286,7 @@ export function validateDomainMachineDefinition<
 		validateSnapshot !== undefined &&
 		typeof validateSnapshot !== "function"
 	) {
-		throw new InvalidDomainMachineDefinitionError(
+		throw invalidDomainMachineDefinitionError(
 			"Domain machine validateSnapshot must be a function data property.",
 		);
 	}
@@ -296,7 +296,7 @@ export function validateDomainMachineDefinition<
 		"states",
 	);
 	if (!isPlainRecord(statesCandidate)) {
-		throw new InvalidDomainMachineDefinitionError(
+		throw invalidDomainMachineDefinitionError(
 			"Domain machine states must be a plain object data property.",
 		);
 	}
@@ -304,7 +304,7 @@ export function validateDomainMachineDefinition<
 	assertDomainMachineDefinitionEntryMap(states, "state");
 
 	if (!hasOwn(states, initial)) {
-		throw new InvalidDomainMachineDefinitionError(
+		throw invalidDomainMachineDefinitionError(
 			`Initial domain machine state "${initial}" is not defined.`,
 		);
 	}
@@ -312,7 +312,7 @@ export function validateDomainMachineDefinition<
 	for (const state of Object.keys(states)) {
 		const node: unknown = readDomainMachineDefinitionProperty(states, state);
 		if (!isPlainRecord(node)) {
-			throw new InvalidDomainMachineDefinitionError(
+			throw invalidDomainMachineDefinitionError(
 				`Domain machine state "${state}" must be a plain object data property.`,
 			);
 		}
@@ -326,7 +326,7 @@ export function validateDomainMachineDefinition<
 			"terminal",
 		);
 		if (terminal !== undefined && typeof terminal !== "boolean") {
-			throw new InvalidDomainMachineDefinitionError(
+			throw invalidDomainMachineDefinitionError(
 				`Domain machine state "${state}" terminal flag must be a boolean.`,
 			);
 		}
@@ -337,7 +337,7 @@ export function validateDomainMachineDefinition<
 			validateContext !== undefined &&
 			typeof validateContext !== "function"
 		) {
-			throw new InvalidDomainMachineDefinitionError(
+			throw invalidDomainMachineDefinitionError(
 				`Domain machine state "${state}" validateContext must be a function.`,
 			);
 		}
@@ -347,7 +347,7 @@ export function validateDomainMachineDefinition<
 			"on",
 		);
 		if (transitions !== undefined && !isPlainRecord(transitions)) {
-			throw new InvalidDomainMachineDefinitionError(
+			throw invalidDomainMachineDefinitionError(
 				`Domain machine state "${state}" transitions must be a plain object.`,
 			);
 		}
@@ -357,7 +357,7 @@ export function validateDomainMachineDefinition<
 
 		const inputTypes = Object.keys(transitions ?? {});
 		if (terminal === true && inputTypes.length > 0) {
-			throw new InvalidDomainMachineDefinitionError(
+			throw invalidDomainMachineDefinitionError(
 				`Terminal domain machine state "${state}" cannot declare transitions.`,
 			);
 		}
@@ -368,7 +368,7 @@ export function validateDomainMachineDefinition<
 				inputType,
 			);
 			if (!isPlainRecord(transition)) {
-				throw new InvalidDomainMachineDefinitionError(
+				throw invalidDomainMachineDefinitionError(
 					`Domain transition from "${state}" on "${inputType}" must be a plain object.`,
 				);
 			}
@@ -382,13 +382,13 @@ export function validateDomainMachineDefinition<
 				"target",
 			);
 			if (typeof target !== "string") {
-				throw new InvalidDomainMachineDefinitionError(
+				throw invalidDomainMachineDefinitionError(
 					`Domain transition from "${state}" on "${inputType}" must target a string state.`,
 				);
 			}
 
 			if (!hasOwn(states, target)) {
-				throw new InvalidDomainMachineDefinitionError(
+				throw invalidDomainMachineDefinitionError(
 					`Domain transition from "${state}" on "${inputType}" targets unknown state "${target}".`,
 				);
 			}
@@ -398,7 +398,7 @@ export function validateDomainMachineDefinition<
 				"guard",
 			);
 			if (guard !== undefined && typeof guard !== "function") {
-				throw new InvalidDomainMachineDefinitionError(
+				throw invalidDomainMachineDefinitionError(
 					`Domain transition from "${state}" on "${inputType}" guard must be a function.`,
 				);
 			}
@@ -408,7 +408,7 @@ export function validateDomainMachineDefinition<
 				"reduce",
 			);
 			if (reduce !== undefined && typeof reduce !== "function") {
-				throw new InvalidDomainMachineDefinitionError(
+				throw invalidDomainMachineDefinitionError(
 					`Domain transition from "${state}" on "${inputType}" reduce must be a function.`,
 				);
 			}
@@ -423,12 +423,12 @@ function assertDomainMachineDefinitionDataProperties(
 	for (const key of Reflect.ownKeys(value)) {
 		const descriptor = Object.getOwnPropertyDescriptor(value, key);
 		if (descriptor !== undefined && !("value" in descriptor)) {
-			throw new InvalidDomainMachineDefinitionError(
+			throw invalidDomainMachineDefinitionError(
 				"Domain machine definition must contain data properties only.",
 			);
 		}
 		if (allowedKeys !== undefined && !allowedKeys.has(key)) {
-			throw new InvalidDomainMachineDefinitionError(
+			throw invalidDomainMachineDefinitionError(
 				`Domain machine definition contains unknown property "${String(key)}".`,
 			);
 		}
@@ -444,7 +444,7 @@ function assertDomainMachineDefinitionEntryMap(
 	for (const key of Reflect.ownKeys(value)) {
 		const descriptor = Object.getOwnPropertyDescriptor(value, key);
 		if (typeof key !== "string" || descriptor?.enumerable !== true) {
-			throw new InvalidDomainMachineDefinitionError(
+			throw invalidDomainMachineDefinitionError(
 				`Domain machine ${entryName} names must be enumerable string properties.`,
 			);
 		}
@@ -457,7 +457,7 @@ function readDomainMachineDefinitionProperty(
 ): unknown {
 	const descriptor = Object.getOwnPropertyDescriptor(value, key);
 	if (descriptor === undefined || !("value" in descriptor)) {
-		throw new InvalidDomainMachineDefinitionError(
+		throw invalidDomainMachineDefinitionError(
 			"Domain machine definition must contain data properties only.",
 		);
 	}
@@ -472,7 +472,7 @@ function readOptionalDomainMachineDefinitionProperty(
 	const descriptor = Object.getOwnPropertyDescriptor(value, key);
 	if (descriptor === undefined) return undefined;
 	if (!("value" in descriptor)) {
-		throw new InvalidDomainMachineDefinitionError(
+		throw invalidDomainMachineDefinitionError(
 			"Domain machine definition must contain data properties only.",
 		);
 	}
