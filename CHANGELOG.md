@@ -239,8 +239,15 @@ immutable. Run one kit version per process during a cutover.
 - The `@shirudo/ddd-kit/utils` entry point is gone; its functions and types
   come from the package root.
 - `@shirudo/ddd-kit/presentation` is `@shirudo/ddd-kit/public-errors`.
-- The `deepOmit` types `Key` and `PathSegment` are `DeepOmitKey` and
-  `DeepOmitPathSegment`. `computeBackoffDelay` is no longer exported.
+- `deepOmit` and its types are no longer exported. `valueObjectEqualsExcept`
+  takes a `ValueObjectEqualsExceptOptions`. `computeBackoffDelay` is no
+  longer exported.
+- The in-memory reference adapters come from `@shirudo/ddd-kit/testing`:
+  `InMemoryOutbox`, `InMemoryEventStore`, `InMemorySnapshotStore`,
+  `InMemoryDeadlineStore`, `InMemoryProjectionCheckpointStore`,
+  `InMemoryIdempotencyStore`, `InMemoryLeasedIdempotencyStore`,
+  `InMemoryTransactionScope`, and the `InMemoryTransactionParticipant` and
+  `InMemoryTransaction` types. The root entry no longer exports them.
 - `engines.node` is `>=22`. Node 20 reached its end of life on 2026-04-30.
 - The peer `@shirudo/base-error` is `^8.3.0`. Before 8.1.0, `redactAllow`
   does not mask the fields that a kit error adds to its log object.

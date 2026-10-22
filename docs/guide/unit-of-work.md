@@ -442,13 +442,12 @@ On their own, the in-memory stores do not see the rollbacks of your
 with one `InMemoryTransactionScope`:
 
 ```ts
+import { RetryingTransactionScope, UnitOfWork } from "@shirudo/ddd-kit";
 import {
   InMemoryEventStore,
   InMemoryOutbox,
   InMemoryTransactionScope,
-  RetryingTransactionScope,
-  UnitOfWork,
-} from "@shirudo/ddd-kit";
+} from "@shirudo/ddd-kit/testing";
 
 const outbox = new InMemoryOutbox<OrderEvent>();
 const events = new InMemoryEventStore<OrderEvent>();
@@ -496,7 +495,7 @@ You can register an in-memory table of your own. It implements
 `InMemoryTransactionParticipant`:
 
 ```ts
-import type { InMemoryTransactionParticipant } from "@shirudo/ddd-kit";
+import type { InMemoryTransactionParticipant } from "@shirudo/ddd-kit/testing";
 
 class OrderTable implements InMemoryTransactionParticipant {
   readonly rows = new Map<string, OrderRow>();

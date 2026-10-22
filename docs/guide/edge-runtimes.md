@@ -659,7 +659,8 @@ money arithmetic. It also runs without Node's `process` or `Buffer` globals.
 This is a compatibility tripwire for the package runtime, not certification of
 a consumer's database, broker, or framework adapters.
 
-In-memory adapters are useful for tests, but they are still memory-only:
+In-memory adapters are useful for tests, but they are still memory-only.
+`@shirudo/ddd-kit/testing` exports them:
 
 - `InMemoryOutbox`
 - `InMemoryEventStore`
