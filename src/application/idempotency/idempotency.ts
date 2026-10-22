@@ -9,7 +9,6 @@ import type { TransactionScope } from "../../persistence/repository/scope";
 import {
 	type CommitRegistration,
 	type WithCommitDeps,
-	type WithCommitWorkResult,
 	withCommit,
 } from "../cqrs/handler";
 
@@ -380,8 +379,8 @@ function scopeWorkRegistration<Evt extends AnyDomainEvent>(
  *     source-side marker can make later reconciliation conclusive.
  *  3. `store.complete(ctx, claim, fn's result)` stages or completes the outcome
  *     in the same transaction as aggregate writes and outbox. The registration
- *     capability is sealed and its token array copied before `complete` can
- *     yield, so leaked callback state cannot change the collection receipt.
+ *     capability is sealed before `complete` can yield, so a late
+ *     registration fails loudly.
  *  4. After commit, `store.confirm(claim)` finalizes a leased store's staged
  *     outcome; it is a no-op for transactional stores. A failure cannot reject
  *     an already committed write, so it is sent to `onIdempotencyError` and the
@@ -403,7 +402,7 @@ function scopeWorkRegistration<Evt extends AnyDomainEvent>(
  * (retryable); unwrapped, map it to a conflict/retry-later application
  * outcome.
  *
- * The stored outcome is `fn`'s `result` value; it must be plain, serialisable
+ * The stored outcome is the value that `fn` returns; it must be plain, serialisable
  * data (see {@link IdempotencyStore}). Transactional storage remains the
  * production default. Leases make the non-transactional family recoverable;
  * they do not manufacture an atomic exactly-once boundary across two stores.
@@ -415,7 +414,7 @@ export async function withIdempotentCommit<Evt extends AnyDomainEvent, R, TCtx>(
 		ctx: TCtx,
 		registration: CommitRegistration<Evt>,
 		execution: IdempotentExecution,
-	) => Promise<WithCommitWorkResult<Evt, R>>,
+	) => Promise<R>,
 ): Promise<IdempotentCommitResult<R>> {
 	const store = deps.idempotency;
 	const attempt: {
@@ -523,17 +522,14 @@ export async function withIdempotentCommit<Evt extends AnyDomainEvent, R, TCtx>(
 				}
 			}
 			if (claim.status === "completed") {
-				return {
-					result: { replayed: true, result: claim.outcome as R },
-					commits: [],
-				};
+				return { replayed: true, result: claim.outcome as R };
 			}
 			attempt.claim = claim.claim;
 			attempt.heartbeat = startLeaseHeartbeat(store, claim.claim);
 			const workRegistration = scopeWorkRegistration(registration);
-			let work: WithCommitWorkResult<Evt, R>;
+			let result: R;
 			try {
-				work = await fn(ctx, workRegistration.registration, {
+				result = await fn(ctx, workRegistration.registration, {
 					key: request.key,
 					fingerprint: request.fingerprint,
 					claimToken: claim.claim.token,
@@ -541,18 +537,8 @@ export async function withIdempotentCommit<Evt extends AnyDomainEvent, R, TCtx>(
 			} finally {
 				workRegistration.close();
 			}
-			// Snapshot the user-controlled receipt before complete() yields. A
-			// leaked mutable array must not be able to add or remove aggregate
-			// commits while the idempotency adapter is persisting the outcome.
-			const result = work.result;
-			const commits = Array.isArray(work.commits)
-				? Object.freeze([...work.commits])
-				: work.commits;
 			await store.complete(ctx, claim.claim, result);
-			return {
-				result: { replayed: false, result },
-				commits,
-			};
+			return { replayed: false, result };
 		},
 	);
 

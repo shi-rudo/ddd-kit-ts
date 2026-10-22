@@ -36,10 +36,8 @@ const outcome = await withIdempotentCommit(
     order.confirm();
     await updateOrderForDirectCommit(tx, order, loaded.expectedVersion);
 
-    return {
-      result: { orderId: order.id },
-      commits: [registration.registerSaved(order)],
-    };
+    registration.registerSaved(order);
+    return { orderId: order.id };
   },
 );
 ```
@@ -138,10 +136,8 @@ const outcome = await withIdempotentCommit(
       status: "committed",
     });
 
-    return {
-      result: { orderId: order.id },
-      commits: [registration.registerSaved(order)],
-    };
+    registration.registerSaved(order);
+    return { orderId: order.id };
   },
 );
 ```

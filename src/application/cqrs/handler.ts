@@ -115,36 +115,21 @@ export interface WithCommitDeps<Evt extends AnyDomainEvent, TCtx> {
 	stampOptions?: SharedDomainEventStampOptions;
 }
 
-declare const aggregateCommitTokenBrand: unique symbol;
-
-/**
- * Opaque receipt that one aggregate was explicitly registered in the current
- * {@link withCommit} invocation. Tokens are issued only by the invocation's
- * {@link CommitRegistration} capability and are bound to that invocation at
- * runtime; a forged token or one retained from an earlier call is rejected
- * inside the transaction.
- */
-export interface AggregateCommitToken<
-	Evt extends AnyDomainEvent = AnyDomainEvent,
-> {
-	readonly [aggregateCommitTokenBrand]: Evt;
-}
-
 /**
  * Invocation-scoped registration capability handed to a {@link withCommit}
  * callback. Call `registerSaved` only for an aggregate participating in the
- * repository write, and return every resulting token in `commits`. Omitting
- * any token rejects the transaction: a registered write may not commit without
- * its event collection and post-commit acknowledgement. Registrable instances
- * must extend `StateStoredAggregate` or `EventSourcedAggregate`; structural
- * `Aggregate` lookalikes have no internal lifecycle capability and fail
- * before commit.
+ * repository write. `withCommit` collects every registered aggregate: a
+ * registered write commits with its event collection and post-commit
+ * acknowledgement. If a registered write must not commit, throw, so the
+ * transaction rolls back. Registrable instances must extend
+ * `StateStoredAggregate` or `EventSourcedAggregate`; structural `Aggregate`
+ * lookalikes have no internal lifecycle capability and fail before commit.
  */
 export interface CommitRegistration<Evt extends AnyDomainEvent> {
 	registerSaved(
 		aggregate: Aggregate<Id<string>, Evt>,
 		options?: CommitRegistrationOptions,
-	): AggregateCommitToken<Evt>;
+	): void;
 	/**
 	 * Register an aggregate whose row the current transaction removes.
 	 * Its events are collected and discarded after commit, but the saved-only
@@ -153,25 +138,13 @@ export interface CommitRegistration<Evt extends AnyDomainEvent> {
 	registerRemoved(
 		aggregate: Aggregate<Id<string>, Evt>,
 		options?: CommitRegistrationOptions,
-	): AggregateCommitToken<Evt>;
+	): void;
 }
 
 /** OCC baseline associated with one exact commit registration. */
 export interface CommitRegistrationOptions {
 	/** Absent for a new aggregate; captured at load for update or removal. */
 	readonly expectedVersion?: Version;
-}
-
-/** The resolved value of a {@link withCommit} work callback. */
-export interface WithCommitWorkResult<Evt extends AnyDomainEvent, R> {
-	result: R;
-	/**
-	 * Commit tokens returned by the invocation's registration capability.
-	 * Every token issued during the callback must appear at least once.
-	 * Naked aggregates are intentionally not accepted: touching an aggregate
-	 * does not prove that its repository write participated in the transaction.
-	 */
-	commits: ReadonlyArray<AggregateCommitToken<Evt>>;
 }
 
 type CommitDisposition = "saved" | "deleted";
@@ -208,10 +181,14 @@ function registrationDiverged<Evt extends AnyDomainEvent>(
 	);
 }
 
-interface CommitTokenScope<Evt extends AnyDomainEvent> {
+interface CommitRegistry<Evt extends AnyDomainEvent> {
 	readonly registration: CommitRegistration<Evt>;
 	close(): void;
-	resolve(tokens: unknown): ReadonlyArray<AggregateCommitRecord<Evt>>;
+	/**
+	 * The records in registration order. Throws when an aggregate changed
+	 * after its registration.
+	 */
+	records(): ReadonlyArray<AggregateCommitRecord<Evt>>;
 }
 
 /**
@@ -223,40 +200,31 @@ export type StampAtRegistration = (
 	operation: string,
 ) => void;
 
-/** One token registry per transactional callback attempt. */
-function createCommitTokenScope<Evt extends AnyDomainEvent>(
+/** One registry per transactional callback attempt. */
+function createCommitRegistry<Evt extends AnyDomainEvent>(
 	stamp: StampAtRegistration,
-): CommitTokenScope<Evt> {
-	const recordsByToken = new WeakMap<object, AggregateCommitRecord<Evt>>();
-	const tokensByAggregate = new WeakMap<
+): CommitRegistry<Evt> {
+	const recordsByAggregate = new Map<
 		Aggregate<Id<string>, Evt>,
-		AggregateCommitToken<Evt>
+		AggregateCommitRecord<Evt>
 	>();
-	let issuedTokenCount = 0;
 	let open = true;
 
 	const register = (
 		aggregate: Aggregate<Id<string>, Evt>,
 		disposition: CommitDisposition,
 		options?: CommitRegistrationOptions,
-	): AggregateCommitToken<Evt> => {
+	): void => {
 		if (!open) {
 			throw new EventCollectionError(
 				"withCommit: commit registration was used after its work callback " +
-					"settled. Await every repository write and return its token before " +
-					"leaving the callback.",
+					"settled. Await every repository write before leaving the callback.",
 			);
 		}
 
-		const existing = tokensByAggregate.get(aggregate);
+		const existing = recordsByAggregate.get(aggregate);
 		if (existing) {
-			const record = recordsByToken.get(existing);
-			if (!record) {
-				throw new EventCollectionError(
-					"withCommit: internal commit-token registry is inconsistent.",
-				);
-			}
-			if (record.disposition === "deleted" && disposition === "saved") {
+			if (existing.disposition === "deleted" && disposition === "saved") {
 				throw new EventCollectionError(
 					`withCommit: aggregate ${describeAggregateIdentity(aggregate.aggregateIdentity)} was registered as ` +
 						"saved after it was registered as deleted in the same transaction.",
@@ -267,16 +235,16 @@ function createCommitTokenScope<Evt extends AnyDomainEvent>(
 			// only a supplied value is compared against the recorded baseline.
 			if (
 				options?.expectedVersion !== undefined &&
-				options.expectedVersion !== record.expectedVersion
+				options.expectedVersion !== existing.expectedVersion
 			) {
 				throw new EventCollectionError(
 					`withCommit: aggregate ${describeAggregateIdentity(aggregate.aggregateIdentity)} was re-registered ` +
 						`with expectedVersion ${String(options.expectedVersion)}, but its ` +
-						`registration recorded ${String(record.expectedVersion)}. Duplicate ` +
+						`registration recorded ${String(existing.expectedVersion)}. Duplicate ` +
 						"registration must assert the same OCC baseline or none.",
 				);
 			}
-			if (registrationDiverged(record)) {
+			if (registrationDiverged(existing)) {
 				throw new EventCollectionError(
 					`withCommit: aggregate ${describeAggregateIdentity(aggregate.aggregateIdentity)} changed after its ` +
 						"commit batch was registered. Register persistence intent last.",
@@ -287,19 +255,15 @@ function createCommitTokenScope<Evt extends AnyDomainEvent>(
 			// not leave a saved aggregate marked deleted, or the post-commit
 			// loop would discard instead of acknowledge.
 			if (disposition === "deleted") {
-				record.disposition = "deleted";
+				existing.disposition = "deleted";
 			}
-			return existing;
+			return;
 		}
 
 		const eventLifecycle = requirePendingEventLifecycleCapability(
 			aggregate,
 			"withCommit registration",
 		);
-
-		const token = Object.freeze(
-			Object.create(null),
-		) as AggregateCommitToken<Evt>;
 		// Stamped before the batch is recorded: the registration records the
 		// exact event objects, and the collection-time recheck compares them by
 		// reference.
@@ -314,8 +278,7 @@ function createCommitTokenScope<Evt extends AnyDomainEvent>(
 		// direct-withCommit style), and grounding the guard in data supplied
 		// by the very caller it checks would be circular.
 		const persistedVersion = eventLifecycle.persistedVersion();
-		tokensByAggregate.set(aggregate, token);
-		recordsByToken.set(token, {
+		recordsByAggregate.set(aggregate, {
 			aggregate,
 			eventLifecycle,
 			disposition,
@@ -324,8 +287,6 @@ function createCommitTokenScope<Evt extends AnyDomainEvent>(
 			persistedVersion,
 			events,
 		});
-		issuedTokenCount += 1;
-		return token;
 	};
 
 	return {
@@ -342,37 +303,9 @@ function createCommitTokenScope<Evt extends AnyDomainEvent>(
 		close: () => {
 			open = false;
 		},
-		resolve: (tokens) => {
-			if (!Array.isArray(tokens)) {
-				throw new EventCollectionError(
-					"withCommit: the work callback must return `commits` containing " +
-						"tokens from the current registration capability. Naked aggregate " +
-						"arrays are not commit evidence.",
-				);
-			}
-
-			const seen = new Set<object>();
-			const records: AggregateCommitRecord<Evt>[] = [];
-			for (const token of tokens) {
-				if (
-					token === null ||
-					(typeof token !== "object" && typeof token !== "function")
-				) {
-					throw new EventCollectionError(
-						"withCommit: a commit token was not issued by this callback's " +
-							"registration capability. Forged and stale tokens are rejected.",
-					);
-				}
-				const tokenObject = token as object;
-				const record = recordsByToken.get(tokenObject);
-				if (!record) {
-					throw new EventCollectionError(
-						"withCommit: a commit token was not issued by this callback's " +
-							"registration capability. Forged and stale tokens are rejected.",
-					);
-				}
-				if (seen.has(tokenObject)) continue;
-				seen.add(tokenObject);
+		records: () => {
+			const records = [...recordsByAggregate.values()];
+			for (const record of records) {
 				// Collection-time recheck of the registration snapshot: an event
 				// recorded after registerSaved but before the callback returned
 				// would be excluded from the collection and silently lost by the
@@ -387,14 +320,6 @@ function createCommitTokenScope<Evt extends AnyDomainEvent>(
 							"register last.",
 					);
 				}
-				records.push(record);
-			}
-			if (seen.size !== issuedTokenCount) {
-				throw new EventCollectionError(
-					"withCommit: every token issued by the current registration " +
-						"capability must be returned in `commits`. If a registered write " +
-						"must not commit, throw so the transaction rolls back.",
-				);
 			}
 			return records;
 		},
@@ -405,27 +330,24 @@ function createCommitTokenScope<Evt extends AnyDomainEvent>(
  * Helper for executing a write Use Case inside a transaction scope.
  *
  * The use-case callback receives an invocation-scoped registration capability
- * and returns opaque commit tokens for the repository writes that completed
- * in the transaction. `withCommit` owns the post-commit lifecycle (collection,
- * outbox, mark-persisted, publish). A naked aggregate is not commit evidence:
- * merely touching or constructing one must never make it look persisted.
+ * and registers the aggregates of the repository writes that completed in the
+ * transaction. `withCommit` collects every registered aggregate and owns the
+ * post-commit lifecycle (collection, outbox, mark-persisted, publish). An
+ * aggregate that the callback only touched or constructed is not collected.
  *
- * **Trust boundary.** A token proves invocation-local registration, not that the
- * kit inspected a database write; a generic transaction helper cannot observe
- * adapter internals. Repository code must register only writes participating in
- * this transaction. `UnitOfWork` centralizes that rule in repository methods.
- * The opaque, scoped token prevents accidental aggregate smuggling and stale
- * reuse; it is not a security boundary against code that deliberately lies to
- * its own persistence capability.
+ * **Trust boundary.** A registration states invocation-local intent; the kit
+ * does not inspect a database write, because a generic transaction helper
+ * cannot observe adapter internals. Repository code must register only writes
+ * participating in this transaction. `UnitOfWork` centralizes that rule in
+ * repository methods. The capability is sealed when the callback settles, so a
+ * late registration fails loudly.
  *
  * Order of operations:
  *  1. `fn(ctx, registration)` runs inside `scope.transactional(...)`; domain
- *     mutations + repo writes happen here. After a repository write has
- *     registered an aggregate, the callback includes that opaque token in its
- *     `commits` result. Tokens are invocation-bound: forged or stale tokens
- *     fail before collection. `ctx` is whatever transaction handle the `scope`
- *     exposes (Drizzle `tx`, Prisma `tx`, Mongo session, or `undefined` for
- *     context-free scopes).
+ *     mutations + repo writes happen here. After a repository write, the
+ *     callback registers its aggregate and finally returns its result. `ctx`
+ *     is whatever transaction handle the `scope` exposes (Drizzle `tx`,
+ *     Prisma `tx`, Mongo session, or `undefined` for context-free scopes).
  *  2. **Still inside the transaction**, `withCommit` collects every
  *     aggregate's `pendingEvents` and writes them via `outbox.add` (so
  *     events persist atomically with the state change). Skipped when no
@@ -436,11 +358,10 @@ function createCommitTokenScope<Evt extends AnyDomainEvent>(
  *     resulting `CommittedDomainEvent`. The domain event itself is never
  *     stamped or copied.
  *
- *     **Collection order.** Events are concatenated in the order
- *     tokens appear in the returned `commits` array, then in
- *     each aggregate's `pendingEvents` order (insertion order via
- *     `apply` / `commit` / `addDomainEvent`). So tokens for `[a, b]`
- *     with `a` emitting `[e1, e2]` and `b` emitting `[e3]` produces
+ *     **Collection order.** Events are concatenated in registration
+ *     order, then in each aggregate's `pendingEvents` order (insertion
+ *     order via `apply` / `commit` / `addDomainEvent`). So registering
+ *     `a`, then `b`, with `a` emitting `[e1, e2]` and `b` emitting `[e3]` produces
  *     `outbox.add([envelope(e1), envelope(e2), envelope(e3)])` and
  *     `bus.publish([e1, e2, e3])` in that exact order.
  *
@@ -496,8 +417,7 @@ function createCommitTokenScope<Evt extends AnyDomainEvent>(
  * direct `withCommit` use, make domain decisions first, write, and register last.
  *
  * **Duplicate registration is idempotent by reference.** Registering the same
- * instance repeatedly returns the same token, and a repeated token in
- * `commits` is collected once. A repeat call that omits `expectedVersion`
+ * instance repeatedly collects it once. A repeat call that omits `expectedVersion`
  * makes no OCC assertion; only a supplied value that contradicts the
  * registration-time baseline rejects. Each event lands in the outbox exactly once
  * and post-commit acknowledgement runs exactly once. Two
@@ -515,31 +435,25 @@ function createCommitTokenScope<Evt extends AnyDomainEvent>(
  *   const order = await orderRepository.getById(orderId);
  *   order.confirm();
  *   await persistOrder(tx, order);                 // low-level adapter write
- *   const commit = registration.registerSaved(order);   // attest the repository write
- *   return { result: order.id, commits: [commit] };
+ *   registration.registerSaved(order);             // attest the repository write
+ *   return order.id;
  * });
  * ```
  */
 export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 	deps: WithCommitDeps<Evt, TCtx>,
-	fn: (
-		ctx: TCtx,
-		registration: CommitRegistration<Evt>,
-	) => Promise<WithCommitWorkResult<Evt, R>>,
+	fn: (ctx: TCtx, registration: CommitRegistration<Evt>) => Promise<R>,
 ): Promise<R> {
-	return withCheckedCommit(
+	return withCheckedCommit<Evt, R, TCtx>(
 		deps,
-		async (ctx, registration) => {
-			const { result, commits } = await fn(ctx, registration);
-			return { result, commits };
-		},
+		async (ctx, registration) => ({ result: await fn(ctx, registration) }),
 		undefined,
 	);
 }
 
 /** A work result that also carries the check of its own attempt. */
-export interface CheckedWorkResult<Evt extends AnyDomainEvent, R>
-	extends WithCommitWorkResult<Evt, R> {
+export interface CheckedWorkResult<R> {
+	readonly result: R;
 	/**
 	 * Runs inside the transaction after the outbox write, just before the
 	 * commit. A check that throws rolls the transaction back.
@@ -564,7 +478,7 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 		ctx: TCtx,
 		registration: CommitRegistration<Evt>,
 		stamp: StampAtRegistration,
-	) => Promise<CheckedWorkResult<Evt, R>>,
+	) => Promise<CheckedWorkResult<R>>,
 	onAttemptStart: (() => void) | undefined,
 ): Promise<R> {
 	const postCommitTimeoutMs =
@@ -593,18 +507,18 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 
 	const { result, commitRecords, events } = await deps.scope.transactional(
 		async (ctx) => {
-			const tokenScope = createCommitTokenScope<Evt>(stamp);
-			let fnResult: CheckedWorkResult<Evt, R>;
+			const registry = createCommitRegistry<Evt>(stamp);
+			let fnResult: CheckedWorkResult<R>;
 			try {
-				fnResult = await fn(ctx, tokenScope.registration, stamp);
+				fnResult = await fn(ctx, registry.registration, stamp);
 			} finally {
 				// A callback can leak the capability into delayed work. Seal it as
 				// soon as the callback settles so a late registration fails loudly
 				// instead of being accepted after the collection snapshot.
-				tokenScope.close();
+				registry.close();
 			}
 			try {
-				const commitRecords = tokenScope.resolve(fnResult.commits);
+				const commitRecords = registry.records();
 				// Prepare each bare domain event for source finalization in the outbox.
 				// The aggregate's event remains untouched and is what the in-process
 				// domain bus receives.

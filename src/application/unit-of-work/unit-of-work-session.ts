@@ -27,11 +27,7 @@ import {
 	persistenceCaptureDrifted,
 	recapturePersistenceBaseline,
 } from "../../persistence/repository/persistence-model";
-import type {
-	AggregateCommitToken,
-	CommitRegistration,
-	StampAtRegistration,
-} from "../cqrs/handler";
+import type { CommitRegistration, StampAtRegistration } from "../cqrs/handler";
 import {
 	AggregateTrackingError,
 	attributeFlushStatementIntent,
@@ -88,7 +84,6 @@ export class Session<Evt extends AnyDomainEvent> {
 	// separate collections: both derive from each entry's registration, so
 	// the bookkeeping cannot drift apart.
 	private readonly _registeredWrites: TrackedAggregate<Evt>[] = [];
-	private readonly _commitTokens = new Set<AggregateCommitToken<Evt>>();
 	private readonly _identityMap = new IdentityMap();
 	// What adapters receive: the typed read-only view, enforced at runtime.
 	// Handing out the map itself would expose set/delete/clear to JavaScript
@@ -475,7 +470,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
 		expectedVersion: Version | undefined,
-	): AggregateCommitToken<Evt> {
+	): void {
 		this.assertOpen("repository.add/update");
 		// Two gates, one invariant: the registration check catches the same
 		// reference; the identity-map tombstone (keyed on the instance's
@@ -490,22 +485,16 @@ export class Session<Evt extends AnyDomainEvent> {
 				identity: aggregate.aggregateIdentity,
 			});
 		}
-		const token = this.commitRegistration.registerSaved(aggregate, {
-			expectedVersion,
-		});
-		this._commitTokens.add(token);
-		return token;
+		this.commitRegistration.registerSaved(aggregate, { expectedVersion });
 	}
 
 	private registerRemovedCommit(
 		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
 		expectedVersion: Version | undefined,
-	): AggregateCommitToken<Evt> {
+	): void {
 		this.assertOpen("repository.remove");
-		const token = this.commitRegistration.registerRemoved(aggregate, {
-			expectedVersion,
-		});
+		this.commitRegistration.registerRemoved(aggregate, { expectedVersion });
 		// One call does ALL the deletion bookkeeping: the identity-map
 		// entry is removed and tombstoned automatically (keyed on the
 		// instance's concrete class), so repositories do not need a
@@ -516,12 +505,10 @@ export class Session<Evt extends AnyDomainEvent> {
 		// map with the same concrete class their factories produce.
 		// Deleted aggregates stay in the collection set: their recorded
 		// deletion events must reach the outbox (repository.md, hard-
-		// delete with event collection). withCommit receives them in the
-		// deleted token disposition, so the saved-only application observer
+		// delete with event collection). withCommit receives them with the
+		// deleted disposition, so the saved-only application observer
 		// never fires for a deletion.
 		this._identityMap.delete(definition.aggregate, aggregate.id);
-		this._commitTokens.add(token);
-		return token;
 	}
 
 	/**
@@ -605,10 +592,6 @@ export class Session<Evt extends AnyDomainEvent> {
 				throw mapRepositoryPersistenceError(entry.definition, error, write);
 			}
 		}
-	}
-
-	public get commitTokens(): ReadonlyArray<AggregateCommitToken<Evt>> {
-		return [...this._commitTokens];
 	}
 
 	/**

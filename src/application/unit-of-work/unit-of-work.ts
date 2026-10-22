@@ -782,16 +782,14 @@ export class UnitOfWork<
 						// register a write, fails the run here.
 						s.assertReadyToCommit();
 						current.workCompleted = true;
-						// The tokens below are what gets collected; after close, any
-						// use of the session throws TransactionClosedError.
-						const commits = s.commitTokens;
+						// After close, any use of the session throws
+						// TransactionClosedError.
 						s.close();
 						// The outbox write can yield, and leaked work can change a
 						// tracked aggregate meanwhile. The same check runs again
 						// just before the commit.
 						return {
 							result,
-							commits,
 							checkBeforeCommit: () => s.assertReadyToCommitLastTime(),
 							onFailureBeforeCommit: (error) => {
 								current.failedBeforeCommit = true;

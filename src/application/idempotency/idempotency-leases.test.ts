@@ -361,7 +361,7 @@ describe("withIdempotentCommit lease orchestration", () => {
 			async () => {
 				entered();
 				await blocked;
-				return { result: "done", commits: [] };
+				return "done";
 			},
 		);
 		await workEntered;
@@ -408,7 +408,7 @@ describe("withIdempotentCommit lease orchestration", () => {
 			async () => {
 				entered();
 				await blocked;
-				return { result: "must roll back", commits: [] };
+				return "must roll back";
 			},
 		);
 		await workEntered;
@@ -446,7 +446,7 @@ describe("withIdempotentCommit lease orchestration", () => {
 			request,
 			async () => {
 				executions++;
-				return { result: { orderId: "wrong" }, commits: [] };
+				return { orderId: "wrong" };
 			},
 		);
 
@@ -476,7 +476,7 @@ describe("withIdempotentCommit lease orchestration", () => {
 			request,
 			async (_ctx, _registration, execution) => {
 				executionToken = execution.claimToken;
-				return { result: "fresh", commits: [] };
+				return "fresh";
 			},
 		);
 
@@ -509,7 +509,7 @@ describe("withIdempotentCommit lease orchestration", () => {
 				},
 			},
 			{ key: "key", fingerprint: "fp" },
-			async () => ({ result: "committed", commits: [] }),
+			async () => "committed",
 		);
 
 		expect(result).toEqual({ replayed: false, result: "committed" });
@@ -542,7 +542,7 @@ describe("withIdempotentCommit lease orchestration", () => {
 					reconcileIdempotency: async () => "unknown" as const,
 				},
 				request,
-				async () => ({ result: "must not run", commits: [] }),
+				async () => "must not run",
 			),
 		).rejects.toMatchObject({
 			code: "IDEMPOTENCY_RECONCILIATION_REQUIRED",

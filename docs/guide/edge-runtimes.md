@@ -538,23 +538,18 @@ const confirmOrder = async (command: ConfirmOrder) => {
       const order = loaded.aggregate;
       if (!order.canBeConfirmedBy(command.requestedBy)) {
         return {
-          result: {
-            status: "forbidden",
-            orderId: command.orderId,
-          } satisfies ConfirmOrderOutcome,
-          commits: [],
-        };
+          status: "forbidden",
+          orderId: command.orderId,
+        } satisfies ConfirmOrderOutcome;
       }
 
       order.confirm();
       await updateOrderForDirectCommit(tx, order, loaded.expectedVersion);
+      registration.registerSaved(order);
       return {
-        result: {
-          status: "confirmed",
-          orderId: order.id,
-        } satisfies ConfirmOrderOutcome,
-        commits: [registration.registerSaved(order)],
-      };
+        status: "confirmed",
+        orderId: order.id,
+      } satisfies ConfirmOrderOutcome;
     },
   );
 

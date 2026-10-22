@@ -194,10 +194,8 @@ async function reactToOrderPlaced(event: OrderPlaced): Promise<void> {
         payload: { kind: "payment-timeout" },
       });
 
-      return {
-        result: saga.id,
-        commits: [registration.registerSaved(saga)],
-      };
+      registration.registerSaved(saga);
+      return saga.id;
     },
   );
 }
@@ -287,10 +285,8 @@ await withCommit(
     );
 
     await makeCheckoutEventStore(tx).append(recorded);
-    return {
-      result: saga.id,
-      commits: [registration.registerSaved(saga)],
-    };
+    registration.registerSaved(saga);
+    return saga.id;
   },
 );
 ```

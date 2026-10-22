@@ -88,10 +88,9 @@ async function commitOne(order, sequence) {
 	order.touch(sequence);
 	await withCommit(
 		{ outbox, scope, eventStampFactory: factory },
-		async (_ctx, registration) => ({
-			result: undefined,
-			commits: [registration.registerSaved(order)],
-		}),
+		async (_ctx, registration) => {
+			registration.registerSaved(order);
+		},
 	);
 }
 

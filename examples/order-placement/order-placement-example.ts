@@ -123,24 +123,19 @@ export function createPlaceOrderHandler<TContext>(
 
 			if (placement.isErr()) {
 				return {
-					result: {
-						status: "rejected",
-						code: placement.error.code,
-					} satisfies PlaceOrderOutcome,
-					commits: [],
-				};
+					status: "rejected",
+					code: placement.error.code,
+				} satisfies PlaceOrderOutcome;
 			}
 
 			const order = placement.value;
 			await orders.insert(order);
 
+			registration.registerSaved(order);
 			return {
-				result: {
-					status: "placed",
-					orderId: order.id,
-				} satisfies PlaceOrderOutcome,
-				commits: [registration.registerSaved(order)],
-			};
+				status: "placed",
+				orderId: order.id,
+			} satisfies PlaceOrderOutcome;
 		});
 
 		return outcome.result.status === "rejected"
