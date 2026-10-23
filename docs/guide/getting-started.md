@@ -24,7 +24,7 @@ once in the consuming app:
 
 ::: tip Module format
 The package is ESM-only. Node consumers need `"type": "module"` in
-`package.json` or a bundler that handles ESM. The package declares Node `>=22`
+`package.json` or a bundler that handles ESM. The package declares Node `>=24`
 for Node projects and also targets modern edge runtimes.
 :::
 

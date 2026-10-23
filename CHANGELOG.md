@@ -242,7 +242,8 @@ immutable. Run one kit version per process during a cutover.
 - `@shirudo/ddd-kit/presentation` is `@shirudo/ddd-kit/public-errors`.
 - The `deepOmit` types `Key` and `PathSegment` are `DeepOmitKey` and
   `DeepOmitPathSegment`. `computeBackoffDelay` is no longer exported.
-- `engines.node` is `>=22`. Node 20 reached its end of life on 2026-04-30.
+- `engines.node` is `>=24`, because the peer `@shirudo/base-error` 9
+  requires Node.js 24. Node 20 reached its end of life on 2026-04-30.
 - The peer `@shirudo/base-error` is `^9.0.0`. base-error 9 removes
   `buildLogObject()`: the kit errors contribute their declared fields
   through `buildOwnLogFields()`, and a subclass of `DomainError` or

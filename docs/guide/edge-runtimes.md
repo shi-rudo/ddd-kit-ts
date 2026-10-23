@@ -15,7 +15,7 @@ the request or operation.
 
 ## Runtime contract
 
-The published package is ESM-only and declares Node `>=22` for Node consumers.
+The published package is ESM-only and declares Node `>=24` for Node consumers.
 Projects using CommonJS need a bundler or an ESM migration.
 
 The runtime surface is intentionally small:
@@ -626,7 +626,7 @@ rules as edge functions: keep domain state in operation scope, persist durable
 state explicitly, and treat in-memory stores as test or demo tools unless the
 process lifetime is truly your durability boundary.
 
-Node consumers must run as ESM and satisfy the package's Node `>=22` engine.
+Node consumers must run as ESM and satisfy the package's Node `>=24` engine.
 Long-lived Node processes make module scope feel safer, but the DDD rules do
 not change. A cached database client is fine. A cached aggregate instance is
 not.

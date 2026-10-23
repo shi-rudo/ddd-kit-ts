@@ -32,7 +32,7 @@ pnpm add @shirudo/ddd-kit @shirudo/result @shirudo/base-error
 `@shirudo/result` and `@shirudo/base-error` are peer dependencies. Install them
 once in the consuming app.
 
-The package is ESM-only, requires TypeScript 5.9+, and supports Node 22+,
+The package is ESM-only, requires TypeScript 5.9+, and supports Node 24+,
 Cloudflare Workers, Vercel Edge, Deno, and Bun.
 
 ## A Small Aggregate

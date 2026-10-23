@@ -1116,7 +1116,7 @@ default `Record<string, unknown>` map.
 | type `Key` of `deepOmit` | `DeepOmitKey` |
 | type `PathSegment` of `deepOmit` | `DeepOmitPathSegment` |
 | `computeBackoffDelay` | not exported; the retry behavior is unchanged |
-| `engines.node` `>=20` | `>=22` |
+| `engines.node` `>=20` | `>=24` |
 | peer `@shirudo/base-error` `^7.1.1` | `^9.0.0` |
 | `import { DomainStateMachine } from "@shirudo/ddd-kit"` | `import { DomainStateMachine } from "@shirudo/ddd-kit/state-machine"` |
 | `deepEqualExcept` | not exported; use `valueObjectEqualsExcept` |
@@ -1124,8 +1124,9 @@ default `Record<string, unknown>` map.
 | `IValueObject` | not exported; type a value object with `ValueObject` |
 
 The `utils` entry point duplicated the root, so only the import path
-changes. `@shirudo/ddd-kit/money` is a new entry point. Node 20 reached its
-end of life on 2026-04-30.
+changes. `@shirudo/ddd-kit/money` is a new entry point. The Node floor
+follows the peer `@shirudo/base-error` 9, which requires Node.js 24. Edge
+runtimes are not affected.
 
 `@shirudo/base-error` 9 removes `buildLogObject()`. The kit errors
 contribute their declared fields through `buildOwnLogFields()`. A subclass
@@ -1587,3 +1588,4 @@ The root entry no longer exports `capturePersistenceBaseline`,
   default](#issue-messages-stay-off-the-wire-by-default). An issue without
   a message and a `null` path segment now reach the client, where the kit
   dropped them.
+- `engines.node` is `>=24`, because base-error 9 requires Node.js 24.
