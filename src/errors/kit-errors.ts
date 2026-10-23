@@ -198,8 +198,10 @@ export interface KitWiringErrorOptions<TCode extends KitWiringErrorCode> {
 	/** Technical message for logs and debugging, never for clients. */
 	readonly message: string;
 	/**
-	 * Safe diagnostic data, for example an aggregate identity, an operation,
-	 * an event type, or a reason code. Never an error object or raw input.
+	 * Diagnostic data for the log, for example an aggregate identity, an
+	 * operation, an event type, or a reason code. Never an error object. A
+	 * code that rejects a value, for example `INVALID_VERSION`, carries that
+	 * value, so `details` is log data and never client data.
 	 */
 	readonly details?: Readonly<Record<string, unknown>>;
 	/** The failure that the kit handled when it found the defect. */
@@ -214,7 +216,8 @@ export interface KitWiringErrorOptions<TCode extends KitWiringErrorCode> {
  * generic domain or infrastructure handler may absorb it. One class carries
  * every wiring code: match on `code`, never on the message.
  *
- * `details` holds safe diagnostic data only, and the log object carries it.
+ * `details` holds diagnostic data for the log, and the log object carries
+ * it.
  * A second failure that occurred while the kit handled `cause`, for example
  * a mapper that threw while it classified the error, is `secondaryCause`.
  */
