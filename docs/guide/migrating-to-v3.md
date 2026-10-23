@@ -1147,10 +1147,12 @@ protected override buildOwnLogFields(): Record<string, unknown> {
 
 base-error writes the envelope itself (`name`, `message`, `code`,
 `category`, `retryable`, `timestamp`, `cause`, and the others) and drops
-those keys from own log fields. A `null` cause now ends every cause-chain
-walk, so `getRootCause` and `someChainRetryable` treat `cause: null` like a
-missing cause. Follow the migration notes of `@shirudo/base-error` 8 and 9
-where you use its API directly.
+those keys from own log fields. A kit error stores its time only in
+`timestamp`. It has no `timestampIso` property; the log object still writes
+`timestampIso`. A `null` cause now ends every cause-chain walk, so
+`getRootCause` and `someChainRetryable` treat `cause: null` like a missing
+cause. Follow the migration notes of `@shirudo/base-error` 8 and 9 where you
+use its API directly.
 
 ### Names
 
@@ -1578,8 +1580,9 @@ The root entry no longer exports `capturePersistenceBaseline`,
 - The peer `@shirudo/base-error` is `^9.0.0`. A subclass of `DomainError` or
   `InfrastructureError` that overrides `buildLogObject` moves its fields to
   `buildOwnLogFields`; see [Entry points and
-  platform](#entry-points-and-platform). A `null` cause now ends every
-  cause-chain walk.
+  platform](#entry-points-and-platform). A kit error has no `timestampIso`
+  property; read `timestamp`. A `null` cause now ends every cause-chain
+  walk.
 - The message of a validation issue no longer reaches a client by default.
   A client that shows `issue.message` shows an empty text and gets no error.
   Pass `issueMessages: true` to `toProblemDetails` or to

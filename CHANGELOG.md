@@ -248,8 +248,9 @@ immutable. Run one kit version per process during a cutover.
   `buildLogObject()`: the kit errors contribute their declared fields
   through `buildOwnLogFields()`, and a subclass of `DomainError` or
   `InfrastructureError` that overrode `buildLogObject` moves to
-  `buildOwnLogFields`. A `null` cause ends every cause-chain walk. See the
-  migration notes of `@shirudo/base-error` 9.
+  `buildOwnLogFields`. A kit error has no `timestampIso` property. A `null`
+  cause ends every cause-chain walk. See the migration notes of
+  `@shirudo/base-error` 9.
 - The repository contract suites are the v3 suites under the same names.
   Their failure messages start with "Contract violated:" and "Contract test
   skipped:".
