@@ -115,35 +115,25 @@ function sanitizePublicIssues(
 }
 
 /**
- * Keeps only the documented path segments: a property key, `null`, or
- * `{ key }` with one of them. `null` stands for a key that is no property
- * key. It keeps its place, so the segments after it still name the field.
+ * Maps each path segment as base-error does: an object segment becomes
+ * `{ key }`, and every key that is no property key becomes `null`. A
+ * segment keeps its place, so the segments after it still name the field.
  */
 function sanitizeIssuePath(path: unknown): PublicIssue["path"] | undefined {
 	if (!Array.isArray(path)) return undefined;
-	const segments: Array<
-		PropertyKey | null | { readonly key: PropertyKey | null }
-	> = [];
-	for (const segment of path) {
-		if (isPathKey(segment)) {
-			segments.push(segment);
-			continue;
-		}
-		if (typeof segment === "object") {
-			const { key } = segment as { key?: unknown };
-			if (isPathKey(key)) segments.push({ key });
-		}
-	}
-	return segments;
+	return path.map((segment: unknown) =>
+		typeof segment === "object" && segment !== null
+			? { key: propertyKeyOrNull((segment as { key?: unknown }).key) }
+			: propertyKeyOrNull(segment),
+	);
 }
 
-function isPathKey(value: unknown): value is PropertyKey | null {
-	return (
-		value === null ||
-		typeof value === "string" ||
+function propertyKeyOrNull(value: unknown): PropertyKey | null {
+	return typeof value === "string" ||
 		typeof value === "number" ||
 		typeof value === "symbol"
-	);
+		? value
+		: null;
 }
 
 /**

@@ -218,8 +218,9 @@ immutable. Run one kit version per process during a cutover.
   the default message of a validator can embed the rejected value. A client
   that shows `issue.message` shows an empty text and gets no error. Pass
   `issueMessages: true` for messages that you wrote. An issue without a
-  message and a `null` path segment now reach the client, where the kit
-  dropped them.
+  message now reaches the client, where the kit dropped it. A path segment
+  that is no property key reaches the client as `null` in its place, where
+  the kit dropped it and the path named the wrong field.
 - `toPublicErrorView` returns the `LocalizedPublicError` of
   `@shirudo/base-error`, and its `locale` option is a preference. The view
   carries the locale that resolved.

@@ -273,6 +273,24 @@ describe("toPublicErrorView()", () => {
 			]);
 		});
 
+		it("maps a path segment that is no property key to null, so the later segments keep their place", () => {
+			const unkeyed = {
+				name: "VALIDATION_FAILED",
+				category: "VALIDATION",
+				publicIssues: () => [
+					{ path: ["lines", { key: undefined }, "sku"] },
+					{ path: ["tags", true, [0], "name"] },
+				],
+			};
+
+			const view = toPublicErrorView(unkeyed);
+
+			expect(view.details?.issues).toEqual([
+				{ path: ["lines", { key: null }, "sku"] },
+				{ path: ["tags", null, { key: null }, "name"] },
+			]);
+		});
+
 		it("stays total when name or publicIssues are throwing accessors", () => {
 			const throwingName = {
 				get name(): string {

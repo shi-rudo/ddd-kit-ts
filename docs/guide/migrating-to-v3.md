@@ -1608,8 +1608,9 @@ The root entry no longer exports `capturePersistenceBaseline`,
   `createKitPublicErrors` for messages that you wrote; see [Issue messages
   stay off the wire by
   default](#issue-messages-stay-off-the-wire-by-default). An issue without
-  a message and a `null` path segment now reach the client, where the kit
-  dropped them.
+  a message now reaches the client, where the kit dropped it. A path
+  segment that is no property key reaches the client as `null` in its
+  place, where the kit dropped it.
 - `engines.node` is `>=24`, because base-error 9 requires Node.js 24.
 - With a tracking outbox, a record whose publication runs past
   `deliveryTimeoutMs` consumes an attempt and can reach the dead letter. In
