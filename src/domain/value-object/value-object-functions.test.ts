@@ -1100,3 +1100,22 @@ describe("valueObject() – RegExp", () => {
 		expect(() => valueObject({ pattern: /ab+c/g })).toThrow(TypeError);
 	});
 });
+
+describe("deepFreeze – a walk that throws", () => {
+	it("leaves no object marked as frozen, so a later call freezes it", () => {
+		const value: Record<string, unknown> = { nested: { count: 1 } };
+		Object.defineProperty(value, "broken", {
+			enumerable: true,
+			configurable: true,
+			get() {
+				throw new Error("read failed");
+			},
+		});
+
+		expect(() => deepFreeze(value)).toThrow();
+		delete value.broken;
+		deepFreeze(value);
+
+		expect(Object.isFrozen(value)).toBe(true);
+	});
+});

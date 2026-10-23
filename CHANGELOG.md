@@ -600,6 +600,9 @@ immutable. Run one kit version per process during a cutover.
   it as a class instance.
 - `deepFreeze` keeps a global or sticky `RegExp` usable. Before, a match on a
   frozen pattern threw.
+- A `deepFreeze` that throws, for example on a failing getter, leaves no
+  object marked as frozen. Before, a later `deepFreeze` stopped at such an
+  object, and the object stayed open without an error.
 - `deepOmit` keeps non-enumerable own string properties, and its
   `ignoreKeyPredicate` receives a stable path. `deepEqual` compares an opaque
   object, for example a generator or a `WeakRef`, by identity.

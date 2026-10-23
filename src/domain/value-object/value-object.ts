@@ -74,15 +74,23 @@ function rejectValueObjectAsInput(input: unknown, entry: string): void {
 // Every object that a deep freeze entered. A later walk stops at such an
 // object, so a state written as `{ ...state, status }` costs the root
 // object, not the whole graph. The walk marks an object before it
-// descends, so a cycle ends at the mark.
+// descends, so a cycle ends at the mark. A walk that fails removes its
+// marks again, because a marked object that it did not freeze would stay
+// open for every later walk.
 const DEEP_FROZEN = new WeakSet<object>();
 
 export function deepFreeze<T>(obj: T): Readonly<T> {
-	freezeDeep(obj);
+	const marked: object[] = [];
+	try {
+		freezeDeep(obj, marked);
+	} catch (error) {
+		for (const entered of marked) DEEP_FROZEN.delete(entered);
+		throw error;
+	}
 	return obj as Readonly<T>;
 }
 
-function freezeDeep(obj: unknown): void {
+function freezeDeep(obj: unknown, marked: object[]): void {
 	if (obj === null || typeof obj !== "object" || DEEP_FROZEN.has(obj)) {
 		return;
 	}
@@ -91,17 +99,20 @@ function freezeDeep(obj: unknown): void {
 	const tag = builtInTag(obj);
 	if (tag === "[object RegExp]") return;
 	DEEP_FROZEN.add(obj);
+	marked.push(obj);
 
 	// Date/Map/Set keep internal-slot mutability under Object.freeze:
 	// shadow their mutators and freeze Map/Set contents (entries are not
 	// own keys, so the key walk below would miss them).
 	if (tag === "[object Map]") {
 		for (const [key, value] of obj as Map<unknown, unknown>) {
-			freezeDeep(key);
-			freezeDeep(value);
+			freezeDeep(key, marked);
+			freezeDeep(value, marked);
 		}
 	} else if (tag === "[object Set]") {
-		for (const member of obj as Set<unknown>) freezeDeep(member);
+		for (const member of obj as Set<unknown>) {
+			freezeDeep(member, marked);
+		}
 	}
 	if (
 		tag === "[object Date]" ||
@@ -113,7 +124,7 @@ function freezeDeep(obj: unknown): void {
 
 	// Reflect.ownKeys returns both string and symbol own keys.
 	for (const key of Reflect.ownKeys(obj)) {
-		freezeDeep((obj as Record<string | symbol, unknown>)[key]);
+		freezeDeep((obj as Record<string | symbol, unknown>)[key], marked);
 	}
 	Object.freeze(obj);
 }
