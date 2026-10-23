@@ -164,6 +164,7 @@ value is not plain data, the walk throws a `TypeError` that names the path.
 | A function, a symbol, a class instance, or another built-in, for example a `RegExp`, an `Error`, a `Promise`, binary data, or a boxed primitive | throws |
 | An accessor, an enumerable symbol-keyed property, a non-enumerable string-keyed property, or an own `__proto__` key | throws |
 | A non-enumerable symbol-keyed property | leaves it out; it is metadata by convention |
+| A record, an array, a `Map`, or a `Set` nested deeper than 100 levels | throws |
 
 A `Map` and a `Set` compare their keys by identity, and a copy cannot keep the
 identity of an object. A copied `Map` with object keys would therefore stop
@@ -174,6 +175,13 @@ A value object can hold another value object; the copy keeps it by reference.
 The copy is the data that the kit keeps, so the walk checks the copy only,
 once. Messages that leave the process, the command messages and the
 integration messages, follow the stricter JSON rule instead.
+
+Every walk of the kit stops at 100 levels of nesting: the plain-data copy, the
+JSON rule, `deepFreeze`, and `deepEqual`. A recursive walk overflows the stack
+of Node.js and workerd after about 1,100 levels, and the stack that the caller
+already uses lowers that number. A fixed limit therefore fails the same way on
+every runtime, with an error that names the path. The log of
+`@shirudo/base-error` keeps the same depth.
 
 ## Identity ids are branded strings, generated app-side
 

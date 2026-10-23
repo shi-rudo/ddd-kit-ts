@@ -1101,6 +1101,20 @@ describe("valueObject() – RegExp", () => {
 	});
 });
 
+/** A value with `levels` levels of nested records: 1 level is `{}`. */
+function nestedRecords(levels: number): Record<string, unknown> {
+	let value: Record<string, unknown> = {};
+	for (let level = 1; level < levels; level += 1) value = { child: value };
+	return value;
+}
+
+/** A value with `levels` levels of nested arrays: 1 level is `[]`. */
+function nestedArrays(levels: number): unknown[] {
+	let value: unknown[] = [];
+	for (let level = 1; level < levels; level += 1) value = [value];
+	return value;
+}
+
 describe("deepFreeze – a walk that throws", () => {
 	it("leaves no object marked as frozen, so a later call freezes it", () => {
 		const value: Record<string, unknown> = { nested: { count: 1 } };
@@ -1117,5 +1131,29 @@ describe("deepFreeze – a walk that throws", () => {
 		deepFreeze(value);
 
 		expect(Object.isFrozen(value)).toBe(true);
+	});
+});
+
+describe("deepFreeze – nesting", () => {
+	it("freezes 100 levels of nesting", () => {
+		const value = nestedRecords(100);
+
+		deepFreeze(value);
+
+		expect(Object.isFrozen(value)).toBe(true);
+	});
+
+	it("rejects a 101st level with a TypeError, also where a recursive walk would overflow the stack", () => {
+		expect(() => deepFreeze(nestedRecords(101))).toThrow(TypeError);
+		expect(() => deepFreeze(nestedArrays(5000))).toThrow(TypeError);
+	});
+
+	it("leaves no object marked as frozen after a failed walk, so a later call freezes it", () => {
+		const inner = nestedRecords(100);
+
+		expect(() => deepFreeze({ inner })).toThrow(TypeError);
+		deepFreeze(inner);
+
+		expect(Object.isFrozen(inner)).toBe(true);
 	});
 });

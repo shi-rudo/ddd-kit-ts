@@ -122,7 +122,9 @@ immutable. Run one kit version per process during a cutover.
   function, a symbol, a class instance, a `RegExp`, binary data, an `Error`,
   an accessor, or a symbol-keyed or hidden property. A key of a `Map` and a
   member of a `Set` must be a primitive, and an own `__proto__` key throws
-  `PROTOTYPE_POLLUTION` at any depth. A value object with a private field
+  `PROTOTYPE_POLLUTION` at any depth. Nesting deeper than 100 levels throws a
+  `TypeError`; `deepFreeze`, `deepEqual`, and the JSON check of the command
+  and integration messages share that limit. A value object with a private field
   no longer becomes an empty record without an error. Map a value object to
   plain data first. `toJSON()` of a kit `ValueObject` is shallow, so map a
   nested value object too. The metadata
