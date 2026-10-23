@@ -8,10 +8,11 @@ import {
 	type ToProblemContext,
 	toProblem,
 } from "@shirudo/base-error/public-error";
+import { sanitizePublicIssues } from "../errors/public-issues";
 
 /** Details member carried by a {@link toProblemDetails} body. */
 export interface ValidationProblemDetails {
-	/** The whitelisted field issues, straight from `publicIssues()`. */
+	/** The field issues of `publicIssues()`, through the kit whitelist. */
 	readonly issues: readonly PublicIssue[];
 }
 
@@ -32,6 +33,12 @@ export interface ValidationProblemOptions<
 	detail?: string;
 	/** URI reference identifying this specific occurrence. */
 	instance?: string;
+	/**
+	 * Adds the `message` of each issue to `details.issues`. Default `false`.
+	 * Set it only for messages that you wrote: the default messages of
+	 * Valibot and ArkType (and of Zod 3 for `enum`) embed the rejected value.
+	 */
+	issueMessages?: boolean;
 	/**
 	 * Extra public extension members merged alongside the documented body
 	 * members. Constrained by base-error's `toProblem` contract: JSON-safe,
@@ -56,9 +63,12 @@ export type ValidationProblemResult<
  * Projects a base-error `ValidationError` to an RFC 9457 Problem
  * Details result by delegating to base-error's `toProblem` transport stage:
  * one pipeline, one wire profile, one hardening implementation. The body
- * carries the error's public `code`, and the whitelisted issues ride under
- * `details.issues` (`{ message, path, code?, pointer? }`, never raw
- * validator extras), the same shape `toPublicErrorView` uses.
+ * carries the error's public `code`, and the issues ride under
+ * `details.issues` (`{ path?, pointer?, code? }`, never raw validator
+ * extras). They pass the same whitelist as in `toPublicErrorView`, also for
+ * an error of another base-error copy. The message of an issue
+ * crosses only with {@link ValidationProblemOptions.issueMessages}, because
+ * the default message of a validator can embed the rejected value.
  *
  * All of `toProblem`'s wire-safety guarantees apply: the body is deeply
  * frozen with a null prototype (cannot carry or receive prototype
@@ -87,7 +97,7 @@ export type ValidationProblemResult<
  * }
  * // body → { type: "about:blank", title: "Validation Failed", status: 422,
  * //          code: "VALIDATION_FAILED",
- * //          details: { issues: [{ message: "must be a valid email", ... }] } }
+ * //          details: { issues: [{ path: ["email"], pointer: "email" }] } }
  * ```
  */
 export function toProblemDetails<
@@ -102,12 +112,21 @@ export function toProblemDetails<
 		status = 422,
 		detail,
 		instance,
+		issueMessages = false,
 		extensions,
 	} = options;
 
 	return toProblem<ValidationProblemDetails, string, TExtensions>(
 		{ status, type, title },
-		{ code: error.code, details: { issues: error.publicIssues() } },
+		{
+			code: error.code,
+			details: {
+				issues: sanitizePublicIssues(
+					error.publicIssues({ messages: issueMessages }),
+					{ issueMessages },
+				),
+			},
+		},
 		{ detail, instance, extensions },
 	);
 }

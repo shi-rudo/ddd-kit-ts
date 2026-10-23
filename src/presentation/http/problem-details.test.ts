@@ -9,7 +9,7 @@ const invalidRegistration = () =>
 	]);
 
 describe("toProblemDetails()", () => {
-	it("delegates to toProblem: 422 defaults, code member, issues under details", () => {
+	it("delegates to toProblem: 422 defaults, code member, issues without their messages under details", () => {
 		const problem = toProblemDetails(invalidRegistration());
 
 		expect(problem.status).toBe(422);
@@ -17,10 +17,10 @@ describe("toProblemDetails()", () => {
 		expect(problem.body.title).toBe("Validation Failed");
 		expect(problem.body.type).toBe("about:blank");
 		expect(problem.body.code).toBe("VALIDATION_FAILED");
-		expect(problem.body.details?.issues).toHaveLength(2);
-		expect(problem.body.details?.issues[0]?.message).toBe(
-			"must be a valid email",
-		);
+		expect(problem.body.details?.issues).toEqual([
+			{ path: ["email"], pointer: "email" },
+			{ path: ["age"], pointer: "age" },
+		]);
 		expect(problem.headers["content-type"]).toContain(
 			"application/problem+json",
 		);
@@ -39,6 +39,30 @@ describe("toProblemDetails()", () => {
 		expect(problem.body.type).toBe("https://api.example/problems/validation");
 		expect(problem.body.detail).toBe("2 fields failed validation");
 		expect(problem.body.instance).toBe("/registrations/42");
+	});
+
+	it("puts the message of each issue on the wire only with issueMessages", () => {
+		const problem = toProblemDetails(invalidRegistration(), {
+			issueMessages: true,
+		});
+
+		expect(problem.body.details?.issues).toEqual([
+			{ message: "must be a valid email", path: ["email"], pointer: "email" },
+			{ message: "must not be negative", path: ["age"], pointer: "age" },
+		]);
+	});
+
+	it("keeps a message off the wire without issueMessages, even when publicIssues() returns one", () => {
+		const fromAnotherCopy = Object.assign(invalidRegistration(), {
+			publicIssues: () => [
+				{ message: "password hunter2 is too short", path: ["password"] },
+			],
+		});
+
+		const problem = toProblemDetails(fromAnotherCopy);
+
+		expect(problem.body.details?.issues).toEqual([{ path: ["password"] }]);
+		expect(JSON.stringify(problem.body)).not.toContain("hunter2");
 	});
 
 	it("merges extension members alongside the documented body members", () => {

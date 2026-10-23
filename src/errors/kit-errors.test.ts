@@ -265,7 +265,9 @@ describe("DomainError", () => {
 		expect(isBaseError(e)).toBe(true);
 		expect(e.timestamp).toBeGreaterThanOrEqual(before);
 		expect(e.timestamp).toBeLessThanOrEqual(after);
-		expect(typeof e.timestampIso).toBe("string");
+		expect(e.toLogObject().timestampIso).toBe(
+			new Date(e.timestamp).toISOString(),
+		);
 	});
 
 	it("propagates cause through the BaseError chain", () => {

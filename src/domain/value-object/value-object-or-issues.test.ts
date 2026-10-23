@@ -44,7 +44,7 @@ describe("valueObjectOrIssues()", () => {
 		expect(result.isErr()).toBe(true);
 		if (result.isErr()) {
 			expect(result.error).toBeInstanceOf(ValidationError);
-			const issues = result.error.publicIssues();
+			const issues = result.error.publicIssues({ messages: true });
 			expect(issues).toHaveLength(2);
 			expect(issues.map((i) => i.message)).toEqual([
 				"must be a valid email",

@@ -1,4 +1,4 @@
-import { isStructuredError, matchError } from "@shirudo/base-error";
+import { BaseError, isStructuredError, matchError } from "@shirudo/base-error";
 import { describe, expect, it } from "vite-plus/test";
 import {
 	invalidFlushStatementError,
@@ -519,6 +519,62 @@ describe("the no-base-error consumer path is first-class", () => {
 });
 
 describe("a serialized kit error keeps the fields it declares", () => {
+	it("logs the declared and the composed fields of a subclass under the envelope of the error", () => {
+		class TaggedOrderError extends DomainError<"TAGGED_ORDER"> {
+			readonly orderId = "order-1";
+
+			constructor() {
+				super({ code: "TAGGED_ORDER", message: "tagged" });
+			}
+
+			protected override buildOwnLogFields(): Record<string, unknown> {
+				return { ...super.buildOwnLogFields(), tag: "probe" };
+			}
+		}
+
+		const log = new TaggedOrderError().toLogObject();
+
+		expect(log).toMatchObject({
+			code: "TAGGED_ORDER",
+			category: "DOMAIN",
+			orderId: "order-1",
+			tag: "probe",
+		});
+		expect(log).not.toHaveProperty("_tag");
+	});
+
+	it("logs a field that holds a cycle with its other values", () => {
+		const order: Record<string, unknown> = { id: "o-1" };
+		order.self = order;
+		class CyclicOrderError extends DomainError<"CYCLIC_ORDER"> {
+			readonly order = order;
+
+			constructor() {
+				super({ code: "CYCLIC_ORDER", message: "cyclic" });
+			}
+		}
+
+		const log = new CyclicOrderError().toLogObject();
+
+		expect(log).toMatchObject({ order: { id: "o-1" } });
+	});
+
+	it("logs a field that holds an error through the log object of that error, so its redaction holds", () => {
+		const upstream = new BaseError("token abc123 expired").redact(["message"]);
+		class UpstreamFailedError extends DomainError<"UPSTREAM_FAILED"> {
+			readonly upstream = upstream;
+
+			constructor() {
+				super({ code: "UPSTREAM_FAILED", message: "upstream failed" });
+			}
+		}
+
+		const log = new UpstreamFailedError().toLogObject();
+
+		expect(log).toHaveProperty("upstream.name", upstream.name);
+		expect(JSON.stringify(log)).not.toContain("abc123");
+	});
+
 	it("carries the fields of an infrastructure error", () => {
 		const error = new ConcurrencyConflictError({
 			reason: "stale_version",

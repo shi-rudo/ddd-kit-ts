@@ -31,10 +31,11 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
-      # Trusted Publishing needs npm 11.5.1 or newer; Node 22 bundles npm 10.
+      # Trusted Publishing needs npm 11.5.1 or newer; early Node 24 releases
+      # bundle an older npm 11.
       - name: Update npm for Trusted Publishing
         run: npm install -g npm@11
 

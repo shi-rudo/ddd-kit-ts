@@ -212,6 +212,15 @@ immutable. Run one kit version per process during a cutover.
   `{ status, headers, body, outcome }`. The issues are under
   `details.issues`. The `member` option and `ValidationProblemMember` are
   gone.
+- The message of a validation issue no longer reaches a client by default.
+  `toProblemDetails`, `toPublicErrorView`, and the `createKitPublicErrors()`
+  catalog put `path`, `pointer`, and `code` under `details.issues`, because
+  the default message of a validator can embed the rejected value. A client
+  that shows `issue.message` shows an empty text and gets no error. Pass
+  `issueMessages: true` for messages that you wrote. An issue without a
+  message now reaches the client, where the kit dropped it. A path segment
+  that is no property key reaches the client as `null` in its place, where
+  the kit dropped it and the path named the wrong field.
 - `toPublicErrorView` returns the `LocalizedPublicError` of
   `@shirudo/base-error`, and its `locale` option is a preference. The view
   carries the locale that resolved.
@@ -256,9 +265,19 @@ immutable. Run one kit version per process during a cutover.
   `InMemoryIdempotencyStore`, `InMemoryLeasedIdempotencyStore`,
   `InMemoryTransactionScope`, and the `InMemoryTransactionParticipant` and
   `InMemoryTransaction` types. The root entry no longer exports them.
-- `engines.node` is `>=22`. Node 20 reached its end of life on 2026-04-30.
-- The peer `@shirudo/base-error` is `^8.3.0`. Before 8.1.0, `redactAllow`
-  does not mask the fields that a kit error adds to its log object.
+- `engines.node` is `>=24`, because the peer `@shirudo/base-error` 9
+  requires Node.js 24. Node 20 reached its end of life on 2026-04-30.
+- The peer `@shirudo/base-error` is `^9.0.0`. base-error 9 removes
+  `buildLogObject()`: the kit errors contribute their declared fields
+  through `buildOwnLogFields()`, at every depth of a cause chain. A subclass
+  of `DomainError` or `InfrastructureError` deletes a `buildLogObject`
+  override that adds only declared fields, and moves a computed field to
+  `buildOwnLogFields`. A kit error has no `timestampIso` property. A `null`
+  cause ends every cause-chain walk. See the migration notes of
+  `@shirudo/base-error` 9. A field of a kit error that holds a cycle reaches
+  the log with a cycle marker, where the kit left the whole field out. A
+  field that holds a `BaseError`, for example `secondaryCause`, carries the
+  log object of that error, so the redaction policy of that error holds.
 - The repository contract suites are the v3 suites under the same names.
   Their failure messages start with "Contract violated:" and "Contract test
   skipped:".
@@ -482,6 +501,8 @@ immutable. Run one kit version per process during a cutover.
   which the consumer extends at the composition root. `toPublicErrorView`
   accepts a `catalog` option, and it reports a failure of that catalog to the
   `onCatalogError` observer before it falls back to the generic view.
+- `issueMessages` of `createKitPublicErrors` and `toProblemDetails` adds the
+  message of each validation issue to `details.issues`.
 
 #### Documentation and tooling
 

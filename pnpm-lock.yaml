@@ -26,8 +26,8 @@ importers:
         specifier: 2.5.10
         version: 2.5.10
       '@shirudo/base-error':
-        specifier: ^8.3.0
-        version: 8.3.0
+        specifier: ^9.0.0
+        version: 9.0.0
       '@shirudo/result':
         specifier: ^1.1.1
         version: 1.1.1
@@ -1252,9 +1252,9 @@ packages:
   '@shikijs/vscode-textmate@10.0.2':
     resolution: {integrity: sha512-83yeghZ2xxin3Nj8z1NMd/NCuca+gsYXswywDy5bHvwlWL8tpTQmzGeUuHd9FC3E/SBEMvzJRwWEOz5gGes9Qg==}
 
-  '@shirudo/base-error@8.3.0':
-    resolution: {integrity: sha512-rK3avZelhs47p4tqzWLEEyohBbt0XB0kuyD/o9KOXYJ38eLcfSDcsd8FQNv7lMo6ZrF55tKidcsTeFmvSoIIiA==}
-    engines: {node: '>=20'}
+  '@shirudo/base-error@9.0.0':
+    resolution: {integrity: sha512-3KUcaC/cAwmxPqPAiYRQfvx6cRjamvQd3h6rNKqmveNktM6wV79kXW2eBWeDIkAlQaL7eD/589LESYVHlG9U5g==}
+    engines: {node: '>=24'}
 
   '@shirudo/result@1.1.1':
     resolution: {integrity: sha512-UaTRXZJ/wDJuTQ7P5vA8atO525v9yeavOxV7sKMcf+eiXbMDtSwWfPryBrc+RV2U42k1LYINkRWF2ZMsr5DzoA==}
@@ -3953,7 +3953,7 @@ snapshots:
 
   '@shikijs/vscode-textmate@10.0.2': {}
 
-  '@shirudo/base-error@8.3.0': {}
+  '@shirudo/base-error@9.0.0': {}
 
   '@shirudo/result@1.1.1': {}
 

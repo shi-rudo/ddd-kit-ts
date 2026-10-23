@@ -47,8 +47,13 @@ export interface KitErrorOptions<TCode extends string> {
 	retryable?: boolean;
 }
 
-/** The keys `StructuredError` owns, which a declared field never replaces. */
-const ENVELOPE_FIELDS: ReadonlySet<string> = new Set(["_tag", "details"]);
+/**
+ * The discriminator of `BaseError`. Every error carries it as an own
+ * property, and base-error does not reserve it, so the log would show it as
+ * an own field. base-error drops its envelope keys from own log fields
+ * itself.
+ */
+const DISCRIMINATOR_FIELD = "_tag";
 
 /**
  * The fields a kit error declares of its own, for the raw log object.
@@ -59,7 +64,7 @@ const ENVELOPE_FIELDS: ReadonlySet<string> = new Set(["_tag", "details"]);
 function ownFields(error: object): Record<string, unknown> {
 	const fields: Record<string, unknown> = {};
 	for (const key of Object.keys(error)) {
-		if (ENVELOPE_FIELDS.has(key)) continue;
+		if (key === DISCRIMINATOR_FIELD) continue;
 		// A field can be an accessor, and a consumer's own error class decides
 		// what it computes. Reading it must not fail the report.
 		try {
@@ -73,44 +78,27 @@ function ownFields(error: object): Record<string, unknown> {
 }
 
 /**
- * Projects one field value to something a log serializer survives.
+ * Projects the field values that base-error leaves out of the log.
  *
- * A field of type `unknown` can hold a driver value with a cycle, a bigint or
- * a symbol, and `JSON.stringify` throws on the first two. A serializer that
- * throws inside the failure path costs the whole report, so a value that does
- * not survive the attempt is left out. An error keeps its name, message and
- * code, which is what a reader needs and cannot cycle.
+ * base-error copies every other value as data under its log budget: a cycle
+ * becomes a marker, and a bigint its decimal string. It drops a symbol and
+ * an error, so a symbol becomes its text here. An error that builds its own
+ * log object, as a `BaseError` does, gives that object, which applies its
+ * redaction policy. base-error bounds such a call during the hook and skips
+ * the nested hooks. Any other error keeps its name, message and code, which
+ * is what a reader needs and cannot cycle.
  */
 function logSafeValue(value: unknown): unknown {
-	switch (typeof value) {
-		case "string":
-		case "number":
-		case "boolean":
-			return value;
-		case "bigint":
-		case "symbol":
-			return String(value);
-		case "undefined":
-		case "function":
-			return undefined;
-		default:
-			break;
-	}
-	if (value === null) return null;
-	if (value instanceof Error) {
-		const code = (value as { readonly code?: unknown }).code;
-		return {
-			name: String(value.name),
-			message: String(value.message),
-			...(typeof code === "string" ? { code } : {}),
-		};
-	}
-	try {
-		JSON.stringify(value);
-		return value;
-	} catch {
-		return undefined;
-	}
+	if (typeof value === "symbol") return String(value);
+	if (!(value instanceof Error)) return value;
+	const { toLogObject } = value as { readonly toLogObject?: unknown };
+	if (typeof toLogObject === "function") return toLogObject.call(value);
+	const code = (value as { readonly code?: unknown }).code;
+	return {
+		name: String(value.name),
+		message: String(value.message),
+		...(typeof code === "string" ? { code } : {}),
+	};
 }
 
 /**
@@ -154,8 +142,8 @@ export abstract class DomainError<
 	}
 
 	/** Carries the fields the concrete error declares into the log object. */
-	protected override buildLogObject(): Record<string, unknown> {
-		return { ...ownFields(this), ...super.buildLogObject() };
+	protected override buildOwnLogFields(): Record<string, unknown> {
+		return ownFields(this);
 	}
 }
 
@@ -250,13 +238,9 @@ export class KitWiringError<
 		}
 	}
 
-	/** Carries `secondaryCause` and log-safe details into the log object. */
-	protected override buildLogObject(): Record<string, unknown> {
-		return {
-			...ownFields(this),
-			...super.buildLogObject(),
-			details: logSafeDetails(this.details),
-		};
+	/** Carries `secondaryCause` into the log object. */
+	protected override buildOwnLogFields(): Record<string, unknown> {
+		return ownFields(this);
 	}
 }
 
@@ -269,17 +253,6 @@ export function isWiringError<TCode extends KitWiringErrorCode>(
 	code: TCode,
 ): value is KitWiringError<TCode> {
 	return value instanceof KitWiringError && value.code === code;
-}
-
-function logSafeDetails(
-	details: Readonly<Record<string, unknown>>,
-): Record<string, unknown> {
-	const safe: Record<string, unknown> = {};
-	for (const [key, value] of Object.entries(details)) {
-		const projected = logSafeValue(value);
-		if (projected !== undefined) safe[key] = projected;
-	}
-	return safe;
 }
 
 /**
@@ -312,8 +285,8 @@ export abstract class InfrastructureError<
 	}
 
 	/** Carries the fields the concrete error declares into the log object. */
-	protected override buildLogObject(): Record<string, unknown> {
-		return { ...ownFields(this), ...super.buildLogObject() };
+	protected override buildOwnLogFields(): Record<string, unknown> {
+		return ownFields(this);
 	}
 }
 

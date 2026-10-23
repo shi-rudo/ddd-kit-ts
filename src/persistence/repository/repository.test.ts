@@ -219,7 +219,9 @@ describe("Repository contract", () => {
 			expect(e.name).toBe("AGGREGATE_NOT_FOUND");
 			expect(e.timestamp).toBeGreaterThanOrEqual(before);
 			expect(e.timestamp).toBeLessThanOrEqual(after);
-			expect(typeof e.timestampIso).toBe("string");
+			expect(e.toLogObject().timestampIso).toBe(
+				new Date(e.timestamp).toISOString(),
+			);
 		});
 
 		it("AggregateNotFoundError carries the aggregate type and id in its technical message", () => {

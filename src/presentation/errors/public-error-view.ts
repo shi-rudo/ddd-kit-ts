@@ -39,7 +39,9 @@ export interface PublicErrorViewOptions {
 	 * The public-error catalog to resolve against. Defaults to a private
 	 * {@link createKitPublicErrors} instance; pass your own extended
 	 * catalog (`createKitPublicErrors().registerByCode(...)`) so your own
-	 * codes and locales resolve through the same pipeline.
+	 * codes and locales resolve through the same pipeline. A catalog from
+	 * `createKitPublicErrors({ issueMessages: true })` adds the message of
+	 * each validation issue.
 	 */
 	catalog?: PublicErrorCatalog<string>;
 	/**
@@ -51,8 +53,8 @@ export interface PublicErrorViewOptions {
 }
 
 /**
- * Maps a kit error (or any caught value) to a base-error
- * {@link LocalizedPublicError} by delegating to the public-error pipeline:
+ * Maps a kit error (or any caught value) to a `LocalizedPublicError` of
+ * `@shirudo/base-error` by delegating to the public-error pipeline:
  * `project` against a catalog (default {@link createKitPublicErrors}), then
  * `localize` with the catalog's messages. A **transport-neutral**,
  * client-safe representation (`code`, `message`, `locale`, optional

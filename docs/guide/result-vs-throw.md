@@ -419,6 +419,10 @@ if (result.isErr()) {
 }
 ```
 
+Each issue carries its `path`, `pointer`, and `code`. Pass
+`issueMessages: true` to add the message, but only for messages that you
+wrote: the default message of a validator can embed the rejected value.
+
 ## Result Is A Peer Dependency
 
 The kit uses `@shirudo/result` but does not re-export it:

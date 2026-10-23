@@ -536,6 +536,32 @@ return Response.json(problem.body, {
 
 A client reads the issues from `details.issues` instead of `errors`.
 
+#### Issue messages stay off the wire by default
+
+`toProblemDetails`, `toPublicErrorView`, and a catalog from
+`createKitPublicErrors()` put the `path`, `pointer`, and `code` of each
+issue under `details.issues`. They leave out the `message`, because the
+default message of a validator can embed the rejected value, for example a
+password. In 2.2.0 every issue carried its message.
+
+A client that shows `issue.message` gets no error after the update. It
+shows an empty text, and you see that only when someone submits an invalid
+form. Search your clients for `issue.message` and pick one fix per
+endpoint:
+
+- If you wrote the messages, as in `valueObjectOrIssues`, opt in:
+
+  ```ts
+  const problem = toProblemDetails(error, { issueMessages: true });
+
+  const catalog = createKitPublicErrors({ issueMessages: true });
+  const view = toPublicErrorView(error, { catalog });
+  ```
+
+- If the messages come from a validator, keep them off the wire. The client
+  finds the field by `pointer` and writes the text itself. An issue carries
+  a `code` when the validator sets one, as Zod does.
+
 #### `toPublicErrorView` resolves the locale
 
 `toPublicErrorView` moved to the `@shirudo/ddd-kit/public-errors` entry point
@@ -1109,19 +1135,44 @@ default `Record<string, unknown>` map.
 | `deepOmit` and its types `Key` and `PathSegment` | not exported; for a value object use `valueObjectEqualsExcept`, whose options type is `ValueObjectEqualsExceptOptions` |
 | `import { InMemoryOutbox } from "@shirudo/ddd-kit"`, also the other in-memory adapters and `InMemoryTransactionScope` | `import { InMemoryOutbox } from "@shirudo/ddd-kit/testing"` |
 | `computeBackoffDelay` | not exported; the retry behavior is unchanged |
-| `engines.node` `>=20` | `>=22` |
-| peer `@shirudo/base-error` `^7.1.1` | `^8.3.0` |
+| `engines.node` `>=20` | `>=24` |
+| peer `@shirudo/base-error` `^7.1.1` | `^9.0.0` |
 | `import { DomainStateMachine } from "@shirudo/ddd-kit"` | `import { DomainStateMachine } from "@shirudo/ddd-kit/state-machine"` |
 | `deepEqualExcept` | not exported; use `valueObjectEqualsExcept` |
 | `freezeShallow` | not exported |
 | `IValueObject` | not exported; type a value object with `ValueObject` |
 
 The `utils` entry point duplicated the root, so only the import path
-changes. `@shirudo/ddd-kit/money` is a new entry point. Node 20 reached its
-end of life on 2026-04-30. `@shirudo/base-error` before 8.1.0 does not mask
-the fields that a kit error adds when you log it with `redactAllow`. Follow
-the migration notes of `@shirudo/base-error` 8 where you use its API
-directly.
+changes. `@shirudo/ddd-kit/money` is a new entry point. The Node floor
+follows the peer `@shirudo/base-error` 9, which requires Node.js 24. Edge
+runtimes are not affected.
+
+`@shirudo/base-error` 9 removes `buildLogObject()`. A kit error puts each
+field that its class declares into the log object, at every depth of a
+cause chain. If a subclass of `DomainError` or `InfrastructureError`
+overrides `buildLogObject` only to add declared fields, delete the
+override. Move a field that the class computes to `buildOwnLogFields()`:
+
+```ts
+// before
+protected override buildLogObject(): Record<string, unknown> {
+  return { ...super.buildLogObject(), lineCount: this.lines.length };
+}
+
+// after
+protected override buildOwnLogFields(): Record<string, unknown> {
+  return { ...super.buildOwnLogFields(), lineCount: this.lines.length };
+}
+```
+
+base-error writes the envelope itself (`name`, `message`, `code`,
+`category`, `retryable`, `timestamp`, `cause`, and the others) and drops
+those keys from own log fields. A kit error stores its time only in
+`timestamp`. It has no `timestampIso` property; the log object still writes
+`timestampIso`. A `null` cause now ends every cause-chain walk, so
+`getRootCause` and `someChainRetryable` treat `cause: null` like a missing
+cause. Follow the migration notes of `@shirudo/base-error` 8 and 9 where you
+use its API directly.
 
 ### Names
 
@@ -1546,6 +1597,22 @@ The root entry no longer exports `capturePersistenceBaseline`,
 
 **rc.16.**
 
+- The peer `@shirudo/base-error` is `^9.0.0`. A subclass of `DomainError` or
+  `InfrastructureError` deletes a `buildLogObject` override that adds only
+  declared fields, and moves a computed field to `buildOwnLogFields`; see
+  [Entry points and platform](#entry-points-and-platform). A kit error has no `timestampIso`
+  property; read `timestamp`. A `null` cause now ends every cause-chain
+  walk.
+- The message of a validation issue no longer reaches a client by default.
+  A client that shows `issue.message` shows an empty text and gets no error.
+  Pass `issueMessages: true` to `toProblemDetails` or to
+  `createKitPublicErrors` for messages that you wrote; see [Issue messages
+  stay off the wire by
+  default](#issue-messages-stay-off-the-wire-by-default). An issue without
+  a message now reaches the client, where the kit dropped it. A path
+  segment that is no property key reaches the client as `null` in its
+  place, where the kit dropped it.
+- `engines.node` is `>=24`, because base-error 9 requires Node.js 24.
 - With a tracking outbox, a record whose publication runs past
   `deliveryTimeoutMs` consumes an attempt and can reach the dead letter. In
   rc.15 it stayed pending without an attempt. Raise `maxDeliveryAttempts` of

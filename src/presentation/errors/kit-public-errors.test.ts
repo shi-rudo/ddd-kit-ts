@@ -82,7 +82,7 @@ describe("createKitPublicErrors catalog", () => {
 		expect(view.retryable).toBe(true);
 	});
 
-	it("projects a ValidationError with sanitized issues under details", () => {
+	it("projects a ValidationError with sanitized issues without their messages under details", () => {
 		const error = new ValidationError("invalid").addIssues([
 			{ message: "must be a valid email", path: ["email"] },
 		]);
@@ -90,9 +90,35 @@ describe("createKitPublicErrors catalog", () => {
 		const view = project(kitPublicErrors, error);
 
 		expect(view.code).toBe("VALIDATION_FAILED");
-		const details = view.details as { issues: Array<{ message: string }> };
-		expect(details.issues).toHaveLength(1);
-		expect(details.issues[0]?.message).toBe("must be a valid email");
+		expect(view.details).toEqual({
+			issues: [{ path: ["email"], pointer: "email" }],
+		});
+	});
+
+	it("projects the message of each issue only for a catalog built with issueMessages", () => {
+		const error = new ValidationError("invalid").addIssues([
+			{ message: "must be a valid email", path: ["email"] },
+		]);
+
+		const view = project(createKitPublicErrors({ issueMessages: true }), error);
+
+		expect(view.details).toEqual({
+			issues: [
+				{ message: "must be a valid email", path: ["email"], pointer: "email" },
+			],
+		});
+	});
+
+	it("keeps a message off the wire without issueMessages, even when publicIssues() returns one", () => {
+		const oversharing = {
+			name: "VALIDATION_FAILED",
+			category: "VALIDATION",
+			publicIssues: () => [{ message: "password hunter2 is too short" }],
+		};
+
+		const view = project(createKitPublicErrors(), oversharing);
+
+		expect(view.details).toEqual({ issues: [{}] });
 	});
 
 	it("degrades unknown errors to the INTERNAL_ERROR fallback", () => {
