@@ -3,13 +3,8 @@ import {
 	createDomainEvent,
 	type DomainEvent,
 } from "../../domain/event/domain-event";
-import {
-	type ExecutionContext,
-	runBoundedExecution,
-} from "../../internal/async/execution";
-import { EventBusClosedError, PublishDepthExceededError } from "./errors";
+import type { ExecutionContext } from "../../internal/async/execution";
 import { type EventBusObservers, InProcessEventBus } from "./event-bus";
-import type { PublishChainStore } from "./publish-chain";
 
 /** Every observer is required. Tests override only the one they assert on. */
 const silentObservers = (): EventBusObservers => ({
@@ -983,7 +978,7 @@ describe("InProcessEventBus", () => {
 			bus.close();
 
 			expect(() => bus.subscribeMany(["OrderCreated"], () => {})).toThrow(
-				EventBusClosedError,
+				expect.objectContaining({ code: "EVENT_BUS_CLOSED" }),
 			);
 		});
 	});
@@ -1077,14 +1072,16 @@ describe("InProcessEventBus", () => {
 			bus.close();
 
 			expect(() => bus.subscribe("OrderCreated", () => {})).toThrow(
-				EventBusClosedError,
+				expect.objectContaining({ code: "EVENT_BUS_CLOSED" }),
 			);
-			expect(() => bus.subscribeAll(() => {})).toThrow(EventBusClosedError);
+			expect(() => bus.subscribeAll(() => {})).toThrow(
+				expect.objectContaining({ code: "EVENT_BUS_CLOSED" }),
+			);
 			await expect(bus.publish([created()])).rejects.toThrow(
-				EventBusClosedError,
+				expect.objectContaining({ code: "EVENT_BUS_CLOSED" }),
 			);
 			await expect(bus.once("OrderCreated")).rejects.toThrow(
-				EventBusClosedError,
+				expect.objectContaining({ code: "EVENT_BUS_CLOSED" }),
 			);
 		});
 
@@ -1096,7 +1093,9 @@ describe("InProcessEventBus", () => {
 
 			bus.close();
 
-			await expect(waiting).rejects.toThrow(EventBusClosedError);
+			await expect(waiting).rejects.toThrow(
+				expect.objectContaining({ code: "EVENT_BUS_CLOSED" }),
+			);
 		});
 
 		it("releases the subscriptions it held", async () => {
@@ -1112,7 +1111,7 @@ describe("InProcessEventBus", () => {
 			bus.close();
 
 			await expect(bus.publish([created()])).rejects.toThrow(
-				EventBusClosedError,
+				expect.objectContaining({ code: "EVENT_BUS_CLOSED" }),
 			);
 			expect(called).toBe(0);
 		});
@@ -1139,7 +1138,9 @@ describe("InProcessEventBus", () => {
 			bus.close();
 
 			await expect(first).rejects.toThrow();
-			await expect(second).rejects.toThrow(EventBusClosedError);
+			await expect(second).rejects.toThrow(
+				expect.objectContaining({ code: "EVENT_BUS_CLOSED" }),
+			);
 		});
 
 		it("settles a waiter created while an observer closes the bus", async () => {
@@ -1159,8 +1160,12 @@ describe("InProcessEventBus", () => {
 			const first = bus.once("OrderCreated");
 			const second = bus.once("OrderCreated");
 
-			await expect(first).rejects.toThrow(EventBusClosedError);
-			await expect(second).rejects.toThrow(EventBusClosedError);
+			await expect(first).rejects.toThrow(
+				expect.objectContaining({ code: "EVENT_BUS_CLOSED" }),
+			);
+			await expect(second).rejects.toThrow(
+				expect.objectContaining({ code: "EVENT_BUS_CLOSED" }),
+			);
 		});
 
 		it("does nothing when called again", () => {
@@ -1185,7 +1190,7 @@ describe("InProcessEventBus", () => {
 			// is what the closed error exists to prevent.
 			await expect(
 				bus.publish([created(), created(), created()]),
-			).rejects.toThrow(EventBusClosedError);
+			).rejects.toThrow(expect.objectContaining({ code: "EVENT_BUS_CLOSED" }));
 			expect(seen).toEqual(["o-1"]);
 		});
 
@@ -1224,23 +1229,6 @@ describe("InProcessEventBus", () => {
 						maxSubscriptionsPerEventType: 0,
 					}),
 			).toThrow();
-		});
-
-		it("rejects a chain store without run and getStore", () => {
-			expect(
-				() =>
-					new InProcessEventBus<OrderEvent>({
-						chainStore: {} as unknown as PublishChainStore,
-					}),
-			).toThrow(TypeError);
-			expect(
-				() =>
-					new InProcessEventBus<OrderEvent>({
-						chainStore: {
-							run: () => undefined,
-						} as unknown as PublishChainStore,
-					}),
-			).toThrow(TypeError);
 		});
 	});
 
@@ -1311,6 +1299,14 @@ describe("InProcessEventBus", () => {
 		// and a test must not depend on that to fail.
 		const BRAKE = 200;
 
+		/** Waits for a condition instead of sleeping a fixed amount. */
+		async function until(reached: () => boolean): Promise<void> {
+			const started = Date.now();
+			while (!reached() && Date.now() - started < 5_000) {
+				await new Promise((resolve) => setTimeout(resolve, 5));
+			}
+		}
+
 		it("rejects a synchronous publish cycle instead of overflowing the stack", async () => {
 			const bus = new InProcessEventBus<OrderEvent>();
 			let depth = 0;
@@ -1318,17 +1314,39 @@ describe("InProcessEventBus", () => {
 			bus.subscribe("OrderCreated", (_event, context) => {
 				if (depth >= BRAKE) return;
 				depth++;
-				return bus.publish([created()], { signal: context.signal });
+				return bus.publish([created()], {
+					publishChain: context.publishChain,
+				});
 			});
 
 			await expect(bus.publish([created()])).rejects.toThrow(
-				PublishDepthExceededError,
+				expect.objectContaining({ code: "PUBLISH_DEPTH_EXCEEDED" }),
 			);
 			expect(depth).toBeLessThan(BRAKE);
 		});
 
-		it("rejects an asynchronous publish cycle that carries the context signal", async () => {
+		it("rejects an asynchronous publish cycle that passes its chain on", async () => {
 			const bus = new InProcessEventBus<OrderEvent>();
+			let depth = 0;
+
+			bus.subscribe("OrderCreated", async (_event, context) => {
+				if (depth >= BRAKE) return;
+				depth++;
+				await Promise.resolve();
+				await bus.publish([created()], {
+					signal: context.signal,
+					publishChain: context.publishChain,
+				});
+			});
+
+			await expect(bus.publish([created()])).rejects.toThrow(
+				expect.objectContaining({ code: "PUBLISH_DEPTH_EXCEEDED" }),
+			);
+			expect(depth).toBeLessThan(BRAKE);
+		});
+
+		it("starts a new chain when a handler does not pass its chain on", async () => {
+			const bus = new InProcessEventBus<OrderEvent>({ maxPublishDepth: 8 });
 			let depth = 0;
 
 			bus.subscribe("OrderCreated", async (_event, context) => {
@@ -1338,35 +1356,9 @@ describe("InProcessEventBus", () => {
 				await bus.publish([created()], { signal: context.signal });
 			});
 
-			await expect(bus.publish([created()])).rejects.toThrow(
-				PublishDepthExceededError,
-			);
-			expect(depth).toBeLessThan(BRAKE);
-		});
+			await bus.publish([created()]);
 
-		it("bounds a cycle whose signal crosses a nested bounded execution", async () => {
-			const bus = new InProcessEventBus<OrderEvent>();
-			let depth = 0;
-
-			bus.subscribe("OrderCreated", async (_event, context) => {
-				if (depth >= BRAKE) return;
-				depth++;
-				// The await ends the synchronous window, so only the signal can
-				// still carry the chain. withCommit then publishes from inside its
-				// own bounded execution, so the bus receives a derived signal, not
-				// the one it handed to the handler.
-				await Promise.resolve();
-				await runBoundedExecution(
-					"nested",
-					{ signal: context.signal, timeoutMs: 5_000 },
-					(nested) => bus.publish([created()], { signal: nested.signal }),
-				);
-			});
-
-			await expect(bus.publish([created()])).rejects.toThrow(
-				PublishDepthExceededError,
-			);
-			expect(depth).toBeLessThan(BRAKE);
+			expect(depth).toBe(BRAKE);
 		});
 
 		it("bounds a synchronous cycle that runs through a later event of a batch", async () => {
@@ -1374,25 +1366,26 @@ describe("InProcessEventBus", () => {
 			let hops = 0;
 
 			// The nested publication carries two events. The cycling one is
-			// second, so it dispatches after an await and the synchronous frame
+			// second, so it dispatches after an await, when the synchronous frame
 			// of its parent has unwound.
-			bus.subscribe("OrderCreated", () => {
+			bus.subscribe("OrderCreated", (_event, context) => {
 				if (hops >= BRAKE) return;
 				hops++;
-				return bus.publish([shipped(), created()]);
+				return bus.publish([shipped(), created()], {
+					publishChain: context.publishChain,
+				});
 			});
 			bus.subscribe("OrderShipped", () => {});
 
 			await expect(bus.publish([created()])).rejects.toThrow(
-				PublishDepthExceededError,
+				expect.objectContaining({ code: "PUBLISH_DEPTH_EXCEEDED" }),
 			);
 			expect(hops).toBeLessThan(BRAKE);
 		});
 
-		it("does not count a later scheduled publication that carries the signal", async () => {
-			// The guide tells a handler to pass context.signal. A poll loop that
-			// obeys it must not run into the bound: every generation finishes
-			// before the next one starts, so nothing is nested.
+		it("does not count a later scheduled publication that carries the chain", async () => {
+			// Every generation finishes before the next one starts, so nothing is
+			// nested, and a poll loop must not run into the bound.
 			const bus = new InProcessEventBus<OrderEvent>({ maxPublishDepth: 4 });
 			let generations = 0;
 			let failure: unknown;
@@ -1402,7 +1395,7 @@ describe("InProcessEventBus", () => {
 				generations++;
 				setTimeout(() => {
 					bus
-						.publish([created()], { signal: context.signal })
+						.publish([created()], { publishChain: context.publishChain })
 						.catch((reason) => {
 							failure ??= reason;
 						});
@@ -1410,14 +1403,33 @@ describe("InProcessEventBus", () => {
 			});
 
 			await bus.publish([created()]);
-			const started = Date.now();
-			while (
-				generations < 12 &&
-				failure === undefined &&
-				Date.now() - started < 5_000
-			) {
-				await new Promise((resolve) => setTimeout(resolve, 5));
-			}
+			await until(() => generations >= 12 || failure !== undefined);
+
+			expect(failure).toBeUndefined();
+			expect(generations).toBe(12);
+		});
+
+		it("does not count a relay that its parent no longer awaits", async () => {
+			// The handler starts the next publication before it returns and never
+			// awaits it. Each generation ends, so nothing accumulates. Counting
+			// this as nesting stops a correct relay at the bound.
+			const bus = new InProcessEventBus<OrderEvent>({ maxPublishDepth: 4 });
+			let generations = 0;
+			let failure: unknown;
+
+			bus.subscribe("OrderCreated", async (_event, context) => {
+				if (generations >= 12) return;
+				generations++;
+				await new Promise((resolve) => setTimeout(resolve, 1));
+				bus
+					.publish([created()], { publishChain: context.publishChain })
+					.catch((reason) => {
+						failure ??= reason;
+					});
+			});
+
+			await bus.publish([created()]);
+			await until(() => generations >= 12 || failure !== undefined);
 
 			expect(failure).toBeUndefined();
 			expect(generations).toBe(12);
@@ -1430,15 +1442,17 @@ describe("InProcessEventBus", () => {
 			bus.subscribe("OrderCreated", (_event, context) => {
 				if (depth >= BRAKE) return;
 				depth++;
-				return bus.publish([shipped()], { signal: context.signal });
+				return bus.publish([shipped()], {
+					publishChain: context.publishChain,
+				});
 			});
 			bus.subscribe("OrderShipped", (_event, context) =>
-				bus.publish([created()], { signal: context.signal }),
+				bus.publish([created()], { publishChain: context.publishChain }),
 			);
 
 			const error = await bus.publish([created()]).catch((reason) => reason);
 
-			expect(error).toBeInstanceOf(PublishDepthExceededError);
+			expect(error).toMatchObject({ code: "PUBLISH_DEPTH_EXCEEDED" });
 			expect(error.code).toBe("PUBLISH_DEPTH_EXCEEDED");
 			expect(error.message).toContain("OrderCreated");
 			expect(error.message).toContain("OrderShipped");
@@ -1450,7 +1464,9 @@ describe("InProcessEventBus", () => {
 
 			bus.subscribe("OrderCreated", (event, context) => {
 				seen.push(event.type);
-				return bus.publish([shipped()], { signal: context.signal });
+				return bus.publish([shipped()], {
+					publishChain: context.publishChain,
+				});
 			});
 			bus.subscribe("OrderShipped", (event) => {
 				seen.push(event.type);
@@ -1486,11 +1502,13 @@ describe("InProcessEventBus", () => {
 			bus.subscribe("OrderCreated", (_event, context) => {
 				if (depth >= BRAKE) return;
 				depth++;
-				return bus.publish([created()], { signal: context.signal });
+				return bus.publish([created()], {
+					publishChain: context.publishChain,
+				});
 			});
 
 			await expect(bus.publish([created()])).rejects.toThrow(
-				PublishDepthExceededError,
+				expect.objectContaining({ code: "PUBLISH_DEPTH_EXCEEDED" }),
 			);
 			expect(depth).toBe(3);
 		});
@@ -1953,7 +1971,7 @@ describe("InProcessEventBus", () => {
 			// An empty batch dispatches nothing, so it cannot extend a cycle.
 			bus.subscribe("OrderCreated", async (_event, context) => {
 				nested = await bus
-					.publish([], { signal: context.signal })
+					.publish([], { publishChain: context.publishChain })
 					.then(() => "resolved")
 					.catch((reason) => reason);
 			});

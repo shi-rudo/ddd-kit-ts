@@ -18,7 +18,6 @@ import {
 	InvalidEventStreamPageError,
 	ReplayRejectedError,
 	ReplayTargetMismatchError,
-	UnreplayableAggregateError,
 } from "../../errors/kit-errors";
 import { createReplayableStreamPages } from "../../testing/replayable-stream-pages";
 import { InMemoryEventStore } from "./adapters/in-memory-event-store";
@@ -467,7 +466,7 @@ describe("reconstituteAggregateFromStreamPages", () => {
 
 		await expect(
 			reconstituteAggregateFromStreamPages(dirtyTarget, read),
-		).rejects.toBeInstanceOf(UnreplayableAggregateError);
+		).rejects.toMatchObject({ code: "UNREPLAYABLE_AGGREGATE" });
 	});
 
 	it("lets a foreign row throw past the Result", async () => {

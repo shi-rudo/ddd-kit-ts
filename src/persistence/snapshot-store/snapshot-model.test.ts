@@ -10,10 +10,10 @@ import { SnapshotTimeValidationError } from "../../domain/event/domain-event-err
 import type { Id } from "../../domain/identity/id";
 import {
 	DomainError,
-	InvalidVersionError,
+	invalidVersionError,
+	type KitWiringError,
 	SnapshotCorruptedError,
 	type SnapshotSchemaMismatchError,
-	SnapshotVersionNotRestoredError,
 } from "../../errors/kit-errors";
 import {
 	captureAggregateSnapshot,
@@ -256,19 +256,19 @@ describe("adapter-owned snapshot models", () => {
 		}
 
 		expect(caught).toBeInstanceOf(SnapshotCorruptedError);
-		expect((caught as SnapshotCorruptedError).cause).toBeInstanceOf(
-			InvalidVersionError,
-		);
+		expect((caught as SnapshotCorruptedError).cause).toMatchObject({
+			code: "INVALID_VERSION",
+		});
 	});
 
-	it("lets an InvalidVersionError thrown by the factory itself propagate raw", () => {
+	it("lets an INVALID_VERSION thrown by the factory itself propagate raw", () => {
 		// A factory that advances the version before markReconstituted is a wiring
 		// bug; wrapping it as corruption would refold the stream on every
 		// load, forever.
 		const wiredWrongModel = defineSnapshotModel({
 			...model,
 			reconstitute: (): Order => {
-				throw new InvalidVersionError(0, "is below the current version 1");
+				throw invalidVersionError(0, "is below the current version 1");
 			},
 		});
 
@@ -279,7 +279,7 @@ describe("adapter-owned snapshot models", () => {
 				snapshotAt: new Date("2026-07-29T10:00:00.000Z"),
 				schemaVersion: 2,
 			}),
-		).toThrow(InvalidVersionError);
+		).toThrow(expect.objectContaining({ code: "INVALID_VERSION" }));
 	});
 
 	it("rejects a reconstitution that does not restore the snapshot version", () => {
@@ -307,14 +307,16 @@ describe("adapter-owned snapshot models", () => {
 			thrown = error;
 		}
 
-		expect(thrown).toBeInstanceOf(SnapshotVersionNotRestoredError);
-		const error = thrown as SnapshotVersionNotRestoredError;
+		expect(thrown).toMatchObject({ code: "SNAPSHOT_VERSION_NOT_RESTORED" });
+		const error = thrown as KitWiringError<"SNAPSHOT_VERSION_NOT_RESTORED">;
 		expect(error.code).toBe("SNAPSHOT_VERSION_NOT_RESTORED");
 		expect(error.message).toContain("markReconstituted");
 		expect(error).toMatchObject({
-			identity: { aggregateType: "Order", aggregateId: "order-1" },
-			snapshotVersion: 7,
-			restoredVersion: 0,
+			details: {
+				identity: { aggregateType: "Order", aggregateId: "order-1" },
+				snapshotVersion: 7,
+				restoredVersion: 0,
+			},
 		});
 	});
 
@@ -507,36 +509,29 @@ describe("adapter-owned snapshot models", () => {
 		).toThrow(/symbol-keyed/);
 	});
 
-	const regExpPatterns: ReadonlyArray<readonly [string, RegExp]> = [
-		["plain", /sku-\d+/i],
-		["global", /sku-\d+/g],
-		["sticky", /sku-\d+/y],
-	];
-	it.each(regExpPatterns)(
-		"keeps a %s RegExp in the state DTO matching after capture",
-		(_kind, skuPattern) => {
-			const regExpModel = defineSnapshotModel({
-				aggregateType: "Order",
-				schemaVersion: 1,
-				capture: () => ({ skuPattern }),
-				reconstitute: (id: OrderId, _state, version: Version): Order => ({
-					id,
-					state: { status: "unused" },
-					version,
-				}),
-			});
-			const order: Order = {
-				id: "order-1" as OrderId,
-				state: { status: "placed" },
-				version: 1 as Version,
-			};
+	it("rejects a RegExp in the state DTO and names how to keep it", () => {
+		const regExpModel = defineSnapshotModel({
+			aggregateType: "Order",
+			schemaVersion: 1,
+			capture: () => ({ skuPattern: /sku-\d+/i }),
+			reconstitute: (id: OrderId, _state, version: Version): Order => ({
+				id,
+				state: { status: "unused" },
+				version,
+			}),
+		});
+		const order: Order = {
+			id: "order-1" as OrderId,
+			state: { status: "placed" },
+			version: 1 as Version,
+		};
 
-			const snapshot = captureAggregateSnapshot(regExpModel, order, new Date());
-
-			expect(Object.isFrozen(snapshot.state)).toBe(true);
-			expect(snapshot.state.skuPattern.test("sku-42")).toBe(true);
-		},
-	);
+		expect(() =>
+			captureAggregateSnapshot(regExpModel, order, new Date()),
+		).toThrow(
+			"captureAggregateSnapshot: state.skuPattern is a RegExp; keep its source and flags as strings",
+		);
+	});
 
 	it("composes snapshot reconstitution with additive event-tail replay", () => {
 		type CounterId = Id<"Counter">;

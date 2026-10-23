@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { EventBusClosedError, InProcessEventBus } from "../../src";
+import { InProcessEventBus } from "../../src";
 import type { DomainEvent } from "../../src/domain/event/domain-event";
 
 type OrderCreated = DomainEvent<"OrderCreated", { orderId: string }>;
@@ -22,7 +22,9 @@ describe("event bus close releases what it holds", () => {
 
 		expect(countTimers()).toBe(before + 1);
 		bus.close();
-		await expect(waiting).rejects.toThrow(EventBusClosedError);
+		await expect(waiting).rejects.toThrow(
+			expect.objectContaining({ code: "EVENT_BUS_CLOSED" }),
+		);
 
 		// A timer left armed holds the event loop open for a waiter that
 		// already settled, which is the leak close() exists to end.
@@ -58,7 +60,9 @@ describe("event bus close releases what it holds", () => {
 
 		expect(attached).toBe(1);
 		bus.close();
-		await expect(waiting).rejects.toThrow(EventBusClosedError);
+		await expect(waiting).rejects.toThrow(
+			expect.objectContaining({ code: "EVENT_BUS_CLOSED" }),
+		);
 
 		// A listener left attached keeps the closed bus reachable from a
 		// long-lived request signal.

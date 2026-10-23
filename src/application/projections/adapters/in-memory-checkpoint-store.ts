@@ -171,7 +171,6 @@ export class InMemoryProjectionCheckpointStore
 		identity: AggregateIdentity,
 		checkpoint: ProjectionCheckpoint,
 	): Promise<void> {
-		// Copy first: the copy can run caller code.
 		const identityKey = encodeAggregateIdentity(identity);
 		const { position, ...rest } = checkpoint;
 		const owned: ProjectionCheckpoint = { ...rest, position: { ...position } };

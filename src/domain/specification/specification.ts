@@ -121,7 +121,7 @@ export function specification<T>(
 	predicate: (candidate: T) => boolean,
 ): Specification<T> {
 	if (name.trim().length === 0 || name !== name.trim()) {
-		throw new Error(
+		throw new RangeError(
 			"specification: the name must be a non-empty ubiquitous-language term " +
 				"without leading or trailing whitespace; adapters match it as an " +
 				"exact string, and padding is invisible in every diagnostic",

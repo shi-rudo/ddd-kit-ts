@@ -145,7 +145,7 @@ See [Defining the adapter boundary](/guide/repository#defining-the-adapter-bound
 for the append-only shape.
 
 Only the helper-created definition is accepted. An unbranded object fails with
-`InvalidRepositoryDefinitionError`, including for JavaScript callers. The
+`INVALID_REPOSITORY_DEFINITION`, including for JavaScript callers. The
 compiler rejects it first. It also rejects a definition whose aggregate events
 the outbox does not accept. And it rejects a definition whose transaction
 context does not accept the context of the scope. The error names the violated
@@ -193,22 +193,22 @@ The adapter and aggregate do not infer it from `version`.
 
 Call the registration method last. After a successful `add`, `update`, or
 `remove`, the aggregate is sealed for that run. A later version change, event
-change, or adapter-capture change throws `AggregateTrackingError` and rolls
+change, or adapter-capture change throws `AGGREGATE_TRACKING` and rolls
 the transaction back. The guard runs before the flush, after the flush, and
 after the outbox write, because an asynchronous adapter can yield to other
 work while the transaction is still open. The last run also covers a loaded
 aggregate without a write: if it changed, the commit fails with
-`UnregisteredChangesError`. A change of a registered aggregate always fails with
-`AggregateTrackingError` and the reason `mutated_after_registration`, also
+`UNREGISTERED_CHANGES`. A change of a registered aggregate always fails with
+`AGGREGATE_TRACKING` and the reason `mutated_after_registration`, also
 while the outbox write runs.
 
 Registration closes when the flush starts. Work that the callback did not
 await can call `add`, `update`, or `remove` later. Until the last check before
-the commit, after the outbox write, that call throws `AggregateTrackingError`
+the commit, after the outbox write, that call throws `AGGREGATE_TRACKING`
 with the reason `registered_during_flush`, and the run fails before it
 commits, also when the caller swallows the error. A repeat of a write that is
 already registered for the same, unchanged instance stays a no-op. After the
-last check, a call throws `TransactionClosedError`: the transaction can no
+last check, a call throws `TRANSACTION_CLOSED`: the transaction can no
 longer take the write, and a caller that swallows the error loses it. Await
 every repository call inside the `run()` callback.
 
@@ -296,7 +296,7 @@ Two loads of one id can overlap, for example
 `Promise.all([findById(id), findById(id)])`. Both pass the identity-map check
 and hydrate. `trackLoaded` returns the first tracked instance to both, so
 return its result, not the hydrated argument. An `add` of a second instance
-with a tracked identity throws `AggregateTrackingError` with the reason
+with a tracked identity throws `AGGREGATE_TRACKING` with the reason
 `identity_already_tracked`.
 
 The facade guards the other members of the adapter. A member that returns the
@@ -305,7 +305,7 @@ facade, so a chained `add` still goes through the Unit of Work. A promise from
 an adapter member reaches the caller unchanged. The adapter defines no `add`,
 `update`, or `remove` of its own, so a raw adapter that leaves the facade, for
 example in a resolved promise, can only read. After `run()` settles, a member
-read throws `TransactionClosedError`.
+read throws `TRANSACTION_CLOSED`.
 A language probe such as `then` or `constructor` does not.
 
 Application code cannot access the raw transaction or the tracking capability.
@@ -401,19 +401,20 @@ timeouts as hard ceilings.
 
 ## Errors and retries
 
-The most useful failures are intentionally specific:
+The most useful failures are intentionally specific. A name in capitals is the
+code of a `KitWiringError`:
 
 | Error | Meaning |
 | --- | --- |
-| `AggregateTrackingError` | invalid add/update/remove lifecycle or mutation after registration |
-| `UnregisteredChangesError` | a loaded aggregate changed but the use case never called `update` |
+| `AGGREGATE_TRACKING` | invalid add/update/remove lifecycle or mutation after registration |
+| `UNREGISTERED_CHANGES` | a loaded aggregate changed but the use case never called `update` |
 | `ConcurrencyConflictError` | the adapter's expected-version predicate lost a race |
 | `DuplicateAggregateError` | an `add` collided with an existing identity |
-| `InvalidRepositoryAdapterError` | a repository factory returned no adapter object, or an adapter that defines `add`, `update`, or `remove` |
+| `INVALID_REPOSITORY_ADAPTER` | a repository factory returned no adapter object, or an adapter that defines `add`, `update`, or `remove` |
 | `CommitError` | work completed, but a step after it (such as the outbox write) failed and the rollback succeeded, or the transaction commit failed |
 | `RollbackError` | a step inside the transaction failed (the work, or a step after it such as the outbox write) and the scope reported a different rollback failure |
-| `NestedUnitOfWorkError` | one instance was entered while already running |
-| `TransactionClosedError` | a leaked context or tracking capability was used after close |
+| `NESTED_UNIT_OF_WORK` | one instance was entered while already running |
+| `TRANSACTION_CLOSED` | a leaked context or tracking capability was used after close |
 
 Do not catch a concurrency conflict and continue inside the same `run()`. The
 identity map still holds the stale instance. Retry the whole application
@@ -442,13 +443,12 @@ On their own, the in-memory stores do not see the rollbacks of your
 with one `InMemoryTransactionScope`:
 
 ```ts
+import { RetryingTransactionScope, UnitOfWork } from "@shirudo/ddd-kit";
 import {
   InMemoryEventStore,
   InMemoryOutbox,
   InMemoryTransactionScope,
-  RetryingTransactionScope,
-  UnitOfWork,
-} from "@shirudo/ddd-kit";
+} from "@shirudo/ddd-kit/testing";
 
 const outbox = new InMemoryOutbox<OrderEvent>();
 const events = new InMemoryEventStore<OrderEvent>();
@@ -475,6 +475,9 @@ const uow = new UnitOfWork({
   writes from outbox `getPending`, deadline `due`, and checkpoint
   `hasReached`. Other reads also see the writes of an open transaction.
 - A store that is not registered keeps its behavior: it does not roll back.
+  `InMemoryIdempotencyStore` is the exception. It belongs to the
+  transactional family and throws outside a transaction, because a failed
+  attempt without a rollback would block its key.
 
 Each store decides what its rollback undoes. "Meanwhile" means while the
 transaction was open:
@@ -486,13 +489,14 @@ transaction was open:
 | `InMemoryDeadlineStore` | every write since the start of the transaction, also acknowledgements and failure reports that a processor made meanwhile; the processor then delivers such a deadline again |
 | `InMemoryProjectionCheckpointStore` | every write since the start of the transaction, also saves and resets made outside the transaction meanwhile; the checkpoint locks stay |
 | `InMemorySnapshotStore` | every write since the start of the transaction, also saves and deletes made outside the transaction meanwhile; a snapshot is derived data, so a later load replays more events or discards a restored snapshot |
-| `InMemoryIdempotencyStore` | the writes of `claim` and `complete`; the lease operations `renew`, `confirm`, `abandon`, and `reconcile` keep their writes on every other key |
+| `InMemoryIdempotencyStore` | the writes of `claim` and `complete` |
+| `InMemoryLeasedIdempotencyStore` | the writes of `claim` and `complete`; the lease operations `renew`, `confirm`, `abandon`, and `reconcile` keep their writes on every other key |
 
 You can register an in-memory table of your own. It implements
 `InMemoryTransactionParticipant`:
 
 ```ts
-import type { InMemoryTransactionParticipant } from "@shirudo/ddd-kit";
+import type { InMemoryTransactionParticipant } from "@shirudo/ddd-kit/testing";
 
 class OrderTable implements InMemoryTransactionParticipant {
   readonly rows = new Map<string, OrderRow>();

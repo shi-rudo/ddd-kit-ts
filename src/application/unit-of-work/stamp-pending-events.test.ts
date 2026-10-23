@@ -8,11 +8,7 @@ import {
 	type DomainEvent,
 } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
-import {
-	DuplicateEventIdError,
-	ReentrantEventRecordingError,
-	UnmanagedInstanceError,
-} from "../../errors/kit-errors";
+import type { KitWiringError } from "../../errors/kit-errors";
 import { stampPendingEvents } from "./stamp-pending-events";
 
 type CounterId = Id<"CounterId">;
@@ -127,8 +123,10 @@ describe("stampPendingEvents", () => {
 			}),
 		).toThrow(
 			expect.objectContaining({
-				constructor: ReentrantEventRecordingError,
-				identity: aggregate.aggregateIdentity,
+				code: "REENTRANT_EVENT_RECORDING",
+				details: expect.objectContaining({
+					identity: aggregate.aggregateIdentity,
+				}),
 			}),
 		);
 
@@ -152,9 +150,11 @@ describe("stampPendingEvents", () => {
 			})),
 		).toThrow(
 			expect.objectContaining({
-				constructor: DuplicateEventIdError,
-				identity: aggregate.aggregateIdentity,
-				eventId: "event-reused",
+				code: "DUPLICATE_EVENT_ID",
+				details: expect.objectContaining({
+					identity: aggregate.aggregateIdentity,
+					eventId: "event-reused",
+				}),
 			}),
 		);
 
@@ -310,7 +310,7 @@ describe("stampPendingEvents", () => {
 				}));
 				return { eventId: `outer-${index}`, occurredAt: recordedAt };
 			}),
-		).toThrow(ReentrantEventRecordingError);
+		).toThrow(expect.objectContaining({ code: "REENTRANT_EVENT_RECORDING" }));
 
 		expect((aggregate.pendingEvents[0] as CounterChanged).eventId).toBe(
 			"inner",
@@ -338,8 +338,12 @@ describe("stampPendingEvents", () => {
 			caught = error;
 		}
 
-		expect(caught).toBeInstanceOf(UnmanagedInstanceError);
-		expect((caught as UnmanagedInstanceError).code).toBe("UNMANAGED_INSTANCE");
-		expect((caught as UnmanagedInstanceError).message).toContain("counter-1");
+		expect(caught).toMatchObject({ code: "UNMANAGED_INSTANCE" });
+		expect((caught as KitWiringError<"UNMANAGED_INSTANCE">).code).toBe(
+			"UNMANAGED_INSTANCE",
+		);
+		expect((caught as KitWiringError<"UNMANAGED_INSTANCE">).message).toContain(
+			"counter-1",
+		);
 	});
 });

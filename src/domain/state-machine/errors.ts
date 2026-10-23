@@ -27,53 +27,81 @@ export class DomainTransitionGuardRejectedError extends DomainError<"DOMAIN_TRAN
 }
 
 /** The machine definition violates its runtime contract. */
-export class InvalidDomainMachineDefinitionError extends KitWiringError<"INVALID_DOMAIN_MACHINE_DEFINITION"> {
-	constructor(message: string, cause?: unknown) {
-		super("INVALID_DOMAIN_MACHINE_DEFINITION", message, cause);
-	}
+export function invalidDomainMachineDefinitionError(
+	message: string,
+	cause?: unknown,
+): KitWiringError<"INVALID_DOMAIN_MACHINE_DEFINITION"> {
+	return new KitWiringError({
+		code: "INVALID_DOMAIN_MACHINE_DEFINITION",
+		message,
+		cause,
+	});
 }
 
 /** Context contains unsupported or unsafe runtime data. */
-export class InvalidDomainMachineContextError extends KitWiringError<"INVALID_DOMAIN_MACHINE_CONTEXT"> {
-	constructor(message: string, cause?: unknown) {
-		super("INVALID_DOMAIN_MACHINE_CONTEXT", message, cause);
-	}
+export function invalidDomainMachineContextError(
+	message: string,
+	cause?: unknown,
+): KitWiringError<"INVALID_DOMAIN_MACHINE_CONTEXT"> {
+	return new KitWiringError({
+		code: "INVALID_DOMAIN_MACHINE_CONTEXT",
+		message,
+		cause,
+	});
 }
 
 /** A supplied or produced snapshot is malformed or violates invariants. */
-export class InvalidDomainMachineSnapshotError extends KitWiringError<"INVALID_DOMAIN_MACHINE_SNAPSHOT"> {
-	constructor(message: string, cause?: unknown) {
-		super("INVALID_DOMAIN_MACHINE_SNAPSHOT", message, cause);
-	}
+export function invalidDomainMachineSnapshotError(
+	message: string,
+	cause?: unknown,
+): KitWiringError<"INVALID_DOMAIN_MACHINE_SNAPSHOT"> {
+	return new KitWiringError({
+		code: "INVALID_DOMAIN_MACHINE_SNAPSHOT",
+		message,
+		cause,
+	});
 }
 
 /** An input is malformed or contains unsupported runtime data. */
-export class InvalidDomainMachineInputError extends KitWiringError<"INVALID_DOMAIN_MACHINE_INPUT"> {
-	constructor(message: string, cause?: unknown) {
-		super("INVALID_DOMAIN_MACHINE_INPUT", message, cause);
-	}
+export function invalidDomainMachineInputError(
+	message: string,
+	cause?: unknown,
+): KitWiringError<"INVALID_DOMAIN_MACHINE_INPUT"> {
+	return new KitWiringError({
+		code: "INVALID_DOMAIN_MACHINE_INPUT",
+		message,
+		cause,
+	});
 }
 
 /** A guard returned a value other than `boolean` or `DomainError`. */
-export class InvalidDomainTransitionGuardResultError extends KitWiringError<"INVALID_DOMAIN_TRANSITION_GUARD_RESULT"> {
-	constructor(message: string, cause?: unknown) {
-		super("INVALID_DOMAIN_TRANSITION_GUARD_RESULT", message, cause);
-	}
+export function invalidDomainTransitionGuardResultError(
+	message: string,
+	cause?: unknown,
+): KitWiringError<"INVALID_DOMAIN_TRANSITION_GUARD_RESULT"> {
+	return new KitWiringError({
+		code: "INVALID_DOMAIN_TRANSITION_GUARD_RESULT",
+		message,
+		cause,
+	});
 }
 
 /** A reducer returned a malformed result or unsupported output data. */
-export class InvalidDomainTransitionResultError extends KitWiringError<"INVALID_DOMAIN_TRANSITION_RESULT"> {
-	constructor(message: string, cause?: unknown) {
-		super("INVALID_DOMAIN_TRANSITION_RESULT", message, cause);
-	}
+export function invalidDomainTransitionResultError(
+	message: string,
+	cause?: unknown,
+): KitWiringError<"INVALID_DOMAIN_TRANSITION_RESULT"> {
+	return new KitWiringError({
+		code: "INVALID_DOMAIN_TRANSITION_RESULT",
+		message,
+		cause,
+	});
 }
 
 /** A callback attempted to evaluate the same stateful machine recursively. */
-export class ReentrantDomainStateMachineEvaluationError extends KitWiringError<"REENTRANT_DOMAIN_STATE_MACHINE_EVALUATION"> {
-	constructor() {
-		super(
-			"REENTRANT_DOMAIN_STATE_MACHINE_EVALUATION",
-			"Domain state machine callbacks cannot evaluate the same machine.",
-		);
-	}
+export function reentrantDomainStateMachineEvaluationError(): KitWiringError<"REENTRANT_DOMAIN_STATE_MACHINE_EVALUATION"> {
+	return new KitWiringError({
+		code: "REENTRANT_DOMAIN_STATE_MACHINE_EVALUATION",
+		message: "Domain state machine callbacks cannot evaluate the same machine.",
+	});
 }

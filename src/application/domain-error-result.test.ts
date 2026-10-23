@@ -78,26 +78,6 @@ describe("domainErrorToResult", () => {
 		if (result.isErr()) expect(result.error).toBe(failure);
 	});
 
-	it("captures the expected-error policy before asynchronous work starts", async () => {
-		const failure = new OrderAlreadyConfirmedError();
-		let release!: () => void;
-		const gate = new Promise<void>((resolve) => {
-			release = resolve;
-		});
-		const expectedErrors: [DomainErrorClass] = [OrderAlreadyConfirmedError];
-		const pending = domainErrorToResult(async () => {
-			await gate;
-			throw failure;
-		}, expectedErrors);
-
-		expectedErrors[0] = OrderClosedError;
-		release();
-
-		const result = await pending;
-		expect(result.isErr()).toBe(true);
-		if (result.isErr()) expect(result.error).toBe(failure);
-	});
-
 	it("rethrows an unlisted DomainError unchanged", async () => {
 		const failure = new OrderClosedError();
 

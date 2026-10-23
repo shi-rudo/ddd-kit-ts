@@ -7,16 +7,18 @@ The aggregate write and outbox still follow the ordinary `withCommit` lifecycle.
 
 ## Choose the storage family first
 
-There are two valid adapter families, but they do not provide the same proof.
+There are two adapter families. Each family has its own port, and they do not
+provide the same proof.
 
-| Family | Commit boundary | Recovery model | Recommendation |
-| --- | --- | --- | --- |
-| Transactional | Idempotency row, aggregate write, and outbox commit in one transaction | Database rollback removes failed claims; committed outcomes replay immediately | Production default |
-| Leased non-transactional | Idempotency record lives outside the source transaction | Heartbeat, token fencing, and source-of-truth reconciliation | Use only when one transaction is impossible |
+| Family | Port | Commit boundary | Recovery model | Recommendation |
+| --- | --- | --- | --- | --- |
+| Transactional | `IdempotencyStore` (`claim`, `complete`) | Idempotency row, aggregate write, and outbox commit in one transaction | Database rollback removes failed claims; committed outcomes replay immediately | Production default |
+| Leased | `LeasedIdempotencyStore` (adds `renew`, `confirm`, `abandon`, `reconcile`) | Idempotency record lives outside the source transaction | Heartbeat, token fencing, and source-of-truth reconciliation | Use only when one transaction is impossible |
 
 The transactional pattern is the only one that makes command effect and
-idempotency completion atomic. `confirm`, `abandon`, `renew`, and `reconcile`
-are no-ops for that family.
+idempotency completion atomic. A transactional adapter implements only `claim`
+and `complete`. Each port declares its family in a `family` field, and
+`withIdempotentCommit` sends the lease operations only to a leased store.
 
 A lease makes a second store recoverable, not atomic. Do not describe it as an
 exactly-once boundary across two stores.
@@ -36,10 +38,8 @@ const outcome = await withIdempotentCommit(
     order.confirm();
     await updateOrderForDirectCommit(tx, order, loaded.expectedVersion);
 
-    return {
-      result: { orderId: order.id },
-      commits: [registration.registerSaved(order)],
-    };
+    registration.registerSaved(order);
+    return { orderId: order.id };
   },
 );
 ```
@@ -50,8 +50,8 @@ different command.
 
 ## Leases and fencing
 
-A leased `claim()` returns an `IdempotencyClaimHandle` with an opaque token,
-`expiresAt`, and `renewAfterMs`. The wrapper renews that token while the source
+A leased `claim()` returns a `LeasedIdempotencyClaimHandle` with an opaque
+token, `expiresAt`, and `renewAfterMs`. The wrapper renews that token while the source
 transaction is open. If renewal fails, it rejects before commit and abandons
 the exact token.
 
@@ -80,10 +80,23 @@ process clocks from different hosts to decide ownership.
 
 ## The staged crash window
 
-For a non-transactional store, `complete` first stages the result. The source
+For a leased store, `complete` first stages the result. The source
 transaction then commits, and `confirm` makes the result replayable. A process
 crash between those last two actions leaves a staged result whose effect may or
 may not exist.
+
+A failure at commit time leaves the same state. If the scope rejects after the
+callback resolved, for example because the connection dropped after `COMMIT`
+was sent, the effect can exist. The wrapper does not release the staged
+result, so a retry cannot run the command a second time. The wrapper cannot
+tell this case from a commit that surely failed, such as a serialization
+failure. Both leave the staged result.
+
+**A leased store needs `reconcileIdempotency`.** The dependency type
+`WithLeasedIdempotentCommitDeps` requires the callback, so a missing callback
+fails at compile time. A staged result that expired stays blocked until the
+callback returns `committed` or `not-committed`. While it returns `unknown`,
+every retry of the key rejects with `IdempotencyReconciliationRequiredError`.
 
 The safe state machine is:
 
@@ -126,10 +139,8 @@ const outcome = await withIdempotentCommit(
       status: "committed",
     });
 
-    return {
-      result: { orderId: order.id },
-      commits: [registration.registerSaved(order)],
-    };
+    registration.registerSaved(order);
+    return { orderId: order.id };
   },
 );
 ```
@@ -159,19 +170,54 @@ Claim, renewal, takeover, completion, and reconciliation must use atomic
 compare-and-set operations. A read followed by an unconditional update is not
 sufficient.
 
-Run `createIdempotencyStoreContractTests` from `@shirudo/ddd-kit/testing`
-against the real adapter. A non-transactional harness supplies deterministic
-`expireLease` and `advanceTimeTo` controls. The suite proves lease takeover,
-renewal past the old expiry, stale-owner fencing, staged reconciliation, and
-the existing replay/fingerprint/rollback laws without wall-clock sleeps.
+Both suites come from `@shirudo/ddd-kit/testing`. Run them against the real
+adapter:
 
-## In-memory reference
+- `createIdempotencyStoreContractTests` for a transactional adapter. Its
+  environment supplies `run` and `runRolledBack`. The suite proves replay of a
+  committed outcome, the fingerprint check, and the release of a rolled-back
+  claim. Run it against a real database: the rollback test is the core proof.
+- `createLeasedIdempotencyStoreContractTests` for a leased adapter. Its
+  environment supplies deterministic `expireLease` and `advanceTimeTo`
+  controls. The suite proves lease takeover, renewal past the old expiry,
+  stale-owner fencing, staged reconciliation, and the replay and fingerprint
+  laws without wall-clock sleeps.
 
-`InMemoryIdempotencyStore` is a reference implementation for finite-lifetime
-tests and demos:
+## In-memory references
+
+The kit ships one in-memory reference per family, for finite-lifetime tests
+and demos. Neither store is durable. A process restart loses completed records
+and can execute a duplicate again. Production idempotency requires durable
+storage, regardless of the family.
+
+Without `maxEntries`, a store keeps every record for its lifetime. At the
+limit, existing keys still replay normally, but a new key fails before
+mutation with `InMemoryCapacityExceededError`. A store never evicts a completed
+decision, because that would weaken idempotency.
+
+### `InMemoryIdempotencyStore` (transactional)
 
 ```ts
-const idempotency = new InMemoryIdempotencyStore({
+const idempotency = new InMemoryIdempotencyStore({ maxEntries: 10_000 });
+const outbox = new InMemoryOutbox();
+const scope = new InMemoryTransactionScope([idempotency, outbox]);
+
+await withIdempotentCommit({ scope, outbox, idempotency }, request, work);
+```
+
+The store needs the rollback of an `InMemoryTransactionScope`; see
+[In-memory transactions](./unit-of-work.md#in-memory-transactions). A
+rollback releases the claim, and the commit makes the outcome replayable. If
+`claim` or `complete` runs outside a transaction of that scope, the store
+throws a `TypeError`: without a rollback, a failed attempt would block its key.
+
+The scope runs one transaction at a time. A duplicate request therefore waits
+for the first execution and then replays its outcome.
+
+### `InMemoryLeasedIdempotencyStore` (leased)
+
+```ts
+const idempotency = new InMemoryLeasedIdempotencyStore({
   leaseDurationMs: 30_000,
   renewAfterMs: 10_000,
   maxEntries: 10_000,
@@ -179,23 +225,17 @@ const idempotency = new InMemoryIdempotencyStore({
 });
 ```
 
-It is not durable. A process restart loses confirmed records and can execute a
-duplicate again. Production idempotency requires durable storage, regardless
-of whether that storage is transactional or leased. Without `maxEntries`, all
-claims and confirmed receipts are retained for the instance lifetime. At the
-limit, existing keys still replay, renew, reconcile, or release normally, but a
-new key fails before mutation with `InMemoryCapacityExceededError`. The store
-never evicts a confirmed decision because doing so would weaken idempotency.
+The store cannot see commits or rollbacks, so it works without a scope. At
+the limit of `maxEntries`, existing keys still renew, reconcile, or release
+normally.
 
-On its own, the store is the leased, non-transactional family. Register it
-with an `InMemoryTransactionScope` for a test that rolls back or retries; see
-[In-memory transactions](./unit-of-work.md#in-memory-transactions). A
-rollback then undoes `claim` and `complete`, which the port runs inside the
-transaction: it returns each key that they wrote to its earlier entry. The
-lease operations `renew`, `confirm`, `abandon`, and `reconcile` stay out of
-band, so a rollback keeps their writes on every other key. A confirmation that
-`withIdempotentCommit` makes after the commit therefore survives the rollback
-of the next transaction.
+Register it with an `InMemoryTransactionScope` for a test that rolls back or
+retries. A rollback then undoes `claim` and `complete`, which the port runs
+inside the transaction: it returns each key that they wrote to its earlier
+entry. The lease operations `renew`, `confirm`, `abandon`, and `reconcile`
+stay out of band, so a rollback keeps their writes on every other key. A
+confirmation that `withIdempotentCommit` makes after the commit therefore
+survives the rollback of the next transaction.
 
 The scope can begin the next transaction before that confirmation. A
 duplicate request that the scope queues behind the first one can therefore

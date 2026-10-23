@@ -7,11 +7,11 @@ import type {
 	DomainTransitionResult,
 } from "./contracts";
 import {
-	InvalidDomainMachineDefinitionError,
-	InvalidDomainMachineInputError,
-	InvalidDomainMachineSnapshotError,
-	InvalidDomainTransitionGuardResultError,
-	InvalidDomainTransitionResultError,
+	invalidDomainMachineDefinitionError,
+	invalidDomainMachineInputError,
+	invalidDomainMachineSnapshotError,
+	invalidDomainTransitionGuardResultError,
+	invalidDomainTransitionResultError,
 } from "./errors";
 import {
 	copyDomainMachineContext,
@@ -80,7 +80,7 @@ export function validateDomainMachineSnapshot<
 	snapshot: DomainMachineSnapshot<TState, TContext>,
 ): void {
 	if (!isRecord(snapshot)) {
-		throw new InvalidDomainMachineSnapshotError(
+		throw invalidDomainMachineSnapshotError(
 			"Domain machine snapshot must be an object.",
 		);
 	}
@@ -89,7 +89,7 @@ export function validateDomainMachineSnapshot<
 	readDomainMachineSnapshotContext(snapshot);
 
 	if (!hasOwn(definition.states, state)) {
-		throw new InvalidDomainMachineSnapshotError(
+		throw invalidDomainMachineSnapshotError(
 			`Domain machine snapshot state "${state}" is not defined.`,
 		);
 	}
@@ -111,12 +111,12 @@ export function validateDomainMachineSnapshotInvariant<
 			context: snapshot.context,
 		});
 		if (typeof validContext !== "boolean") {
-			throw new InvalidDomainMachineDefinitionError(
+			throw invalidDomainMachineDefinitionError(
 				`Domain machine state "${snapshot.state}" validateContext must return a boolean.`,
 			);
 		}
 		if (!validContext) {
-			throw new InvalidDomainMachineSnapshotError(
+			throw invalidDomainMachineSnapshotError(
 				`Domain machine snapshot violates the context invariant for state "${snapshot.state}".`,
 			);
 		}
@@ -126,13 +126,13 @@ export function validateDomainMachineSnapshotInvariant<
 
 	const valid = definition.validateSnapshot(snapshot);
 	if (typeof valid !== "boolean") {
-		throw new InvalidDomainMachineDefinitionError(
+		throw invalidDomainMachineDefinitionError(
 			"Domain machine validateSnapshot must return a boolean.",
 		);
 	}
 
 	if (!valid) {
-		throw new InvalidDomainMachineSnapshotError(
+		throw invalidDomainMachineSnapshotError(
 			`Domain machine snapshot violates invariants for state "${snapshot.state}".`,
 		);
 	}
@@ -147,7 +147,7 @@ function readDomainMachineSnapshotState<TState extends string>(snapshot: {
 		!("value" in stateDescriptor) ||
 		typeof stateDescriptor.value !== "string"
 	) {
-		throw new InvalidDomainMachineSnapshotError(
+		throw invalidDomainMachineSnapshotError(
 			"Domain machine snapshot state must be a string data property.",
 		);
 	}
@@ -163,7 +163,7 @@ function readDomainMachineSnapshotContext<TContext>(snapshot: {
 		"context",
 	);
 	if (contextDescriptor === undefined || !("value" in contextDescriptor)) {
-		throw new InvalidDomainMachineSnapshotError(
+		throw invalidDomainMachineSnapshotError(
 			"Domain machine snapshot context must be present as a data property.",
 		);
 	}
@@ -175,7 +175,7 @@ export function validateDomainMachineInput(
 	input: unknown,
 ): asserts input is DomainMachineInput {
 	if (!isDomainMachineInput(input)) {
-		throw new InvalidDomainMachineInputError(
+		throw invalidDomainMachineInputError(
 			"Domain machine input must be an object with a string type.",
 		);
 	}
@@ -204,7 +204,7 @@ export function resolveDomainTransitionGuardResult(
 		return { allowed: false, rejection: result };
 	}
 
-	throw new InvalidDomainTransitionGuardResultError(
+	throw invalidDomainTransitionGuardResultError(
 		"Domain transition guard must return a boolean or DomainError.",
 	);
 }
@@ -215,20 +215,20 @@ export function validateDomainTransitionResult<TContext, TOutput>(
 	if (result === undefined) return;
 
 	if (!isPlainRecord(result)) {
-		throw new InvalidDomainTransitionResultError(
+		throw invalidDomainTransitionResultError(
 			"Domain transition result must be a plain object when returned.",
 		);
 	}
 
 	for (const key of Reflect.ownKeys(result)) {
 		if (!DOMAIN_TRANSITION_RESULT_KEYS.has(key)) {
-			throw new InvalidDomainTransitionResultError(
+			throw invalidDomainTransitionResultError(
 				`Domain transition result contains unknown property "${String(key)}".`,
 			);
 		}
 		const descriptor = Object.getOwnPropertyDescriptor(result, key);
 		if (descriptor !== undefined && !("value" in descriptor)) {
-			throw new InvalidDomainTransitionResultError(
+			throw invalidDomainTransitionResultError(
 				"Domain transition result must contain data properties only.",
 			);
 		}
@@ -236,7 +236,7 @@ export function validateDomainTransitionResult<TContext, TOutput>(
 
 	const outputs = readDomainTransitionResultOutputs(result);
 	if (outputs !== undefined && !Array.isArray(outputs)) {
-		throw new InvalidDomainTransitionResultError(
+		throw invalidDomainTransitionResultError(
 			"Domain transition result outputs must be an array when provided.",
 		);
 	}
@@ -252,7 +252,7 @@ export function readDomainTransitionResultContext<TContext, TOutput>(
 	const contextDescriptor = Object.getOwnPropertyDescriptor(result, "context");
 	if (contextDescriptor === undefined) return { hasContext: false };
 	if (!("value" in contextDescriptor)) {
-		throw new InvalidDomainTransitionResultError(
+		throw invalidDomainTransitionResultError(
 			"Domain transition result context must be a data property when provided.",
 		);
 	}
@@ -268,7 +268,7 @@ export function readDomainTransitionResultOutputs<TContext, TOutput>(
 	const outputsDescriptor = Object.getOwnPropertyDescriptor(result, "outputs");
 	if (outputsDescriptor === undefined) return undefined;
 	if (!("value" in outputsDescriptor)) {
-		throw new InvalidDomainTransitionResultError(
+		throw invalidDomainTransitionResultError(
 			"Domain transition result outputs must be a data property when provided.",
 		);
 	}

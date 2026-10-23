@@ -124,7 +124,8 @@ export type CommandOutboxMapper<
  * receipt. The helper never publishes it or copies its payload implicitly; the
  * application mapper selects and translates the data that belongs in the
  * versioned Published Language. The route rejects values JSON would lose or
- * change before it calls the adapter.
+ * change before it calls the adapter. It drops an invalid trace context
+ * instead, so a malformed trace header never fails the business write.
  * Every command gets a stable id derived from the event id and its zero-based
  * order, so an exact transaction retry produces the same rows.
  *
@@ -207,7 +208,6 @@ function toDurableCommand<C extends PublishedCommand>(
 	assertPublishedCommand(sourceCommand);
 	assertOptionalNonBlank("correlationId", correlationId);
 	assertOptionalNonBlank("conversationId", conversationId);
-	assertTraceContext(traceparent, tracestate);
 
 	const command = JSON.parse(JSON.stringify(sourceCommand)) as C;
 	return deepFreeze({
@@ -217,8 +217,7 @@ function toDurableCommand<C extends PublishedCommand>(
 		command,
 		...(correlationId === undefined ? {} : { correlationId }),
 		...(conversationId === undefined ? {} : { conversationId }),
-		...(traceparent === undefined ? {} : { traceparent }),
-		...(tracestate === undefined ? {} : { tracestate }),
+		...validTraceContext(traceparent, tracestate),
 		causationId: event.eventId,
 	}) as DurableCommandMessage<C>;
 }
@@ -269,21 +268,31 @@ const TRACEPARENT =
 const TRACESTATE_MEMBER =
 	/^([a-z0-9][a-z0-9_@*/-]{0,255})=[\x20-\x2b\x2d-\x3c\x3e-\x7e]{1,256}$/;
 
-function assertTraceContext(traceparent: unknown, tracestate: unknown): void {
-	if (traceparent === undefined) {
-		if (tracestate !== undefined) {
-			invalid("$.tracestate", "requires traceparent");
-		}
-		return;
-	}
-	if (typeof traceparent !== "string") {
-		invalid("$.traceparent", "must be a W3C traceparent string");
-	}
+/**
+ * The trace context that the message keeps. Trace context is observability
+ * data, so an invalid value never fails the business write. As W3C Trace
+ * Context tells a receiver, an invalid `traceparent` drops the whole context,
+ * and an invalid `tracestate` drops only itself. A kept `tracestate` is
+ * stored with its empty list-members and their white space removed.
+ */
+function validTraceContext(
+	traceparent: unknown,
+	tracestate: unknown,
+): CommandMessageRelationships {
+	if (!isValidTraceparent(traceparent)) return {};
+	const members = validTracestateMembers(tracestate);
+	return members === undefined
+		? { traceparent }
+		: { traceparent, tracestate: members.join(",") };
+}
+
+function isValidTraceparent(traceparent: unknown): traceparent is string {
+	if (typeof traceparent !== "string") return false;
 	const match = TRACEPARENT.exec(traceparent);
-	const version = match?.[1];
-	const extension = match?.[5] ?? "";
-	if (
-		match === null ||
+	if (match === null) return false;
+	const version = match[1];
+	const extension = match[5] ?? "";
+	return !(
 		version === "ff" ||
 		/^0+$/.test(match[2] ?? "") ||
 		/^0+$/.test(match[3] ?? "") ||
@@ -291,40 +300,27 @@ function assertTraceContext(traceparent: unknown, tracestate: unknown): void {
 		(version !== "00" &&
 			extension.length > 0 &&
 			(!extension.startsWith("-") || extension.length === 1))
-	) {
-		invalid(
-			"$.traceparent",
-			"must be a structurally valid lowercase W3C traceparent",
-		);
-	}
-	if (tracestate === undefined) return;
+	);
+}
+
+function validTracestateMembers(
+	tracestate: unknown,
+): readonly string[] | undefined {
 	if (typeof tracestate !== "string" || tracestate.length > 512) {
-		invalid("$.tracestate", "must stay within the 512-character command limit");
+		return undefined;
 	}
-	// W3C Trace Context requires receivers to tolerate empty list-members
-	// ("vendor1=abc,,vendor2=def"). They carry no data and are dropped
-	// before validation; a header with only empty members counts as absent.
 	const members = tracestate
 		.split(",")
 		.map((member) => member.trim())
 		.filter((member) => member.length > 0);
-	if (members.length === 0) return;
+	if (members.length === 0 || members.length > 32) return undefined;
 	const keys = new Set<string>();
-	if (
-		members.length > 32 ||
-		members.some((member) => {
-			const memberMatch = TRACESTATE_MEMBER.exec(member);
-			const key = memberMatch?.[1];
-			if (key === undefined || keys.has(key)) return true;
-			keys.add(key);
-			return false;
-		})
-	) {
-		invalid(
-			"$.tracestate",
-			"must contain 1 to 32 unique, valid W3C tracestate list-members",
-		);
+	for (const member of members) {
+		const key = TRACESTATE_MEMBER.exec(member)?.[1];
+		if (key === undefined || keys.has(key)) return undefined;
+		keys.add(key);
 	}
+	return members;
 }
 
 function invalid(path: string, reason: string): never {

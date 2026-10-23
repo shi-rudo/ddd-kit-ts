@@ -9,7 +9,7 @@ import {
 	ProjectionIdentityViolationError,
 	ProjectionOrderViolationError,
 	ProjectionReceiptViolationError,
-	UnprojectableEventError,
+	unprojectableEventError,
 } from "../../errors/kit-errors";
 import { abortReason } from "../../internal/async/abort";
 import type { CommittedDomainEvent } from "../../messaging/committed-event";
@@ -152,7 +152,7 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 		// batch must not burn a transaction or apply a prefix.
 		const cursored = events.map(({ event, source, position }) => {
 			if (typeof event.eventId !== "string" || event.eventId.length === 0) {
-				throw new UnprojectableEventError(
+				throw unprojectableEventError(
 					this.projection.name,
 					typeof event.eventId === "string" ? event.eventId : "<missing>",
 					"carries no non-empty eventId. Projection checkpoints retain the " +
@@ -161,7 +161,7 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 				);
 			}
 			if (position === undefined) {
-				throw new UnprojectableEventError(
+				throw unprojectableEventError(
 					this.projection.name,
 					event.eventId,
 					"carries no complete projection cursor envelope. Events written " +
@@ -170,7 +170,7 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 				);
 			}
 			if (!isValidPosition(position)) {
-				throw new UnprojectableEventError(
+				throw unprojectableEventError(
 					this.projection.name,
 					event.eventId,
 					"carries an invalid projection cursor: aggregateVersion and " +
@@ -181,7 +181,7 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 				);
 			}
 			if (source === undefined) {
-				throw new UnprojectableEventError(
+				throw unprojectableEventError(
 					this.projection.name,
 					event.eventId,
 					"carries no aggregateId/aggregateType in its commit envelope source.",
@@ -189,7 +189,7 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 			}
 			const { aggregateId, aggregateType } = source;
 			if (!aggregateId || !aggregateType) {
-				throw new UnprojectableEventError(
+				throw unprojectableEventError(
 					this.projection.name,
 					event.eventId,
 					"carries no aggregateId/aggregateType; the checkpoint watermark " +
@@ -251,7 +251,7 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 					identity,
 				);
 				if (stored !== undefined && !isValidCheckpoint(stored)) {
-					throw new UnprojectableEventError(
+					throw unprojectableEventError(
 						this.projection.name,
 						event.eventId,
 						"found a stored checkpoint with an invalid or legacy cursor. " +

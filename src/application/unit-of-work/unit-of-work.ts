@@ -1,18 +1,15 @@
+import { someCauseChain } from "@shirudo/base-error";
 import type { Aggregate, Version } from "../../domain/aggregate/aggregate";
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
-import {
-	AggregateDeletedError,
-	type InfrastructureError,
-} from "../../errors/kit-errors";
+import type { InfrastructureError } from "../../errors/kit-errors";
 import { abortReason } from "../../internal/async/abort";
 import type { ExecutionContext } from "../../internal/async/execution";
-import { findInCauseChain } from "../../internal/cause-chain";
 import {
-	applyCooperativeBrand,
-	hasCooperativeBrand,
-} from "../../internal/cooperative-brand";
-import type { EventBus } from "../../messaging/event-bus/ports";
+	assertNotFromAnotherKitCopy,
+	markKitCopy,
+} from "../../internal/kit-copy";
+import type { EventBus, PublishChain } from "../../messaging/event-bus/ports";
 import type { OutboxWriter } from "../../messaging/outbox/ports";
 import type { AggregateClass } from "../../persistence/repository/identity-map";
 import type { PersistenceModel } from "../../persistence/repository/persistence-model";
@@ -20,10 +17,9 @@ import type { TransactionScope } from "../../persistence/repository/scope";
 import { withCheckedCommit } from "../cqrs/handler";
 import {
 	CommitError,
-	InvalidRepositoryDefinitionError,
-	NestedUnitOfWorkError,
+	invalidRepositoryDefinitionError,
+	nestedUnitOfWorkError,
 	RollbackError,
-	TransactionClosedError,
 	wiringErrorInCauseChain,
 } from "./errors";
 import type {
@@ -78,20 +74,21 @@ export interface RunOptions {
 	 */
 	readonly signal?: AbortSignal;
 	/**
+	 * See `withCommit`: the chain of the event handler that runs this unit of
+	 * work, from `context.publishChain`.
+	 */
+	readonly publishChain?: PublishChain;
+	/**
 	 * Stamp options that every event stamped in this run shares, for example
 	 * the correlation id of the request.
 	 */
 	readonly stampOptions?: SharedDomainEventStampOptions;
 }
 
-// Shared across package copies like every other kit brand: a definition
-// built by a bundled plugin copy's defineRepository must be accepted by the
-// host copy's UnitOfWork. The key version stamps the definition SHAPE; bump
-// it when the definition contract changes so an incompatible copy fails the
-// generic not-a-definition check instead of half-working.
-const repositoryDefinitionBrand: unique symbol = Symbol.for(
-	"@shirudo/ddd-kit/repository-definition/v3",
-);
+// A type-level marker: only defineRepository produces a RepositoryDefinition.
+declare const repositoryDefinitionBrand: unique symbol;
+
+const REPOSITORY_DEFINITIONS = new WeakSet<object>();
 
 /** Adapter wiring accepted by {@link defineRepository}. */
 export interface RepositoryDefinitionOptions<
@@ -502,8 +499,10 @@ export function defineRepository<
 		// non-enumerable members vanish silently. Without this check, the
 		// loss surfaces as a bare TypeError deep inside the first run().
 		assertRepositoryDefinitionMembers(branded as Record<PropertyKey, unknown>);
-		applyCooperativeBrand(branded, repositoryDefinitionBrand);
-		return Object.freeze(branded);
+		markKitCopy(branded);
+		Object.freeze(branded);
+		REPOSITORY_DEFINITIONS.add(branded);
+		return branded;
 	};
 	return builder as unknown as RepositoryDefinitionBuilder<TRepositoryPort>;
 }
@@ -645,9 +644,9 @@ export interface UnitOfWorkDeps<
  * - **Unit-of-Work-owned writes.** Standard `add`, `update`, and `remove`
  *   methods register lifecycle intent. Adapter implementations with those
  *   names are not invoked through the facade.
- * - **Lifecycle errors.** {@link NestedUnitOfWorkError},
- *   {@link TransactionClosedError}, {@link CommitError},
- *   {@link RollbackError}, {@link AggregateDeletedError}.
+ * - **Lifecycle errors.** `NESTED_UNIT_OF_WORK`,
+ *   `TRANSACTION_CLOSED`, {@link CommitError},
+ *   {@link RollbackError}, `AGGREGATE_DELETED`.
  *
  * - **A per-operation Identity Map and expected-version receipt.** Read paths
  *   call `trackLoaded` before returning an aggregate. The Unit of Work then
@@ -660,7 +659,7 @@ export interface UnitOfWorkDeps<
  *
  * **Instance discipline:** one instance owns one logical operation at
  * a time. `run()` while a run is active throws
- * {@link NestedUnitOfWorkError} - that covers genuine nesting AND two
+ * `NESTED_UNIT_OF_WORK` - that covers genuine nesting AND two
  * concurrent requests sharing one instance, which is the same bug in
  * different clothes. Construct one `UnitOfWork` per operation
  * (construction stores one reference; the shareable singleton is the
@@ -727,7 +726,7 @@ export class UnitOfWork<
 			);
 		}
 		if (this._active) {
-			throw new NestedUnitOfWorkError();
+			throw nestedUnitOfWorkError();
 		}
 		this._active = true;
 
@@ -751,6 +750,7 @@ export class UnitOfWork<
 					onPersistError: this.deps.onPersistError,
 					postCommitTimeoutMs: this.deps.postCommitTimeoutMs,
 					signal: options?.signal,
+					publishChain: options?.publishChain,
 					eventStampFactory: this.deps.eventStampFactory,
 					stampOptions: options?.stampOptions,
 				},
@@ -784,16 +784,14 @@ export class UnitOfWork<
 						// register a write, fails the run here.
 						s.assertReadyToCommit();
 						current.workCompleted = true;
-						// The tokens below are what gets collected; after close, any
-						// use of the session throws TransactionClosedError.
-						const commits = s.commitTokens;
+						// After close, any use of the session throws
+						// `TRANSACTION_CLOSED`.
 						s.close();
 						// The outbox write can yield, and leaked work can change a
 						// tracked aggregate meanwhile. The same check runs again
 						// just before the commit.
 						return {
 							result,
-							commits,
 							checkBeforeCommit: () => s.assertReadyToCommitLastTime(),
 							onFailureBeforeCommit: (error) => {
 								current.failedBeforeCommit = true;
@@ -839,7 +837,11 @@ export class UnitOfWork<
 		>) {
 			const candidate = this.deps.repositories[key] as unknown;
 			if (!isRepositoryDefinition(candidate)) {
-				throw new InvalidRepositoryDefinitionError(String(key));
+				assertNotFromAnotherKitCopy(
+					candidate,
+					`The repository definition "${String(key)}"`,
+				);
+				throw invalidRepositoryDefinitionError(String(key));
 			}
 			const definition = candidate as RuntimeRepositoryDefinition<Evt, TCtx>;
 			const adapter = definition.create(tx, session.trackingFor(definition));
@@ -855,7 +857,11 @@ export class UnitOfWork<
 }
 
 function isRepositoryDefinition(value: unknown): value is object {
-	return hasCooperativeBrand(value, repositoryDefinitionBrand);
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		REPOSITORY_DEFINITIONS.has(value)
+	);
 }
 
 function makeContext<TRepos, Evt extends AnyDomainEvent>(
@@ -935,18 +941,11 @@ function classifyRunError(
 	// attempt. Classifying by those stale flags would mislabel the abort as
 	// a RollbackError carrying a retryable cause, inviting a retry of an
 	// explicitly cancelled operation.
-	if (
-		signal?.aborted &&
-		signal.reason !== undefined &&
-		(error === signal.reason || causeChainContains(error, signal.reason))
-	) {
+	if (signal?.aborted && causeChainContains(error, signal.reason)) {
 		return error;
 	}
 	if (state.workThrew) {
-		if (
-			error === state.workError ||
-			causeChainContains(error, state.workError)
-		) {
+		if (causeChainContains(error, state.workError)) {
 			return error;
 		}
 		return new RollbackError(state.workError, error);
@@ -958,7 +957,6 @@ function classifyRunError(
 		}
 		if (
 			state.failedBeforeCommit &&
-			error !== state.failureBeforeCommit &&
 			!causeChainContains(error, state.failureBeforeCommit)
 		) {
 			return new RollbackError(state.failureBeforeCommit, error);
@@ -969,17 +967,13 @@ function classifyRunError(
 }
 
 /**
- * Whether `error`'s `cause` chain contains `target` by reference. A
- * `target` of `undefined`/`null` never matches: every error without a
- * `cause` property would otherwise "contain" a thrown `undefined`.
+ * Whether `error` or its `cause` chain is `target`, by reference. A `target`
+ * of `undefined`/`null` never matches: a thrown `undefined` would otherwise
+ * match every error.
  */
 function causeChainContains(error: unknown, target: unknown): boolean {
 	if (target === undefined || target === null) {
 		return false;
 	}
-	return (
-		findInCauseChain(error, (_link, cause) =>
-			cause === target ? true : undefined,
-		) ?? false
-	);
+	return someCauseChain(error, (link) => link === target);
 }

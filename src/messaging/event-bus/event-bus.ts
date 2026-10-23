@@ -13,18 +13,18 @@ import {
 	assertPositiveInteger,
 	assertTimerDelay,
 } from "../../internal/validate";
-import { EventBusClosedError, PublishDepthExceededError } from "./errors";
+import { eventBusClosedError, publishDepthExceededError } from "./errors";
 import type {
 	EventBus,
 	EventHandler,
+	EventHandlerContext,
 	OnceOptions,
 	PublishOptions,
 } from "./ports";
 import {
-	type PublishChainOrigin,
-	type PublishChainState,
-	type PublishChainStore,
-	PublishChainTracker,
+	asPublishChain,
+	PublishChainLink,
+	publishChainLinkOf,
 } from "./publish-chain";
 
 /**
@@ -153,21 +153,12 @@ export interface EventBusOptions {
 	 * A handler that publishes re-enters `publish`. An unbounded chain either
 	 * overflows the call stack or starves the event loop until the process runs
 	 * out of memory, and the publish timeout stops neither. Beyond this depth
-	 * the bus throws {@link PublishDepthExceededError}.
+	 * the bus throws `PUBLISH_DEPTH_EXCEEDED`.
 	 *
 	 * The bound counts one publish CHAIN, never the bus instance. Concurrent
 	 * publications on one shared bus never reach it.
 	 */
 	readonly maxPublishDepth?: number;
-	/**
-	 * Where the publish chain is kept across an `await`.
-	 *
-	 * Without this the bus follows the chain through the signal, which holds
-	 * across its own nested operations but ends at a signal the kit did not
-	 * derive, for example one from `AbortSignal.any`. A store follows every
-	 * chain, whatever the handler does with the signal.
-	 */
-	readonly chainStore?: PublishChainStore;
 }
 
 /**
@@ -210,33 +201,25 @@ export interface EventBusOptions {
  * failed. `observers.onHandlerError` carries the batch position and the
  * event, so a handler no longer names itself to be identifiable.
  *
- * **A handler that publishes keeps the chain visible, or the bound cannot
- * see it.** Pass `context.signal` into the nested publication, or inject a
- * `chainStore`. A handler that does neither and publishes after an `await`
- * leaves a chain no window can follow, and the bound never fires for it.
+ * **A handler that publishes passes its chain on, or the bound cannot see
+ * it.** Pass `context.publishChain` as `publishChain` to the nested
+ * publication, also through `withCommit` or `UnitOfWork.run`. Without it, the
+ * nested publication starts a new chain.
  *
- * Such a handler re-enters `publish`, and it does so synchronously even when
- * it does not await the result. A cycle in the handler graph overflows
- * the call stack, or it starves the event loop until the process runs
- * out of memory. `timeoutMs` stops neither. A timer is a macrotask, and
- * a starved loop never runs one. Beyond `maxPublishDepth` (default 32)
- * the bus throws `PublishDepthExceededError` and names the event path.
- * The aggregation contract still applies to it. If a second handler of
- * the same event also fails, the caller receives an `AggregateError` that
- * carries the depth error, not the depth error itself.
+ * A handler that publishes re-enters `publish`, and it does so synchronously
+ * even when it does not await the result. A cycle in the handler graph
+ * overflows the call stack, or it starves the event loop until the process
+ * runs out of memory. `timeoutMs` stops neither. A timer is a macrotask, and
+ * a starved loop never runs one. Beyond `maxPublishDepth` (default 32) the
+ * bus throws `PUBLISH_DEPTH_EXCEEDED` and names the event path. The
+ * aggregation contract still applies to it. If a second handler of the same
+ * event also fails, the caller receives an `AggregateError` that carries the
+ * depth error, not the depth error itself.
  *
- * The bound counts one chain, never the bus. Concurrent publications on
- * one shared bus never reach it. A handler links its nested publication
- * to the chain when it passes `context.signal`. That is the same
- * practice that gives the handler cancellation. The link survives the
- * nested operations of the kit, `withCommit` included. It ends at a
- * signal the kit did not derive, for example one from `AbortSignal.any`.
- * A handler that drops the signal leaves no link at all. There, only a
- * synchronous cycle is caught.
- *
- * Pass `chainStore` to follow every chain, whatever a handler does with
- * the signal.
- *
+ * The bound counts the open publications of one chain, never the bus.
+ * Concurrent publications on one shared bus never reach it, and neither
+ * does a relay: a publication that its handler does not await ends the
+ * dispatch of its parent.
  */
 export class InProcessEventBus<Evt extends AnyDomainEvent>
 	implements EventBus<Evt>
@@ -244,8 +227,6 @@ export class InProcessEventBus<Evt extends AnyDomainEvent>
 	private readonly handlers = new Map<string, EventHandler<Evt>[]>();
 	private readonly catchAllHandlers: EventHandler<Evt>[] = [];
 	private readonly maxPublishDepth: number;
-
-	private readonly chain: PublishChainTracker;
 	private closed = false;
 	// How to settle each waiter `once()` created, cleanup included. A callback
 	// learns that no event follows by not being called again; a promise cannot,
@@ -278,7 +259,6 @@ export class InProcessEventBus<Evt extends AnyDomainEvent>
 				options.maxSubscriptionsPerEventType,
 			);
 		}
-		this.chain = new PublishChainTracker(options.chainStore);
 		this.maxPublishDepth = options.maxPublishDepth ?? DEFAULT_MAX_PUBLISH_DEPTH;
 		this.maxSubscriptionsPerEventType =
 			options.maxSubscriptionsPerEventType ??
@@ -340,7 +320,7 @@ export class InProcessEventBus<Evt extends AnyDomainEvent>
 		this.pendingOnce.clear();
 		for (const settle of waiting) {
 			try {
-				settle(new EventBusClosedError("once"));
+				settle(eventBusClosedError("once"));
 			} catch {
 				// The waiters are already out of the set, so a throw here would
 				// strand every waiter after this one and no later close() could
@@ -351,7 +331,7 @@ export class InProcessEventBus<Evt extends AnyDomainEvent>
 	}
 
 	private assertOpen(operation: string): void {
-		if (this.closed) throw new EventBusClosedError(operation);
+		if (this.closed) throw eventBusClosedError(operation);
 	}
 
 	subscribe<K extends Evt["type"]>(
@@ -440,7 +420,7 @@ export class InProcessEventBus<Evt extends AnyDomainEvent>
 				assertTimerDelay("EventBus.once", "timeoutMs", timeoutMs);
 			}
 			if (this.closed) {
-				reject(new EventBusClosedError("once"));
+				reject(eventBusClosedError("once"));
 				return;
 			}
 			const signal = options?.signal;
@@ -488,7 +468,7 @@ export class InProcessEventBus<Evt extends AnyDomainEvent>
 			// on a closed bus with nothing left to settle it.
 			this.pendingOnce.add(settleAsClosed);
 			if (this.closed) {
-				settleAsClosed(new EventBusClosedError("once"));
+				settleAsClosed(eventBusClosedError("once"));
 				return;
 			}
 
@@ -532,14 +512,12 @@ export class InProcessEventBus<Evt extends AnyDomainEvent>
 		// thrown after dispatch. An abort ends the batch but must not
 		// swallow the failures that already happened.
 		// Depth comes from the chain, never from the instance: one bus is
-		// published to concurrently by design. Three windows can see a chain,
-		// and a window that cannot see it reports 0, never a wrong depth, so
-		// the deepest one is the truth. Depth and path come from that same
-		// window, so a reported depth and the path beside it cannot describe
-		// different chains. Each window counts only while its own dispatch
-		// runs; the fields say why.
-		const parent = this.chain.parentOf(options.signal);
-		const depth = parent.depth + 1;
+		// published to concurrently by design.
+		const ancestry =
+			publishChainLinkOf(options.publishChain)?.openAncestry(
+				this.maxPublishDepth,
+			) ?? [];
+		const depth = ancestry.length + 1;
 		// An empty batch dispatches nothing, so it cannot extend a chain and
 		// must not meet the bound. Everything else still runs, so an invalid
 		// option is still rejected. Only the first event is about to dispatch,
@@ -547,11 +525,12 @@ export class InProcessEventBus<Evt extends AnyDomainEvent>
 		// reached it.
 		const [first] = events;
 		if (first !== undefined && depth > this.maxPublishDepth) {
-			throw new PublishDepthExceededError(depth, this.maxPublishDepth, [
-				...parent.path,
+			throw publishDepthExceededError(depth, this.maxPublishDepth, [
+				...ancestry.map((link) => link.eventType).reverse(),
 				first.type,
 			]);
 		}
+		const parent = ancestry[0];
 
 		const errors: Error[] = [];
 		try {
@@ -561,8 +540,7 @@ export class InProcessEventBus<Evt extends AnyDomainEvent>
 					signal: options.signal,
 					timeoutMs: options.timeoutMs ?? DEFAULT_EXECUTION_TIMEOUT_MS,
 				},
-				(context) =>
-					this.publishWithinContext(events, context, errors, depth, parent),
+				(context) => this.publishWithinContext(events, context, errors, parent),
 			);
 		} catch (boundedError) {
 			if (errors.length === 0) throw boundedError;
@@ -588,8 +566,7 @@ export class InProcessEventBus<Evt extends AnyDomainEvent>
 		events: ReadonlyArray<Evt>,
 		context: ExecutionContext,
 		errors: Error[],
-		depth: number,
-		parent: PublishChainOrigin,
+		parent: PublishChainLink | undefined,
 	): Promise<void> {
 		// One abort check for each event, after its dispatch. A check before
 		// the dispatch cannot fire: an already aborted signal never reaches
@@ -603,15 +580,16 @@ export class InProcessEventBus<Evt extends AnyDomainEvent>
 			// The chain is recorded for the event that dispatches now, never for
 			// the whole batch: an event that has not dispatched yet is not on
 			// the chain, and naming it in a cycle report is wrong.
-			const state: PublishChainState = {
-				path: [...parent.path, event.type],
-			};
-			await this.chain.whileOnEvent(
-				context.signal,
-				state,
-				parent.enclosing,
-				() => this.dispatchEvent(event, context, errors, state),
-			);
+			const link = new PublishChainLink(event.type, parent);
+			try {
+				await this.dispatchEvent(
+					event,
+					Object.freeze({ ...context, publishChain: asPublishChain(link) }),
+					errors,
+				);
+			} finally {
+				link.close();
+			}
 			if (context.signal.aborted) {
 				throw abortReason(context.signal, "EventBus.publish aborted");
 			}
@@ -620,9 +598,8 @@ export class InProcessEventBus<Evt extends AnyDomainEvent>
 
 	private async dispatchEvent(
 		event: Evt,
-		context: ExecutionContext,
+		context: EventHandlerContext,
 		errors: Error[],
-		state: PublishChainState,
 	): Promise<void> {
 		// Typed and catch-all handlers share ONE allSettled batch, so the
 		// contract holds across both kinds: none sees the others' errors,
@@ -667,13 +644,9 @@ export class InProcessEventBus<Evt extends AnyDomainEvent>
 			await Promise.allSettled(
 				batch.map(async (handler, index) => {
 					try {
-						// `handler(...)` returns at its first `await`, so this
-						// window covers exactly the synchronous part of the
-						// handler. Splitting the call from the `await` keeps a
-						// synchronous throw on the same path as a rejection.
-						const running = this.chain.inSyncWindow(state, () =>
-							handler(event, context),
-						);
+						// Splitting the call from the `await` keeps a synchronous
+						// throw on the same path as a rejection.
+						const running = handler(event, context);
 						// A handler that returned without a promise is not pending.
 						// Mark it here, because a peer that aborts synchronously
 						// runs before this wrapper resumes.

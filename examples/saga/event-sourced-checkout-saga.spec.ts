@@ -15,6 +15,7 @@ import {
 } from "../../src/domain/event/domain-event";
 import { moneyOfMinor } from "../../src/domain/value-object/money";
 import { outboxWriterAcceptingEventLoss } from "../../src/messaging/outbox/outbox";
+import { InMemoryTransactionScope } from "../../src/persistence/repository/adapters/in-memory-transaction-scope";
 import type { TransactionScope } from "../../src/persistence/repository/scope";
 import {
 	type CheckoutParticipantCommand,
@@ -127,10 +128,8 @@ async function commitProcessDecision(
 				}),
 			);
 			await database.append(recorded);
-			return {
-				result: undefined,
-				commits: [registration.registerSaved(saga)],
-			};
+			registration.registerSaved(saga);
+			return undefined;
 		},
 	);
 }
@@ -377,9 +376,7 @@ describe("Event-sourced checkout saga", () => {
 			throw new Error("expected the RequestPayment participant command");
 		}
 		const idempotency = new InMemoryIdempotencyStore<undefined>();
-		const scope: TransactionScope<undefined> = {
-			transactional: (work) => work(undefined),
-		};
+		const scope = new InMemoryTransactionScope([idempotency]);
 		let executions = 0;
 		const consume = () =>
 			withIdempotentCommit(
@@ -402,10 +399,7 @@ describe("Event-sourced checkout saga", () => {
 				},
 				async () => {
 					executions += 1;
-					return {
-						result: { paymentId, accepted: true },
-						commits: [],
-					};
+					return { paymentId, accepted: true };
 				},
 			);
 

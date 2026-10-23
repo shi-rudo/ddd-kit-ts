@@ -92,19 +92,16 @@ Calling `createDomainEvent(...)` directly still works, but inside an aggregate
 decision when it registers the aggregate for persistence.
 
 Two wiring guards sit on the recording paths. An event that no kit
-constructor built throws `HandBuiltEventError` (code `HAND_BUILT_EVENT`). A
+constructor built throws `HAND_BUILT_EVENT`. A
 state or payload root that carries an own `__proto__` key throws
-`PrototypePollutionError` (code `PROTOTYPE_POLLUTION`). Both guard against
-accidents, not against code in the same process: the kit-built mark has a
-cooperative tier that another loaded copy of the kit can apply, and the key
-guard looks at the root object only. Validate and strip untrusted input at
-the application edge. See
-[Domain Events -> Shape](./domain-events.md#shape) for the two tiers of the
-kit-built mark.
+`PROTOTYPE_POLLUTION`. Both guard against
+accidents, not against code in the same process. Validate and strip
+untrusted input at the application edge. An event that another loaded copy of
+the kit built throws `DUPLICATE_KIT_COPY`; see
+[Domain Events -> Shape](./domain-events.md#shape).
 
 `AggregateConfig.maxPendingEvents` limits the pending list. A recording that
-would grow the list past the limit throws `PendingEventLimitExceededError`
-(code `PENDING_EVENT_LIMIT_EXCEEDED`) before the state moves, on `setState`,
+would grow the list past the limit throws `PENDING_EVENT_LIMIT_EXCEEDED` before the state moves, on `setState`,
 `apply`, and `addDomainEvent`. Replayed history does not count. The default
 is unlimited. Treat the limit as a modelling signal, not as a budget to
 raise: a decision that emits hundreds of facts in one command points at a
@@ -193,10 +190,8 @@ event. It does not remember a database baseline. The operation-scoped
 `UnitOfWork` owns that baseline.
 
 `markReconstituted` has two preconditions. The instance must carry no pending
-events, or it throws `UnreplayableAggregateError` (code
-`UNREPLAYABLE_AGGREGATE`). The current version must not be above the
-restored version, or it throws `InvalidVersionError` (code
-`INVALID_VERSION`). Two factory shapes break these rules:
+events, or it throws `UNREPLAYABLE_AGGREGATE`. The current version must not be above the
+restored version, or it throws `INVALID_VERSION`. Two factory shapes break these rules:
 
 - A factory that calls `setState(rowState)` before `markReconstituted`. Every
   `setState` advances the version, so the instance is at version 1 before
@@ -314,7 +309,7 @@ surfaces that the aggregate declares:
   it.
 
 ```ts
-import { deepFreeze, copyPlainState } from "@shirudo/ddd-kit";
+import { deepFreeze, copyPlainData } from "@shirudo/ddd-kit";
 
 class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   get status(): OrderState["status"] {
@@ -322,24 +317,24 @@ class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   }
 
   get plainState(): Readonly<OrderState> {
-    return deepFreeze(copyPlainState(this.state));
+    return deepFreeze(copyPlainData(this.state, { subject: "Order state" }));
   }
 }
 ```
 
-The getter walks and clones the whole state on every read. That cost belongs
-to the adapter. The unit of work reads the DTO several times per aggregate:
-at load, when it registers the write, and at commit. The snapshot model
-copies the captured DTO once more, so a snapshot capture clones twice.
-Application code reads domain queries and never the DTO in a loop.
+The getter copies the whole state on every read. That cost belongs to the
+adapter. The unit of work reads the DTO several times per aggregate: at load,
+when it registers the write, and at commit. The snapshot model copies the
+captured DTO once more, so a snapshot capture copies twice. Application code
+reads domain queries and never the DTO in a loop.
 
-`copyPlainState` is a `structuredClone` behind a guard. A structured clone keeps
-the data properties of a class instance and drops the methods on its
-prototype, without an error. The guard throws a `TypeError` that names the
-field path and the class instead:
+`copyPlainData` copies under the plain-data rule of the kit (see "One rule
+for plain data" in the design decisions). A plain copy of a class instance
+would keep its data properties and lose the methods on its prototype, so the
+copy throws a `TypeError` that names the field path and the class instead:
 
 ```
-TypeError: copyPlainState: state.items[0] is a class instance (OrderItem); map it to plain data
+TypeError: Order state.items[0] is a class instance (OrderItem); map it to plain data
 ```
 
 The tell is a state field whose type carries behaviour. A type alias hides
@@ -363,14 +358,10 @@ get plainState(): PlainOrderState {
 ```
 
 A subclass of a built-in (`class Tags extends Set`) is a class instance too.
-`copyPlainState` also rejects a function, a symbol, an enumerable symbol-keyed
+The copy also rejects a function, a symbol, an enumerable symbol-keyed
 property, a non-enumerable property on a record or an array, an accessor
-property, an expando on a built-in (also a non-enumerable one), an `Error`, a
-`Promise`, a `WeakMap`, a `WeakSet`, a `SharedArrayBuffer`, and a view over
-one. A `Proxy` fails in the walk or in the clone; `copyPlainState` rethrows a
-failure of the clone as a `TypeError` that keeps the cause. The checks catch
-accidents, not a hostile `Proxy`. Plain objects, arrays, `Date`, `Map`, `Set`,
-`RegExp`, bigints, and typed arrays pass.
+property, a `RegExp`, binary data, an `Error`, a `Promise`, a `WeakMap`, and a
+`WeakSet`. Plain objects, arrays, `Date`, `Map`, `Set`, and primitives pass.
 
 A `Money` value is a frozen plain object and passes. Its `amountMinor` is a
 `bigint`, and JSON cannot carry a `bigint`. A JSON-backed row or snapshot
@@ -630,15 +621,14 @@ const fresh = reconstituteAggregateFromSnapshot(
 copies the persistence DTO and deep-freezes the snapshot, its `state` and
 `snapshotAt` included. A later change to the aggregate, or to the DTO that
 `capture` returned, cannot alter the snapshot. A write into the snapshot
-between capture and save throws a `TypeError`. The freeze cannot seal every
-built-in. A typed array, a `DataView`, or a `RegExp` in the DTO passes
-through unfrozen. A `Map` or `Set` blocks only the mutators the kit knows.
-See `deepFreeze` for the list.
+between capture and save throws a `TypeError`. The DTO follows the plain-data
+rule of the kit (see "One rule for plain data" in the design decisions), so a
+`RegExp` or binary data in it throws. A `Map` or `Set` blocks only the
+mutators the kit knows. See `deepFreeze` for the list.
 Reconstitution always creates a fresh aggregate through the model. It never
 mutates a live instance or records a new domain fact. A factory that forgets
 `markReconstituted(version)` returns an aggregate at the wrong version; the
-restore then throws `SnapshotVersionNotRestoredError` (code
-`SNAPSHOT_VERSION_NOT_RESTORED`).
+restore then throws `SNAPSHOT_VERSION_NOT_RESTORED`.
 
 Live aggregate state remains `protected`. The model captures the aggregate
 through its plain state (`order.plainState`) or through domain queries,

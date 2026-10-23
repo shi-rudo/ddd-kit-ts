@@ -4,7 +4,7 @@ import type { AnyDomainEvent } from "../../src/domain/event/domain-event";
 import { moneyOfMinor } from "../../src/domain/value-object/money";
 import { DomainError } from "../../src/errors/kit-errors";
 import { InMemoryOutbox } from "../../src/messaging/outbox/outbox";
-import type { TransactionScope } from "../../src/persistence/repository/scope";
+import { InMemoryTransactionScope } from "../../src/persistence/repository/adapters/in-memory-transaction-scope";
 import {
 	type CustomerId,
 	createPlaceOrderHandler,
@@ -119,14 +119,12 @@ function createHandlerHarness(
 ) {
 	const savedOrders: Order[] = [];
 	let createdIds = 0;
-	const scope: TransactionScope<undefined> = {
-		transactional: <T>(work: (context: undefined) => Promise<T>) =>
-			work(undefined),
-	};
+	const outbox = new InMemoryOutbox<AnyDomainEvent>();
+	const idempotency = new InMemoryIdempotencyStore<undefined>();
 	const deps: PlaceOrderHandlerDeps<undefined> = {
-		scope,
-		outbox: new InMemoryOutbox<AnyDomainEvent>(),
-		idempotency: new InMemoryIdempotencyStore<undefined>(),
+		scope: new InMemoryTransactionScope([idempotency, outbox]),
+		outbox,
+		idempotency,
 		newOrderId: () => {
 			createdIds += 1;
 			return orderId;

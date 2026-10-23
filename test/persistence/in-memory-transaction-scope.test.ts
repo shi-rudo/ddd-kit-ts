@@ -5,9 +5,6 @@ import {
 	defineRepository,
 	type Id,
 	InfrastructureError,
-	InMemoryOutbox,
-	type InMemoryTransactionParticipant,
-	InMemoryTransactionScope,
 	type PersistenceModel,
 	type RepositoryTracking,
 	RetryingTransactionScope,
@@ -16,6 +13,11 @@ import {
 	UnitOfWork,
 	type Version,
 } from "../../src";
+import {
+	InMemoryOutbox,
+	type InMemoryTransactionParticipant,
+	InMemoryTransactionScope,
+} from "../../src/testing";
 
 type OrderId = Id<"OrderId">;
 type OrderEvent =

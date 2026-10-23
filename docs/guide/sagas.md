@@ -194,10 +194,8 @@ async function reactToOrderPlaced(event: OrderPlaced): Promise<void> {
         payload: { kind: "payment-timeout" },
       });
 
-      return {
-        result: saga.id,
-        commits: [registration.registerSaved(saga)],
-      };
+      registration.registerSaved(saga);
+      return saga.id;
     },
   );
 }
@@ -287,10 +285,8 @@ await withCommit(
     );
 
     await makeCheckoutEventStore(tx).append(recorded);
-    return {
-      result: saga.id,
-      commits: [registration.registerSaved(saga)],
-    };
+    registration.registerSaved(saga);
+    return saga.id;
   },
 );
 ```
@@ -333,7 +329,9 @@ not participant-domain objects. The checkout mapper therefore emits
 `MoneyDto`, whose minor amount is a decimal string, instead of putting
 `Money.amountMinor: bigint` into a durable message. Explicit `traceparent` and
 `tracestate` fields carry technical W3C Trace Context without overloading the
-business correlation and conversation ids.
+business correlation and conversation ids. The route drops an invalid trace
+context and keeps the command: an invalid `traceparent` drops both fields,
+and an invalid `tracestate` drops only itself.
 
 Delivery remains at least once. The participant scopes
 `withIdempotentCommit` by consumer and command `messageId`. It stores the

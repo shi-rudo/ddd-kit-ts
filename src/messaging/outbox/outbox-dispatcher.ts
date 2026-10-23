@@ -1,4 +1,5 @@
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
+import { AcknowledgedRecordPendingError } from "../../errors/kit-errors";
 import {
 	DEFAULT_EXECUTION_TIMEOUT_MS,
 	type ExecutionContext,
@@ -195,6 +196,8 @@ export interface OutboxDispatcherOptions<Evt extends AnyDomainEvent> {
 	/**
 	 * Maximum time to await one sink publication. The sink receives the same
 	 * deadline as an AbortSignal and an absolute `deadlineAt`. Default `30000`ms.
+	 * With a tracking outbox, the expiry consumes an attempt, whatever
+	 * {@link classifyFailure} says.
 	 */
 	deliveryTimeoutMs?: number;
 
@@ -215,9 +218,9 @@ export interface OutboxDispatcherOptions<Evt extends AnyDomainEvent> {
 	/**
 	 * Classifies delivery errors as transient, permanent, or unknown. Transient
 	 * failures back off without consuming the poison ceiling; permanent and
-	 * unknown failures count. The default walks the cause chain: native
-	 * `TimeoutError` and `retryable: true` are transient, `retryable: false` is
-	 * permanent, and unmapped errors are unknown. A throwing or invalid custom
+	 * unknown failures count. The default walks the cause chain, and the nearest
+	 * marker decides: native `TimeoutError` and `retryable: true` are transient,
+	 * `retryable: false` is permanent, and unmapped errors are unknown. A throwing or invalid custom
 	 * classifier becomes unknown and is exposed through the observer assessment
 	 * without replacing the original delivery error.
 	 */
@@ -255,9 +258,10 @@ export interface OutboxDispatcherOptions<Evt extends AnyDomainEvent> {
  * - **Bounded retries only with tracking.** With a
  *   {@link DispatchTrackingOutbox}, permanent and unknown delivery failures
  *   are reported via `markFailed`; transient failures back off without
- *   consuming the poison ceiling. The shared default recognizes native
- *   timeouts and `retryable` markers, and consumers can override it through
- *   {@link OutboxDispatcherOptions.classifyFailure};
+ *   consuming the poison ceiling. The expiry of the dispatcher's own
+ *   delivery budget always consumes an attempt. The shared default
+ *   recognizes native timeouts and `retryable` markers, and consumers can
+ *   override it through {@link OutboxDispatcherOptions.classifyFailure};
  *   the store owns the ceiling and the dead-letter set (wire
  *   `deadLetters()` to alerting). An ack failure
  *   (`markDispatched` throwing) is NOT reported as a delivery failure:
@@ -355,6 +359,7 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 	 * tracking outbox); the next cycle retries it.
 	 */
 	protected async pass(signal?: AbortSignal): Promise<"drained" | "stopped"> {
+		const acknowledged = new Set<string>();
 		while (!signal?.aborted) {
 			let batch: ReadonlyArray<OutboxRecord<Evt>>;
 			try {
@@ -377,7 +382,19 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 				this.consecutiveFailures = 0;
 				return "drained";
 			}
-			const completed = await this.dispatchBatch(batch, signal);
+			const repeated = batch.find((record) =>
+				acknowledged.has(record.dispatchId),
+			);
+			if (repeated !== undefined) {
+				this.consecutiveFailures += 1;
+				reportToObserver(() =>
+					this.observers.onPollError(
+						new AcknowledgedRecordPendingError(repeated.dispatchId),
+					),
+				);
+				return "stopped";
+			}
+			const completed = await this.dispatchBatch(batch, acknowledged, signal);
 			if (!completed) return "stopped";
 		}
 		return "stopped";
@@ -385,24 +402,31 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 
 	/**
 	 * Dispatches one batch sequentially and acks the delivered prefix in
-	 * a single `markDispatched` call. Returns `true` when every record
-	 * was delivered and acked, `false` when the pass stopped early
-	 * (publish failure, ack failure, or abort).
+	 * a single `markDispatched` call, and adds the acked ids to
+	 * `acknowledged`. Returns `true` when every record was delivered and
+	 * acked, `false` when the pass stopped early (publish failure, ack
+	 * failure, or abort).
 	 */
 	private async dispatchBatch(
 		batch: ReadonlyArray<OutboxRecord<Evt>>,
+		acknowledged: Set<string>,
 		signal?: AbortSignal,
 	): Promise<boolean> {
 		const delivered: string[] = [];
 		let failedRecord: OutboxRecord<Evt> | undefined;
 		let failure: unknown;
+		let ownBudgetExpired = false;
 		for (const record of batch) {
 			if (signal?.aborted) break;
+			let boundedContext: ExecutionContext | undefined;
 			try {
 				await runBoundedExecution(
 					"OutboxDispatcher.publish",
 					{ signal, timeoutMs: this.deliveryTimeoutMs },
-					(context) => this.sink.publish(record, context),
+					(context) => {
+						boundedContext = context;
+						return this.sink.publish(record, context);
+					},
 				);
 				delivered.push(record.dispatchId);
 			} catch (error) {
@@ -411,6 +435,7 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 				}
 				failedRecord = record;
 				failure = error;
+				ownBudgetExpired = boundedContext?.signal.aborted === true;
 				break;
 			}
 		}
@@ -433,6 +458,7 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 					},
 					(context) => this.outbox.markDispatched(delivered, context),
 				);
+				for (const dispatchId of delivered) acknowledged.add(dispatchId);
 				this.consecutiveFailures = 0;
 			} catch (error) {
 				// The events WERE delivered; a failed ack means they will
@@ -460,8 +486,14 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 			reportToObserver(() =>
 				this.observers.onDispatchError(error, record, assessment),
 			);
+			// The expiry of the dispatcher's own delivery budget is evidence
+			// against this record, not a transient fault: without an attempt,
+			// a sink that hangs on it would block the outbox forever.
 			const tracking = this.trackingOutbox;
-			if (tracking !== undefined && assessment.kind !== "transient") {
+			if (
+				tracking !== undefined &&
+				(assessment.kind !== "transient" || ownBudgetExpired)
+			) {
 				try {
 					const deadLetter = await runBoundedExecution(
 						"OutboxDispatcher.markFailed",

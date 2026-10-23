@@ -458,38 +458,6 @@ describe("InMemoryEventStore", () => {
 			});
 		});
 
-		it("rejects a Map whose prototype was replaced and that carries an own property", async () => {
-			const store = new InMemoryEventStore<OrderEvent>();
-			const disguised = Object.setPrototypeOf(
-				new Map([["k", 1]]),
-				Object.prototype,
-			);
-			disguised.note = "lost in the copy";
-			const withDisguisedMap = {
-				...renamed("bad"),
-				payload: { name: "bad", lines: disguised },
-			} as unknown as OrderEvent;
-
-			await expect(
-				store.append(streamA, [withDisguisedMap], { expectedVersion: 0 }),
-			).rejects.toBeInstanceOf(TypeError);
-		});
-
-		it("rejects an index key on a Map instead of dropping it", async () => {
-			const store = new InMemoryEventStore<OrderEvent>();
-			const withIndexKey = {
-				...renamed("bad"),
-				payload: { name: "bad", lines: Object.assign(new Map(), { 0: "x" }) },
-			} as unknown as OrderEvent;
-
-			await expect(
-				store.append(streamA, [withIndexKey], { expectedVersion: 0 }),
-			).rejects.toBeInstanceOf(TypeError);
-			expect(await store.readStream(streamA, allEvents)).toMatchObject({
-				exists: false,
-			});
-		});
-
 		it("rejects a RegExp in an event", async () => {
 			const store = new InMemoryEventStore<OrderEvent>();
 			const withPattern = {
@@ -500,50 +468,6 @@ describe("InMemoryEventStore", () => {
 			await expect(
 				store.append(streamA, [withPattern], { expectedVersion: 0 }),
 			).rejects.toBeInstanceOf(TypeError);
-		});
-
-		it("rejects a SharedArrayBuffer whose prototype was replaced", async () => {
-			const store = new InMemoryEventStore<OrderEvent>();
-			const disguised = Object.setPrototypeOf(
-				new SharedArrayBuffer(4),
-				Object.prototype,
-			);
-			const withSharedMemory = {
-				...renamed("bad"),
-				payload: { name: "bad", memory: disguised },
-			} as unknown as OrderEvent;
-
-			await expect(
-				store.append(streamA, [withSharedMemory], { expectedVersion: 0 }),
-			).rejects.toBeInstanceOf(TypeError);
-			expect(await store.readStream(streamA, allEvents)).toMatchObject({
-				exists: false,
-			});
-		});
-
-		it("rejects an event getter without running it", async () => {
-			const store = new InMemoryEventStore<OrderEvent>();
-			let getterRuns = 0;
-			const batch: OrderEvent[] = [];
-			const withGetter = { ...renamed("bad") } as Record<string, unknown>;
-			Object.defineProperty(withGetter, "payload", {
-				enumerable: true,
-				get() {
-					getterRuns += 1;
-					batch.pop();
-					return { name: "bad" };
-				},
-			});
-			batch.push(renamed("first"), withGetter as unknown as OrderEvent);
-
-			await expect(
-				store.append(streamA, batch, { expectedVersion: 0 }),
-			).rejects.toBeInstanceOf(TypeError);
-			expect(getterRuns).toBe(0);
-			expect(batch).toHaveLength(2);
-			expect(await store.readStream(streamA, allEvents)).toMatchObject({
-				exists: false,
-			});
 		});
 
 		it("rejects a stale batch with a conflict before it copies the events", async () => {

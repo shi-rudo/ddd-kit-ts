@@ -99,26 +99,22 @@ deletion. Application code never receives the transaction handle. The
 definition binds its read adapter and `flush` implementation to that handle.
 See [Repository](./repository.md).
 
-### Returning Naked Aggregates Or Events From `withCommit`
+### Collecting Events By Hand In `withCommit`
 
-The `withCommit` callback must return opaque commit tokens. It must not return
-naked aggregates or manually collected events.
+The `withCommit` callback registers each aggregate after its repository write
+succeeds and returns its result. It does not collect or return events by hand.
 
 ```ts
-// Wrong
-return { result, events: order.pendingEvents };
-
-// Also wrong: touching an aggregate does not prove it was saved
-return { result, aggregates: [order] };
+// Wrong: the callback collects the events itself
+await publish(order.pendingEvents);
+return order.id;
 
 // Right, after the repository write succeeds
-return {
-  result,
-  commits: [registration.registerSaved(order)],
-};
+registration.registerSaved(order);
+return order.id;
 ```
 
-The callback's job is to provide commit evidence for repository writes that participated in this invocation. Tokens are opaque and invocation-scoped, so a forged token or one retained from an earlier call is rejected inside the transaction. Every token issued during the callback must be returned in `commits`; omitting one also rejects inside the transaction. If a registered write should not commit, throw so the transaction rolls back. `withCommit` then collects events from those registered aggregates at the correct point in the lifecycle.
+The callback's job is to register the repository writes that participated in this invocation. `withCommit` collects every registered aggregate, and only those: touching an aggregate does not make it look saved. The registration capability is sealed when the callback settles, so a late registration rejects inside the transaction. If a registered write should not commit, throw so the transaction rolls back. `withCommit` then collects events from those registered aggregates at the correct point in the lifecycle.
 
 Manual collection is tempting because it looks explicit. The problem is timing. If every caller decides when to read events, clear events, or publish events, the transaction boundary stops being a boundary. Some callers will collect before the repository flush, some after it, and some after an error. The whole point of `withCommit` is to centralize that order:
 
@@ -129,7 +125,7 @@ Manual collection is tempting because it looks explicit. The problem is timing. 
 5. Commit.
 6. Acknowledge saved aggregates through the kit-internal capability.
 
-Return commit tokens and let the unit-of-work boundary do its job. See [Outbox & Transactions](./outbox.md).
+Register the writes and let the unit-of-work boundary do its job. See [Outbox & Transactions](./outbox.md).
 
 ## Runtime Mistakes
 
@@ -301,7 +297,7 @@ orderB.ship("tracking-123");
 repositories.orders.update(orderA);
 ```
 
-If `orderA` and `orderB` are different objects with the same id, both can carry pending events and both can receive different commit tokens. Object-identity dedupe cannot help, because these are genuinely two JavaScript objects. Depending on flush order, you can get duplicate events, stale state, or a concurrency conflict that looks random.
+If `orderA` and `orderB` are different objects with the same id, both can carry pending events and both can be registered. Object-identity dedupe cannot help, because these are genuinely two JavaScript objects. Depending on flush order, you can get duplicate events, stale state, or a concurrency conflict that looks random.
 
 An identity map makes the second `findById` return the same object. Now the operation is forced to deal with one aggregate instance and one version history.
 
@@ -405,32 +401,33 @@ Three facts decide how you write a handler:
 2. A retry after a timeout runs the handlers a second time. The first attempt
    can still run. Make the handler idempotent, or do not retry a publish that
    timed out.
-3. A handler that publishes must pass `context.signal` into that publication.
-   The signal links the nested publication to its chain, and the bus stops a
-   cycle at `maxPublishDepth` (default 32) with `PublishDepthExceededError`.
-   If another handler of the same event also fails, that error arrives inside
-   an `AggregateError`.
+3. A handler that publishes must pass `context.publishChain` as
+   `publishChain` into that publication. The chain links the nested
+   publication to its parent, and the bus stops a cycle at `maxPublishDepth`
+   (default 32) with `PUBLISH_DEPTH_EXCEEDED`. If another handler of the
+   same event also fails, that error arrives inside an `AggregateError`.
 
-Pass `context.signal` into every call a handler makes. The signal gives the
-call cancellation, and it gives the bus the chain.
-
-The link survives the nested operations of the kit, `withCommit` included. It
-ends at a signal that the kit did not derive, for example one from
-`AbortSignal.any`. Without the link, an asynchronous cycle starves the event
-loop, and the process runs out of memory.
-
-On Node, `chainStore` follows every chain, even when a handler replaces the
-signal. The kit does not import `node:async_hooks` itself, because that
-specifier does not resolve in an edge bundle.
+Pass `context.signal` into every call a handler makes, for cancellation. Pass
+`context.publishChain` into every publication that the handler awaits, also
+through `withCommit` and `UnitOfWork.run`. Without the chain, the nested
+publication starts a new chain. A synchronous cycle then overflows the call
+stack, and an asynchronous cycle starves the event loop until the process
+runs out of memory.
 
 ```ts
-import { AsyncLocalStorage } from "node:async_hooks";
-import { InProcessEventBus, type PublishChainState } from "@shirudo/ddd-kit";
-
-const bus = new InProcessEventBus<OrderEvent>({
-  chainStore: new AsyncLocalStorage<PublishChainState>(),
+bus.subscribe("OrderPlaced", async (event, context) => {
+  await withCommit(
+    { ...deps, signal: context.signal, publishChain: context.publishChain },
+    async (tx, registration) => {
+      // ...
+    },
+  );
 });
 ```
+
+The bus counts only the publications of a chain that are still open. A
+publication that the handler schedules for later, or does not await, ends the
+chain of its parent and never reaches the bound.
 
 ```ts
 // Rebuildable. The bus is the right home.
@@ -606,7 +603,8 @@ When you review code that uses the kit, make sure that these rules apply:
 - Preserve structured errors until the mapping boundary.
 - Put work that the business cannot lose behind the outbox, not on the
   event bus.
-- Pass `context.signal` into every publication a handler makes.
+- Pass `context.signal` and `context.publishChain` into every publication a
+  handler makes.
 - Call the unsubscribe function that `subscribe` returns.
 
 Most production bugs in this area come from moving responsibility one layer too early: repositories clearing events, callers collecting events, tests owning globals, or application code bypassing aggregate metadata. Keep each responsibility at its boundary and the kit stays predictable.

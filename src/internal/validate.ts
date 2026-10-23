@@ -11,7 +11,7 @@ export function assertNonNegativeFinite(
 	value: number,
 ): void {
 	if (!Number.isFinite(value) || value < 0) {
-		throw new Error(
+		throw new RangeError(
 			`${context}: ${field} must be a non-negative finite number, got ${value}`,
 		);
 	}
@@ -44,7 +44,7 @@ export function assertPositiveInteger(
 	value: number,
 ): void {
 	if (!Number.isInteger(value) || value < 1) {
-		throw new Error(
+		throw new RangeError(
 			`${context}: ${field} must be an integer >= 1, got ${value}`,
 		);
 	}

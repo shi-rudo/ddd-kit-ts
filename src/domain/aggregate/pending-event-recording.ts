@@ -1,4 +1,5 @@
-import { createGlobalCapabilityRegistry } from "../../internal/global-capability-registry";
+import { unmanagedInstanceError } from "../../errors/kit-errors";
+import { assertNotFromAnotherKitCopy } from "../../internal/kit-copy";
 import type {
 	AnyDomainEvent,
 	AnyUnstampedDomainEvent,
@@ -16,27 +17,25 @@ export interface PendingEventRecordingCapability {
 	) => ReadonlyArray<AnyDomainEvent>;
 }
 
-// The key version stamps the capability SHAPE, mirroring
-// pending-event-lifecycle.ts, and the shape includes the event type that
-// crosses record(). Bump it whenever the interface above or that event
-// shape changes: registrations made under another key stay invisible, so
-// an aggregate constructed by an incompatible package copy fails the
-// caller's UnmanagedInstanceError check instead of half-working.
-const recordingCapabilityRegistryKey = Symbol.for(
-	"@shirudo/ddd-kit/pending-event-recording-registry/v2",
-);
+const capabilities = new WeakMap<object, PendingEventRecordingCapability>();
 
-const { registry: capabilities, require } =
-	createGlobalCapabilityRegistry<PendingEventRecordingCapability>(
-		recordingCapabilityRegistryKey,
-	);
-
-/** Resolves the recording capability or throws `UnmanagedInstanceError`. */
+/**
+ * Resolves the recording capability. Throws `DUPLICATE_KIT_COPY` for an
+ * aggregate of another loaded kit copy and `UNMANAGED_INSTANCE` for any
+ * other object.
+ */
 export function requirePendingEventRecordingCapability(
 	aggregate: object,
 	operation: string,
 ): PendingEventRecordingCapability {
-	return require(aggregate, operation, "aggregate");
+	const capability = capabilities.get(aggregate);
+	if (capability !== undefined) return capability;
+	assertNotFromAnotherKitCopy(aggregate, "The aggregate");
+	throw unmanagedInstanceError(
+		operation,
+		"aggregate",
+		(aggregate as { id?: unknown } | null | undefined)?.id,
+	);
 }
 
 export function registerPendingEventRecordingCapability(

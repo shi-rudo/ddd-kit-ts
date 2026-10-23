@@ -1,3 +1,4 @@
+import { findInCauseChain } from "@shirudo/base-error";
 import type { Aggregate, Version } from "../../domain/aggregate/aggregate";
 import { requirePendingEventLifecycleReadView } from "../../domain/aggregate/pending-event-lifecycle";
 import type {
@@ -6,14 +7,15 @@ import type {
 } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
 import {
-	AggregateDeletedError,
+	aggregateDeletedError,
 	attributeConflictIntent,
 	ConcurrencyConflictError,
 	type InfrastructureError,
 	isInfrastructureErrorLike,
-	UnregisteredChangesError,
+	isWiringError,
+	type KitWiringError,
+	unregisteredChangesError,
 } from "../../errors/kit-errors";
-import { findInCauseChain } from "../../internal/cause-chain";
 import {
 	type AggregateClass,
 	IdentityMap,
@@ -27,17 +29,12 @@ import {
 	persistenceCaptureDrifted,
 	recapturePersistenceBaseline,
 } from "../../persistence/repository/persistence-model";
-import type {
-	AggregateCommitToken,
-	CommitRegistration,
-	StampAtRegistration,
-} from "../cqrs/handler";
+import type { CommitRegistration, StampAtRegistration } from "../cqrs/handler";
 import {
-	AggregateTrackingError,
+	aggregateTrackingError,
 	attributeFlushStatementIntent,
-	InvalidFlushStatementError,
-	RepositoryErrorMappingFailedError,
-	TransactionClosedError,
+	repositoryErrorMappingFailedError,
+	transactionClosedError,
 	wiringErrorInCauseChain,
 } from "./errors";
 import type {
@@ -88,12 +85,11 @@ export class Session<Evt extends AnyDomainEvent> {
 	// separate collections: both derive from each entry's registration, so
 	// the bookkeeping cannot drift apart.
 	private readonly _registeredWrites: TrackedAggregate<Evt>[] = [];
-	private readonly _commitTokens = new Set<AggregateCommitToken<Evt>>();
 	private readonly _identityMap = new IdentityMap();
 	// What adapters receive: the typed read-only view, enforced at runtime.
 	// Handing out the map itself would expose set/delete/clear to JavaScript
 	// callers, and a stray clear() erases deletion tombstones and the
-	// pending-event baselines behind UnregisteredChangesError. A view that an
+	// pending-event baselines behind `UNREGISTERED_CHANGES`. A view that an
 	// adapter keeps answers empty once the session is no longer open, so it
 	// cannot serve an instance after its attempt ended.
 	private readonly _identityMapView = Object.freeze({
@@ -120,7 +116,9 @@ export class Session<Evt extends AnyDomainEvent> {
 	 * work: nothing can fail the attempt any more.
 	 */
 	private _lateRegistrationsFailAttempt = false;
-	private _registrationDuringFlush: AggregateTrackingError | undefined;
+	private _registrationDuringFlush:
+		| KitWiringError<"AGGREGATE_TRACKING">
+		| undefined;
 
 	constructor(
 		private readonly commitRegistration: CommitRegistration<Evt>,
@@ -180,7 +178,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		// findById would serve it.
 		const existing = this._trackingByAggregate.get(aggregate);
 		if (existing && existing.definition !== definition) {
-			throw new AggregateTrackingError({
+			throw aggregateTrackingError({
 				identity: aggregate.aggregateIdentity,
 				operation: "load",
 				reason: "different_repository",
@@ -217,7 +215,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		this.assertNotRemoved(aggregate, definition);
 		const existing = this._trackingByAggregate.get(aggregate);
 		if (existing && existing.definition !== definition) {
-			throw new AggregateTrackingError({
+			throw aggregateTrackingError({
 				identity: aggregate.aggregateIdentity,
 				operation: "add",
 				reason: "different_repository",
@@ -225,7 +223,7 @@ export class Session<Evt extends AnyDomainEvent> {
 			});
 		}
 		if (existing?.lifecycle === "loaded") {
-			throw new AggregateTrackingError({
+			throw aggregateTrackingError({
 				identity: aggregate.aggregateIdentity,
 				operation: "add",
 				reason: "loaded_as_new",
@@ -278,7 +276,7 @@ export class Session<Evt extends AnyDomainEvent> {
 	): void {
 		const tracked = this._identityMap.get(definition.aggregate, aggregate.id);
 		if (tracked === undefined || tracked === aggregate) return;
-		throw new AggregateTrackingError({
+		throw aggregateTrackingError({
 			identity: aggregate.aggregateIdentity,
 			operation: "add",
 			reason: "identity_already_tracked",
@@ -360,7 +358,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		// branching on the machine-readable reason must not get not_loaded
 		// for the identical violation on the update/remove path.
 		if (entry && entry.definition !== definition) {
-			throw new AggregateTrackingError({
+			throw aggregateTrackingError({
 				identity: aggregate.aggregateIdentity,
 				operation: operation,
 				reason: "different_repository",
@@ -372,7 +370,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		// ("load it through the repository") is impossible for an aggregate
 		// that has no row yet and would actively mislead.
 		if (entry && entry.lifecycle === "new" && entry.definition === definition) {
-			throw new AggregateTrackingError({
+			throw aggregateTrackingError({
 				identity: aggregate.aggregateIdentity,
 				operation: operation,
 				reason: "conflicting_intent",
@@ -380,7 +378,7 @@ export class Session<Evt extends AnyDomainEvent> {
 			});
 		}
 		if (entry?.lifecycle !== "loaded" || entry.definition !== definition) {
-			throw new AggregateTrackingError({
+			throw aggregateTrackingError({
 				identity: aggregate.aggregateIdentity,
 				operation: operation,
 				reason: "not_loaded",
@@ -395,7 +393,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void {
 		if (this._identityMap.isDeleted(definition.aggregate, aggregate.id)) {
-			throw new AggregateDeletedError({
+			throw aggregateDeletedError({
 				identity: aggregate.aggregateIdentity,
 			});
 		}
@@ -407,7 +405,7 @@ export class Session<Evt extends AnyDomainEvent> {
 	): boolean {
 		if (entry.registration !== undefined) {
 			if (entry.registration.intent !== intent) {
-				throw new AggregateTrackingError({
+				throw aggregateTrackingError({
 					identity: entry.aggregate.aggregateIdentity,
 					operation: intent,
 					reason: "conflicting_intent",
@@ -462,7 +460,7 @@ export class Session<Evt extends AnyDomainEvent> {
 			!sameEvents ||
 			persistenceChanged
 		) {
-			throw new AggregateTrackingError({
+			throw aggregateTrackingError({
 				identity: entry.aggregate.aggregateIdentity,
 				operation,
 				reason: "mutated_after_registration",
@@ -475,7 +473,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
 		expectedVersion: Version | undefined,
-	): AggregateCommitToken<Evt> {
+	): void {
 		this.assertOpen("repository.add/update");
 		// Two gates, one invariant: the registration check catches the same
 		// reference; the identity-map tombstone (keyed on the instance's
@@ -486,26 +484,20 @@ export class Session<Evt extends AnyDomainEvent> {
 			this.isRemovedInstance(aggregate) ||
 			this._identityMap.isDeleted(definition.aggregate, aggregate.id)
 		) {
-			throw new AggregateDeletedError({
+			throw aggregateDeletedError({
 				identity: aggregate.aggregateIdentity,
 			});
 		}
-		const token = this.commitRegistration.registerSaved(aggregate, {
-			expectedVersion,
-		});
-		this._commitTokens.add(token);
-		return token;
+		this.commitRegistration.registerSaved(aggregate, { expectedVersion });
 	}
 
 	private registerRemovedCommit(
 		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
 		expectedVersion: Version | undefined,
-	): AggregateCommitToken<Evt> {
+	): void {
 		this.assertOpen("repository.remove");
-		const token = this.commitRegistration.registerRemoved(aggregate, {
-			expectedVersion,
-		});
+		this.commitRegistration.registerRemoved(aggregate, { expectedVersion });
 		// One call does ALL the deletion bookkeeping: the identity-map
 		// entry is removed and tombstoned automatically (keyed on the
 		// instance's concrete class), so repositories do not need a
@@ -516,12 +508,10 @@ export class Session<Evt extends AnyDomainEvent> {
 		// map with the same concrete class their factories produce.
 		// Deleted aggregates stay in the collection set: their recorded
 		// deletion events must reach the outbox (repository.md, hard-
-		// delete with event collection). withCommit receives them in the
-		// deleted token disposition, so the saved-only application observer
+		// delete with event collection). withCommit receives them with the
+		// deleted disposition, so the saved-only application observer
 		// never fires for a deletion.
 		this._identityMap.delete(definition.aggregate, aggregate.id);
-		this._commitTokens.add(token);
-		return token;
 	}
 
 	/**
@@ -548,7 +538,7 @@ export class Session<Evt extends AnyDomainEvent> {
 				(entry.aggregate.version !== entry.expectedVersion ||
 					persistenceCaptureDrifted(entry.baseline, entry.aggregate))
 			) {
-				throw new UnregisteredChangesError({
+				throw unregisteredChangesError({
 					identity: entry.aggregate.aggregateIdentity,
 					appendOnly: entry.definition.appendOnly === true,
 				});
@@ -569,7 +559,7 @@ export class Session<Evt extends AnyDomainEvent> {
 			// registered, yet it has no write intent: a forgotten update whose
 			// events would be silently dropped.
 			const aggregate = instance as Aggregate<Id<string>, Evt>;
-			throw new UnregisteredChangesError({
+			throw unregisteredChangesError({
 				identity: aggregate.aggregateIdentity,
 				appendOnly:
 					this._trackingByAggregate.get(aggregate)?.definition.appendOnly ===
@@ -585,7 +575,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		for (const entry of this._registeredWrites) {
 			const registration = entry.registration;
 			if (registration === undefined) {
-				throw new AggregateTrackingError({
+				throw aggregateTrackingError({
 					identity: entry.aggregate.aggregateIdentity,
 					operation: "commit",
 					reason: "mutated_after_registration",
@@ -605,10 +595,6 @@ export class Session<Evt extends AnyDomainEvent> {
 				throw mapRepositoryPersistenceError(entry.definition, error, write);
 			}
 		}
-	}
-
-	public get commitTokens(): ReadonlyArray<AggregateCommitToken<Evt>> {
-		return [...this._commitTokens];
 	}
 
 	/**
@@ -636,7 +622,7 @@ export class Session<Evt extends AnyDomainEvent> {
 
 	public assertOpen(operation: string): void {
 		if (this._phase !== "open") {
-			throw new TransactionClosedError(operation);
+			throw transactionClosedError(operation);
 		}
 	}
 
@@ -672,7 +658,7 @@ export class Session<Evt extends AnyDomainEvent> {
 			this.assertUnchangedAfterRegistration(entry, operation);
 			return true;
 		}
-		const rejection = new AggregateTrackingError({
+		const rejection = aggregateTrackingError({
 			identity: aggregate.aggregateIdentity,
 			operation,
 			reason: "registered_during_flush",
@@ -685,8 +671,8 @@ export class Session<Evt extends AnyDomainEvent> {
  * A flush and an event store report what they observed; the unit of work
  * knows which write it asked for. So the intent of a conflict and of a
  * statement defect comes from here. It is set on the error object itself,
- * found by its code anywhere in the cause chain, so a wrapped error and an
- * error from another copy of the kit get it too.
+ * found by its code anywhere in the cause chain, so a wrapped error gets it
+ * too.
  */
 function attributeWriteIntent(
 	error: unknown,
@@ -699,10 +685,8 @@ function attributeWriteIntent(
 		Reflect.set(conflict, "intent", intent);
 	}
 	const defect = firstInCauseChainWithCode(error, "INVALID_FLUSH_STATEMENT");
-	if (defect instanceof InvalidFlushStatementError) {
+	if (isWiringError(defect, "INVALID_FLUSH_STATEMENT")) {
 		attributeFlushStatementIntent(defect, intent);
-	} else if (defect !== undefined) {
-		Reflect.set(defect, "intent", intent);
 	}
 }
 
@@ -710,13 +694,13 @@ function firstInCauseChainWithCode(
 	error: unknown,
 	code: string,
 ): object | undefined {
-	return findInCauseChain(error, (link) => {
-		try {
-			return (link as { code?: unknown }).code === code ? link : undefined;
-		} catch {
-			return undefined;
-		}
-	});
+	return findInCauseChain(
+		error,
+		(link): link is object =>
+			typeof link === "object" &&
+			link !== null &&
+			(link as { code?: unknown }).code === code,
+	);
 }
 
 function mapRepositoryPersistenceError<Evt extends AnyDomainEvent>(
@@ -734,22 +718,18 @@ function mapRepositoryPersistenceError<Evt extends AnyDomainEvent>(
 	try {
 		mapped = definition.mapError(error, write);
 	} catch (mapperError) {
-		throw new RepositoryErrorMappingFailedError({
+		throw repositoryErrorMappingFailedError({
 			identity: write.aggregateIdentity,
 			intent: write.intent,
 			persistenceError: error,
 			mapperError,
 		});
 	}
-	// Copy-safe: an adapter package can carry its own copy of the kit, whose
-	// InfrastructureError fails a plain instanceof here; rejecting it would
-	// turn every retryable conflict into a non-retryable wiring crash that
-	// blames a correct mapper.
 	if (isInfrastructureErrorLike(mapped)) {
 		attributeWriteIntent(mapped, write.intent);
 		return mapped;
 	}
-	throw new RepositoryErrorMappingFailedError({
+	throw repositoryErrorMappingFailedError({
 		identity: write.aggregateIdentity,
 		intent: write.intent,
 		persistenceError: error,

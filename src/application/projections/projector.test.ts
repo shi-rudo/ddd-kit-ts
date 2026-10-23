@@ -3,10 +3,7 @@ import {
 	createDomainEvent,
 	type DomainEvent,
 } from "../../domain/event/domain-event";
-import {
-	ForeignEventError,
-	UnprojectableEventError,
-} from "../../errors/kit-errors";
+import { ForeignEventError } from "../../errors/kit-errors";
 import type {
 	CommittedDomainEvent,
 	EventCommitCandidate,
@@ -1097,7 +1094,7 @@ describe("Projector", () => {
 		};
 
 		await expect(projector.project([untyped])).rejects.toThrow(
-			UnprojectableEventError,
+			expect.objectContaining({ code: "UNPROJECTABLE_EVENT" }),
 		);
 		expect(rows).toEqual([]);
 	});

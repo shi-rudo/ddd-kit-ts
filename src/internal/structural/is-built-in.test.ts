@@ -93,13 +93,6 @@ describe("isWeakMap", () => {
 		expect(isWeakMap(foreign)).toBe(true);
 	});
 
-	it("rejects a plain object that spoofs the WeakMap tag", () => {
-		const spoofed = { [Symbol.toStringTag]: "WeakMap" };
-
-		expect(Object.prototype.toString.call(spoofed)).toBe("[object WeakMap]");
-		expect(isWeakMap(spoofed)).toBe(false);
-	});
-
 	it("rejects other collections and non-objects", () => {
 		expect(isWeakMap(new WeakSet())).toBe(false);
 		expect(isWeakMap(new Map())).toBe(false);

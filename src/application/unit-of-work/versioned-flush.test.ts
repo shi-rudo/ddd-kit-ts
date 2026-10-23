@@ -6,7 +6,6 @@ import {
 	ConcurrencyConflictError,
 	DuplicateAggregateError,
 } from "../../errors/kit-errors";
-import { InvalidFlushStatementError } from "./errors";
 import type {
 	AggregatePersistenceWrite,
 	AggregateWriteIntent,
@@ -265,12 +264,14 @@ describe("versionedFlush", () => {
 				writeFor(intent, 3 as Version),
 			).catch((error: unknown) => error);
 
-			expect(rejection).toBeInstanceOf(InvalidFlushStatementError);
+			expect(rejection).toMatchObject({ code: "INVALID_FLUSH_STATEMENT" });
 			expect(rejection).toMatchObject({
 				code: "INVALID_FLUSH_STATEMENT",
-				reason: "statement_absent",
-				identity: { aggregateType: "Order", aggregateId: orderId },
-				intent,
+				details: {
+					reason: "statement_absent",
+					identity: { aggregateType: "Order", aggregateId: orderId },
+					intent,
+				},
 			});
 			expect((rejection as Error).message).toContain(requirement);
 		},
@@ -294,10 +295,12 @@ describe("versionedFlush", () => {
 				writeFor("update", 3 as Version),
 			).catch((error: unknown) => error);
 
-			expect(rejection).toBeInstanceOf(InvalidFlushStatementError);
+			expect(rejection).toMatchObject({ code: "INVALID_FLUSH_STATEMENT" });
 			expect(rejection).toMatchObject({
-				reason: "no_row_count",
-				received: returned === undefined ? undefined : received,
+				details: {
+					reason: "no_row_count",
+					received: returned === undefined ? undefined : received,
+				},
 			});
 			expect(calls).toEqual(["update transaction update"]);
 		},
@@ -361,11 +364,13 @@ describe("versionedFlush", () => {
 				writeFor("update", expectedVersion as Version),
 			).catch((error: unknown) => error);
 
-			expect(rejection).toBeInstanceOf(InvalidFlushStatementError);
+			expect(rejection).toMatchObject({ code: "INVALID_FLUSH_STATEMENT" });
 			expect(rejection).toMatchObject({
-				reason: "no_expected_version",
-				intent: "update",
-				received: String(expectedVersion),
+				details: {
+					reason: "no_expected_version",
+					intent: "update",
+					received: String(expectedVersion),
+				},
 			});
 			expect(calls).toEqual([]);
 		},
@@ -382,10 +387,9 @@ describe("versionedFlush", () => {
 			writeFor("update", 3 as Version),
 		).catch((error: unknown) => error);
 
-		expect(rejection).toBeInstanceOf(InvalidFlushStatementError);
+		expect(rejection).toMatchObject({ code: "INVALID_FLUSH_STATEMENT" });
 		expect(rejection).toMatchObject({
-			reason: "no_version",
-			received: "3 (string)",
+			details: { reason: "no_version", received: "3 (string)" },
 		});
 		expect((rejection as Error).message).toContain(
 			`currentVersion statement of Order(${orderId}) returned 3 (string)`,
@@ -432,12 +436,11 @@ describe("versionedFlush", () => {
 			writeFor("add", undefined),
 		).catch((error: unknown) => error);
 
-		expect(rejection).toBeInstanceOf(InvalidFlushStatementError);
+		expect(rejection).toMatchObject({ code: "INVALID_FLUSH_STATEMENT" });
 		expect(rejection).toMatchObject({
-			reason: "duplicate_check_failed",
-			intent: "add",
 			cause: outage,
-			classifierCause: classifierFailure,
+			secondaryCause: classifierFailure,
+			details: { reason: "duplicate_check_failed", intent: "add" },
 		});
 	});
 
@@ -510,8 +513,10 @@ describe("versionedFlush", () => {
 			writeFor("update", undefined),
 		).catch((error: unknown) => error);
 
-		expect(rejection).toBeInstanceOf(InvalidFlushStatementError);
-		expect(rejection).toMatchObject({ reason: "no_expected_version" });
+		expect(rejection).toMatchObject({ code: "INVALID_FLUSH_STATEMENT" });
+		expect(rejection).toMatchObject({
+			details: { reason: "no_expected_version" },
+		});
 		expect(calls).toEqual([]);
 	});
 });
@@ -621,12 +626,10 @@ describe("classifyConcurrencyConflict", () => {
 				() => returned as unknown as number,
 			).catch((error: unknown) => error);
 
-			expect(rejection).toBeInstanceOf(InvalidFlushStatementError);
+			expect(rejection).toMatchObject({ code: "INVALID_FLUSH_STATEMENT" });
 			expect(rejection).toMatchObject({
-				reason: "no_version",
-				received,
-				intent: null,
 				retryable: false,
+				details: { reason: "no_version", received, intent: null },
 			});
 		},
 	);
@@ -650,10 +653,9 @@ describe("classifyConcurrencyConflict", () => {
 				},
 			}).catch((error: unknown) => error);
 
-			expect(rejection).toBeInstanceOf(InvalidFlushStatementError);
+			expect(rejection).toMatchObject({ code: "INVALID_FLUSH_STATEMENT" });
 			expect(rejection).toMatchObject({
-				reason: "no_expected_version",
-				received,
+				details: { reason: "no_expected_version", received },
 			});
 			expect(reads).toBe(0);
 		},

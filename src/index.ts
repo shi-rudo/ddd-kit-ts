@@ -31,11 +31,9 @@ export {
 } from "./application/cqrs/command/command-outbox";
 // App orchestration: withCommit + Unit of Work
 export {
-	type AggregateCommitToken,
 	type CommitRegistration,
 	type CommitRegistrationOptions,
 	type WithCommitDeps,
-	type WithCommitWorkResult,
 	withCommit,
 } from "./application/cqrs/handler";
 export type { Query, QueryHandler } from "./application/cqrs/query/query";
@@ -44,10 +42,6 @@ export {
 	QueryBus,
 	type QueryBusOptions,
 } from "./application/cqrs/query/query-bus";
-export {
-	InMemoryDeadlineStore,
-	type InMemoryDeadlineStoreOptions,
-} from "./application/deadlines/adapters/in-memory-deadline-store";
 // Deadlines: durable timeout-as-input
 export {
 	DeadlineProcessor,
@@ -64,10 +58,6 @@ export {
 	domainErrorToResult,
 } from "./application/domain-error-result";
 export {
-	InMemoryIdempotencyStore,
-	type InMemoryIdempotencyStoreOptions,
-} from "./application/idempotency/adapters/in-memory-idempotency-store";
-export {
 	type IdempotencyClaim,
 	type IdempotencyClaimHandle,
 	type IdempotencyLease,
@@ -78,14 +68,14 @@ export {
 	type IdempotentCommitRequest,
 	type IdempotentCommitResult,
 	type IdempotentExecution,
+	type LeasedIdempotencyClaim,
+	type LeasedIdempotencyClaimHandle,
+	type LeasedIdempotencyStore,
 	type WithIdempotentCommitDeps,
+	type WithLeasedIdempotentCommitDeps,
 	withIdempotentCommit,
 } from "./application/idempotency/idempotency";
-// Projections: checkpoint port, runner, in-memory reference
-export {
-	InMemoryProjectionCheckpointStore,
-	type InMemoryProjectionCheckpointStoreOptions,
-} from "./application/projections/adapters/in-memory-checkpoint-store";
+// Projections: checkpoint port and runner
 export {
 	isPositionAfter,
 	type Projection,
@@ -107,22 +97,8 @@ export {
 	type ProjectorOptions,
 } from "./application/projections/projector";
 export {
-	AggregateTrackingError,
-	type AggregateTrackingErrorOptions,
-	type AggregateTrackingReason,
 	CommitError,
-	type FlushStatementReason,
-	InvalidFlushStatementError,
-	type InvalidFlushStatementErrorOptions,
-	InvalidRepositoryAdapterError,
-	type InvalidRepositoryAdapterErrorOptions,
-	type InvalidRepositoryAdapterReason,
-	InvalidRepositoryDefinitionError,
-	NestedUnitOfWorkError,
-	RepositoryErrorMappingFailedError,
-	type RepositoryErrorMappingFailedErrorOptions,
 	RollbackError,
-	TransactionClosedError,
 } from "./application/unit-of-work/errors";
 export type {
 	AggregatePersistenceWrite,
@@ -239,6 +215,7 @@ export {
 export {
 	deepFreeze,
 	ValueObject,
+	type ValueObjectEqualsExceptOptions,
 	type ValueObjectOf,
 	valueObject,
 	valueObjectEquals,
@@ -248,34 +225,20 @@ export {
 export { valueObjectOrIssues } from "./domain/value-object/value-object-or-issues";
 // Errors
 export {
-	AggregateDeletedError,
-	type AggregateDeletedErrorOptions,
+	AcknowledgedRecordPendingError,
 	type AggregateIdentityMismatchOptions,
 	AggregateNotFoundError,
 	type AggregateNotFoundErrorOptions,
-	CapabilityRegistryConflictError,
 	ConcurrencyConflictError,
 	type ConcurrencyConflictErrorOptions,
 	type ConcurrencyConflictReason,
-	DirectStateMutationError,
-	type DirectStateMutationErrorOptions,
 	DomainError,
 	DuplicateAggregateError,
 	type DuplicateAggregateErrorOptions,
-	DuplicateEventIdError,
-	type DuplicateEventIdErrorOptions,
-	DuplicateHandlerRegistrationError,
-	type DuplicateHandlerRegistrationErrorOptions,
-	ErrorMapperFailedError,
-	type ErrorMapperFailedErrorOptions,
-	EventCollectionError,
 	type EventStreamPageReason,
-	FoldReturnedNoStateError,
 	ForeignEventError,
-	HandBuiltEventError,
 	IdempotencyClaimLostError,
 	type IdempotencyClaimLostErrorOptions,
-	IdempotencyCompletionWithoutClaimError,
 	IdempotencyInFlightError,
 	type IdempotencyInFlightErrorOptions,
 	IdempotencyKeyReuseError,
@@ -289,27 +252,18 @@ export {
 	InvalidEventStreamPageError,
 	type InvalidEventStreamPageErrorOptions,
 	InvalidIntegrationMessageError,
-	InvalidVersionError,
 	isDomainErrorLike,
 	isInfrastructureErrorLike,
 	isWiringErrorLike,
 	type KitErrorCode,
 	type KitErrorOptions,
-	MisattributedEventError,
-	MissingEntityIdError,
-	MissingFoldError,
-	MissingHandlerError,
-	PendingEventBatchMismatchError,
-	type PendingEventBatchMismatchErrorOptions,
-	PendingEventLimitExceededError,
-	type PendingEventLimitExceededErrorOptions,
+	KitWiringError,
+	type KitWiringErrorCode,
+	type KitWiringErrorOptions,
 	ProjectionGapError,
 	ProjectionIdentityViolationError,
 	ProjectionOrderViolationError,
 	ProjectionReceiptViolationError,
-	PrototypePollutionError,
-	ReentrantEventRecordingError,
-	type ReentrantEventRecordingErrorOptions,
 	ReplayRejectedError,
 	type ReplayRejectedErrorOptions,
 	ReplayTargetMismatchError,
@@ -318,16 +272,6 @@ export {
 	SnapshotCorruptedError,
 	SnapshotSchemaMismatchError,
 	type SnapshotSchemaMismatchErrorOptions,
-	SnapshotVersionNotRestoredError,
-	type SnapshotVersionNotRestoredErrorOptions,
-	UnmanagedInstanceError,
-	UnprojectableEventError,
-	UnregisteredChangesError,
-	type UnregisteredChangesErrorOptions,
-	UnregisteredHandlerError,
-	type UnregisteredHandlerErrorOptions,
-	UnreplayableAggregateError,
-	type UnreplayableAggregateErrorOptions,
 } from "./errors/kit-errors";
 export type { ExecutionContext } from "./internal/async/execution";
 export type {
@@ -336,15 +280,12 @@ export type {
 	DeliveryFailureKind,
 } from "./internal/delivery-failure";
 export type { StandardSchemaV1 } from "./internal/standard-schema";
-export { copyPlainState } from "./internal/structural/copy-plain-state";
 // Structural equality and copies
 export { deepEqual } from "./internal/structural/deep-equal";
 export {
-	type DeepOmitKey,
-	type DeepOmitOptions,
-	type DeepOmitPathSegment,
-	deepOmit,
-} from "./internal/structural/deep-omit";
+	type CopyPlainDataOptions,
+	copyPlainData,
+} from "./internal/structural/plain-data";
 // Messaging: commit envelope, bus, outbox, dispatcher
 export type {
 	CommitPosition,
@@ -352,10 +293,6 @@ export type {
 	EventCommitCandidate,
 	EventCommitCandidatePosition,
 } from "./messaging/committed-event";
-export {
-	EventBusClosedError,
-	PublishDepthExceededError,
-} from "./messaging/event-bus/errors";
 export {
 	type EventBusObservers,
 	type EventBusOptions,
@@ -367,13 +304,11 @@ export {
 export type {
 	EventBus,
 	EventHandler,
+	EventHandlerContext,
 	OnceOptions,
+	PublishChain,
 	PublishOptions,
 } from "./messaging/event-bus/ports";
-export type {
-	PublishChainState,
-	PublishChainStore,
-} from "./messaging/event-bus/publish-chain";
 export {
 	createIntegrationMessage,
 	decodeIntegrationMessage,
@@ -387,11 +322,7 @@ export {
 	type JsonPrimitive,
 	type JsonValue,
 } from "./messaging/integration-message/integration-message";
-export {
-	InMemoryOutbox,
-	type InMemoryOutboxOptions,
-	outboxWriterAcceptingEventLoss,
-} from "./messaging/outbox/outbox";
+export { outboxWriterAcceptingEventLoss } from "./messaging/outbox/outbox";
 export {
 	eventBusSink,
 	OutboxDispatcher,
@@ -407,10 +338,6 @@ export type {
 	OutboxWriter,
 } from "./messaging/outbox/ports";
 // Persistence: repository, event store, snapshot store
-export {
-	InMemoryEventStore,
-	type InMemoryEventStoreOptions,
-} from "./persistence/event-store/adapters/in-memory-event-store";
 export type {
 	EventStore,
 	EventStoreAppendOptions,
@@ -433,15 +360,10 @@ export {
 	type ReplayableStreamPages,
 	reconstituteAggregateFromStreamPages,
 } from "./persistence/event-store/reconstitute-from-stream-pages";
-export { InMemoryTransactionScope } from "./persistence/repository/adapters/in-memory-transaction-scope";
 export {
 	type AggregateClass,
 	IdentityMap,
 } from "./persistence/repository/identity-map";
-export type {
-	InMemoryTransaction,
-	InMemoryTransactionParticipant,
-} from "./persistence/repository/in-memory-transaction";
 export type {
 	PersistenceChanges,
 	PersistenceLifecycle,
@@ -451,8 +373,6 @@ export type {
 	AggregatePersistence,
 	Repository,
 } from "./persistence/repository/repository";
-// computeBackoffDelay is deliberately NOT exported: internal since 2.x
-// (unit-tested via direct source import), removed from the surface in v3.
 export {
 	RetryingTransactionScope,
 	type RetryPolicy,
@@ -461,10 +381,6 @@ export type {
 	TransactionalOptions,
 	TransactionScope,
 } from "./persistence/repository/scope";
-export {
-	InMemorySnapshotStore,
-	type InMemorySnapshotStoreOptions,
-} from "./persistence/snapshot-store/adapters/in-memory-snapshot-store";
 export {
 	captureAggregateSnapshot,
 	defineSnapshotModel,

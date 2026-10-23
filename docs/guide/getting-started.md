@@ -22,6 +22,12 @@ once in the consuming app:
 - `@shirudo/base-error` is the structured-error foundation used by kit errors
   and validation helpers.
 
+Load one copy of the kit per process. If you write an adapter package, for
+example a repository for your database, declare `@shirudo/ddd-kit` as a peer
+dependency and do not bundle it. The application then installs one copy, and
+the adapter uses it. An object that a second loaded copy built throws
+`DUPLICATE_KIT_COPY`.
+
 ::: tip Module format
 The package is ESM-only. Node consumers need `"type": "module"` in
 `package.json` or a bundler that handles ESM. The package declares Node `>=24`

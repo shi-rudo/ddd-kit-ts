@@ -376,7 +376,7 @@ callers and storage.
 The wrapper also rejects reentrant evaluation. A guard, reducer,
 `validateContext`, or `validateSnapshot` must not call `can(...)` or
 `dispatch(...)` on the same machine instance. That throws
-`ReentrantDomainStateMachineEvaluationError`, leaves the current snapshot
+`REENTRANT_DOMAIN_STATE_MACHINE_EVALUATION`, leaves the current snapshot
 unchanged, and releases the evaluation lock even if callback code throws.
 
 ## Persist snapshots, not machines
@@ -465,9 +465,10 @@ guards or reducers. The current machine definition should operate on the
 current context schema.
 
 Snapshots are plain data and can be serialized as JSON when the context uses
-JSON-compatible values. The runtime can carry values such as `bigint`, `symbol`,
-`undefined`, and non-finite numbers in memory, but JSON does not preserve them
-faithfully. Encode those explicitly if they belong in persisted context.
+JSON-compatible values. The runtime can carry values such as `bigint`,
+`undefined`, non-finite numbers, `Date`, `Map`, and `Set` in memory, but JSON
+does not preserve them faithfully. Encode those explicitly if they belong in
+persisted context.
 
 ## Save outputs atomically with the snapshot
 
@@ -617,32 +618,29 @@ mistakes; it does not replace behavioral tests for guard conditions.
 
 ## Respect the data boundary
 
-Machine context, inputs, outputs, and snapshots are data. Use primitives, plain
-objects, and plain arrays.
+Machine context, inputs, outputs, and snapshots are data. They follow the
+plain-data rule of the kit (see "One rule for plain data" in the design
+decisions): primitives, plain objects, plain arrays, `Date`, `Map`, and `Set`.
 
 Do not put these values in machine data:
 
-- functions, promises, or external resources
+- functions, symbols, promises, or external resources
 - class instances or custom array subclasses
-- `Date`, `RegExp`, `Map`, `Set`, typed arrays, or binary buffers
-- accessors, hidden behavior, or inherited domain state
-
-Represent dates as ISO strings or epoch numbers, maps as records or entry
-arrays, sets as arrays, and regular expressions as pattern/flag data.
+- `RegExp`, typed arrays, or binary buffers
+- accessors, symbol-keyed properties, hidden behavior, or inherited domain
+  state
 
 The runtime copies and deeply freezes context, inputs, snapshots, and outputs.
 Plain objects from another JavaScript Realm are accepted and normalized to local
-plain objects while copied. Own accessors are rejected without invoking their
-getter or setter.
+plain objects while copied. A value outside the rule throws the machine error
+for its place, with the path in the message.
 
-The data graph is limited to 256 nested object/array levels, 10,000 unique
-object nodes, and 100,000 own properties per copy operation. Those limits are
-not business rules; they are guardrails against accidental giant object graphs.
+If you serialize a snapshot as JSON, encode a `Date` as an ISO string or an
+epoch number, a `Map` as a record or an entry array, and a `Set` as an array.
+JSON does not keep them.
 
-Inputs must also be trusted and Proxy-free. JavaScript has no portable,
-side-effect-free way to identify a transparent `Proxy`; reflective validation
-can execute its traps. Parse untrusted wire input into ordinary DTOs before
-constructing machine inputs or snapshots.
+Parse untrusted wire input into ordinary DTOs before constructing machine
+inputs or snapshots.
 
 Definition validation is strict as well. Unknown properties are rejected, so a
 misspelled `gaurd` or `output` fails instead of silently removing a business
@@ -659,19 +657,20 @@ Missing transitions and rejected guards are domain-rule violations:
 - a concrete `DomainError` returned by a guard is thrown unchanged
 
 Broken definitions, invalid restored snapshots, malformed inputs, bad reducer
-results, and reentrant calls are wiring or reconstitution failures:
+results, and reentrant calls are wiring or reconstitution failures. They throw
+a `KitWiringError` with one of these codes:
 
-- `InvalidDomainMachineDefinitionError extends BaseError`
-- `InvalidDomainMachineContextError extends BaseError`
-- `InvalidDomainMachineSnapshotError extends BaseError`
-- `InvalidDomainMachineInputError extends BaseError`
-- `InvalidDomainTransitionGuardResultError extends BaseError`
-- `InvalidDomainTransitionResultError extends BaseError`
-- `ReentrantDomainStateMachineEvaluationError extends BaseError`
+- `INVALID_DOMAIN_MACHINE_DEFINITION`
+- `INVALID_DOMAIN_MACHINE_CONTEXT`
+- `INVALID_DOMAIN_MACHINE_SNAPSHOT`
+- `INVALID_DOMAIN_MACHINE_INPUT`
+- `INVALID_DOMAIN_TRANSITION_GUARD_RESULT`
+- `INVALID_DOMAIN_TRANSITION_RESULT`
+- `REENTRANT_DOMAIN_STATE_MACHINE_EVALUATION`
 
 That split is the same one the rest of the kit uses. Domain operations throw
 `DomainError` for rejected business moves. Broken code and corrupted data fail
-loudly as structured `BaseError` instances.
+loudly as a `KitWiringError`.
 
 ## DomainStateMachine vs XState
 

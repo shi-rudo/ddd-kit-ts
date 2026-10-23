@@ -8,13 +8,51 @@
  * are adapter CONTRACTS the consumer's implementation must prove; this
  * entry provides the proof harnesses. It also ships
  * `createReplayableStreamPages`, a replayable stream read built from an
- * in-memory tail for a test of the code that consumes a read. Kept out of
- * the core barrel so test-only code never rides into production bundles.
- * Named exports only; a module this file does not export is kit-internal
- * test support.
+ * in-memory tail for a test of the code that consumes a read.
+ *
+ * The in-memory reference adapters of the ports live here too, for tests
+ * and demos, with the `InMemoryTransactionScope` that gives them a rollback.
+ * They pass the contract suites, but they are not durable.
+ *
+ * Kept out of the core barrel so test-only code never rides into
+ * production bundles. Named exports only; a module this file does not
+ * export is kit-internal test support.
  *
  * @module @shirudo/ddd-kit/testing
  */
+export {
+	InMemoryDeadlineStore,
+	type InMemoryDeadlineStoreOptions,
+} from "../application/deadlines/adapters/in-memory-deadline-store";
+export {
+	InMemoryIdempotencyStore,
+	type InMemoryIdempotencyStoreOptions,
+} from "../application/idempotency/adapters/in-memory-idempotency-store";
+export {
+	InMemoryLeasedIdempotencyStore,
+	type InMemoryLeasedIdempotencyStoreOptions,
+} from "../application/idempotency/adapters/in-memory-leased-idempotency-store";
+export {
+	InMemoryProjectionCheckpointStore,
+	type InMemoryProjectionCheckpointStoreOptions,
+} from "../application/projections/adapters/in-memory-checkpoint-store";
+export {
+	InMemoryOutbox,
+	type InMemoryOutboxOptions,
+} from "../messaging/outbox/outbox";
+export {
+	InMemoryEventStore,
+	type InMemoryEventStoreOptions,
+} from "../persistence/event-store/adapters/in-memory-event-store";
+export { InMemoryTransactionScope } from "../persistence/repository/adapters/in-memory-transaction-scope";
+export type {
+	InMemoryTransaction,
+	InMemoryTransactionParticipant,
+} from "../persistence/repository/in-memory-transaction";
+export {
+	InMemorySnapshotStore,
+	type InMemorySnapshotStoreOptions,
+} from "../persistence/snapshot-store/adapters/in-memory-snapshot-store";
 export {
 	type CommandOutboxContractEnvironment,
 	type CommandOutboxContractHarness,
@@ -54,6 +92,12 @@ export {
 	type IdempotencyStoreContractHarness,
 	type IdempotencyStoreContractTest,
 } from "./idempotency-store-contract";
+export {
+	createLeasedIdempotencyStoreContractTests,
+	type LeasedIdempotencyStoreContractEnvironment,
+	type LeasedIdempotencyStoreContractHarness,
+	type LeasedIdempotencyStoreContractTest,
+} from "./leased-idempotency-store-contract";
 export {
 	createOutboxContractTests,
 	type OutboxContractEnvironment,

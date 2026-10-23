@@ -5,6 +5,7 @@ import {
 	type PublicErrorCatalog,
 	project,
 } from "@shirudo/base-error/public-error";
+import { reportToObserver } from "../../internal/observer";
 import {
 	createKitPublicErrors,
 	type PublicErrorViewDetails,
@@ -43,6 +44,12 @@ export interface PublicErrorViewOptions {
 	 * each validation issue.
 	 */
 	catalog?: PublicErrorCatalog<string>;
+	/**
+	 * Observer for a failure of the catalog or its messages. The view then
+	 * falls back to the generic view, so this observer is the only place
+	 * where the failure shows.
+	 */
+	onCatalogError?: (error: unknown) => void;
 }
 
 /**
@@ -84,9 +91,9 @@ export function toPublicErrorView(
 	const locale = options.locale ?? DEFAULT_LOCALE;
 	const catalog = options.catalog ?? defaultCatalog;
 	// The catch is the totality guarantee's last line: `project` is total
-	// by contract, but a hostile catalog or message set handed in via
+	// by contract, but a broken catalog or message set handed in via
 	// options must still degrade to the fallback view, never crash the
-	// 500 path.
+	// 500 path. The observer keeps the failure visible.
 	try {
 		const view = project(catalog, error) as PublicError<
 			PublicErrorViewDetails,
@@ -99,7 +106,8 @@ export function toPublicErrorView(
 		// A consumer descriptor without userMessages: keep the view, attach
 		// the generic fallback text so the type stays LocalizedPublicError.
 		return { ...view, message: FALLBACK_MESSAGE, locale: DEFAULT_LOCALE };
-	} catch {
+	} catch (catalogError) {
+		reportToObserver(() => options.onCatalogError?.(catalogError));
 		return {
 			code: FALLBACK_CODE,
 			message: FALLBACK_MESSAGE,

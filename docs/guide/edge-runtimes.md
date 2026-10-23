@@ -23,7 +23,7 @@ The runtime surface is intentionally small:
 - no required `process`, `fs`, or `Buffer` usage in the package runtime
 - default event ids are UUID v7 from Web Crypto's `crypto.getRandomValues()`
 - event and snapshot timestamps use `new Date()`
-- aggregate snapshots and value-object cloning use `structuredClone`
+- the in-memory reference adapters copy their records with `structuredClone`
 - `EventBus` uses `Promise.allSettled`
 - cancellation-aware APIs accept `AbortSignal`
 
@@ -538,23 +538,18 @@ const confirmOrder = async (command: ConfirmOrder) => {
       const order = loaded.aggregate;
       if (!order.canBeConfirmedBy(command.requestedBy)) {
         return {
-          result: {
-            status: "forbidden",
-            orderId: command.orderId,
-          } satisfies ConfirmOrderOutcome,
-          commits: [],
-        };
+          status: "forbidden",
+          orderId: command.orderId,
+        } satisfies ConfirmOrderOutcome;
       }
 
       order.confirm();
       await updateOrderForDirectCommit(tx, order, loaded.expectedVersion);
+      registration.registerSaved(order);
       return {
-        result: {
-          status: "confirmed",
-          orderId: order.id,
-        } satisfies ConfirmOrderOutcome,
-        commits: [registration.registerSaved(order)],
-      };
+        status: "confirmed",
+        orderId: order.id,
+      } satisfies ConfirmOrderOutcome;
     },
   );
 
@@ -664,12 +659,14 @@ money arithmetic. It also runs without Node's `process` or `Buffer` globals.
 This is a compatibility tripwire for the package runtime, not certification of
 a consumer's database, broker, or framework adapters.
 
-In-memory adapters are useful for tests, but they are still memory-only:
+In-memory adapters are useful for tests, but they are still memory-only.
+`@shirudo/ddd-kit/testing` exports them:
 
 - `InMemoryOutbox`
 - `InMemoryEventStore`
 - `InMemorySnapshotStore`
 - `InMemoryIdempotencyStore`
+- `InMemoryLeasedIdempotencyStore`
 - `InMemoryDeadlineStore`
 - `InMemoryProjectionCheckpointStore`
 

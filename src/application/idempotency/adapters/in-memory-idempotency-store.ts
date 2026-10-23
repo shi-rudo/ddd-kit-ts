@@ -1,14 +1,10 @@
 import {
-	IdempotencyClaimLostError,
-	IdempotencyCompletionWithoutClaimError,
 	IdempotencyInFlightError,
 	IdempotencyKeyReuseError,
 	InMemoryCapacityExceededError,
+	idempotencyCompletionWithoutClaimError,
 } from "../../../errors/kit-errors";
-import {
-	assertPositiveSafeInteger,
-	MAX_TIMER_DELAY_MS,
-} from "../../../internal/validate";
+import { assertPositiveSafeInteger } from "../../../internal/validate";
 import type {
 	InMemoryTransaction,
 	InMemoryTransactionParticipant,
@@ -16,9 +12,6 @@ import type {
 import type {
 	IdempotencyClaim,
 	IdempotencyClaimHandle,
-	IdempotencyLease,
-	IdempotencyReconciliation,
-	IdempotencyReconciliationDecision,
 	IdempotencyStore,
 } from "../idempotency";
 
@@ -26,90 +19,53 @@ interface PendingEntry {
 	readonly fingerprint: string;
 	readonly status: "pending";
 	readonly token: string;
-	readonly expiresAtMs: number;
 }
 
-interface StagedEntry {
+interface CompletedEntry {
 	readonly fingerprint: string;
-	readonly status: "staged";
-	readonly token: string;
-	readonly expiresAtMs: number;
-	readonly outcome: unknown;
-}
-
-interface ConfirmedEntry {
-	readonly fingerprint: string;
-	readonly status: "confirmed";
+	readonly status: "completed";
 	readonly token: string;
 	readonly outcome: unknown;
 }
 
-type IdempotencyEntry = PendingEntry | StagedEntry | ConfirmedEntry;
+type IdempotencyEntry = PendingEntry | CompletedEntry;
 
 export interface InMemoryIdempotencyStoreOptions {
-	/** Store-local clock. Durable adapters should prefer server/database time. */
-	readonly clock?: () => Date;
-	/** Token component source; an internal generation keeps ownership unique. */
-	readonly claimTokenFactory?: () => string;
-	/** Lease lifetime for pending and staged records. Default: 30 seconds. */
-	readonly leaseDurationMs?: number;
-	/** Heartbeat delay advertised to the wrapper. Default: half the lease. */
-	readonly renewAfterMs?: number;
-	/** Maximum number of pending, staged, and confirmed records. */
+	/** Maximum number of pending and completed records. */
 	readonly maxEntries?: number;
-}
-
-const DEFAULT_LEASE_DURATION_MS = 30_000;
-
-function positiveSafeInteger(value: number): boolean {
-	return Number.isSafeInteger(value) && value > 0;
 }
 
 /**
  * In-memory reference implementation of {@link IdempotencyStore} for
- * finite-lifetime tests and demos. Without `maxEntries`, every confirmed
- * receipt remains reachable for the lifetime of the instance. A long-lived
- * process must configure the limit or use a durable adapter; exhaustion
+ * finite-lifetime tests and demos. Without `maxEntries`, every completed
+ * record remains reachable for the lifetime of the instance. Exhaustion
  * rejects new keys before mutation and never forgets an idempotency decision.
  *
- * On its own, the store is the reference for the leased family: it cannot
- * see commits or rollbacks. Claims and staged outcomes carry bounded leases,
- * while every mutation compares the store-issued token. An expired pending
- * claim may be replaced; an expired staged outcome cannot be guessed away and
- * instead returns `reconciliation-required`. Only an authoritative
- * `committed` / `not-committed` decision can settle it.
+ * The store belongs to the transactional family, so it needs a rollback.
+ * Register it with an `InMemoryTransactionScope`, and run `claim` and
+ * `complete` inside a transaction of that scope. A rollback then releases
+ * the claim, and the commit makes the outcome replayable. A `claim` or
+ * `complete` outside such a transaction throws a `TypeError`, because a
+ * failed attempt would otherwise block its key.
  *
- * Register the store with an `InMemoryTransactionScope` for tests that roll
- * back or retry. A rollback then undoes the writes of `claim` and `complete`,
- * which the port runs inside the transaction. It returns each key that they
- * wrote to its earlier entry. The lease operations `renew`, `confirm`,
- * `abandon`, and `reconcile` stay out of band, as the port defines them. A
- * rollback keeps their writes on every other key. A confirmation that
- * arrives after the next transaction began therefore survives the rollback
- * of that transaction.
+ * The scope runs one transaction at a time. A duplicate request therefore
+ * waits for the first execution and then replays its outcome. A second claim
+ * of a pending key inside the same transaction throws
+ * `IdempotencyInFlightError`.
  */
 export class InMemoryIdempotencyStore<TCtx = unknown>
 	implements IdempotencyStore<TCtx>, InMemoryTransactionParticipant
 {
+	readonly family = "transactional";
 	private readonly entries = new Map<string, IdempotencyEntry>();
 	/** The entries that `claim` and `complete` replaced in the open transaction. */
 	private replacedInTransaction:
 		| Array<readonly [string, IdempotencyEntry | undefined]>
 		| undefined;
-	private readonly clock: () => Date;
-	private readonly claimTokenFactory: () => string;
-	private readonly leaseDurationMs: number;
-	private readonly renewAfterMs: number;
 	private readonly maxEntries: number | undefined;
 	private tokenGeneration = 0;
 
 	constructor(options: InMemoryIdempotencyStoreOptions = {}) {
-		this.clock = options.clock ?? (() => new Date());
-		this.claimTokenFactory =
-			options.claimTokenFactory ?? (() => globalThis.crypto.randomUUID());
-		this.leaseDurationMs = options.leaseDurationMs ?? DEFAULT_LEASE_DURATION_MS;
-		this.renewAfterMs =
-			options.renewAfterMs ?? Math.floor(this.leaseDurationMs / 2);
 		if (options.maxEntries !== undefined) {
 			assertPositiveSafeInteger(
 				"InMemoryIdempotencyStore",
@@ -118,23 +74,6 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 			);
 		}
 		this.maxEntries = options.maxEntries;
-		if (
-			!positiveSafeInteger(this.leaseDurationMs) ||
-			this.leaseDurationMs > MAX_TIMER_DELAY_MS
-		) {
-			throw new RangeError(
-				`leaseDurationMs must be a positive safe integer no greater than ${MAX_TIMER_DELAY_MS}`,
-			);
-		}
-		if (
-			!positiveSafeInteger(this.renewAfterMs) ||
-			this.renewAfterMs >= this.leaseDurationMs ||
-			this.renewAfterMs > MAX_TIMER_DELAY_MS
-		) {
-			throw new RangeError(
-				`renewAfterMs must be a positive safe integer below leaseDurationMs and no greater than ${MAX_TIMER_DELAY_MS}`,
-			);
-		}
 	}
 
 	/**
@@ -167,17 +106,23 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 		key: string,
 		fingerprint: string,
 	): Promise<IdempotencyClaim> {
-		// The clock and the token factory come from the store options and can
-		// change the store. claim reads the clock before the store state, and
-		// it decides again after the factory ran.
-		const now = this.nowMs();
-		const decided = this.decideFromStoredEntry(key, fingerprint, now);
-		if (decided !== undefined) return decided;
-		const tokenPart = this.newTokenPart();
-		return (
-			this.decideFromStoredEntry(key, fingerprint, now) ??
-			this.createPending(key, fingerprint, now, tokenPart)
-		);
+		this.assertInTransaction("claim");
+		const existing = this.entries.get(key);
+		if (existing === undefined) return this.createPending(key, fingerprint);
+		if (existing.fingerprint !== fingerprint) {
+			throw new IdempotencyKeyReuseError({
+				key,
+				storedFingerprint: existing.fingerprint,
+				receivedFingerprint: fingerprint,
+			});
+		}
+		if (existing.status === "pending") {
+			throw new IdempotencyInFlightError({ key });
+		}
+		return {
+			status: "completed",
+			outcome: structuredClone(existing.outcome),
+		};
 	}
 
 	async complete(
@@ -185,114 +130,18 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 		claim: IdempotencyClaimHandle,
 		outcome: unknown,
 	): Promise<void> {
-		// Copy first: the copy can run caller code.
+		this.assertInTransaction("complete");
 		const { key, token } = claim;
-		const owned = structuredClone(outcome);
-		const now = this.nowMs();
 		const existing = this.entries.get(key);
-		if (existing === undefined) {
-			throw new IdempotencyCompletionWithoutClaimError(key);
+		if (existing?.status !== "pending" || existing.token !== token) {
+			throw idempotencyCompletionWithoutClaimError(key);
 		}
-		if (
-			existing.status !== "pending" ||
-			existing.token !== token ||
-			now >= existing.expiresAtMs
-		) {
-			throw this.claimLost({ key, token });
-		}
-		const expiresAtMs = now + this.leaseDurationMs;
-		this.lease(expiresAtMs);
 		this.writeInTransaction(key, {
 			fingerprint: existing.fingerprint,
-			status: "staged",
-			token: existing.token,
-			expiresAtMs,
-			outcome: owned,
+			status: "completed",
+			token,
+			outcome: structuredClone(outcome),
 		});
-	}
-
-	async renew(
-		claim: IdempotencyClaimHandle,
-	): Promise<IdempotencyLease | undefined> {
-		const { key, token } = claim;
-		const now = this.nowMs();
-		const existing = this.entries.get(key);
-		if (
-			existing === undefined ||
-			existing.status === "confirmed" ||
-			existing.token !== token ||
-			now >= existing.expiresAtMs
-		) {
-			throw this.claimLost({ key, token });
-		}
-		const expiresAtMs = now + this.leaseDurationMs;
-		const lease = this.lease(expiresAtMs);
-		this.entries.set(key, { ...existing, expiresAtMs });
-		return lease;
-	}
-
-	async confirm(claim: IdempotencyClaimHandle): Promise<void> {
-		const { key, token } = claim;
-		const existing = this.entries.get(key);
-		if (existing?.status === "staged" && existing.token === token) {
-			this.entries.set(key, {
-				fingerprint: existing.fingerprint,
-				status: "confirmed",
-				token: existing.token,
-				outcome: existing.outcome,
-			});
-		}
-	}
-
-	async abandon(claim: IdempotencyClaimHandle): Promise<void> {
-		const { key, token } = claim;
-		const existing = this.entries.get(key);
-		if (
-			existing !== undefined &&
-			existing.status !== "confirmed" &&
-			existing.token === token
-		) {
-			this.entries.delete(key);
-		}
-	}
-
-	async reconcile(
-		reconciliation: IdempotencyReconciliation,
-		decision: Exclude<IdempotencyReconciliationDecision, "unknown">,
-	): Promise<void> {
-		const { key, token, fingerprint, expiredAt } = reconciliation;
-		if (decision !== "committed" && decision !== "not-committed") {
-			throw new TypeError(
-				"reconcile decision must be committed or not-committed; uncertainty must leave the record untouched",
-			);
-		}
-		// The clock comes from the store options and can run code that changes
-		// the store, so reconcile reads it before the store state.
-		const now = this.nowMs();
-		const existing = this.entries.get(key);
-		if (
-			existing === undefined ||
-			existing.status !== "staged" ||
-			existing.token !== token ||
-			existing.fingerprint !== fingerprint ||
-			new Date(existing.expiresAtMs).toISOString() !== expiredAt ||
-			now < existing.expiresAtMs
-		) {
-			throw new IdempotencyClaimLostError({
-				key,
-				token,
-			});
-		}
-		if (decision === "committed") {
-			this.entries.set(key, {
-				fingerprint: existing.fingerprint,
-				status: "confirmed",
-				token: existing.token,
-				outcome: existing.outcome,
-			});
-			return;
-		}
-		this.entries.delete(key);
 	}
 
 	/** Test hook: number of stored records in any state. */
@@ -305,93 +154,20 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 		this.entries.clear();
 	}
 
-	/**
-	 * Returns the claim that the stored entry of the key decides, or
-	 * `undefined` when the store can create a pending claim. Throws for a
-	 * reused key, a claim in flight, and a full store.
-	 */
-	private decideFromStoredEntry(
-		key: string,
-		fingerprint: string,
-		now: number,
-	): IdempotencyClaim | undefined {
-		const existing = this.entries.get(key);
-		if (existing === undefined) {
-			if (
-				this.maxEntries !== undefined &&
-				this.entries.size >= this.maxEntries
-			) {
-				throw new InMemoryCapacityExceededError({
-					store: "InMemoryIdempotencyStore",
-					resource: "entries",
-					limit: this.maxEntries,
-					current: this.entries.size,
-					attempted: 1,
-				});
-			}
-			return undefined;
-		}
-		if (existing.fingerprint !== fingerprint) {
-			throw new IdempotencyKeyReuseError({
-				key,
-				storedFingerprint: existing.fingerprint,
-				receivedFingerprint: fingerprint,
+	private createPending(key: string, fingerprint: string): IdempotencyClaim {
+		if (this.maxEntries !== undefined && this.entries.size >= this.maxEntries) {
+			throw new InMemoryCapacityExceededError({
+				store: "InMemoryIdempotencyStore",
+				resource: "entries",
+				limit: this.maxEntries,
+				current: this.entries.size,
+				attempted: 1,
 			});
 		}
-		if (existing.status === "confirmed") {
-			return {
-				status: "completed",
-				outcome: structuredClone(existing.outcome),
-			};
-		}
-		if (now < existing.expiresAtMs) {
-			throw new IdempotencyInFlightError({ key });
-		}
-		if (existing.status === "staged") {
-			return {
-				status: "reconciliation-required",
-				reconciliation: Object.freeze({
-					key,
-					fingerprint,
-					token: existing.token,
-					expiredAt: new Date(existing.expiresAtMs).toISOString(),
-				}),
-			};
-		}
-		return undefined;
-	}
-
-	private newTokenPart(): string {
-		const tokenPart = this.claimTokenFactory();
-		if (typeof tokenPart !== "string" || tokenPart.length === 0) {
-			throw new TypeError("claimTokenFactory must return a non-empty string");
-		}
-		return tokenPart;
-	}
-
-	private createPending(
-		key: string,
-		fingerprint: string,
-		now: number,
-		tokenPart: string,
-	): IdempotencyClaim {
 		this.tokenGeneration += 1;
-		if (!Number.isSafeInteger(this.tokenGeneration)) {
-			throw new RangeError("idempotency claim-token generation exhausted");
-		}
-		const token = `${this.tokenGeneration}:${tokenPart}`;
-		const expiresAtMs = now + this.leaseDurationMs;
-		const lease = this.lease(expiresAtMs);
-		this.writeInTransaction(key, {
-			fingerprint,
-			status: "pending",
-			token,
-			expiresAtMs,
-		});
-		return {
-			status: "claimed",
-			claim: Object.freeze({ key, token, lease }),
-		};
+		const token = `${this.tokenGeneration}:${globalThis.crypto.randomUUID()}`;
+		this.writeInTransaction(key, { fingerprint, status: "pending", token });
+		return { status: "claimed", claim: Object.freeze({ key, token }) };
 	}
 
 	private writeInTransaction(key: string, entry: IdempotencyEntry): void {
@@ -399,26 +175,13 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 		this.entries.set(key, entry);
 	}
 
-	private lease(expiresAtMs: number): IdempotencyLease {
-		return Object.freeze({
-			expiresAt: new Date(expiresAtMs).toISOString(),
-			renewAfterMs: this.renewAfterMs,
-		});
-	}
-
-	private nowMs(): number {
-		const now = this.clock();
-		const value = now instanceof Date ? now.getTime() : Number.NaN;
-		if (!Number.isFinite(value)) {
-			throw new TypeError("idempotency clock must return a valid Date");
+	private assertInTransaction(operation: "claim" | "complete"): void {
+		if (this.replacedInTransaction === undefined) {
+			throw new TypeError(
+				`InMemoryIdempotencyStore.${operation}() ran outside a transaction. ` +
+					"Register the store with an InMemoryTransactionScope and run the " +
+					"command through that scope, or use InMemoryLeasedIdempotencyStore.",
+			);
 		}
-		return value;
-	}
-
-	private claimLost(claim: IdempotencyClaimHandle): IdempotencyClaimLostError {
-		return new IdempotencyClaimLostError({
-			key: claim.key,
-			token: claim.token,
-		});
 	}
 }

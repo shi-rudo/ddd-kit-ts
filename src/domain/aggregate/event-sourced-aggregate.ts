@@ -1,11 +1,11 @@
 import { err, ok, type Result } from "@shirudo/result";
 import {
-	DirectStateMutationError,
 	type DomainError,
-	FoldReturnedNoStateError,
+	directStateMutationError,
 	ForeignEventError,
+	foldReturnedNoStateError,
 	isDomainErrorLike,
-	MissingFoldError,
+	missingFoldError,
 } from "../../errors/kit-errors";
 import {
 	assertStateHasNoOwnProtoKey,
@@ -48,7 +48,7 @@ export type Fold<TState, TEvent extends AnyDomainEvent> = (
  *
  * Extends `BaseAggregate` (the shared lifecycle machinery) but offers no
  * `setState()`, and the inherited `setState()` throws
- * `DirectStateMutationError`: the only way to change state is an event
+ * `DIRECT_STATE_MUTATION`: the only way to change state is an event
  * folded through `apply()`, so the instance never runs ahead
  * of its stream.
  *
@@ -126,12 +126,12 @@ export abstract class EventSourcedAggregate<
 	protected validateEvent(_event: UnstampedDomainEventOf<TEvent>): void {}
 
 	/**
-	 * Always throws {@link DirectStateMutationError}. An event-sourced
+	 * Always throws `DIRECT_STATE_MUTATION`. An event-sourced
 	 * aggregate changes state only through `apply()`, where the fact is
 	 * recorded and the version advances with it.
 	 */
 	protected override setState(_newState: TState): void {
-		throw new DirectStateMutationError({ identity: this.aggregateIdentity });
+		throw directStateMutationError({ identity: this.aggregateIdentity });
 	}
 
 	/**
@@ -142,10 +142,10 @@ export abstract class EventSourcedAggregate<
 	 * Throws `DomainError` (or a subclass) when `validateEvent` rejects the
 	 * decision. Throws whatever the `validateState` function throws when it
 	 * rejects the folded state.
-	 * Throws `MissingFoldError` if no fold is declared for `event.type`.
-	 * Throws `FoldReturnedNoStateError` (wiring) when the fold returns
+	 * Throws `MISSING_FOLD` if no fold is declared for `event.type`.
+	 * Throws `FOLD_RETURNED_NO_STATE` (wiring) when the fold returns
 	 * `undefined`, the signature of a fold without a `return`.
-	 * Throws `MisattributedEventError` (wiring) when the event carries an
+	 * Throws `MISATTRIBUTED_EVENT` (wiring) when the event carries an
 	 * `aggregateId` or `aggregateType` naming a different aggregate;
 	 * missing aggregate identity fields are stamped from the aggregate instead.
 	 *
@@ -169,7 +169,7 @@ export abstract class EventSourcedAggregate<
 		// New facts get their aggregate identity here, by construction: missing
 		// fields are stamped from the aggregate (the createEvent
 		// guarantee), a present-but-foreign aggregate identity throws
-		// MisattributedEventError before anything is recorded. Without
+		// `MISATTRIBUTED_EVENT` before anything is recorded. Without
 		// this, a misattributed event would mutate state, version, and
 		// pendingEvents and only fail later at collection or on the next
 		// load, poisoning the own stream.
@@ -254,14 +254,14 @@ export abstract class EventSourcedAggregate<
 				) => TState)
 			: undefined;
 		if (!fold) {
-			throw new MissingFoldError(event.type);
+			throw missingFoldError(event.type);
 		}
 
 		const nextState = fold(this.state, event);
 		// Only `undefined` is rejected: a primitive or `null` state is a
 		// legal TState, a missing `return` is not.
 		if (nextState === undefined) {
-			throw new FoldReturnedNoStateError(event.type);
+			throw foldReturnedNoStateError(event.type);
 		}
 		return nextState;
 	}
@@ -331,9 +331,6 @@ export abstract class EventSourcedAggregate<
 			// so anything in it now came from a fold that recorded a
 			// decision; the rollback drops it too.
 			this.discardPendingDecisions();
-			// Copy-safe: a fold may run in another loaded copy of the kit,
-			// whose DomainError fails a plain instanceof; the Result channel
-			// must carry it regardless.
 			if (isDomainErrorLike(e)) return err(e);
 			throw e;
 		}

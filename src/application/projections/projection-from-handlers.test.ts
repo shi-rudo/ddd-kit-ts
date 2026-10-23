@@ -3,7 +3,6 @@ import {
 	createDomainEvent,
 	type DomainEvent,
 } from "../../domain/event/domain-event";
-import { MissingHandlerError } from "../../errors/kit-errors";
 import type { TransactionScope } from "../../persistence/repository/scope";
 import { InMemoryProjectionCheckpointStore } from "./adapters/in-memory-checkpoint-store";
 import {
@@ -126,10 +125,10 @@ describe("projectionFromHandlers", () => {
 				(error: unknown) => error,
 			);
 
-			expect(rejection).toBeInstanceOf(MissingHandlerError);
+			expect(rejection).toMatchObject({ code: "MISSING_HANDLER" });
 			expect(rejection).toMatchObject({
 				code: "MISSING_HANDLER",
-				eventType: type,
+				details: { eventType: type },
 			});
 		},
 	);
@@ -169,7 +168,7 @@ describe("projectionFromHandlers", () => {
 					},
 				},
 			]),
-		).rejects.toBeInstanceOf(MissingHandlerError);
+		).rejects.toMatchObject({ code: "MISSING_HANDLER" });
 		expect(writes).toEqual([]);
 		await expect(
 			checkpoints.load(undefined, projection.name, source),

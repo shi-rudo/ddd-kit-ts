@@ -30,33 +30,58 @@ function english(message: string): LocalizedMessageSet {
 }
 
 /**
- * Duck-types the base-error validation family by capability, not
- * `instanceof` (duplicate installs), and not by a name whitelist (custom
- * codes): a SCREAMING_SNAKE `name` (base-error names a `ValidationError`
- * after its code), `category === "VALIDATION"` (kit and
+ * The matcher and the details projection of the validation family for one
+ * catalog.
+ *
+ * The matcher duck-types the base-error validation family by capability,
+ * not `instanceof` (duplicate installs), and not by a name whitelist
+ * (custom codes): a SCREAMING_SNAKE `name` (base-error names a
+ * `ValidationError` after its code), `category === "VALIDATION"` (kit and
  * convention-following consumer errors carry DOMAIN / INFRASTRUCTURE /
  * WIRING, so a structured infrastructure error exposing a
  * `publicIssues()` method is NOT mistaken for one), and a `publicIssues()`
  * that actually returns an array. Reads and the probe call may throw on
  * hostile inputs; `project` contains a throwing matcher as a miss, which
  * keeps the projection total.
+ *
+ * The match keeps the array that the probe call returned, so the
+ * projection reads it instead of calling `publicIssues()` a second time.
+ * Each catalog keeps its own arrays, because the probe asks for messages
+ * only with `issueMessages`.
  */
-function isValidationErrorLike(
-	error: unknown,
-): error is { publicIssues(options: { messages: boolean }): unknown[] } {
-	if (typeof error !== "object" || error === null) return false;
-	const { name, category, publicIssues } = error as {
-		name?: unknown;
-		category?: unknown;
-		publicIssues?: unknown;
+function validationErrorProjection(options: {
+	readonly issueMessages: boolean;
+}) {
+	const matchedIssues = new WeakMap<object, unknown[]>();
+	return {
+		match(error: unknown): error is object {
+			if (typeof error !== "object" || error === null) return false;
+			const { name, category, publicIssues } = error as {
+				name?: unknown;
+				category?: unknown;
+				publicIssues?: unknown;
+			};
+			if (
+				typeof name !== "string" ||
+				!/^[A-Z][A-Z0-9_]*$/.test(name) ||
+				category !== "VALIDATION" ||
+				typeof publicIssues !== "function"
+			) {
+				return false;
+			}
+			const issues: unknown = publicIssues.call(error, {
+				messages: options.issueMessages,
+			});
+			if (!Array.isArray(issues)) return false;
+			matchedIssues.set(error, issues);
+			return true;
+		},
+		projectDetails(error: object): PublicErrorViewDetails {
+			return {
+				issues: sanitizePublicIssues(matchedIssues.get(error) ?? [], options),
+			};
+		},
 	};
-	return (
-		typeof name === "string" &&
-		/^[A-Z][A-Z0-9_]*$/.test(name) &&
-		category === "VALIDATION" &&
-		typeof publicIssues === "function" &&
-		Array.isArray((error as { publicIssues(): unknown }).publicIssues())
-	);
 }
 
 /**
@@ -70,14 +95,16 @@ function isValidationErrorLike(
  */
 function sanitizePublicIssues(
 	result: unknown[],
-	issueMessages: boolean,
+	options: { readonly issueMessages: boolean },
 ): readonly PublicIssue[] {
 	const issues: PublicIssue[] = [];
 	for (const entry of result) {
 		if (typeof entry !== "object" || entry === null) continue;
 		const { message, path, code, pointer } = entry as Record<string, unknown>;
 		const issue: PublicIssue = {};
-		if (issueMessages && typeof message === "string") issue.message = message;
+		if (options.issueMessages && typeof message === "string") {
+			issue.message = message;
+		}
 		const safePath = sanitizeIssuePath(path);
 		if (safePath !== undefined) issue.path = safePath;
 		if (typeof code === "string") issue.code = code;
@@ -157,7 +184,9 @@ function isPathKey(value: unknown): value is PropertyKey | null {
  * to the `INTERNAL_ERROR` fallback.
  */
 export function createKitPublicErrors(options: KitPublicErrorsOptions = {}) {
-	const issueMessages = options.issueMessages === true;
+	const validation = validationErrorProjection({
+		issueMessages: options.issueMessages === true,
+	});
 	return definePublicErrors({
 		fallback: {
 			publicCode: "INTERNAL_ERROR",
@@ -221,17 +250,12 @@ export function createKitPublicErrors(options: KitPublicErrorsOptions = {}) {
 			userMessages: english("The currency is not supported."),
 		})
 		.register({
-			match: isValidationErrorLike,
+			match: validation.match,
 			descriptor: {
 				publicCode: "VALIDATION_FAILED",
 				status: 422,
 				userMessages: english("The submitted data is invalid."),
-				projectDetails: (error): PublicErrorViewDetails => ({
-					issues: sanitizePublicIssues(
-						error.publicIssues({ messages: issueMessages }),
-						issueMessages,
-					),
-				}),
+				projectDetails: validation.projectDetails,
 			},
 		});
 }

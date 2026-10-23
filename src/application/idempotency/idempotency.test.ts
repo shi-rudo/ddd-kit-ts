@@ -10,24 +10,14 @@ import {
 import type { Id } from "../../domain/identity/id";
 import {
 	ConcurrencyConflictError,
-	EventCollectionError,
-	IdempotencyCompletionWithoutClaimError,
-	IdempotencyInFlightError,
 	IdempotencyKeyReuseError,
-	InMemoryCapacityExceededError,
 } from "../../errors/kit-errors";
 import type { EventCommitCandidate } from "../../messaging/committed-event";
 import { InMemoryOutbox } from "../../messaging/outbox/outbox";
 import { InMemoryTransactionScope } from "../../persistence/repository/adapters/in-memory-transaction-scope";
 import { RetryingTransactionScope } from "../../persistence/repository/retrying-scope";
-import type { TransactionScope } from "../../persistence/repository/scope";
-import type {
-	AggregateCommitToken,
-	CommitRegistration,
-	WithCommitWorkResult,
-} from "../cqrs/handler";
+import type { CommitRegistration } from "../cqrs/handler";
 import { InMemoryIdempotencyStore } from "./adapters/in-memory-idempotency-store";
-import type { IdempotencyClaim, IdempotencyClaimHandle } from "./idempotency";
 import { withIdempotentCommit } from "./idempotency";
 
 type OrderId = Id<"OrderId">;
@@ -64,165 +54,18 @@ class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
 	}
 }
 
-function createScope(): TransactionScope<undefined> {
+function createDeps(outbox = new InMemoryOutbox<AnyDomainEvent>()) {
+	const idempotency = new InMemoryIdempotencyStore<undefined>();
 	return {
-		transactional: <T>(fn: (_ctx: undefined) => Promise<T>) => fn(undefined),
-	};
-}
-
-function createDeps() {
-	return {
-		outbox: new InMemoryOutbox<AnyDomainEvent>(),
-		scope: createScope(),
-		idempotency: new InMemoryIdempotencyStore<undefined>(),
+		outbox,
+		scope: new InMemoryTransactionScope([idempotency, outbox]),
+		idempotency,
 	};
 }
 
 const request = { key: "req-1", fingerprint: "fp-1" };
 
-async function claimHandle(
-	store: InMemoryIdempotencyStore<undefined>,
-	key: string,
-	fingerprint: string,
-): Promise<IdempotencyClaimHandle> {
-	const claim = await store.claim(undefined, key, fingerprint);
-	if (claim.status !== "claimed") {
-		throw new Error(`Expected a fresh claim, received ${claim.status}`);
-	}
-	return claim.claim;
-}
-
-describe("withIdempotentCommit", () => {
-	it("rejects a legacy naked aggregate result and releases the claim", async () => {
-		const deps = createDeps();
-		const order = new Order("o-legacy" as OrderId);
-		order.confirm();
-
-		await expect(
-			withIdempotentCommit(
-				deps,
-				request,
-				async () =>
-					({
-						result: "must not commit",
-						aggregates: [order],
-					}) as unknown as WithCommitWorkResult<AnyDomainEvent, string>,
-			),
-		).rejects.toBeInstanceOf(EventCollectionError);
-		expect(order.pendingEvents).toHaveLength(1);
-		expect(await deps.outbox.getPending()).toEqual([]);
-
-		await expect(
-			withIdempotentCommit(deps, request, async () => ({
-				result: "retry",
-				commits: [],
-			})),
-		).resolves.toEqual({ replayed: false, result: "retry" });
-	});
-
-	it("abandons the staged claim when the commit itself fails", async () => {
-		const deps = createDeps();
-		// A driver that rejects AFTER the callback resolved: the classic
-		// COMMIT-time serialization failure or dropped connection.
-		let commits = 0;
-		deps.scope = {
-			transactional: async (fn) => {
-				const result = await fn(undefined);
-				commits += 1;
-				if (commits === 1) throw new Error("commit failed");
-				return result;
-			},
-		};
-		let executions = 0;
-
-		const run = () =>
-			withIdempotentCommit(deps, request, async () => {
-				executions += 1;
-				return { result: executions, commits: [] };
-			});
-
-		await expect(run()).rejects.toThrow("commit failed");
-		// Without the abandon, the staged claim wedges the key and this
-		// retry would reject with IdempotencyInFlightError.
-		await expect(run()).resolves.toEqual({ replayed: false, result: 2 });
-		expect(executions).toBe(2);
-	});
-
-	it("seals the user registration capability before idempotency completion", async () => {
-		const deps = createDeps();
-		const originalComplete = deps.idempotency.complete.bind(deps.idempotency);
-		let signalCompleteStarted: () => void = () => {};
-		const completeStarted = new Promise<void>((resolve) => {
-			signalCompleteStarted = resolve;
-		});
-		let releaseComplete: () => void = () => {};
-		const completeBlocked = new Promise<void>((resolve) => {
-			releaseComplete = resolve;
-		});
-		deps.idempotency.complete = async (ctx, key, outcome) => {
-			await originalComplete(ctx, key, outcome);
-			signalCompleteStarted();
-			await completeBlocked;
-		};
-
-		let leaked: CommitRegistration<AnyDomainEvent> | undefined;
-		const execution = withIdempotentCommit(
-			deps,
-			request,
-			async (_ctx, registration) => {
-				leaked = registration;
-				return { result: "ok", commits: [] };
-			},
-		);
-		await completeStarted;
-
-		expect(() => leaked?.registerSaved(new Order("o-late" as OrderId))).toThrow(
-			EventCollectionError,
-		);
-		releaseComplete();
-		await expect(execution).resolves.toEqual({ replayed: false, result: "ok" });
-	});
-
-	it("snapshots commit tokens before idempotency completion can yield", async () => {
-		const deps = createDeps();
-		const originalComplete = deps.idempotency.complete.bind(deps.idempotency);
-		let signalCompleteStarted: () => void = () => {};
-		const completeStarted = new Promise<void>((resolve) => {
-			signalCompleteStarted = resolve;
-		});
-		let releaseComplete: () => void = () => {};
-		const completeBlocked = new Promise<void>((resolve) => {
-			releaseComplete = resolve;
-		});
-		deps.idempotency.complete = async (ctx, key, outcome) => {
-			await originalComplete(ctx, key, outcome);
-			signalCompleteStarted();
-			await completeBlocked;
-		};
-
-		const order = new Order("o-snapshot" as OrderId);
-		order.confirm();
-		let mutableCommits: AggregateCommitToken<AnyDomainEvent>[] = [];
-		const execution = withIdempotentCommit(
-			deps,
-			request,
-			async (_ctx, registration) => {
-				mutableCommits = [registration.registerSaved(order)];
-				return { result: order.id, commits: mutableCommits };
-			},
-		);
-		await completeStarted;
-		mutableCommits.length = 0;
-		releaseComplete();
-
-		await expect(execution).resolves.toEqual({
-			replayed: false,
-			result: "o-snapshot",
-		});
-		expect(order.pendingEvents).toHaveLength(0);
-		expect(await deps.outbox.getPending()).toHaveLength(1);
-	});
-
+describe("withIdempotentCommit with a transactional store", () => {
 	it("runs the work fresh, stores the outcome, and collects events", async () => {
 		const deps = createDeps();
 		const order = new Order("o-1" as OrderId);
@@ -232,10 +75,8 @@ describe("withIdempotentCommit", () => {
 			request,
 			async (_ctx, registration) => {
 				order.confirm();
-				return {
-					result: { orderId: order.id },
-					commits: [registration.registerSaved(order)],
-				};
+				registration.registerSaved(order);
+				return { orderId: order.id };
 			},
 		);
 
@@ -244,48 +85,6 @@ describe("withIdempotentCommit", () => {
 		const pending = await deps.outbox.getPending();
 		expect(pending).toHaveLength(1);
 		expect(pending[0]?.event.type).toBe("OrderConfirmed");
-	});
-
-	it("passes the registration options to withCommit, so a contradicting re-registration rejects", async () => {
-		const deps = createDeps();
-		const order = new Order("o-1" as OrderId);
-
-		const execution = withIdempotentCommit(
-			deps,
-			request,
-			async (_ctx, registration) => {
-				order.confirm();
-				const first = registration.registerSaved(order, {
-					expectedVersion: 0 as Version,
-				});
-				registration.registerSaved(order, { expectedVersion: 1 as Version });
-				return { result: order.id, commits: [first] };
-			},
-		);
-
-		await expect(execution).rejects.toBeInstanceOf(EventCollectionError);
-		expect(await deps.outbox.getPending()).toHaveLength(0);
-	});
-
-	it("stamps with the factory and the shared stamp options of its dependencies", async () => {
-		const deps = {
-			...createDeps(),
-			eventStampFactory: createDomainEventFactory({
-				eventIdFactory: () => "evt-1",
-			}),
-			stampOptions: { metadata: { correlationId: "corr-1" } },
-		};
-		const order = new Order("o-1" as OrderId);
-		order.decideConfirmation();
-
-		await withIdempotentCommit(deps, request, async (_ctx, registration) => ({
-			result: order.id,
-			commits: [registration.registerSaved(order)],
-		}));
-
-		const [record] = await deps.outbox.getPending();
-		expect(record?.event.eventId).toBe("evt-1");
-		expect(record?.event.metadata?.correlationId).toBe("corr-1");
 	});
 
 	it("replays the stored outcome on a duplicate without re-running the work", async () => {
@@ -298,10 +97,8 @@ describe("withIdempotentCommit", () => {
 			executions++;
 			const order = new Order("o-1" as OrderId);
 			order.confirm();
-			return {
-				result: { orderId: order.id },
-				commits: [registration.registerSaved(order)],
-			};
+			registration.registerSaved(order);
+			return { orderId: order.id };
 		};
 
 		await withIdempotentCommit(deps, request, work);
@@ -313,77 +110,54 @@ describe("withIdempotentCommit", () => {
 		expect(await deps.outbox.getPending()).toHaveLength(1);
 	});
 
-	it("rejects the same key with a different fingerprint", async () => {
-		const deps = createDeps();
-		await withIdempotentCommit(deps, request, async () => ({
-			result: "first",
-			commits: [],
-		}));
-
-		await expect(
-			withIdempotentCommit(
-				deps,
-				{ key: request.key, fingerprint: "fp-OTHER" },
-				async () => ({ result: "second", commits: [] }),
-			),
-		).rejects.toBeInstanceOf(IdempotencyKeyReuseError);
-	});
-
-	it("surfaces a concurrent in-flight duplicate as a retryable error", async () => {
+	it("a concurrent duplicate waits for the first execution and replays its outcome", async () => {
 		const deps = createDeps();
 		let releaseFirst: () => void = () => {};
 		const firstBlocked = new Promise<void>((resolve) => {
 			releaseFirst = resolve;
 		});
-
 		const first = withIdempotentCommit(deps, request, async () => {
 			await firstBlocked;
-			return { result: "first", commits: [] };
+			return "first";
 		});
-		// Give the first execution time to claim.
-		await new Promise((resolve) => setTimeout(resolve, 0));
-
-		const second = withIdempotentCommit(deps, request, async () => ({
-			result: "second",
-			commits: [],
-		}));
-		await expect(second).rejects.toBeInstanceOf(IdempotencyInFlightError);
-		await expect(second).rejects.toMatchObject({ retryable: true });
+		const second = withIdempotentCommit(deps, request, async () => "second");
 
 		releaseFirst();
-		await expect(first).resolves.toEqual({
-			replayed: false,
-			result: "first",
-		});
+
+		await expect(first).resolves.toEqual({ replayed: false, result: "first" });
+		await expect(second).resolves.toEqual({ replayed: true, result: "first" });
 	});
 
-	it("composes with RetryingTransactionScope: a retryable attempt failure releases its claim and the retry runs fresh", async () => {
-		const inner = createScope();
-		const deps = {
-			outbox: new InMemoryOutbox<AnyDomainEvent>(),
-			scope: new RetryingTransactionScope(inner, {
-				maxAttempts: 3,
-				baseDelayMs: 1,
+	it("rejects the same key with a different fingerprint", async () => {
+		const deps = createDeps();
+		await withIdempotentCommit(deps, request, async () => "first");
+
+		await expect(
+			withIdempotentCommit(
+				deps,
+				{ key: request.key, fingerprint: "fp-OTHER" },
+				async () => "second",
+			),
+		).rejects.toBeInstanceOf(IdempotencyKeyReuseError);
+	});
+
+	it("releases the claim through the rollback when the work fails, so a retry runs fresh", async () => {
+		const deps = createDeps();
+		const order = new Order("o-failed" as OrderId);
+		order.confirm();
+
+		await expect(
+			withIdempotentCommit(deps, request, async (_ctx, registration) => {
+				registration.registerSaved(order);
+				throw new Error("work failed");
 			}),
-			idempotency: new InMemoryIdempotencyStore<undefined>(),
-		};
-		let executions = 0;
+		).rejects.toThrow("work failed");
+		expect(order.pendingEvents).toHaveLength(1);
+		expect(await deps.outbox.getPending()).toEqual([]);
 
-		const outcome = await withIdempotentCommit(deps, request, async () => {
-			executions++;
-			if (executions === 1) {
-				throw new ConcurrencyConflictError({
-					reason: "stale_version",
-					identity: { aggregateType: "Order", aggregateId: "o-1" },
-					expectedVersion: 1,
-					actualVersion: 2,
-				});
-			}
-			return { result: "second attempt", commits: [] };
-		});
-
-		expect(executions).toBe(2);
-		expect(outcome).toEqual({ replayed: false, result: "second attempt" });
+		await expect(
+			withIdempotentCommit(deps, request, async () => "retry"),
+		).resolves.toEqual({ replayed: false, result: "retry" });
 	});
 
 	it("does not replay a false success when the transaction fails after complete()", async () => {
@@ -399,11 +173,7 @@ describe("withIdempotentCommit", () => {
 				return super.add(events);
 			}
 		}
-		const deps = {
-			outbox: new FlakyOutbox(),
-			scope: createScope(),
-			idempotency: new InMemoryIdempotencyStore<undefined>(),
-		};
+		const deps = createDeps(new FlakyOutbox());
 		let executions = 0;
 		const work = async (
 			_ctx: undefined,
@@ -412,14 +182,12 @@ describe("withIdempotentCommit", () => {
 			executions++;
 			const order = new Order(`o-${executions}` as OrderId);
 			order.confirm();
-			return {
-				result: { orderId: order.id },
-				commits: [registration.registerSaved(order)],
-			};
+			registration.registerSaved(order);
+			return { orderId: order.id };
 		};
 
-		// First call: complete() runs, then the outbox write fails inside
-		// the transaction. The staged outcome must not become replayable.
+		// complete() runs, then the outbox write fails inside the transaction.
+		// The rollback must take the stored outcome with it.
 		await expect(withIdempotentCommit(deps, request, work)).rejects.toThrow(
 			"outbox down",
 		);
@@ -428,314 +196,133 @@ describe("withIdempotentCommit", () => {
 		expect(executions).toBe(2);
 		expect(second).toEqual({ replayed: false, result: { orderId: "o-2" } });
 
-		// Only the committed outcome replays afterwards.
 		const third = await withIdempotentCommit(deps, request, work);
 		expect(executions).toBe(2);
 		expect(third).toEqual({ replayed: true, result: { orderId: "o-2" } });
 	});
 
-	it("releases the claim when the work fails, so a retry runs fresh", async () => {
-		const deps = createDeps();
-		await expect(
-			withIdempotentCommit(deps, request, async () => {
-				throw new Error("boom");
-			}),
-		).rejects.toThrow("boom");
-
-		const retried = await withIdempotentCommit(deps, request, async () => ({
-			result: "second attempt",
-			commits: [],
-		}));
-		expect(retried).toEqual({ replayed: false, result: "second attempt" });
-	});
-
-	it("propagates the work error even when abandon itself fails", async () => {
-		const deps = createDeps();
-		deps.idempotency.abandon = async () => {
-			throw new Error("abandon failed");
-		};
-		await expect(
-			withIdempotentCommit(deps, request, async () => {
-				throw new Error("boom");
-			}),
-		).rejects.toThrow("boom");
-	});
-
-	it("does not abandon when the claim itself was the failure", async () => {
-		const deps = createDeps();
-		await withIdempotentCommit(deps, request, async () => ({
-			result: "first",
-			commits: [],
-		}));
-		let abandoned = false;
-		const originalAbandon = deps.idempotency.abandon.bind(deps.idempotency);
-		deps.idempotency.abandon = async (claim: IdempotencyClaimHandle) => {
-			abandoned = true;
-			return originalAbandon(claim);
-		};
-
-		await expect(
-			withIdempotentCommit(
-				deps,
-				{ key: request.key, fingerprint: "fp-OTHER" },
-				async () => ({ result: "x", commits: [] }),
-			),
-		).rejects.toBeInstanceOf(IdempotencyKeyReuseError);
-		expect(abandoned).toBe(false);
-	});
-});
-
-describe("withIdempotentCommit with an InMemoryTransactionScope", () => {
-	it("keeps a confirmed outcome when a later transaction of the same scope rolls back", async () => {
+	it("composes with RetryingTransactionScope: a retryable attempt failure releases its claim and the retry runs fresh", async () => {
 		const idempotency = new InMemoryIdempotencyStore<undefined>();
+		const outbox = new InMemoryOutbox<AnyDomainEvent>();
 		const deps = {
-			outbox: new InMemoryOutbox<AnyDomainEvent>(),
-			scope: new InMemoryTransactionScope([idempotency]),
+			outbox,
+			scope: new RetryingTransactionScope(
+				new InMemoryTransactionScope([idempotency, outbox]),
+				{ maxAttempts: 3, baseDelayMs: 1 },
+			),
 			idempotency,
 		};
-		const first = withIdempotentCommit(
-			deps,
-			{ key: "req-1", fingerprint: "fp-1" },
-			async () => ({ result: "first", commits: [] }),
-		);
-		const second = withIdempotentCommit(
-			deps,
-			{ key: "req-2", fingerprint: "fp-2" },
-			async () => {
-				await first;
-				throw new Error("second failed");
-			},
-		);
+		let executions = 0;
 
-		await expect(second).rejects.toThrow("second failed");
-		await expect(first).resolves.toEqual({ replayed: false, result: "first" });
-		await expect(
-			withIdempotentCommit(
-				deps,
-				{ key: "req-1", fingerprint: "fp-1" },
-				async () => ({ result: "rerun", commits: [] }),
-			),
-		).resolves.toEqual({ replayed: true, result: "first" });
-	});
-});
+		const outcome = await withIdempotentCommit(deps, request, async () => {
+			executions++;
+			if (executions === 1) {
+				throw new ConcurrencyConflictError({
+					reason: "stale_version",
+					identity: { aggregateType: "Order", aggregateId: "o-1" },
+					expectedVersion: 1,
+					actualVersion: 2,
+				});
+			}
+			return "second attempt";
+		});
 
-describe("InMemoryIdempotencyStore", () => {
-	it("checks the capacity after a token factory claimed another key", async () => {
-		let inner: Promise<unknown> | undefined;
-		let claimedInside = false;
-		const store: InMemoryIdempotencyStore<undefined> =
-			new InMemoryIdempotencyStore<undefined>({
-				maxEntries: 1,
-				claimTokenFactory: () => {
-					if (!claimedInside) {
-						claimedInside = true;
-						inner = store.claim(undefined, "k-2", "fp");
-					}
-					return "token";
-				},
-			});
-
-		await expect(store.claim(undefined, "k-1", "fp")).rejects.toBeInstanceOf(
-			InMemoryCapacityExceededError,
-		);
-		await expect(inner).resolves.toMatchObject({ status: "claimed" });
-		expect(store.size).toBe(1);
+		expect(executions).toBe(2);
+		expect(outcome).toEqual({ replayed: false, result: "second attempt" });
 	});
 
-	it("keeps the claim that a token factory took on the same key", async () => {
-		let inner: Promise<IdempotencyClaim> | undefined;
-		let claimedInside = false;
-		const store: InMemoryIdempotencyStore<undefined> =
-			new InMemoryIdempotencyStore<undefined>({
-				claimTokenFactory: () => {
-					if (!claimedInside) {
-						claimedInside = true;
-						inner = store.claim(undefined, "k", "fp");
-					}
-					return "token";
-				},
-			});
-
-		await expect(store.claim(undefined, "k", "fp")).rejects.toBeInstanceOf(
-			IdempotencyInFlightError,
-		);
-		const innerClaim = await inner;
-		if (innerClaim?.status !== "claimed") {
-			throw new Error("expected the inner claim to own the key");
-		}
-		await expect(
-			store.complete(undefined, innerClaim.claim, "done"),
-		).resolves.toBeUndefined();
-	});
-
-	it("reads a claim handle once per call", async () => {
-		const store = new InMemoryIdempotencyStore<undefined>();
-		const handle = await claimHandle(store, "k", "fp");
-		let keyReads = 0;
-		const counted = {
-			get key() {
-				keyReads += 1;
-				return handle.key;
-			},
-			token: handle.token,
+	it("seals the user registration capability before idempotency completion", async () => {
+		const deps = createDeps();
+		const originalComplete = deps.idempotency.complete.bind(deps.idempotency);
+		let signalCompleteStarted: () => void = () => {};
+		const completeStarted = new Promise<void>((resolve) => {
+			signalCompleteStarted = resolve;
+		});
+		let releaseComplete: () => void = () => {};
+		const completeBlocked = new Promise<void>((resolve) => {
+			releaseComplete = resolve;
+		});
+		deps.idempotency.complete = async (ctx, claim, outcome) => {
+			await originalComplete(ctx, claim, outcome);
+			signalCompleteStarted();
+			await completeBlocked;
 		};
 
-		await store.renew(counted);
-		await store.complete(undefined, counted, "done");
-		await store.confirm(counted);
-		await store.abandon(counted);
+		let leaked: CommitRegistration<AnyDomainEvent> | undefined;
+		const execution = withIdempotentCommit(
+			deps,
+			request,
+			async (_ctx, registration) => {
+				leaked = registration;
+				return "ok";
+			},
+		);
+		await completeStarted;
 
-		expect(keyReads).toBe(4);
+		expect(() => leaked?.registerSaved(new Order("o-late" as OrderId))).toThrow(
+			expect.objectContaining({ code: "EVENT_COLLECTION_FAILED" }),
+		);
+		releaseComplete();
+		await expect(execution).resolves.toEqual({ replayed: false, result: "ok" });
 	});
 
-	it("does not stage an outcome whose getter abandoned the claim", async () => {
-		const store = new InMemoryIdempotencyStore<undefined>();
-		const handle = await claimHandle(store, "k", "fp");
-		const outcome = {
-			get total() {
-				void store.abandon(handle);
-				return 42;
+	it("passes the registration options to withCommit, so a contradicting re-registration rejects", async () => {
+		const deps = createDeps();
+		const order = new Order("o-1" as OrderId);
+
+		const execution = withIdempotentCommit(
+			deps,
+			request,
+			async (_ctx, registration) => {
+				order.confirm();
+				registration.registerSaved(order, {
+					expectedVersion: 0 as Version,
+				});
+				registration.registerSaved(order, { expectedVersion: 1 as Version });
+				return order.id;
 			},
+		);
+
+		await expect(execution).rejects.toMatchObject({
+			code: "EVENT_COLLECTION_FAILED",
+		});
+		expect(await deps.outbox.getPending()).toHaveLength(0);
+	});
+
+	it("stamps with the factory and the shared stamp options of its dependencies", async () => {
+		const deps = {
+			...createDeps(),
+			eventStampFactory: createDomainEventFactory({
+				eventIdFactory: () => "evt-1",
+			}),
+			stampOptions: { metadata: { correlationId: "corr-1" } },
 		};
+		const order = new Order("o-1" as OrderId);
+		order.decideConfirmation();
 
-		await expect(
-			store.complete(undefined, handle, outcome),
-		).rejects.toBeInstanceOf(IdempotencyCompletionWithoutClaimError);
-		expect(store.size).toBe(0);
-	});
-
-	it("returns a claim to pending after a rolled-back complete", async () => {
-		const store = new InMemoryIdempotencyStore<undefined>();
-		const scope = new InMemoryTransactionScope([store]);
-		const handle = await scope.transactional(() =>
-			claimHandle(store, "k", "fp"),
-		);
-
-		await scope
-			.transactional(async () => {
-				await store.complete(undefined, handle, "rolled back");
-				throw new Error("work failed");
-			})
-			.catch(() => {});
-		await store.complete(undefined, handle, "committed");
-		await store.confirm(handle);
-
-		await expect(store.claim(undefined, "k", "fp")).resolves.toEqual({
-			status: "completed",
-			outcome: "committed",
+		await withIdempotentCommit(deps, request, async (_ctx, registration) => {
+			registration.registerSaved(order);
+			return order.id;
 		});
+
+		const [record] = await deps.outbox.getPending();
+		expect(record?.event.eventId).toBe("evt-1");
+		expect(record?.event.metadata?.correlationId).toBe("corr-1");
 	});
 
-	it("leaves the key free after a rolled-back claim", async () => {
-		const store = new InMemoryIdempotencyStore<undefined>();
-		const scope = new InMemoryTransactionScope([store]);
+	it("passes the claim token to the work", async () => {
+		const deps = createDeps();
+		let claimToken: string | undefined;
 
-		await scope
-			.transactional(async () => {
-				await claimHandle(store, "k", "fp");
-				throw new Error("work failed");
-			})
-			.catch(() => {});
-
-		await expect(store.claim(undefined, "k", "fp")).resolves.toMatchObject({
-			status: "claimed",
-		});
-	});
-
-	it("isolates stored outcomes from caller mutation", async () => {
-		const store = new InMemoryIdempotencyStore<undefined>();
-		const handle = await claimHandle(store, "k", "fp");
-		const outcome = { items: ["a"] };
-		await store.complete(undefined, handle, outcome);
-		await store.confirm(handle);
-		outcome.items.push("b"); // caller mutates after storing
-
-		const claim = await store.claim(undefined, "k", "fp");
-		expect(claim).toEqual({
-			status: "completed",
-			outcome: { items: ["a"] },
-		});
-		if (claim.status === "completed") {
-			(claim.outcome as { items: string[] }).items.push("c");
-		}
-		const again = await store.claim(undefined, "k", "fp");
-		expect(again).toEqual({ status: "completed", outcome: { items: ["a"] } });
-	});
-
-	it("throws the wiring error on complete without a claim", async () => {
-		const store = new InMemoryIdempotencyStore<undefined>();
-		await expect(
-			store.complete(undefined, { key: "k", token: "missing" }, "x"),
-		).rejects.toBeInstanceOf(IdempotencyCompletionWithoutClaimError);
-	});
-
-	it("a staged, unconfirmed outcome is in-flight, never replayed", async () => {
-		const store = new InMemoryIdempotencyStore<undefined>();
-		const handle = await claimHandle(store, "k", "fp");
-		await store.complete(undefined, handle, "uncommitted");
-		await expect(store.claim(undefined, "k", "fp")).rejects.toBeInstanceOf(
-			IdempotencyInFlightError,
-		);
-	});
-
-	it("abandon releases pending and staged entries, never confirmed records", async () => {
-		const store = new InMemoryIdempotencyStore<undefined>();
-		const staged = await claimHandle(store, "staged", "fp");
-		await store.complete(undefined, staged, "uncommitted");
-		await store.abandon(staged);
-		await expect(store.claim(undefined, "staged", "fp")).resolves.toMatchObject(
-			{
-				status: "claimed",
+		await withIdempotentCommit(
+			deps,
+			request,
+			async (_ctx, _registration, execution) => {
+				claimToken = execution.claimToken;
+				return "done";
 			},
 		);
 
-		const confirmed = await claimHandle(store, "confirmed", "fp");
-		await store.complete(undefined, confirmed, "done");
-		await store.confirm(confirmed);
-		await store.abandon(confirmed);
-		const claim = await store.claim(undefined, "confirmed", "fp");
-		expect(claim).toEqual({ status: "completed", outcome: "done" });
+		expect(claimToken).toEqual(expect.any(String));
 	});
-
-	it("rejects a new key at capacity while preserving replay of existing keys", async () => {
-		const store = new InMemoryIdempotencyStore<undefined>({ maxEntries: 1 });
-		const existing = await claimHandle(store, "existing", "fp");
-		await store.complete(undefined, existing, { orderId: "o-1" });
-		await store.confirm(existing);
-
-		await expect(store.claim(undefined, "new", "fp-new")).rejects.toMatchObject(
-			{
-				code: "IN_MEMORY_CAPACITY_EXCEEDED",
-				store: "InMemoryIdempotencyStore",
-				resource: "entries",
-				limit: 1,
-				current: 1,
-				attempted: 1,
-			},
-		);
-		await expect(store.claim(undefined, "existing", "fp")).resolves.toEqual({
-			status: "completed",
-			outcome: { orderId: "o-1" },
-		});
-		expect(store.size).toBe(1);
-	});
-
-	it("releases capacity when an unconfirmed claim is abandoned", async () => {
-		const store = new InMemoryIdempotencyStore<undefined>({ maxEntries: 1 });
-		const first = await claimHandle(store, "first", "fp-1");
-		await store.abandon(first);
-
-		await expect(
-			store.claim(undefined, "second", "fp-2"),
-		).resolves.toMatchObject({ status: "claimed" });
-	});
-
-	it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
-		"rejects invalid maxEntries capacity %s",
-		(maxEntries) => {
-			expect(() => new InMemoryIdempotencyStore({ maxEntries })).toThrowError(
-				RangeError,
-			);
-		},
-	);
 });

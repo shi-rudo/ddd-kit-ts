@@ -137,7 +137,6 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 		dueAt: Date;
 		payload: TPayload;
 	}): Promise<void> {
-		// Copy first: the copy can run caller code.
 		const scope = deadline.scope;
 		const key = deadline.key;
 		const dueAt = new Date(deadline.dueAt);
@@ -184,7 +183,7 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 		limit: number,
 	): Promise<ReadonlyArray<DueDeadline<TPayload>>> {
 		if (!Number.isInteger(limit) || limit < 0) {
-			throw new Error(
+			throw new RangeError(
 				`InMemoryDeadlineStore: limit must be an integer >= 0, got ${limit}`,
 			);
 		}

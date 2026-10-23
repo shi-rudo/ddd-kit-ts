@@ -20,7 +20,8 @@ The kit gives you five pieces:
 The main path looks like this:
 
 ```ts
-import { InMemoryOutbox, UnitOfWork } from "@shirudo/ddd-kit";
+import { UnitOfWork } from "@shirudo/ddd-kit";
+import { InMemoryOutbox } from "@shirudo/ddd-kit/testing";
 
 const outbox = new InMemoryOutbox<OrderEvent>();
 
@@ -56,7 +57,7 @@ its events.
    aggregate that are still unstamped, with `eventStampFactory` and
    `stampOptions` from the dependencies.
 4. Still inside the transaction, the unit of work freezes and flushes the
-   registered receipts. `withCommit` rejects invalid internal commit tokens
+   registered receipts. `withCommit` collects every registered aggregate
    and calls `outbox.add(events)` with the exact batches.
 5. The transaction commits.
 6. After commit, `withCommit` acknowledges every saved aggregate through a
@@ -163,10 +164,7 @@ const scope: TransactionScope<undefined> = {
   transactional: (fn) => fn(undefined),
 };
 
-await withCommit({ scope, outbox }, async () => ({
-  result: "ok",
-  commits: [],
-}));
+await withCommit({ scope, outbox }, async () => "ok");
 ```
 
 This scope has no rollback. For a test that rolls back or retries, use
@@ -347,10 +345,9 @@ no-op without touching the source head. Unbounded production
 workloads need a durable adapter with an explicit source-head retention policy
 that keeps ended heads, and a transactional unique key on `eventId`.
 
-`add` reads each candidate once, before it reads its own state. It rejects a
-malformed candidate with `EventCollectionError`: a part that is not an object, an
-`eventId` or `type` that is not an own string data property of the event, a
-source field that is not a string, or a position that is not a valid commit
+`add` rejects a malformed candidate with `EVENT_COLLECTION_FAILED`: a part that
+is not an object, an `eventId` or `type` that is not a string, a source field
+that is not a string, or a position that is not a valid commit
 position. A valid position has integer fields, an `aggregateVersion` of at
 least 0, and a `commitSequence` below `commitSize`. The candidates that
 `withCommit` builds pass.
@@ -364,7 +361,8 @@ retries; see [In-memory transactions](./unit-of-work.md#in-memory-transactions).
 While a transaction is open, `getPending` returns only committed records.
 
 ```ts
-import { InMemoryOutbox, type DomainEvent } from "@shirudo/ddd-kit";
+import { type DomainEvent } from "@shirudo/ddd-kit";
+import { InMemoryOutbox } from "@shirudo/ddd-kit/testing";
 
 type OrderCreated = DomainEvent<"OrderCreated", { orderId: string }>;
 
@@ -390,9 +388,9 @@ dedupes exact pending, dead-lettered, and recently dispatched re-adds by
 `eventId`, and implements dispatch tracking. A contradictory source or commit
 position rejects instead of being mistaken for a retry. Once a dispatched
 receipt is evicted, a candidate behind the current source head fails with
-`EventCollectionError` rather than rewinding the head. `endEventSources` marks the
+`EVENT_COLLECTION_FAILED` rather than rewinding the head. `endEventSources` marks the
 cursor of a removed aggregate as ended, and a new event of that source fails
-with `EventCollectionError` too. A retry of an event at the
+with `EVENT_COLLECTION_FAILED` too. A retry of an event at the
 current source head still dedupes, because the source cursor names it. This is
 intentionally fail-safe, not an unbounded idempotency promise. Durable outboxes keep the
 event-ID receipt in storage.
@@ -454,12 +452,19 @@ The dispatcher has a narrow contract:
 - It stops the batch on the first delivery failure.
 - It aborts each sink through its `ExecutionContext` after `deliveryTimeoutMs`
   (30 seconds by default). A sink that ignores the signal cannot keep the
-  dispatcher pending, but its foreign I/O can continue as zombie work.
+  dispatcher pending, but its foreign I/O can continue as zombie work. With a
+  tracking outbox, the expiry of this budget consumes an attempt, whatever the
+  classifier says. So a record that makes the sink hang reaches the dead
+  letter instead of blocking the outbox forever.
 - It bounds `getPending`, `markDispatched`, and `markFailed` through
   `storageTimeoutMs` (30 seconds by default) and passes the same context to the
   store.
 - It never rejects from `run()` or `drainOnce()`. Failures go to observers
   and the loop backs off.
+- It ends a pass when `getPending` returns a record that the same pass
+  already acknowledged. `onPollError` then receives
+  `AcknowledgedRecordPendingError`, and the loop backs off. The cause is an
+  acknowledgement that did not take effect, or a read that lags behind it.
 - It does not coordinate multiple process instances. If several dispatchers
   poll the same outbox, your adapter must claim records in `getPending`
   (`FOR UPDATE SKIP LOCKED`, leases, visibility timeouts, or equivalent).
@@ -539,9 +544,11 @@ const dispatcher = new OutboxDispatcher({
 
 `transient` failures back off but do not consume the poison-message budget.
 `permanent` and safely conservative `unknown` failures do. The shared default
-walks the error cause chain: native `TimeoutError` and `retryable: true` are
-transient, while `retryable: false` is permanent. Unmapped errors remain
-unknown. If a custom classifier throws or returns an invalid value, the
+walks the error cause chain, and the nearest marker decides: native
+`TimeoutError` and `retryable: true` are transient, while `retryable: false`
+is permanent. Unmapped errors remain unknown. The expiry of the dispatcher's own `deliveryTimeoutMs` consumes an
+attempt in every case. A `TimeoutError` that the sink raises before that
+budget expires follows the classifier. If a custom classifier throws or returns an invalid value, the
 original delivery error remains the primary error, the failure counts as
 unknown, and `onDispatchError` receives a third assessment argument containing
 `classifierError`.
@@ -727,7 +734,6 @@ You may use both channels for different audiences:
 await withCommit({ scope, outbox, bus }, async (tx) => {
   // bus: in-process fast path after commit
   // outbox: durable handoff for dispatchers
-  return { result: undefined, commits: [] };
 });
 ```
 
@@ -756,8 +762,8 @@ Within one aggregate, event order is causal. If an aggregate emits
 that order. `withCommit` collects events in the order the aggregate recorded
 them, and a sequential outbox dispatcher preserves that order.
 
-Across aggregates, order is not a domain guarantee. Returning commit tokens
-for `[a, b]` creates a deterministic collection order, but brokers, parallel
+Across aggregates, order is not a domain guarantee. Registering `a`, then
+`b`, creates a deterministic collection order, but brokers, parallel
 dispatchers, and separate processes may reorder events from `a` against events
 from `b`.
 

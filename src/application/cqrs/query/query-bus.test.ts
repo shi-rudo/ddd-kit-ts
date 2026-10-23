@@ -1,6 +1,6 @@
 import type { Result } from "@shirudo/result";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
-import { UnregisteredHandlerError } from "../../../errors/kit-errors";
+import type { KitWiringError } from "../../../errors/kit-errors";
 import type { Query } from "./query";
 import { type IQueryBus, QueryBus } from "./query-bus";
 
@@ -66,12 +66,12 @@ describe("QueryBus", () => {
 			}
 		});
 
-		it("throws UnregisteredHandlerError if no handler is registered (wiring bug, not an err)", async () => {
+		it("throws UNREGISTERED_HANDLER if no handler is registered (wiring bug, not an err)", async () => {
 			const bus = new QueryBus();
 
-			await expect(
-				bus.execute({ type: "UnknownQuery" }),
-			).rejects.toBeInstanceOf(UnregisteredHandlerError);
+			await expect(bus.execute({ type: "UnknownQuery" })).rejects.toMatchObject(
+				{ code: "UNREGISTERED_HANDLER" },
+			);
 		});
 
 		it("rethrows a nested dispatch's wiring bug instead of absorbing it into the channel", async () => {
@@ -87,9 +87,9 @@ describe("QueryBus", () => {
 				return null;
 			});
 
-			await expect(bus.execute({ type: "Outer" })).rejects.toBeInstanceOf(
-				UnregisteredHandlerError,
-			);
+			await expect(bus.execute({ type: "Outer" })).rejects.toMatchObject({
+				code: "UNREGISTERED_HANDLER",
+			});
 			expect(mapperCalls).toBe(0);
 		});
 
@@ -214,12 +214,12 @@ describe("QueryBus", () => {
 			).rejects.toThrow("No handler registered");
 		});
 
-		it("executeUnsafe throws the named UnregisteredHandlerError", async () => {
+		it("executeUnsafe throws the named UNREGISTERED_HANDLER", async () => {
 			const bus = new QueryBus();
 
 			await expect(
 				bus.executeUnsafe({ type: "UnknownQuery" }),
-			).rejects.toBeInstanceOf(UnregisteredHandlerError);
+			).rejects.toMatchObject({ code: "UNREGISTERED_HANDLER" });
 		});
 
 		it("bypasses mapExpectedError for unregistered types: the wiring bug throws instead of riding the channel", async () => {
@@ -236,10 +236,10 @@ describe("QueryBus", () => {
 				(error: unknown) => error,
 			);
 
-			expect(rejection).toBeInstanceOf(UnregisteredHandlerError);
-			const error = rejection as UnregisteredHandlerError;
-			expect(error.busKind).toBe("query");
-			expect(error.messageType).toBe("UnknownQuery");
+			expect(rejection).toMatchObject({ code: "UNREGISTERED_HANDLER" });
+			const error = rejection as KitWiringError<"UNREGISTERED_HANDLER">;
+			expect(error.details.busKind).toBe("query");
+			expect(error.details.messageType).toBe("UnknownQuery");
 			expect(mapperCalls).toBe(0);
 		});
 

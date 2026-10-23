@@ -6,11 +6,8 @@ import type {
 	DomainTransitionOutcome,
 } from "./contracts";
 import { ensureStableDomainMachineDefinition } from "./definition";
-import { ReentrantDomainStateMachineEvaluationError } from "./errors";
-import {
-	createDomainMachineSnapshot,
-	prepareDomainMachineSnapshot,
-} from "./snapshot";
+import { reentrantDomainStateMachineEvaluationError } from "./errors";
+import { prepareDomainMachineSnapshot } from "./snapshot";
 import {
 	canTransitionPreparedDomainState,
 	createInitialDomainMachineSnapshotFromPrepared,
@@ -40,14 +37,7 @@ export {
 } from "./definition";
 export {
 	DomainTransitionGuardRejectedError,
-	InvalidDomainMachineContextError,
-	InvalidDomainMachineDefinitionError,
-	InvalidDomainMachineInputError,
-	InvalidDomainMachineSnapshotError,
 	InvalidDomainTransitionError,
-	InvalidDomainTransitionGuardResultError,
-	InvalidDomainTransitionResultError,
-	ReentrantDomainStateMachineEvaluationError,
 } from "./errors";
 export {
 	canTransitionDomainState,
@@ -112,9 +102,9 @@ export class DomainStateMachine<
 		}
 	}
 
-	/** Returns a defensive, deeply frozen copy of the current snapshot. */
+	/** The current snapshot. It is deeply frozen, so callers share it safely. */
 	get snapshot(): DomainMachineSnapshot<TState, TContext> {
-		return createDomainMachineSnapshot<TState, TContext>(this.#snapshot);
+		return this.#snapshot;
 	}
 
 	/** Current named control state. */
@@ -154,7 +144,7 @@ export class DomainStateMachine<
 
 	private evaluate<TResult>(operation: () => TResult): TResult {
 		if (this.#evaluating) {
-			throw new ReentrantDomainStateMachineEvaluationError();
+			throw reentrantDomainStateMachineEvaluationError();
 		}
 
 		this.#evaluating = true;

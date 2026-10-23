@@ -1,9 +1,6 @@
 import { someChainRetryable } from "@shirudo/base-error";
 import { abortReason } from "../../internal/async/abort";
-import {
-	computeBackoffDelay,
-	neutralJitterSource,
-} from "../../internal/async/backoff";
+import { computeBackoffDelay } from "../../internal/async/backoff";
 import { sleepRejectingOnAbort } from "../../internal/async/sleep";
 import { reportToObserver } from "../../internal/observer";
 import {
@@ -86,7 +83,7 @@ function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
  *
  * **Classification is by error, not by guesswork.** Only errors the
  * `isRetryable` predicate accepts are retried; everything else (a
- * `DomainError`, `EventCollectionError`, `UnregisteredChangesError`,
+ * `DomainError`, `EVENT_COLLECTION_FAILED`, `UNREGISTERED_CHANGES`,
  * `DuplicateAggregateError`, a non-Error throw) surfaces immediately.
  * After `maxAttempts` the last error is rethrown unchanged, so a caller
  * can still match `ConcurrencyConflictError` and map it to HTTP 409.
@@ -131,10 +128,7 @@ export class RetryingTransactionScope<TCtx> implements TransactionScope<TCtx> {
 		assertTimerDelay("RetryingTransactionScope", "maxDelayMs", this.maxDelayMs);
 		this.isRetryable = policy.isRetryable ?? someChainRetryable;
 		this.sleep = policy.sleep ?? defaultSleep;
-		// Wrapped like the poll loop's jitter: an injected source that throws
-		// or returns a non-finite value must not replace the transaction's
-		// original retryable error or eliminate the backoff.
-		this.random = neutralJitterSource(policy.random ?? Math.random);
+		this.random = policy.random ?? Math.random;
 		this.onRetry = policy.onRetry;
 	}
 

@@ -61,9 +61,13 @@
  */
 import {
 	assertNoOwnProtoKey,
-	MissingEntityIdError,
-	UnmanagedInstanceError,
+	missingEntityIdError,
+	unmanagedInstanceError,
 } from "../../errors/kit-errors";
+import {
+	assertNotFromAnotherKitCopy,
+	markKitCopy,
+} from "../../internal/kit-copy";
 import type { Id } from "../identity/id";
 import { deepFreeze } from "../value-object/value-object";
 
@@ -245,7 +249,7 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 * `TState` publicly would expose the aggregate's live object graph and
 	 * let nested mutation bypass behavior, validation, versioning, and
 	 * dirty tracking. Concrete entities should expose business-meaningful queries or
-	 * immutable DTOs (`deepFreeze(copyPlainState(this.state))` for a
+	 * immutable DTOs (`deepFreeze(copyPlainData(this.state))` for a
 	 * plain-data state). Snapshot projection belongs to the persistence
 	 * adapter, which captures the aggregate from outside through those
 	 * queries and DTOs rather than asking the entity to create its own
@@ -293,8 +297,8 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 * {@link EntityConfig.deepFreezeState} enabled, the ownership transfer
 	 * widens to the whole graph: NESTED objects are frozen in place too.
 	 *
-	 * @throws MissingEntityIdError when `id` is not a non-blank string.
-	 * @throws PrototypePollutionError when a plain-object, null-prototype,
+	 * @throws `MISSING_ENTITY_ID` when `id` is not a non-blank string.
+	 * @throws `PROTOTYPE_POLLUTION` when a plain-object, null-prototype,
 	 * or array state carries an own `"__proto__"` data key; validate and
 	 * strip untrusted input at the boundary.
 	 */
@@ -304,9 +308,10 @@ export abstract class Entity<TState, TId extends Id<string>>
 		config?: EntityConfig<TState>,
 	) {
 		if (typeof id !== "string" || id.trim() === "") {
-			throw new MissingEntityIdError(id);
+			throw missingEntityIdError(id);
 		}
 		this.id = id;
+		markKitCopy(this);
 		this._stateFreezeMode =
 			(config?.deepFreezeState ?? false) ? "deep" : "shallow";
 		stateValidators.set(
@@ -340,7 +345,7 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 * ownership transfer and is frozen in place; see the constructor.
 	 *
 	 * @param newState - The new state
-	 * @throws PrototypePollutionError when the state carries an own
+	 * @throws `PROTOTYPE_POLLUTION` when the state carries an own
 	 * `"__proto__"` data key; the previous state is kept.
 	 */
 	protected setState(newState: TState): void {
@@ -382,7 +387,8 @@ export function assertStateInvariant<TState>(
 ): void {
 	const validateState = stateValidators.get(entity);
 	if (validateState === undefined) {
-		throw new UnmanagedInstanceError(
+		assertNotFromAnotherKitCopy(entity, "The entity");
+		throw unmanagedInstanceError(
 			"assertStateInvariant",
 			"entity",
 			(entity as { id?: unknown } | null)?.id,

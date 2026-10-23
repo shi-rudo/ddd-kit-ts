@@ -108,7 +108,7 @@ class OrderItem extends Entity<OrderItemState, ItemId> {
 The important details:
 
 - `id` is readonly and must be a non-blank string; the constructor throws
-  `MissingEntityIdError` (code `MISSING_ENTITY_ID`) for anything else
+  `MISSING_ENTITY_ID` for anything else
 - `state` is protected; consumers use explicit domain queries
 - `setState(...)` validates the next state and only then replaces the old one
 - if validation throws, the previous state remains in place
@@ -315,7 +315,7 @@ hold and mutate child entity references. The aggregate root is the entry point.
 `Entity.state` is protected. External code cannot read or mutate the live state
 graph; a concrete entity exposes domain queries or a plain state instead.
 [Aggregates -> Reading State from Outside](./aggregates.md#reading-state-from-outside)
-shows the plain state, built with `deepFreeze(copyPlainState(this.state))`.
+shows the plain state, built with `deepFreeze(copyPlainData(this.state))`.
 
 ```ts
 class OrderItem extends Entity<OrderItemState, ItemId> {

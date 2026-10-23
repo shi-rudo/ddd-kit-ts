@@ -135,7 +135,7 @@ The event store runs the version check, so that flush stays hand-written.
 The receipt is immutable. The adapter must not inspect mutable aggregate state
 during the flush. `UnitOfWork` compares the registered version, event batch,
 and persistence capture before and after the asynchronous flush. If one
-value changes, the transaction rolls back with `AggregateTrackingError`.
+value changes, the transaction rolls back with `AGGREGATE_TRACKING`.
 
 ## Multi-table aggregates
 

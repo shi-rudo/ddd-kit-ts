@@ -110,7 +110,7 @@ function omitInternal(
 	}
 
 	if (budget && ++budget.visits > PATH_SENSITIVE_VISIT_BUDGET) {
-		throw new Error(
+		throw new RangeError(
 			`deepOmit: exceeded ${PATH_SENSITIVE_VISIT_BUDGET} node visits. ` +
 				`With ignoreKeyPredicate, objects reached via shared references ` +
 				`are cloned once per path (the predicate may decide differently ` +
@@ -122,7 +122,6 @@ function omitInternal(
 
 	// Arrays: recursively process every own property so sparse holes, custom
 	// properties, symbols, and descriptors remain observable to deepEqual.
-	// `Array.isArray` is brand-based and immune to `Symbol.toStringTag` spoofing.
 	if (Array.isArray(obj)) {
 		const arr = obj as unknown[];
 		const clone: unknown[] = new Array(arr.length);
@@ -167,9 +166,7 @@ function omitInternal(
 
 	const tag = Object.prototype.toString.call(obj);
 
-	// Built-in atomic types: clone by type rather than walk. The detection
-	// is brand-verified: a plain object spoofing a built-in tag falls
-	// through to the plain-object walk below.
+	// Built-in atomic types: clone by type rather than walk.
 	if (isBuiltInObject(obj, tag)) {
 		const builtInClone = cloneBuiltIn(obj, tag);
 		visited.set(obj, builtInClone);

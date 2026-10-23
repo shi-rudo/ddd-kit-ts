@@ -1,10 +1,9 @@
 import { assertNoOwnProtoKey } from "../../errors/kit-errors";
 import {
-	applyCooperativeBrand,
-	hasCooperativeBrand,
-} from "../../internal/cooperative-brand";
-import { copyFreezableState } from "../../internal/structural/copy-plain-state";
-import { isIntrinsicConstructorPrototype } from "../../internal/structural/is-built-in";
+	assertNotFromAnotherKitCopy,
+	markKitCopy,
+} from "../../internal/kit-copy";
+import { copyPlainData, isDate } from "../../internal/structural/plain-data";
 import { uuidV7 } from "../../internal/uuid-v7";
 import { deepFreeze } from "../value-object/value-object";
 import { type ClockFactory, defaultClockFactory, readClock } from "./clock";
@@ -439,55 +438,37 @@ const STAMPED_EVENTS = new WeakSet<object>();
 const UNSTAMPED_EVENTS = new WeakSet<object>();
 const FACTORY_OWNED_EVENT_STAMPS = new WeakSet<object>();
 
-// Cooperative cross-instance tier of the kit-built check: a WeakSet is
-// bound to ONE loaded copy of this module, so an event legitimately
-// built by a second copy of the kit would be rejected as hand-built.
-// Such events are recognized by the cooperative brand instead, which
-// every constructor and kit-derived copy applies before it freezes the
-// event (see `cooperative-brand.ts` for the probe rules).
-// The key strings are the cross-copy wire contract: every kit copy in a
-// process reads and applies the same keys. The constant names follow the
-// vocabulary; the key strings never change, so an older word in a key is
-// part of the contract, not a name.
-const STAMPED_BRAND = Symbol.for("@shirudo/ddd-kit.mintedEvent");
-const UNSTAMPED_BRAND = Symbol.for("@shirudo/ddd-kit.uncommittedEvent");
-
-function brandStampedEvent(event: object): void {
-	applyCooperativeBrand(event, STAMPED_BRAND);
-}
-
-function brandUnstampedEvent(event: object): void {
-	applyCooperativeBrand(event, UNSTAMPED_BRAND);
-}
-
 function isFactoryOwnedDomainEventStamp(stamp: object): boolean {
 	return FACTORY_OWNED_EVENT_STAMPS.has(stamp);
 }
 
 /**
- * Whether `event` is a stamped domain event: it came out of
- * {@link createDomainEvent}, {@link createStampedDomainEvent}, or
- * {@link stampDomainEvent}, so it is deeply frozen with defensively copied
- * payload and metadata. An unstamped decision carries the other brand; see
- * {@link isUnstampedDomainEvent}. Two tiers: events of THIS
- * loaded copy of the kit are verified through the module-private
- * WeakSet; events built by ANOTHER copy (duplicate dependency, dual
- * CJS/ESM load) are recognized through a cooperative `Symbol.for`
- * brand that code in the same process can fake. The gate catches
- * accidents, not adversaries. Module-internal export for the aggregate
- * recording paths; not part of the package entries.
+ * Whether `event` is a stamped domain event that this copy of the kit
+ * built: it came out of {@link createDomainEvent},
+ * {@link createStampedDomainEvent}, or {@link stampDomainEvent}, so it is
+ * deeply frozen with defensively copied payload and metadata. An unstamped
+ * decision is in the other set; see {@link isUnstampedDomainEvent}.
+ * Module-internal export for the aggregate recording paths; not part of
+ * the package entries.
  */
 export function isStampedDomainEvent(event: object): event is AnyDomainEvent {
-	return STAMPED_EVENTS.has(event) || hasCooperativeBrand(event, STAMPED_BRAND);
+	return STAMPED_EVENTS.has(event);
 }
 
-/** Whether a value is a kit-built unstamped event. */
+/** Whether a value is an unstamped event that this copy of the kit built. */
 export function isUnstampedDomainEvent(
 	event: object,
 ): event is AnyUnstampedDomainEvent {
-	return (
-		UNSTAMPED_EVENTS.has(event) || hasCooperativeBrand(event, UNSTAMPED_BRAND)
-	);
+	return UNSTAMPED_EVENTS.has(event);
+}
+
+/**
+ * Throws `DUPLICATE_KIT_COPY` when another loaded copy of the kit built
+ * `event`. A recording path calls it before it reports the event as
+ * hand-built.
+ */
+export function assertEventNotFromAnotherKitCopy(event: unknown): void {
+	assertNotFromAnotherKitCopy(event, "The domain event");
 }
 
 /**
@@ -544,15 +525,15 @@ export function buildUnstampedDomainEvent<T extends string, P>(
 		payload: ownEventPayload(definition, payload, operation),
 		schemaVersion: options?.schemaVersion ?? 1,
 	};
-	brandUnstampedEvent(event);
+	markKitCopy(event);
 	const unstamped = deepFreeze(event) as UnstampedDomainEvent<T, P>;
 	UNSTAMPED_EVENTS.add(unstamped);
 	return unstamped;
 }
 
-/** Brands and freezes a kit-derived copy of an unstamped event. */
+/** Marks and freezes a kit-derived copy of an unstamped event. */
 export function adoptUnstampedDomainEvent<T extends object>(copy: T): T {
-	brandUnstampedEvent(copy);
+	markKitCopy(copy);
 	Object.freeze(copy);
 	UNSTAMPED_EVENTS.add(copy);
 	return copy;
@@ -570,6 +551,7 @@ export function stampDomainEvent<T extends string, P>(
 	stamp: DomainEventStamp,
 ): DomainEvent<T, P> {
 	if (!isUnstampedDomainEvent(event)) {
+		assertEventNotFromAnotherKitCopy(event);
 		throw new TypeError(
 			"stampDomainEvent requires an unstamped event from an aggregate's createEvent",
 		);
@@ -624,24 +606,22 @@ function buildStampedEvent<T extends string, P>(
 		schemaVersion: event.schemaVersion,
 		metadata,
 	};
-	brandStampedEvent(recorded);
+	markKitCopy(recorded);
 	Object.freeze(recorded);
 	STAMPED_EVENTS.add(recorded);
 	return recorded;
 }
 
 /**
- * Brands, freezes, and registers a kit-derived copy of a stamped event
+ * Marks, freezes, and registers a kit-derived copy of a stamped event
  * (e.g. the copy `apply()` stamps with the aggregate identity) as recorded
  * itself.
  * The copy shares the already-frozen payload/metadata of its source,
- * so the kit-built guarantee carries over. Applying the cooperative brand
- * before freezing keeps the copy recognizable by another loaded kit
- * instance as well as by this instance's WeakSet. Module-internal
- * export; not part of the package entries.
+ * so the kit-built guarantee carries over. Module-internal export; not
+ * part of the package entries.
  */
 export function adoptStampedDomainEvent<T extends object>(copy: T): T {
-	brandStampedEvent(copy);
+	markKitCopy(copy);
 	Object.freeze(copy);
 	STAMPED_EVENTS.add(copy);
 	return copy;
@@ -652,29 +632,20 @@ export function adoptStampedDomainEvent<T extends object>(copy: T): T {
  * Sets occurredAt to current date and schemaVersion to 1 if not provided.
  *
  * **Input ownership.** The event is deeply frozen, and `payload` and
- * `metadata` are deep-cloned first, so the caller's own objects are never
+ * `metadata` are copied first, so the caller's own objects are never
  * frozen in place and later mutation of them does not bleed into the event
- * (same contract as `valueObject()`). The event data rule checks the data before the
- * copy and the copy after it. So the copy loses no data without an error,
- * and no getter of the data runs. The in-memory event store applies the
- * same rule on append. The checks catch accidents, not a hostile `Proxy`: a
- * trap that changes the data during the check can hide a loss. An error
- * that a `Proxy` trap throws passes unchanged, so a coded error of the
- * caller keeps its code. These values throw a `TypeError`: a function, a
- * Promise, a WeakMap or a WeakSet, an `Error`, a host object such as a
- * `File`, a binary buffer, a `RegExp`, and shared memory. The same holds
- * for what the copy would lose or change: a class instance, an accessor, an
- * enumerable symbol-keyed property, a non-enumerable data property, and an
- * expando on a built-in. A non-enumerable symbol key is metadata by
- * convention, and the event does not get it. Map a value object to plain
- * data before it goes into an event. `toJSON()` of a `ValueObject` is
- * shallow, so map a nested value object too.
+ * (same contract as `valueObject()`). The copy follows the plain-data rule
+ * of the kit (records, arrays, `Date`, `Map`, `Set`, and primitives; see
+ * the design decisions). A value outside it throws a `TypeError` that names
+ * the path, for example a function, a class instance, a `RegExp`, binary
+ * data, or an accessor. Map a value object to plain data before it goes
+ * into an event. `toJSON()` of a `ValueObject` is shallow, so map a nested
+ * value object too.
  *
  * **With a definition.** Pass a definition from `defineDomainEvent` in
  * place of the type, and its Standard Schema decides what the payload may
- * contain in place of the deep check. The payload is the schema output,
- * copied and frozen, and the event takes the schema version of the
- * definition.
+ * contain. The payload is the schema output, copied and frozen, and the
+ * event takes the schema version of the definition.
  *
  * **For aggregate-internal events, prefer `this.createEvent(...)` on
  * `StateStoredAggregate` / `EventSourcedAggregate`.** That helper auto-injects
@@ -837,7 +808,7 @@ function buildDomainEvent<T extends string, P>(
 	// (Vernon, IDDD §8).
 	// Brand BEFORE the freeze (a frozen object rejects new properties);
 	// non-enumerable, so spreads, JSON, and equality never see it.
-	brandStampedEvent(event);
+	markKitCopy(event);
 	const built = deepFreeze(event) as DomainEvent<T, P>;
 	STAMPED_EVENTS.add(built);
 	return built;
@@ -869,7 +840,7 @@ function assertProducerOwnedEventFields(
 }
 
 function copyValidEventDate(value: unknown): Date {
-	if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
+	if (!isDate(value) || !Number.isFinite(value.getTime())) {
 		throw new DomainEventValidationError(
 			"EVENT_OCCURRED_AT_INVALID",
 			"occurredAt",
@@ -900,8 +871,7 @@ function ownedEventMetadata(
 		return factorySource === undefined ? undefined : { source: factorySource };
 	}
 	const owned: unknown = cloneOwnedEventData(metadata, "metadata", operation);
-	if (!isPlainRecordCopy(owned)) {
-		// The copy is the kit's own, so its tag runs no caller code.
+	if (!isPlainRecord(owned)) {
 		const received =
 			typeof owned === "object"
 				? owned === null
@@ -919,44 +889,24 @@ function ownedEventMetadata(
 	return { ...record, source: factorySource };
 }
 
-/**
- * True for a structured-clone copy of a plain record. A runtime such as
- * Vercel Edge returns the copy with the `Object.prototype` of another realm,
- * so the check compares the source text of the constructor, not the
- * prototype object.
- */
-function isPlainRecordCopy(copy: unknown): boolean {
+/** True for the copy of a record: the copy lives in this realm. */
+function isPlainRecord(copy: unknown): boolean {
 	if (typeof copy !== "object" || copy === null) return false;
 	const prototype = Object.getPrototypeOf(copy);
-	return (
-		prototype !== null &&
-		isIntrinsicConstructorPrototype(prototype, "Object") &&
-		Object.getPrototypeOf(prototype) === null
-	);
+	return prototype === Object.prototype || prototype === null;
 }
 
 /**
- * Deep-clones caller-supplied event data (payload, metadata) before the
- * event is frozen, so a constructor never freezes or aliases the caller's
- * own object graph. {@link copyFreezableState} checks the data and the
- * clone; its JSDoc states the rule and its limits.
+ * Copies caller-supplied event data (payload, metadata) under the
+ * plain-data rule before the event is frozen, so a constructor never freezes
+ * or aliases the caller's own object graph.
  */
 function cloneOwnedEventData<T>(
 	value: T,
 	field: "payload" | "metadata",
 	operation: string,
 ): T {
-	// An own "__proto__" data key survives structuredClone and would
-	// re-arm prototype pollution in every [[Set]]-based consumer of the
-	// event; reject it at the root, the same contract as entity state. The
-	// check runs first, so this key throws its own error whatever else is
-	// wrong with the data.
-	if (value !== null && typeof value === "object") {
-		assertNoOwnProtoKey(value, `Event ${field} of ${operation}`);
-	}
-	// The freeze rule keeps the guarantee "kit-built implies deeply
-	// frozen".
-	return copyFreezableState(value, `${operation}: ${field}`);
+	return copyPlainData(value, { subject: `${operation}: ${field}` });
 }
 
 /** The definition when the caller passed one in place of the type. */
@@ -1053,24 +1003,13 @@ export function copyMetadata(
 export function mergeMetadata(
 	...metadataObjects: Array<EventMetadata | undefined>
 ): EventMetadata {
-	// Copy via defineProperty, not Object.assign: assign uses [[Set]],
-	// which invokes the `__proto__` setter for an own "__proto__" key
-	// (typical of JSON.parse'd metadata from outbox rows or message
-	// envelopes) and would install an attacker-controlled prototype.
 	const merged: Record<PropertyKey, unknown> = {};
 	for (const metadata of metadataObjects) {
 		if (!metadata) continue;
+		// An own "__proto__" key, typical of JSON.parse'd metadata, would
+		// reach the prototype setter of `merged` through Object.assign.
 		assertNoOwnProtoKey(metadata, "Event metadata");
-		for (const key of Reflect.ownKeys(metadata)) {
-			const descriptor = Object.getOwnPropertyDescriptor(metadata, key);
-			if (!descriptor?.enumerable) continue;
-			Object.defineProperty(merged, key, {
-				value: (metadata as Record<PropertyKey, unknown>)[key],
-				writable: true,
-				enumerable: true,
-				configurable: true,
-			});
-		}
+		Object.assign(merged, metadata);
 	}
 	return merged as EventMetadata;
 }

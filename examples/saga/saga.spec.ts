@@ -153,10 +153,8 @@ function registerCommandHandlers(deps: AppDeps): void {
 		withCommit(commitDeps, async (_tx, registration) => {
 			const order = Order.place(cmd.orderId, cmd.customerId, cmd.total);
 			await deps.orderRepository.insert(order);
-			return {
-				result: ok(order.id),
-				commits: [registration.registerSaved(order)],
-			};
+			registration.registerSaved(order);
+			return ok(order.id);
 		});
 
 	const requestPayment: CommandHandler<
@@ -166,10 +164,8 @@ function registerCommandHandlers(deps: AppDeps): void {
 		withCommit(commitDeps, async (_tx, registration) => {
 			const payment = Payment.request(cmd.paymentId, cmd.orderId, cmd.amount);
 			await deps.paymentRepository.insert(payment);
-			return {
-				result: ok(payment.id),
-				commits: [registration.registerSaved(payment)],
-			};
+			registration.registerSaved(payment);
+			return ok(payment.id);
 		});
 
 	const requestShipping: CommandHandler<
@@ -179,10 +175,8 @@ function registerCommandHandlers(deps: AppDeps): void {
 		withCommit(commitDeps, async (_tx, registration) => {
 			const shipment = Shipment.request(cmd.shipmentId, cmd.orderId);
 			await deps.shipmentRepository.insert(shipment);
-			return {
-				result: ok(shipment.id),
-				commits: [registration.registerSaved(shipment)],
-			};
+			registration.registerSaved(shipment);
+			return ok(shipment.id);
 		});
 
 	const confirmOrder: CommandHandler<ConfirmOrderCommand, void> = async (
@@ -195,10 +189,8 @@ function registerCommandHandlers(deps: AppDeps): void {
 				const order = await deps.orderRepository.getById(cmd.orderId);
 				order.confirm(confirmedAt);
 				await deps.orderRepository.update(order);
-				return {
-					result: ok(undefined as void),
-					commits: [registration.registerSaved(order)],
-				};
+				registration.registerSaved(order);
+				return ok(undefined as void);
 			},
 		);
 	};
@@ -208,10 +200,8 @@ function registerCommandHandlers(deps: AppDeps): void {
 			const order = await deps.orderRepository.getById(cmd.orderId);
 			order.cancel(cmd.reason);
 			await deps.orderRepository.update(order);
-			return {
-				result: ok(undefined as void),
-				commits: [registration.registerSaved(order)],
-			};
+			registration.registerSaved(order);
+			return ok(undefined as void);
 		});
 
 	const refundPayment: CommandHandler<RefundPaymentCommand, void> = async (
@@ -221,10 +211,8 @@ function registerCommandHandlers(deps: AppDeps): void {
 			const payment = await deps.paymentRepository.getById(cmd.paymentId);
 			payment.refund();
 			await deps.paymentRepository.update(payment);
-			return {
-				result: ok(undefined as void),
-				commits: [registration.registerSaved(payment)],
-			};
+			registration.registerSaved(payment);
+			return ok(undefined as void);
 		});
 
 	commandBus.register("PlaceOrder", placeOrder);
@@ -348,10 +336,8 @@ async function simulatePaymentResult(
 			if (outcome.kind === "received") payment.receive();
 			else payment.fail(outcome.reason);
 			await paymentRepository.update(payment);
-			return {
-				result: ok(undefined as void),
-				commits: [registration.registerSaved(payment)],
-			};
+			registration.registerSaved(payment);
+			return ok(undefined as void);
 		},
 	);
 }
@@ -374,10 +360,8 @@ async function simulateShippingResult(
 				shipment.fail(outcome.reason);
 			}
 			await shipmentRepository.update(shipment);
-			return {
-				result: ok(undefined as void),
-				commits: [registration.registerSaved(shipment)],
-			};
+			registration.registerSaved(shipment);
+			return ok(undefined as void);
 		},
 	);
 }

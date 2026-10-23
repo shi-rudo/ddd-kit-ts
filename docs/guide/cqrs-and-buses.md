@@ -41,10 +41,13 @@ forever. The imperative shell is the part of the application that invokes the
 handler and supervises the I/O it starts.
 
 `InProcessEventBus` therefore bounds the execution of every handler. For each call
-to `publish`, it creates one `ExecutionContext` and passes it to every handler
-for the event type, including handlers registered through `subscribeAll`. The
-context gives all of those handlers the same cancellation signal and time
-budget:
+to `publish`, it creates one `ExecutionContext`. Every handler of the
+publication receives it as part of its `EventHandlerContext`, including
+handlers registered through `subscribeAll`. The context gives all of those
+handlers the same cancellation signal and time budget. It also carries the
+publish chain of the event, which a handler passes on to a publication that it
+awaits; see
+[Using the Event Bus for Work That Must Not Be Lost](./common-mistakes.md#using-the-event-bus-for-work-that-must-not-be-lost):
 
 ```ts
 eventBus.subscribe("OrderConfirmed", async (event, context) => {
@@ -542,7 +545,7 @@ A concrete type map is the single source of truth for handler and execution resu
 
 ### Unregistered Commands
 
-Dispatching a command type with no registered handler throws `UnregisteredHandlerError`.
+Dispatching a command type with no registered handler throws `UNREGISTERED_HANDLER`.
 
 That is a wiring bug, not a domain failure. The command bus does not put it on the `Result` error channel and does not pass it through `mapExpectedError`. A missing registration means the application was bootstrapped incorrectly, so it should fail loudly at the boundary that turns programming bugs into 500s.
 
@@ -596,7 +599,7 @@ The bus gives you two execution styles:
 - `execute(...)` returns `Result<R, E>` and applies the optional selective `mapExpectedError` policy; unclassified handler failures throw.
 - `executeUnsafe(...)` returns `R` directly and lets handler failures throw.
 
-Both variants throw `UnregisteredHandlerError` for missing handlers. Missing query registration is still a wiring bug.
+Both variants throw `UNREGISTERED_HANDLER` for missing handlers. Missing query registration is still a wiring bug.
 
 As with commands, a concrete query type map owns the result of both execution styles. Explicit `<Query, Result>` arguments are available only with the default untyped map shape; they cannot override `Queries[query.type]`.
 

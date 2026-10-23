@@ -114,6 +114,25 @@ describe("toPublicErrorView()", () => {
 		expect(view.message).toBe("The requested resource could not be found.");
 	});
 
+	it("reports a failing catalog to onCatalogError and returns the fallback view", () => {
+		const catalog = createKitPublicErrors();
+		const failure = new Error("message set unavailable");
+		catalog.messagesFor = () => {
+			throw failure;
+		};
+		const reported: unknown[] = [];
+
+		const view = toPublicErrorView(
+			new AggregateNotFoundError({
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
+			}),
+			{ catalog, onCatalogError: (error) => reported.push(error) },
+		);
+
+		expect(view.code).toBe("INTERNAL_ERROR");
+		expect(reported).toEqual([failure]);
+	});
+
 	describe("hardening against hostile or accidental publicIssues()", () => {
 		it("degrades to the fallback view when publicIssues() throws, instead of crashing the 500 path", () => {
 			const hostile = {
@@ -168,6 +187,28 @@ describe("toPublicErrorView()", () => {
 			expect(view.message).toBe("An unexpected error occurred.");
 			expect(view.details).toBeUndefined();
 			expect(JSON.stringify(view)).not.toContain("10.0.0.5");
+		});
+
+		it("calls publicIssues() once per view", () => {
+			let calls = 0;
+			const validation = {
+				name: "VALIDATION_FAILED",
+				category: "VALIDATION",
+				publicIssues: () => {
+					calls += 1;
+					return [{ message: "Name is required.", path: ["name"] }];
+				},
+			};
+
+			const view = toPublicErrorView(validation, {
+				catalog: createKitPublicErrors({ issueMessages: true }),
+			});
+
+			expect(view.code).toBe("VALIDATION_FAILED");
+			expect(view.details?.issues).toEqual([
+				{ message: "Name is required.", path: ["name"] },
+			]);
+			expect(calls).toBe(1);
 		});
 
 		it("ignores a publicIssues() that does not return an array", () => {

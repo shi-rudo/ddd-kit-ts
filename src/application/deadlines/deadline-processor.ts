@@ -107,9 +107,9 @@ export interface DeadlineProcessorOptions<TPayload> {
 	/**
 	 * Classifies handler failures as transient, permanent, or unknown. Transient
 	 * failures back off without consuming the poison ceiling; permanent and
-	 * unknown failures count. The default walks the cause chain: native
-	 * `TimeoutError` and `retryable: true` are transient, `retryable: false` is
-	 * permanent, and unmapped errors are unknown. A throwing or invalid custom
+	 * unknown failures count. The default walks the cause chain, and the nearest
+	 * marker decides: native `TimeoutError` and `retryable: true` are transient,
+	 * `retryable: false` is permanent, and unmapped errors are unknown. A throwing or invalid custom
 	 * classifier becomes unknown and is exposed through the observer assessment
 	 * without replacing the original handler error.
 	 */
@@ -117,9 +117,7 @@ export interface DeadlineProcessorOptions<TPayload> {
 
 	/**
 	 * Jitter source for the failure backoff, injectable for
-	 * deterministic tests. Default `Math.random`. Neutralized like every
-	 * user callback: a throwing or non-finite source degrades to the
-	 * midpoint multiplier.
+	 * deterministic tests. Default `Math.random`.
 	 */
 	random?: () => number;
 

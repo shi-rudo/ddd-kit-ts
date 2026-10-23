@@ -1,23 +1,53 @@
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import type { ExecutionContext } from "../../internal/async/execution";
 
+// A type-level marker: only an event bus produces a PublishChain.
+declare const publishChainBrand: unique symbol;
+
 /**
- * Event handler function type for subscribing to domain events. The execution
- * context carries the publication's cooperative cancellation and deadline;
- * those runtime controls belong to the imperative shell, never to the domain
- * event itself.
+ * The position of one dispatch on its publish chain. A handler receives it as
+ * `context.publishChain` and passes it to a publication that it awaits. The
+ * bus counts the open publications on the chain and stops a publish cycle.
+ * The value is opaque.
+ */
+export interface PublishChain {
+	readonly [publishChainBrand]: true;
+}
+
+/**
+ * What a handler receives beside the event: the cooperative cancellation and
+ * the deadline of the publication, and its publish chain. These runtime
+ * controls belong to the imperative shell, never to the domain event itself.
+ */
+export interface EventHandlerContext extends ExecutionContext {
+	/**
+	 * Pass it as `publishChain` to a publication that the handler awaits, also
+	 * through `withCommit` or `UnitOfWork.run`. An event bus without a depth
+	 * bound leaves it out.
+	 */
+	readonly publishChain?: PublishChain;
+}
+
+/**
+ * Event handler function type for subscribing to domain events.
  *
  * @template Evt - The type of domain event
  */
 export type EventHandler<Evt> = (
 	event: Evt,
-	context: ExecutionContext,
+	context: EventHandlerContext,
 ) => Promise<void> | void;
 
 /** Controls one bounded in-process event publication. */
 export interface PublishOptions {
 	/** Owner/request cancellation propagated to every event handler. */
 	readonly signal?: AbortSignal;
+	/**
+	 * The chain of the handler that publishes, from `context.publishChain`.
+	 * Without it, the publication starts a new chain, and the bus cannot see
+	 * a cycle through it.
+	 */
+	readonly publishChain?: PublishChain;
 	/**
 	 * Maximum time to await the complete publication. Default `30000`ms.
 	 *

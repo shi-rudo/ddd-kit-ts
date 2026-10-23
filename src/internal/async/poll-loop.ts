@@ -1,5 +1,5 @@
 import { assertPositiveInteger, assertTimerDelay } from "../validate";
-import { computeBackoffDelay, neutralJitterSource } from "./backoff";
+import { computeBackoffDelay } from "./backoff";
 import { joinWithoutBlockingOnAbort } from "./in-flight";
 import { sleepResolvingOnAbort } from "./sleep";
 
@@ -18,8 +18,7 @@ export interface PollLoopOptions {
  * once: the never-rejecting `run(signal)` cadence (idle sleep when
  * drained, jittered streak backoff when stopped), the reentrancy-safe
  * `drainOnce` that joins an in-flight pass instead of starting a
- * competing one, option validation, and the per-instance neutralized
- * jitter source. Subclasses implement one thing: {@link pass}, the
+ * competing one, and option validation. Subclasses implement one thing: {@link pass}, the
  * delivery semantics of their port. Internal plumbing, not exported
  * from the package entries.
  */
@@ -51,7 +50,7 @@ export abstract class PollLoop {
 		assertTimerDelay(context, "pollIntervalMs", this.pollIntervalMs);
 		assertTimerDelay(context, "baseDelayMs", this.baseDelayMs);
 		assertTimerDelay(context, "maxDelayMs", this.maxDelayMs);
-		this.jitter = neutralJitterSource(options.random ?? Math.random);
+		this.jitter = options.random ?? Math.random;
 	}
 
 	/**

@@ -1,6 +1,6 @@
 import { err, ok, type Result } from "@shirudo/result";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
-import { UnregisteredHandlerError } from "../../../errors/kit-errors";
+import type { KitWiringError } from "../../../errors/kit-errors";
 import type { Command } from "./command";
 import { CommandBus, type ICommandBus } from "./command-bus";
 
@@ -78,12 +78,12 @@ describe("CommandBus", () => {
 			}
 		});
 
-		it("throws UnregisteredHandlerError if no handler is registered (wiring bug, not an err)", async () => {
+		it("throws UNREGISTERED_HANDLER if no handler is registered (wiring bug, not an err)", async () => {
 			const bus = new CommandBus();
 
 			await expect(
 				bus.execute({ type: "UnknownCommand" }),
-			).rejects.toBeInstanceOf(UnregisteredHandlerError);
+			).rejects.toMatchObject({ code: "UNREGISTERED_HANDLER" });
 			await expect(bus.execute({ type: "UnknownCommand" })).rejects.toThrow(
 				"No handler registered for command type: UnknownCommand",
 			);
@@ -91,7 +91,7 @@ describe("CommandBus", () => {
 
 		it("rethrows a nested dispatch's wiring bug instead of absorbing it into the channel", async () => {
 			// A handler that awaits a nested execute with a typoed type: the
-			// nested UnregisteredHandlerError lands in the outer catch, which
+			// nested UNREGISTERED_HANDLER lands in the outer catch, which
 			// must rethrow it, not map it into an err the caller treats as an
 			// expected failure.
 			let mapperCalls = 0;
@@ -106,9 +106,9 @@ describe("CommandBus", () => {
 				return ok("unreachable");
 			});
 
-			await expect(bus.execute({ type: "Outer" })).rejects.toBeInstanceOf(
-				UnregisteredHandlerError,
-			);
+			await expect(bus.execute({ type: "Outer" })).rejects.toMatchObject({
+				code: "UNREGISTERED_HANDLER",
+			});
 			expect(mapperCalls).toBe(0);
 		});
 
@@ -129,10 +129,10 @@ describe("CommandBus", () => {
 				(error: unknown) => error,
 			);
 
-			expect(rejection).toBeInstanceOf(UnregisteredHandlerError);
-			const error = rejection as UnregisteredHandlerError;
-			expect(error.busKind).toBe("command");
-			expect(error.messageType).toBe("UnknownCommand");
+			expect(rejection).toMatchObject({ code: "UNREGISTERED_HANDLER" });
+			const error = rejection as KitWiringError<"UNREGISTERED_HANDLER">;
+			expect(error.details.busKind).toBe("command");
+			expect(error.details.messageType).toBe("UnknownCommand");
 			expect(mapperCalls).toBe(0);
 		});
 
