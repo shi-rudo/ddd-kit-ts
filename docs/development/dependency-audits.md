@@ -4,8 +4,15 @@ Last reviewed: 2026-09-06
 
 ## Release gate
 
-`pnpm audit:prod` runs `pnpm audit --prod` on every pull request and push to
-`main`. Any advisory in the installed production dependency graph fails CI.
+`pnpm audit:prod` runs `pnpm audit --prod`. The publish workflow runs it
+before `npm publish`, so an advisory in the installed production dependency
+graph stops the release.
+
+The `audit` workflow runs it too: on every push to `main`, on a pull request
+that changes `pnpm-lock.yaml` or `package.json`, and once a day. It is not a
+required check, because the advisory endpoint is a third-party service and
+its outage must not block a merge that changes no dependency. The daily run
+finds an advisory that was published after the last dependency change.
 
 The package currently has no regular `dependencies`; its runtime collaborators
 are peer dependencies selected by each consumer. The production audit therefore
