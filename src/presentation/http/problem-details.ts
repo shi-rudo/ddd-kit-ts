@@ -8,10 +8,11 @@ import {
 	type ToProblemContext,
 	toProblem,
 } from "@shirudo/base-error/public-error";
+import { sanitizePublicIssues } from "../errors/public-issues";
 
 /** Details member carried by a {@link toProblemDetails} body. */
 export interface ValidationProblemDetails {
-	/** The whitelisted field issues, straight from `publicIssues()`. */
+	/** The field issues of `publicIssues()`, through the kit whitelist. */
 	readonly issues: readonly PublicIssue[];
 }
 
@@ -62,9 +63,10 @@ export type ValidationProblemResult<
  * Projects a base-error `ValidationError` to an RFC 9457 Problem
  * Details result by delegating to base-error's `toProblem` transport stage:
  * one pipeline, one wire profile, one hardening implementation. The body
- * carries the error's public `code`, and the whitelisted issues ride under
+ * carries the error's public `code`, and the issues ride under
  * `details.issues` (`{ path?, pointer?, code? }`, never raw validator
- * extras), the same shape `toPublicErrorView` uses. The message of an issue
+ * extras). They pass the same whitelist as in `toPublicErrorView`, also for
+ * an error of another base-error copy. The message of an issue
  * crosses only with {@link ValidationProblemOptions.issueMessages}, because
  * the default message of a validator can embed the rejected value.
  *
@@ -118,7 +120,12 @@ export function toProblemDetails<
 		{ status, type, title },
 		{
 			code: error.code,
-			details: { issues: error.publicIssues({ messages: issueMessages }) },
+			details: {
+				issues: sanitizePublicIssues(
+					error.publicIssues({ messages: issueMessages }),
+					{ issueMessages },
+				),
+			},
 		},
 		{ detail, instance, extensions },
 	);

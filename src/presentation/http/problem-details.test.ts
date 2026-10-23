@@ -52,6 +52,19 @@ describe("toProblemDetails()", () => {
 		]);
 	});
 
+	it("keeps a message off the wire without issueMessages, even when publicIssues() returns one", () => {
+		const fromAnotherCopy = Object.assign(invalidRegistration(), {
+			publicIssues: () => [
+				{ message: "password hunter2 is too short", path: ["password"] },
+			],
+		});
+
+		const problem = toProblemDetails(fromAnotherCopy);
+
+		expect(problem.body.details?.issues).toEqual([{ path: ["password"] }]);
+		expect(JSON.stringify(problem.body)).not.toContain("hunter2");
+	});
+
 	it("merges extension members alongside the documented body members", () => {
 		const problem = toProblemDetails(invalidRegistration(), {
 			extensions: { traceId: "abc-123" },
