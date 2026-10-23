@@ -209,7 +209,9 @@ Pass the definition in place of the type to `createEvent`,
   code `EVENT_SCHEMA_VERSION_INVALID`.
 - A payload that fails the schema throws `DomainEventValidationError` with the
   code `EVENT_PAYLOAD_INVALID`. Its `issues` hold the messages of the schema
-  and their paths as plain keys.
+  and their paths as plain keys. The error message names only the paths,
+  because the default message of a validator can embed the rejected value,
+  and the message reaches every stack trace.
 - The schema must validate synchronously. A schema that returns a Promise
   throws `EVENT_PAYLOAD_SCHEMA_ASYNC`. A zod schema also returns a Promise
   when one of its refinements throws.
