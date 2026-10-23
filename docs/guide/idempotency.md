@@ -29,7 +29,7 @@ exactly-once boundary across two stores.
 const outcome = await withIdempotentCommit(
   { scope, outbox, idempotency },
   {
-    key: request.headers.get("Idempotency-Key")!,
+    key: JSON.stringify(["orders.confirm-order.v1", actorId, clientKey]),
     fingerprint: stableHash(command),
   },
   async (tx, registration) => {
@@ -44,9 +44,18 @@ const outcome = await withIdempotentCommit(
 );
 ```
 
-The fingerprint is part of the safety contract. Reusing a key for different
-content throws `IdempotencyKeyReuseError` instead of replaying the answer to a
-different command.
+`clientKey` is the `Idempotency-Key` header after the boundary validated it.
+`actorId` comes from the verified principal, not from the request body. The
+kit does not validate or scope a key. If the raw header is the key, all
+clients share one key space. Then a client that knows the key of another
+client can replay or block that request. So the key joins the name of the
+consumer, the authenticated actor, and the client key. The
+[edge runtimes guide](./edge-runtimes.md) shows the complete boundary.
+
+The fingerprint is part of the safety contract. Hash the complete business
+intention, including the actor. Reusing a key for different content throws
+`IdempotencyKeyReuseError` instead of replaying the answer to a different
+command.
 
 ## Leases and fencing
 
