@@ -24,3 +24,9 @@ peerDependencyRules:
   allowedVersions:
     vite: "*"
     vitest: "*"
+
+# The @shirudo packages skip the release-age check of pnpm, so the kit can
+# adopt a release of its own peer packages on the day it is published. The
+# lockfile still pins each version and its integrity hash.
+minimumReleaseAgeExclude:
+  - "@shirudo/*"
