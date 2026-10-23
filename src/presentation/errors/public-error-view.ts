@@ -38,7 +38,9 @@ export interface PublicErrorViewOptions {
 	 * The public-error catalog to resolve against. Defaults to a private
 	 * {@link createKitPublicErrors} instance; pass your own extended
 	 * catalog (`createKitPublicErrors().registerByCode(...)`) so your own
-	 * codes and locales resolve through the same pipeline.
+	 * codes and locales resolve through the same pipeline. A catalog from
+	 * `createKitPublicErrors({ issueMessages: true })` adds the message of
+	 * each validation issue.
 	 */
 	catalog?: PublicErrorCatalog<string>;
 }

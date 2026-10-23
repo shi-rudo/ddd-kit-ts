@@ -41,6 +41,17 @@ describe("toProblemDetails()", () => {
 		expect(problem.body.instance).toBe("/registrations/42");
 	});
 
+	it("puts the message of each issue on the wire only with issueMessages", () => {
+		const problem = toProblemDetails(invalidRegistration(), {
+			issueMessages: true,
+		});
+
+		expect(problem.body.details?.issues).toEqual([
+			{ message: "must be a valid email", path: ["email"], pointer: "email" },
+			{ message: "must not be negative", path: ["age"], pointer: "age" },
+		]);
+	});
+
 	it("merges extension members alongside the documented body members", () => {
 		const problem = toProblemDetails(invalidRegistration(), {
 			extensions: { traceId: "abc-123" },

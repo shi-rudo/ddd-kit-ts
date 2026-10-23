@@ -522,6 +522,32 @@ return Response.json(problem.body, {
 
 A client reads the issues from `details.issues` instead of `errors`.
 
+#### Issue messages stay off the wire by default
+
+`toProblemDetails`, `toPublicErrorView`, and a catalog from
+`createKitPublicErrors()` put the `path`, `pointer`, and `code` of each
+issue under `details.issues`. They leave out the `message`, because the
+default message of a validator can embed the rejected value, for example a
+password. In 2.2.0 every issue carried its message.
+
+A client that shows `issue.message` gets no error after the update. It
+shows an empty text, and you see that only when someone submits an invalid
+form. Search your clients for `issue.message` and pick one fix per
+endpoint:
+
+- If you wrote the messages, as in `valueObjectOrIssues`, opt in:
+
+  ```ts
+  const problem = toProblemDetails(error, { issueMessages: true });
+
+  const catalog = createKitPublicErrors({ issueMessages: true });
+  const view = toPublicErrorView(error, { catalog });
+  ```
+
+- If the messages come from a validator, keep them off the wire. The client
+  finds the field by `pointer` and writes the text itself. An issue carries
+  a `code` when the validator sets one, as Zod does.
+
 #### `toPublicErrorView` resolves the locale
 
 `toPublicErrorView` moved to the `@shirudo/ddd-kit/public-errors` entry point
@@ -1553,3 +1579,11 @@ The root entry no longer exports `capturePersistenceBaseline`,
   `buildOwnLogFields`; see [Entry points and
   platform](#entry-points-and-platform). A `null` cause now ends every
   cause-chain walk.
+- The message of a validation issue no longer reaches a client by default.
+  A client that shows `issue.message` shows an empty text and gets no error.
+  Pass `issueMessages: true` to `toProblemDetails` or to
+  `createKitPublicErrors` for messages that you wrote; see [Issue messages
+  stay off the wire by
+  default](#issue-messages-stay-off-the-wire-by-default). An issue without
+  a message and a `null` path segment now reach the client, where the kit
+  dropped them.

@@ -4,6 +4,17 @@ import {
 	LocalizedMessageSet,
 } from "@shirudo/base-error/public-error";
 
+/** Options for {@link createKitPublicErrors}. */
+export interface KitPublicErrorsOptions {
+	/**
+	 * Adds the `message` of each validation issue to `details.issues`.
+	 * Default `false`. Set it only for messages that you wrote: the default
+	 * messages of Valibot and ArkType (and of Zod 3 for `enum`) embed the
+	 * rejected value.
+	 */
+	readonly issueMessages?: boolean;
+}
+
 /** Details shape carried by the validation views this catalog projects. */
 export interface PublicErrorViewDetails {
 	/** Whitelisted field issues, present only for a validation error. */
@@ -32,7 +43,7 @@ function english(message: string): LocalizedMessageSet {
  */
 function isValidationErrorLike(
 	error: unknown,
-): error is { publicIssues(): unknown[] } {
+): error is { publicIssues(options: { messages: boolean }): unknown[] } {
 	if (typeof error !== "object" || error === null) return false;
 	const { name, category, publicIssues } = error as {
 		name?: unknown;
@@ -53,15 +64,20 @@ function isValidationErrorLike(
  * whitelist so only the documented wire fields (`message`, `path`, `code`,
  * `pointer`) can reach a client: a duck-typed implementation must not be
  * able to smuggle arbitrary payloads into the view. Each field crosses only
- * with its documented type, and an entry that is no object is dropped.
+ * with its documented type, and an entry that is no object is dropped. A
+ * `message` crosses only with `issueMessages`, also when a duck-typed
+ * `publicIssues()` returns one without the opt-in.
  */
-function sanitizePublicIssues(result: unknown[]): readonly PublicIssue[] {
+function sanitizePublicIssues(
+	result: unknown[],
+	issueMessages: boolean,
+): readonly PublicIssue[] {
 	const issues: PublicIssue[] = [];
 	for (const entry of result) {
 		if (typeof entry !== "object" || entry === null) continue;
 		const { message, path, code, pointer } = entry as Record<string, unknown>;
 		const issue: PublicIssue = {};
-		if (typeof message === "string") issue.message = message;
+		if (issueMessages && typeof message === "string") issue.message = message;
 		const safePath = sanitizeIssuePath(path);
 		if (safePath !== undefined) issue.path = safePath;
 		if (typeof code === "string") issue.code = code;
@@ -136,10 +152,12 @@ function isPathKey(value: unknown): value is PropertyKey | null {
  * Kit errors resolve by their stable `code` (since v3,
  * `error.name === error.code`); the base-error validation family resolves
  * by capability (see the matcher), with its whitelisted issues projected
- * under `details.issues`. Everything else degrades to the
- * `INTERNAL_ERROR` fallback.
+ * under `details.issues`. The message of an issue crosses only with
+ * {@link KitPublicErrorsOptions.issueMessages}. Everything else degrades
+ * to the `INTERNAL_ERROR` fallback.
  */
-export function createKitPublicErrors() {
+export function createKitPublicErrors(options: KitPublicErrorsOptions = {}) {
+	const issueMessages = options.issueMessages === true;
 	return definePublicErrors({
 		fallback: {
 			publicCode: "INTERNAL_ERROR",
@@ -209,7 +227,10 @@ export function createKitPublicErrors() {
 				status: 422,
 				userMessages: english("The submitted data is invalid."),
 				projectDetails: (error): PublicErrorViewDetails => ({
-					issues: sanitizePublicIssues(error.publicIssues()),
+					issues: sanitizePublicIssues(
+						error.publicIssues({ messages: issueMessages }),
+						issueMessages,
+					),
 				}),
 			},
 		});

@@ -127,11 +127,15 @@ const parsed = valueObjectOrIssues(
 
 if (parsed.isErr()) {
   return Response.json(
-    { issues: parsed.error.publicIssues() },
+    { issues: parsed.error.publicIssues({ messages: true }) },
     { status: 400 },
   );
 }
 ```
+
+`publicIssues()` leaves out the message of each issue unless you pass
+`messages: true`. Pass it only for messages that you wrote: the default
+messages of Valibot and ArkType embed the rejected value.
 
 Both helpers return validation failures as values. They still call `valueObject()` on the
 success path, so non-data JavaScript values can still throw `TypeError`. That is

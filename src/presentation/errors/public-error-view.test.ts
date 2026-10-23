@@ -5,6 +5,7 @@ import {
 	ConcurrencyConflictError,
 	DuplicateAggregateError,
 } from "../../errors/kit-errors";
+import { createKitPublicErrors } from "./kit-public-errors";
 import { toPublicErrorView } from "./public-error-view";
 
 describe("toPublicErrorView()", () => {
@@ -54,6 +55,20 @@ describe("toPublicErrorView()", () => {
 		expect(view.details?.issues).toEqual([
 			{ path: ["email"], pointer: "email" },
 			{ path: ["age"], pointer: "age" },
+		]);
+	});
+
+	it("carries the messages of the issues through a catalog built with issueMessages", () => {
+		const error = new ValidationError("Registration is invalid").addIssues([
+			{ message: "must be a valid email", path: ["email"] },
+		]);
+
+		const view = toPublicErrorView(error, {
+			catalog: createKitPublicErrors({ issueMessages: true }),
+		});
+
+		expect(view.details?.issues).toEqual([
+			{ message: "must be a valid email", path: ["email"], pointer: "email" },
 		]);
 	});
 
@@ -193,12 +208,7 @@ describe("toPublicErrorView()", () => {
 
 			expect(view.code).toBe("VALIDATION_FAILED");
 			expect(view.details?.issues).toEqual([
-				{
-					message: "must be a valid email",
-					path: ["email"],
-					code: "EMAIL",
-					pointer: "email",
-				},
+				{ path: ["email"], code: "EMAIL", pointer: "email" },
 				{},
 			]);
 			expect(JSON.stringify(view)).not.toContain("10.0.0.5");

@@ -33,6 +33,12 @@ export interface ValidationProblemOptions<
 	/** URI reference identifying this specific occurrence. */
 	instance?: string;
 	/**
+	 * Adds the `message` of each issue to `details.issues`. Default `false`.
+	 * Set it only for messages that you wrote: the default messages of
+	 * Valibot and ArkType (and of Zod 3 for `enum`) embed the rejected value.
+	 */
+	issueMessages?: boolean;
+	/**
 	 * Extra public extension members merged alongside the documented body
 	 * members. Constrained by base-error's `toProblem` contract: JSON-safe,
 	 * string-keyed, and free of the reserved member names, checked at
@@ -59,8 +65,8 @@ export type ValidationProblemResult<
  * carries the error's public `code`, and the whitelisted issues ride under
  * `details.issues` (`{ path?, pointer?, code? }`, never raw validator
  * extras), the same shape `toPublicErrorView` uses. The message of an issue
- * stays off the wire, because a validator's default message can embed the
- * rejected value.
+ * crosses only with {@link ValidationProblemOptions.issueMessages}, because
+ * the default message of a validator can embed the rejected value.
  *
  * All of `toProblem`'s wire-safety guarantees apply: the body is deeply
  * frozen with a null prototype (cannot carry or receive prototype
@@ -104,12 +110,16 @@ export function toProblemDetails<
 		status = 422,
 		detail,
 		instance,
+		issueMessages = false,
 		extensions,
 	} = options;
 
 	return toProblem<ValidationProblemDetails, string, TExtensions>(
 		{ status, type, title },
-		{ code: error.code, details: { issues: error.publicIssues() } },
+		{
+			code: error.code,
+			details: { issues: error.publicIssues({ messages: issueMessages }) },
+		},
 		{ detail, instance, extensions },
 	);
 }

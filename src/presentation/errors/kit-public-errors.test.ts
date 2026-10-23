@@ -95,6 +95,32 @@ describe("createKitPublicErrors catalog", () => {
 		});
 	});
 
+	it("projects the message of each issue only for a catalog built with issueMessages", () => {
+		const error = new ValidationError("invalid").addIssues([
+			{ message: "must be a valid email", path: ["email"] },
+		]);
+
+		const view = project(createKitPublicErrors({ issueMessages: true }), error);
+
+		expect(view.details).toEqual({
+			issues: [
+				{ message: "must be a valid email", path: ["email"], pointer: "email" },
+			],
+		});
+	});
+
+	it("keeps a message off the wire without issueMessages, even when publicIssues() returns one", () => {
+		const oversharing = {
+			name: "VALIDATION_FAILED",
+			category: "VALIDATION",
+			publicIssues: () => [{ message: "password hunter2 is too short" }],
+		};
+
+		const view = project(createKitPublicErrors(), oversharing);
+
+		expect(view.details).toEqual({ issues: [{}] });
+	});
+
 	it("degrades unknown errors to the INTERNAL_ERROR fallback", () => {
 		const view = project(kitPublicErrors, new Error("pg pool exhausted"));
 

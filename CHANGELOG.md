@@ -197,6 +197,14 @@ immutable. Run one kit version per process during a cutover.
   `{ status, headers, body, outcome }`. The issues are under
   `details.issues`. The `member` option and `ValidationProblemMember` are
   gone.
+- The message of a validation issue no longer reaches a client by default.
+  `toProblemDetails`, `toPublicErrorView`, and the `createKitPublicErrors()`
+  catalog put `path`, `pointer`, and `code` under `details.issues`, because
+  the default message of a validator can embed the rejected value. A client
+  that shows `issue.message` shows an empty text and gets no error. Pass
+  `issueMessages: true` for messages that you wrote. An issue without a
+  message and a `null` path segment now reach the client, where the kit
+  dropped them.
 - `toPublicErrorView` returns the `LocalizedPublicError` of
   `@shirudo/base-error`, and its `locale` option is a preference. The view
   carries the locale that resolved.
@@ -450,6 +458,8 @@ immutable. Run one kit version per process during a cutover.
 - `createKitPublicErrors()` builds a public error catalog of the kit codes,
   which the consumer extends at the composition root. `toPublicErrorView`
   accepts a `catalog` option.
+- `issueMessages` of `createKitPublicErrors` and `toProblemDetails` adds the
+  message of each validation issue to `details.issues`.
 
 #### Documentation and tooling
 
