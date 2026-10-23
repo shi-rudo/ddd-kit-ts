@@ -48,22 +48,12 @@ export interface KitErrorOptions<TCode extends string> {
 }
 
 /**
- * The keys that base-error writes into the log envelope itself. It drops
- * them from own log fields, so a kit error does not return them there.
+ * The discriminator of `BaseError`. Every error carries it as an own
+ * property, and base-error does not reserve it, so the log would show it as
+ * an own field. base-error drops its envelope keys from own log fields
+ * itself.
  */
-const ENVELOPE_FIELDS: ReadonlySet<string> = new Set([
-	"_tag",
-	"name",
-	"message",
-	"stack",
-	"code",
-	"category",
-	"retryable",
-	"timestamp",
-	"timestampIso",
-	"cause",
-	"details",
-]);
+const DISCRIMINATOR_FIELD = "_tag";
 
 /**
  * The fields a kit error declares of its own, for the raw log object.
@@ -74,7 +64,7 @@ const ENVELOPE_FIELDS: ReadonlySet<string> = new Set([
 function ownFields(error: object): Record<string, unknown> {
 	const fields: Record<string, unknown> = {};
 	for (const key of Object.keys(error)) {
-		if (ENVELOPE_FIELDS.has(key)) continue;
+		if (key === DISCRIMINATOR_FIELD) continue;
 		// A field can be an accessor, and a consumer's own error class decides
 		// what it computes. Reading it must not fail the report.
 		try {
