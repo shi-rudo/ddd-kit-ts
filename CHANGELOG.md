@@ -269,8 +269,9 @@ immutable. Run one kit version per process during a cutover.
   requires Node.js 24. Node 20 reached its end of life on 2026-04-30.
 - The peer `@shirudo/base-error` is `^9.0.0`. base-error 9 removes
   `buildLogObject()`: the kit errors contribute their declared fields
-  through `buildOwnLogFields()`, and a subclass of `DomainError` or
-  `InfrastructureError` that overrode `buildLogObject` moves to
+  through `buildOwnLogFields()`, at every depth of a cause chain. A subclass
+  of `DomainError` or `InfrastructureError` deletes a `buildLogObject`
+  override that adds only declared fields, and moves a computed field to
   `buildOwnLogFields`. A kit error has no `timestampIso` property. A `null`
   cause ends every cause-chain walk. See the migration notes of
   `@shirudo/base-error` 9. A field of a kit error that holds a cycle reaches

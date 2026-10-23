@@ -1147,20 +1147,21 @@ changes. `@shirudo/ddd-kit/money` is a new entry point. The Node floor
 follows the peer `@shirudo/base-error` 9, which requires Node.js 24. Edge
 runtimes are not affected.
 
-`@shirudo/base-error` 9 removes `buildLogObject()`. The kit errors
-contribute their declared fields through `buildOwnLogFields()`. A subclass
-of `DomainError` or `InfrastructureError` that overrides `buildLogObject`
-moves its fields there:
+`@shirudo/base-error` 9 removes `buildLogObject()`. A kit error puts each
+field that its class declares into the log object, at every depth of a
+cause chain. If a subclass of `DomainError` or `InfrastructureError`
+overrides `buildLogObject` only to add declared fields, delete the
+override. Move a field that the class computes to `buildOwnLogFields()`:
 
 ```ts
 // before
 protected override buildLogObject(): Record<string, unknown> {
-  return { ...super.buildLogObject(), orderId: this.orderId };
+  return { ...super.buildLogObject(), lineCount: this.lines.length };
 }
 
 // after
 protected override buildOwnLogFields(): Record<string, unknown> {
-  return { ...super.buildOwnLogFields(), orderId: this.orderId };
+  return { ...super.buildOwnLogFields(), lineCount: this.lines.length };
 }
 ```
 
@@ -1597,9 +1598,9 @@ The root entry no longer exports `capturePersistenceBaseline`,
 **rc.16.**
 
 - The peer `@shirudo/base-error` is `^9.0.0`. A subclass of `DomainError` or
-  `InfrastructureError` that overrides `buildLogObject` moves its fields to
-  `buildOwnLogFields`; see [Entry points and
-  platform](#entry-points-and-platform). A kit error has no `timestampIso`
+  `InfrastructureError` deletes a `buildLogObject` override that adds only
+  declared fields, and moves a computed field to `buildOwnLogFields`; see
+  [Entry points and platform](#entry-points-and-platform). A kit error has no `timestampIso`
   property; read `timestamp`. A `null` cause now ends every cause-chain
   walk.
 - The message of a validation issue no longer reaches a client by default.
