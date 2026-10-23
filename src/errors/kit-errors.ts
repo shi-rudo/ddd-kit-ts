@@ -78,44 +78,22 @@ function ownFields(error: object): Record<string, unknown> {
 }
 
 /**
- * Projects one field value to something a log serializer survives.
+ * Projects the field values that base-error leaves out of the log.
  *
- * A field of type `unknown` can hold a driver value with a cycle, a bigint or
- * a symbol, and `JSON.stringify` throws on the first two. A serializer that
- * throws inside the failure path costs the whole report, so a value that does
- * not survive the attempt is left out. An error keeps its name, message and
- * code, which is what a reader needs and cannot cycle.
+ * base-error copies every other value as data under its log budget: a cycle
+ * becomes a marker, and a bigint its decimal string. It drops a symbol and
+ * an error, so a symbol becomes its text here. An error keeps its name,
+ * message and code, which is what a reader needs and cannot cycle.
  */
 function logSafeValue(value: unknown): unknown {
-	switch (typeof value) {
-		case "string":
-		case "number":
-		case "boolean":
-			return value;
-		case "bigint":
-		case "symbol":
-			return String(value);
-		case "undefined":
-		case "function":
-			return undefined;
-		default:
-			break;
-	}
-	if (value === null) return null;
-	if (value instanceof Error) {
-		const code = (value as { readonly code?: unknown }).code;
-		return {
-			name: String(value.name),
-			message: String(value.message),
-			...(typeof code === "string" ? { code } : {}),
-		};
-	}
-	try {
-		JSON.stringify(value);
-		return value;
-	} catch {
-		return undefined;
-	}
+	if (typeof value === "symbol") return String(value);
+	if (!(value instanceof Error)) return value;
+	const code = (value as { readonly code?: unknown }).code;
+	return {
+		name: String(value.name),
+		message: String(value.message),
+		...(typeof code === "string" ? { code } : {}),
+	};
 }
 
 /**

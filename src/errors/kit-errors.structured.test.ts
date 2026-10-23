@@ -543,6 +543,22 @@ describe("a serialized kit error keeps the fields it declares", () => {
 		expect(log).not.toHaveProperty("_tag");
 	});
 
+	it("logs a field that holds a cycle with its other values", () => {
+		const order: Record<string, unknown> = { id: "o-1" };
+		order.self = order;
+		class CyclicOrderError extends DomainError<"CYCLIC_ORDER"> {
+			readonly order = order;
+
+			constructor() {
+				super({ code: "CYCLIC_ORDER", message: "cyclic" });
+			}
+		}
+
+		const log = new CyclicOrderError().toLogObject();
+
+		expect(log).toMatchObject({ order: { id: "o-1" } });
+	});
+
 	it("carries the fields of an infrastructure error", () => {
 		const error = new ConcurrencyConflictError({
 			reason: "stale_version",
