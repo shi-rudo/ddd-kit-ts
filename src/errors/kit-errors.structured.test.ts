@@ -1,4 +1,4 @@
-import { isStructuredError, matchError } from "@shirudo/base-error";
+import { BaseError, isStructuredError, matchError } from "@shirudo/base-error";
 import { describe, expect, it } from "vite-plus/test";
 import {
 	invalidFlushStatementError,
@@ -557,6 +557,22 @@ describe("a serialized kit error keeps the fields it declares", () => {
 		const log = new CyclicOrderError().toLogObject();
 
 		expect(log).toMatchObject({ order: { id: "o-1" } });
+	});
+
+	it("logs a field that holds an error through the log object of that error, so its redaction holds", () => {
+		const upstream = new BaseError("token abc123 expired").redact(["message"]);
+		class UpstreamFailedError extends DomainError<"UPSTREAM_FAILED"> {
+			readonly upstream = upstream;
+
+			constructor() {
+				super({ code: "UPSTREAM_FAILED", message: "upstream failed" });
+			}
+		}
+
+		const log = new UpstreamFailedError().toLogObject();
+
+		expect(log).toHaveProperty("upstream.name", upstream.name);
+		expect(JSON.stringify(log)).not.toContain("abc123");
 	});
 
 	it("carries the fields of an infrastructure error", () => {

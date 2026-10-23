@@ -82,12 +82,17 @@ function ownFields(error: object): Record<string, unknown> {
  *
  * base-error copies every other value as data under its log budget: a cycle
  * becomes a marker, and a bigint its decimal string. It drops a symbol and
- * an error, so a symbol becomes its text here. An error keeps its name,
- * message and code, which is what a reader needs and cannot cycle.
+ * an error, so a symbol becomes its text here. An error that builds its own
+ * log object, as a `BaseError` does, gives that object, which applies its
+ * redaction policy. base-error bounds such a call during the hook and skips
+ * the nested hooks. Any other error keeps its name, message and code, which
+ * is what a reader needs and cannot cycle.
  */
 function logSafeValue(value: unknown): unknown {
 	if (typeof value === "symbol") return String(value);
 	if (!(value instanceof Error)) return value;
+	const { toLogObject } = value as { readonly toLogObject?: unknown };
+	if (typeof toLogObject === "function") return toLogObject.call(value);
 	const code = (value as { readonly code?: unknown }).code;
 	return {
 		name: String(value.name),

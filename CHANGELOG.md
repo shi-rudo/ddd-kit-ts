@@ -274,7 +274,9 @@ immutable. Run one kit version per process during a cutover.
   `buildOwnLogFields`. A kit error has no `timestampIso` property. A `null`
   cause ends every cause-chain walk. See the migration notes of
   `@shirudo/base-error` 9. A field of a kit error that holds a cycle reaches
-  the log with a cycle marker, where the kit left the whole field out.
+  the log with a cycle marker, where the kit left the whole field out. A
+  field that holds a `BaseError`, for example `secondaryCause`, carries the
+  log object of that error, so the redaction policy of that error holds.
 - The repository contract suites are the v3 suites under the same names.
   Their failure messages start with "Contract violated:" and "Contract test
   skipped:".
