@@ -1,7 +1,7 @@
 ---
 name: ddd-kit
 description: Build tactical DDD in TypeScript with @shirudo/ddd-kit. Use when modeling aggregates, entities, value objects, domain events, repositories, or use cases, or when wiring the toolkit into an application layer.
-version: 0.1.0
+version: 0.1.1
 ---
 
 # Domain-Driven Design with @shirudo/ddd-kit
@@ -50,6 +50,6 @@ entities, value objects, domain events, repositories, and the use-case boundary.
 
 ## Related
 
-- `domain-driven-design`: the framework-agnostic methodology skill; use it for
-  strategic questions (bounded contexts, pattern selection, context mapping)
-  before reaching for toolkit specifics.
+- `domain-driven-design` (in `shi-rudo/agent-skills`): the framework-agnostic
+  methodology skill; use it for strategic questions (bounded contexts, pattern
+  selection, context mapping) before reaching for toolkit specifics.
