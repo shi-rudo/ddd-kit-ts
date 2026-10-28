@@ -29,7 +29,7 @@ exactly-once boundary across two stores.
 const outcome = await withIdempotentCommit(
   { scope, outbox, idempotency },
   {
-    key: JSON.stringify(["orders.confirm-order.v1", actorId, clientKey]),
+    key: qualifiedCommandKey(CONFIRM_ORDER_COMMAND_NAME, actorId, clientKey),
     fingerprint: stableHash(command),
   },
   async (tx, registration) => {
@@ -50,7 +50,8 @@ kit does not validate or qualify a key. If the raw header is the key, all
 clients share one key space. Then a client that knows the key of another
 client can replay or block that request. So qualify the client key with the
 command name and the authenticated actor. The
-[edge runtimes guide](./edge-runtimes.md) shows the complete boundary.
+[edge runtimes guide](./edge-runtimes.md) defines `qualifiedCommandKey` and
+`CONFIRM_ORDER_COMMAND_NAME`, and it shows the complete boundary.
 
 The fingerprint is part of the safety contract. Hash the complete business
 intention. Reusing a key for different content throws

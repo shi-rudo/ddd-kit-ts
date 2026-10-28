@@ -263,7 +263,7 @@ describe("untrusted-boundary examples", () => {
 
 		expect(normalUse).not.toContain("key: request.headers.get(");
 		expect(normalUse).toContain(
-			'key: JSON.stringify(["orders.confirm-order.v1", actorId, clientKey])',
+			"key: qualifiedCommandKey(CONFIRM_ORDER_COMMAND_NAME, actorId, clientKey)",
 		);
 		expect(edgeGuide).toContain(
 			'const CONFIRM_ORDER_COMMAND_NAME = "orders.confirm-order.v1";',
