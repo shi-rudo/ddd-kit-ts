@@ -175,7 +175,7 @@ reaction becomes exactly-once in effect:
 async function reactToOrderPlaced(event: OrderPlaced): Promise<void> {
   await withIdempotentCommit(
     { scope, outbox, idempotency },
-    // The key scopes the inbox per REACTION, not per event: another
+    // The key qualifies the inbox per REACTION, not per event: another
     // consumer of the same event keeps its own inbox entry. The
     // fingerprint is a tripwire (see below); any stable content hash works.
     { key: `checkout-saga:${event.eventId}`, fingerprint: stableHash(event.payload) },

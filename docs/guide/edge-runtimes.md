@@ -127,8 +127,9 @@ still decide whether that actor may confirm this particular order.
 
 The client also creates one high-entropy `Idempotency-Key`, such as a UUID, for
 the logical command and reuses that key only when retrying the same intention.
-The edge validates it separately from the body, scopes it to this command and
-to the authenticated actor, and fingerprints the complete business intention.
+The edge validates it separately from the body, qualifies it with the command
+name and the authenticated actor, and fingerprints the complete business
+intention.
 This is application coordination metadata; it never becomes state on the
 `Order` aggregate.
 
@@ -143,7 +144,7 @@ import {
 import { err, ok, type Result } from "@shirudo/result";
 
 const MAX_COMMAND_BYTES = 64 * 1024;
-const CONFIRM_ORDER_KEY_SCOPE = "orders.confirm-order.v1";
+const CONFIRM_ORDER_COMMAND_NAME = "orders.confirm-order.v1";
 
 type OrderId = Id<"OrderId">;
 type ActorId = Id<"ActorId">;
@@ -227,12 +228,12 @@ declare function authenticateRequest(
 ): Promise<Result<AuthenticatedPrincipal, AuthenticationFailure>>;
 declare function stableHash(intention: ConfirmOrderIntention): string;
 
-function scopedCommandKey(
-  scope: string,
+function qualifiedCommandKey(
+  commandName: string,
   actorId: ActorId,
   key: IdempotencyKey,
 ): string {
-  return JSON.stringify([scope, actorId, key]);
+  return JSON.stringify([commandName, actorId, key]);
 }
 
 function isTransientOrderCommandStatus(status: number): boolean {
@@ -413,7 +414,7 @@ function decodeConfirmOrder(
   return ok({
     ...intention,
     idempotency: {
-      key: scopedCommandKey(CONFIRM_ORDER_KEY_SCOPE, principal.actorId, idempotencyKey),
+      key: qualifiedCommandKey(CONFIRM_ORDER_COMMAND_NAME, principal.actorId, idempotencyKey),
       fingerprint: stableHash(intention),
     },
   });
@@ -508,7 +509,7 @@ malformed, or oversized key produces `INVALID_IDEMPOTENCY_KEY`; it is not
 reported as bad JSON. `stableHash` stands for a deterministic canonical hash,
 not a plain `JSON.stringify` whose result could depend on property insertion
 order. Its input contains the command type, order id, and authenticated actor,
-so the same scoped key cannot silently replay a different intention.
+so the same qualified key cannot silently replay a different intention.
 
 The Durable Object contract distinguishes expected outcomes from availability.
 `403`, `404`, and `409` are permanent application results that the caller can
@@ -567,7 +568,7 @@ const confirmOrder = async (command: ConfirmOrder) => {
 
 This guarantee requires a transactional idempotency store in the same commit
 boundary as the order repository and outbox. `withIdempotentCommit` claims the
-scoped key before it calls the domain. It stores the key, fingerprint, outcome,
+qualified key before it calls the domain. It stores the key, fingerprint, outcome,
 aggregate write, and outbox record atomically.
 
 A retry with the same key and fingerprint receives the stored outcome without
@@ -690,7 +691,7 @@ deterministic time.
 - Use per-event options for one exceptional id or timestamp.
 - Build edge handlers from invocation dependencies such as `env`.
 - Keep aggregates and unit-of-work state inside the operation.
-- Give retryable write commands a scoped idempotency key and fingerprint, and
+- Give retryable write commands a qualified idempotency key and fingerprint, and
   commit their serializable outcome atomically with state and outbox changes.
 - Use in-process buses only inside one invocation.
 - Use an outbox plus durable transport for cross-invocation event delivery.

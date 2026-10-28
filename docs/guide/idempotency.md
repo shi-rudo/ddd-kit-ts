@@ -46,10 +46,10 @@ const outcome = await withIdempotentCommit(
 
 `clientKey` is the `Idempotency-Key` header after the boundary validated it.
 `actorId` comes from the verified principal, not from the request body. The
-kit does not validate or scope a key. If the raw header is the key, all
+kit does not validate or qualify a key. If the raw header is the key, all
 clients share one key space. Then a client that knows the key of another
-client can replay or block that request. So the key joins the name of the
-command, the authenticated actor, and the client key. The
+client can replay or block that request. So qualify the client key with the
+command name and the authenticated actor. The
 [edge runtimes guide](./edge-runtimes.md) shows the complete boundary.
 
 The fingerprint is part of the safety contract. Hash the complete business

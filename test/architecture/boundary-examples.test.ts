@@ -90,7 +90,7 @@ describe("untrusted-boundary examples", () => {
 
 		expect(consumer).toContain("readonly messageId: string;");
 		expect(consumer).toContain(
-			"const deliveryKey = scopedMessageKey(PLACE_ORDER_CONSUMER, messageId.value)",
+			"const deliveryKey = qualifiedMessageKey(PLACE_ORDER_CONSUMER_NAME, messageId.value)",
 		);
 		expect(consumer).toContain("key: deliveryKey");
 		expect(consumer).toContain("const intention: PlaceOrderIntention = {");
@@ -224,7 +224,7 @@ describe("untrusted-boundary examples", () => {
 		);
 		expect(decoder).toContain("const intention: ConfirmOrderIntention = {");
 		expect(decoder).toContain(
-			"scopedCommandKey(CONFIRM_ORDER_KEY_SCOPE, principal.actorId, idempotencyKey)",
+			"qualifiedCommandKey(CONFIRM_ORDER_COMMAND_NAME, principal.actorId, idempotencyKey)",
 		);
 		expect(decoder).toContain("fingerprint: stableHash(intention)");
 		expect(edgeGuide).toContain("body: JSON.stringify(command)");
@@ -253,7 +253,7 @@ describe("untrusted-boundary examples", () => {
 		);
 	});
 
-	it("scopes a client idempotency key to the command and the actor", () => {
+	it("qualifies a client idempotency key with the command and the actor", () => {
 		const edgeGuide = sourceOf("edgeGuide");
 		const normalUse = sectionBetween(
 			sourceOf("idempotencyGuide"),
@@ -266,7 +266,7 @@ describe("untrusted-boundary examples", () => {
 			'key: JSON.stringify(["orders.confirm-order.v1", actorId, clientKey])',
 		);
 		expect(edgeGuide).toContain(
-			'const CONFIRM_ORDER_KEY_SCOPE = "orders.confirm-order.v1";',
+			'const CONFIRM_ORDER_COMMAND_NAME = "orders.confirm-order.v1";',
 		);
 	});
 
