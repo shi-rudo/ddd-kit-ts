@@ -658,20 +658,17 @@ export class InvalidCommandMessageError extends InfrastructureError<"INVALID_COM
 }
 
 /**
- * Thrown when a value carries an own `"__proto__"` data key: the shape
- * `JSON.parse` produces for hostile DB rows or request bodies handed to
- * reconstitute factories. Such a key can never be legitimate domain state;
- * accepting it would hand a prototype-pollution payload to every downstream
- * consumer that copies the state through `[[Set]]` (`Object.assign`,
- * for-in assignment loops), and dropping it would be silent data mutation.
+ * Thrown when a value carries an own `"__proto__"` data key. `JSON.parse`
+ * gives this shape for a hostile DB row or request body. Such a key is never
+ * legitimate domain state. If the kit accepted it, each later copy through
+ * `[[Set]]` (`Object.assign`, a for-in assignment loop) would receive a
+ * prototype-pollution payload. If the kit dropped it, the data would change
+ * silently.
  *
- * Two checks throw it. The plain-data copy looks at every depth. It covers
- * event payloads and metadata, the output of an event schema, value-object
- * props, snapshots, and the data of a domain state machine. The state check
- * looks at the root object only. It covers `Entity` (constructor and
- * `setState`), the event-sourced fold (`apply` and replay), `copyMetadata`,
- * and `mergeMetadata`, and a class instance passes it as an ownership
- * transfer.
+ * Two checks throw it. The plain-data copy looks at every depth. The state
+ * check looks at the root object only, and a class instance passes it as an
+ * ownership transfer. SECURITY.md, section "Untrusted input", lists where
+ * each check runs.
  *
  * Deliberately **not** a `DomainError` or `InfrastructureError` (same
  * posture as `MISSING_HANDLER`): untrusted input reaching the
