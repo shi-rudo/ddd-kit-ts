@@ -188,8 +188,8 @@ therefore choose how the kit classifies its error.
   candidate publishes under `next`.
 - A merge to `main` requires every job of the CI workflow (`ci.yml`): the
   tests on Node 24 and 26, the edge runtime smoke test, and the docs build.
-  The branch protection of `main` holds this list. If a job is added to
-  `ci.yml`, add it there too.
+  The branch protection of `main` holds this list. If you add a job to
+  `ci.yml`, add it to that list too.
 
 ## Known gaps
 
