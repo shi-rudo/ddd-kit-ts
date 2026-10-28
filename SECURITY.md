@@ -186,7 +186,10 @@ therefore choose how the kit classifies its error.
 - A version tag starts the publish workflow. It publishes through npm
   Trusted Publishing, without a token, and with provenance. A release
   candidate publishes under `next`.
-- `main` requires the checks `verify (24)` and `verify (26)`.
+- A merge to `main` requires every job of the CI workflow (`ci.yml`): the
+  tests on Node 24 and 26, the edge runtime smoke test, and the docs build.
+  The branch protection of `main` holds this list. If a job is added to
+  `ci.yml`, add it there too.
 
 ## Known gaps
 
