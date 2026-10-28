@@ -92,9 +92,10 @@ the consumer decides where that object goes.
 ## Untrusted input
 
 - **Plain data.** `copyPlainData` (`src/internal/structural/plain-data.ts`)
-  copies and checks event payloads and metadata, the output of an event
-  schema, value-object props, snapshots, the state of the domain state
-  machine, and the events of the in-memory event store. A value that is not
+  copies and checks data at these paths: event payloads and metadata, the
+  output of an event schema, and value-object props. It also copies
+  snapshots, the state of the domain state machine, and the events of the
+  in-memory event store. A value that is not
   plain data fails with `TypeError` and names its path. An own `__proto__`
   key at any depth fails with the wiring code `PROTOTYPE_POLLUTION`.
 - **Root-only checks.** Four paths check only the root object for an own
