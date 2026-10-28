@@ -238,8 +238,11 @@ export interface LeasedIdempotencyStore<TCtx = unknown> {
 /** Identifies one logical command execution for {@link withIdempotentCommit}. */
 export interface IdempotentCommitRequest {
 	/**
-	 * The idempotency key: client-supplied header, message id, or a key
-	 * derived from actor + intention. One key names one logical command.
+	 * The idempotency key. One key names one logical command. The kit does
+	 * not validate or qualify a key. If a client supplies the key, qualify
+	 * it with the command name and the authenticated actor. Otherwise one
+	 * client can replay or block the request of another client. If a message
+	 * id is the key, qualify it with the name of the consumer.
 	 */
 	readonly key: string;
 	/**
