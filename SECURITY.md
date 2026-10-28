@@ -97,8 +97,12 @@ the consumer decides where that object goes.
   machine, and the events of the in-memory event store. A value that is not
   plain data fails with `TypeError` and names its path. An own `__proto__`
   key at any depth fails with the wiring code `PROTOTYPE_POLLUTION`.
-- **Entity state.** The entity and the event-sourced fold check only the
-  root object for an own `__proto__` key. They do not walk nested objects.
+- **Root-only checks.** Four paths check only the root object for an own
+  `__proto__` key. They do not walk nested objects. The paths are the entity
+  (constructor and `setState`), the event-sourced fold (`apply` and replay),
+  `copyMetadata`, and `mergeMetadata`. An event made from the merged
+  metadata gets the plain-data check at every depth. Code that reads the
+  merged metadata directly gets no such check.
 - **Event definitions.** `defineDomainEvent` validates the payload with a
   Standard Schema and copies the output under the plain-data rule. The kit
   does not compare the input with the output, so use a strict object schema.
