@@ -1,8 +1,8 @@
 # Security
 
-This file maps the security boundaries of `@shirudo/ddd-kit`. Read it before
-you change code at one of these boundaries. If a change moves a boundary,
-update this file in the same change.
+This file maps the security boundaries of version 3 of `@shirudo/ddd-kit`.
+Read it before you change code at one of these boundaries. If a change moves
+a boundary, update this file in the same change.
 
 ## Reporting a vulnerability
 
@@ -10,9 +10,16 @@ Report a vulnerability privately through
 [GitHub private vulnerability reporting](https://github.com/shi-rudo/ddd-kit-ts/security/advisories/new).
 Do not open a public issue for it.
 
-Security fixes follow the [stability policy](STABILITY.md#versions): only the
-newest major version gets releases. A release candidate gets no fix of its
-own. The next release candidate carries the fix.
+## Supported versions
+
+Only version 3 gets security fixes.
+
+- A release candidate gets no fix of its own. The next release candidate
+  carries the fix.
+- From 3.0.0, the newest major version gets the fixes, as the
+  [stability policy](STABILITY.md#versions) says.
+- Version 2 and older get no fixes. This includes 2.2.0 under the npm
+  dist-tag `latest`.
 
 ## Trust model
 
