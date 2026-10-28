@@ -262,6 +262,7 @@ describe("untrusted-boundary examples", () => {
 		);
 
 		expect(normalUse).not.toContain("key: request.headers.get(");
+		expect(normalUse).toContain("fingerprint: stableHash(intention)");
 		expect(normalUse).toContain(
 			"key: qualifiedCommandKey(CONFIRM_ORDER_COMMAND_NAME, actorId, clientKey)",
 		);
