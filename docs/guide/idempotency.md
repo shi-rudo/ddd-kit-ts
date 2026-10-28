@@ -53,7 +53,7 @@ command, the authenticated actor, and the client key. The
 [edge runtimes guide](./edge-runtimes.md) shows the complete boundary.
 
 The fingerprint is part of the safety contract. Hash the complete business
-intention, including the actor. Reusing a key for different content throws
+intention. Reusing a key for different content throws
 `IdempotencyKeyReuseError` instead of replaying the answer to a different
 command.
 
