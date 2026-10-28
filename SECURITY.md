@@ -118,10 +118,10 @@ the consumer decides where that object goes.
 
 The kit does not validate or scope an idempotency key. If a raw client
 header is the key, one client can replay or block the request of another
-client. Scope the key to the consumer and to the authenticated actor, and
-fingerprint the complete business intention, as the
-[edge runtimes guide](docs/guide/edge-runtimes.md) shows. A key with another
-fingerprint fails with `IDEMPOTENCY_KEY_REUSE`.
+client. Scope the key to the command and to the authenticated actor.
+Fingerprint the complete business intention. The
+[edge runtimes guide](docs/guide/edge-runtimes.md) shows both. A key with
+another fingerprint fails with `IDEMPOTENCY_KEY_REUSE`.
 
 ## Identifiers and randomness
 
