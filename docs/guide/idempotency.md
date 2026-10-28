@@ -49,7 +49,7 @@ const outcome = await withIdempotentCommit(
 kit does not validate or scope a key. If the raw header is the key, all
 clients share one key space. Then a client that knows the key of another
 client can replay or block that request. So the key joins the name of the
-consumer, the authenticated actor, and the client key. The
+command, the authenticated actor, and the client key. The
 [edge runtimes guide](./edge-runtimes.md) shows the complete boundary.
 
 The fingerprint is part of the safety contract. Hash the complete business

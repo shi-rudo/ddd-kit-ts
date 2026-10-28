@@ -15,6 +15,7 @@ const exampleUrls = {
 	),
 	cqrsGuide: new URL("../../docs/guide/cqrs-and-buses.md", import.meta.url),
 	edgeGuide: new URL("../../docs/guide/edge-runtimes.md", import.meta.url),
+	idempotencyGuide: new URL("../../docs/guide/idempotency.md", import.meta.url),
 };
 
 const examples = Object.values(exampleUrls).map((url) => ({
@@ -223,7 +224,7 @@ describe("untrusted-boundary examples", () => {
 		);
 		expect(decoder).toContain("const intention: ConfirmOrderIntention = {");
 		expect(decoder).toContain(
-			"scopedCommandKey(CONFIRM_ORDER_CONSUMER, principal.actorId, idempotencyKey)",
+			"scopedCommandKey(CONFIRM_ORDER_KEY_SCOPE, principal.actorId, idempotencyKey)",
 		);
 		expect(decoder).toContain("fingerprint: stableHash(intention)");
 		expect(edgeGuide).toContain("body: JSON.stringify(command)");
@@ -249,6 +250,23 @@ describe("untrusted-boundary examples", () => {
 		expect(edgeGuide).toContain("atomically");
 		expect(edgeGuide).toContain(
 			"Retryability is a property of the failure, not permission to retry blindly",
+		);
+	});
+
+	it("scopes a client idempotency key to the command and the actor", () => {
+		const edgeGuide = sourceOf("edgeGuide");
+		const normalUse = sectionBetween(
+			sourceOf("idempotencyGuide"),
+			"## Normal use",
+			"## Leases and fencing",
+		);
+
+		expect(normalUse).not.toContain("key: request.headers.get(");
+		expect(normalUse).toContain(
+			'key: JSON.stringify(["orders.confirm-order.v1", actorId, clientKey])',
+		);
+		expect(edgeGuide).toContain(
+			'const CONFIRM_ORDER_KEY_SCOPE = "orders.confirm-order.v1";',
 		);
 	});
 

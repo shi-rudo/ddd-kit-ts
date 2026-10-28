@@ -127,10 +127,10 @@ still decide whether that actor may confirm this particular order.
 
 The client also creates one high-entropy `Idempotency-Key`, such as a UUID, for
 the logical command and reuses that key only when retrying the same intention.
-The edge validates it separately from the body, scopes it to this consumer and
-authenticated actor, and fingerprints the complete business intention. This is
-application coordination metadata; it never becomes state on the `Order`
-aggregate.
+The edge validates it separately from the body, scopes it to this command and
+to the authenticated actor, and fingerprints the complete business intention.
+This is application coordination metadata; it never becomes state on the
+`Order` aggregate.
 
 ```ts
 import {
@@ -143,7 +143,7 @@ import {
 import { err, ok, type Result } from "@shirudo/result";
 
 const MAX_COMMAND_BYTES = 64 * 1024;
-const CONFIRM_ORDER_CONSUMER = "edge.confirm-order.v1";
+const CONFIRM_ORDER_KEY_SCOPE = "orders.confirm-order.v1";
 
 type OrderId = Id<"OrderId">;
 type ActorId = Id<"ActorId">;
@@ -413,7 +413,7 @@ function decodeConfirmOrder(
   return ok({
     ...intention,
     idempotency: {
-      key: scopedCommandKey(CONFIRM_ORDER_CONSUMER, principal.actorId, idempotencyKey),
+      key: scopedCommandKey(CONFIRM_ORDER_KEY_SCOPE, principal.actorId, idempotencyKey),
       fingerprint: stableHash(intention),
     },
   });
