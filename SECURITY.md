@@ -150,15 +150,18 @@ Bounded:
   cannot stop the promise.
 - Retries have a maximum number of attempts, except a plain outbox without
   dead letters, which retries with a capped backoff.
+- `copyPlainData`, `assertJsonValue`, `deepFreeze`, and `deepEqual` stop at
+  100 levels of nesting (`src/internal/structural/nesting-depth.ts`). A
+  deeper value fails with `TypeError`. An integration message fails with
+  `INVALID_INTEGRATION_MESSAGE`, and a command message with
+  `INVALID_COMMAND_MESSAGE`.
 
 Not bounded:
 
 - `maxPendingEvents` of an aggregate has no limit by default.
 - An in-memory adapter has no limit unless you set its capacity option.
-- `copyPlainData`, `assertJsonValue`, `deepFreeze`, and `deepEqual` recurse
-  without a depth limit. A deeply nested input can overflow the stack with
-  `RangeError`. Limit the size and the depth of a request body at the
-  boundary.
+- The kit does not limit the size of a value. Limit the size of a request
+  body at the boundary.
 
 ## More than one copy of the kit
 
