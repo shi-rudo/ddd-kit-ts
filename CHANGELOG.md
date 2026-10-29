@@ -122,7 +122,9 @@ immutable. Run one kit version per process during a cutover.
   function, a symbol, a class instance, a `RegExp`, binary data, an `Error`,
   an accessor, or a symbol-keyed or hidden property. A key of a `Map` and a
   member of a `Set` must be a primitive, and an own `__proto__` key throws
-  `PROTOTYPE_POLLUTION` at any depth. A value object with a private field
+  `PROTOTYPE_POLLUTION` at any depth. Nesting deeper than 100 levels throws a
+  `TypeError`; `deepFreeze`, `deepEqual`, and the JSON check of the command
+  and integration messages share that limit. A value object with a private field
   no longer becomes an empty record without an error. Map a value object to
   plain data first. `toJSON()` of a kit `ValueObject` is shallow, so map a
   nested value object too. The metadata
@@ -398,7 +400,9 @@ immutable. Run one kit version per process during a cutover.
   schema output is the payload: the kit copies it under the plain-data rule
   and freezes the copy. A failed schema throws
   `DomainEventValidationError` with the code `EVENT_PAYLOAD_INVALID` and the
-  issues; a schema that returns a Promise throws `EVENT_PAYLOAD_SCHEMA_ASYNC`.
+  issues. Its message names only the paths of the issues, because a validator
+  message can embed the rejected value. A schema that returns a Promise
+  throws `EVENT_PAYLOAD_SCHEMA_ASYNC`.
   Use strict object schemas: a plain `z.object` drops unknown keys without an
   error. The kit copies the Standard Schema types and adds no dependency.
 - The root entry exports the types `Fold` and `CreateEventOptions`. A
@@ -506,6 +510,9 @@ immutable. Run one kit version per process during a cutover.
 
 #### Documentation and tooling
 
+- `SECURITY.md` maps the security boundaries of the kit: what reaches a
+  client, what reaches a log, the checks for untrusted input, and the known
+  gaps. It names GitHub private vulnerability reporting as the channel.
 - The docs build fails when a public signature names a type that no entry
   exports. typedoc treats its validation warnings as errors.
 - The API docs cover every entry point: `@shirudo/ddd-kit`, `/testing`,
@@ -529,6 +536,19 @@ immutable. Run one kit version per process during a cutover.
   `llms-full.txt` from the guides. The package never contained the file.
 
 ### Fixed
+
+- The command idempotency guide used the raw `Idempotency-Key` header as the
+  key. The JSDoc of `IdempotentCommitRequest.key` listed a client-supplied
+  header as a key. A raw header puts all clients into one key space, so one
+  client can replay or block the request of another client. The guide and
+  the JSDoc now qualify a client key with the command name and the
+  authenticated actor. If you copied the earlier example, qualify your key
+  the same way. The store finds a record only under the exact key text. A
+  retry of a request from before the switch therefore finds no record and
+  runs the command again. Switch only when no retry of an earlier request
+  can still arrive. If your key already holds a command name, keep that
+  name. For example, keep `edge.confirm-order.v1` of the earlier edge
+  runtimes guide, because a new name changes every key.
 
 - `OutboxDispatcher` ends a pass when `getPending` returns a record that the
   same pass already acknowledged, and reports
@@ -600,6 +620,9 @@ immutable. Run one kit version per process during a cutover.
   it as a class instance.
 - `deepFreeze` keeps a global or sticky `RegExp` usable. Before, a match on a
   frozen pattern threw.
+- A `deepFreeze` that throws, for example on a failing getter, leaves no
+  object marked as frozen. Before, a later `deepFreeze` stopped at such an
+  object, and the object stayed open without an error.
 - `deepOmit` keeps non-enumerable own string properties, and its
   `ignoreKeyPredicate` receives a stable path. `deepEqual` compares an opaque
   object, for example a generator or a `WeakRef`, by identity.

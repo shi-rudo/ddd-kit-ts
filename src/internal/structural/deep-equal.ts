@@ -1,4 +1,5 @@
 import { isBuiltInObject, isOpaqueExoticTag } from "./is-built-in";
+import { MAX_NESTING_DEPTH } from "./nesting-depth";
 
 const objProto = Object.prototype;
 const objToString = objProto.toString;
@@ -30,6 +31,7 @@ function sameValueZero(a: unknown, b: unknown): boolean {
  * @param a - The first value to compare
  * @param b - The second value to compare
  * @returns `true` if the values are deeply equal, `false` otherwise
+ * @throws TypeError if the values are nested deeper than 100 levels
  *
  * @example
  * ```ts
@@ -40,7 +42,7 @@ function sameValueZero(a: unknown, b: unknown): boolean {
  * ```
  */
 export function deepEqual(a: unknown, b: unknown): boolean {
-	return deepEqualInner(a, b, new WeakMap<object, WeakSet<object>>());
+	return deepEqualInner(a, b, new WeakMap<object, WeakSet<object>>(), 0);
 }
 
 /**
@@ -64,6 +66,7 @@ function deepEqualInner(
 	a: unknown,
 	b: unknown,
 	visited: VisitedPairs,
+	depth: number,
 ): boolean {
 	// 1. Fast path: reference equality
 	if (a === b) return true;
@@ -85,6 +88,11 @@ function deepEqualInner(
 
 	const objA = a as object;
 	const objB = b as object;
+	if (depth >= MAX_NESTING_DEPTH) {
+		throw new TypeError(
+			`deepEqual: the values are nested deeper than ${MAX_NESTING_DEPTH} levels`,
+		);
+	}
 
 	// 3. Cycles: already seen this exact (a, b) pair?
 	let cachedBs = visited.get(objA);
@@ -159,7 +167,7 @@ function deepEqualInner(
 			// Sparse holes stay observable through the key-set comparison above:
 			// a hole leaves no own key, so two arrays that differ by a hole vs
 			// an explicit undefined have different key sets.
-			if (!deepEqualInner(arrA[key], arrB[key], visited)) {
+			if (!deepEqualInner(arrA[key], arrB[key], visited, depth + 1)) {
 				return false;
 			}
 		}
@@ -177,7 +185,7 @@ function deepEqualInner(
 		// tagA === tagB was already enforced above.
 		if (isOpaqueExoticTag(tagA)) return objA === objB;
 		if (!haveComparablePrototypes(objA, objB)) return false;
-		return comparePlainObjects(objA, objB, visited);
+		return comparePlainObjects(objA, objB, visited, depth);
 	}
 
 	switch (tagA) {
@@ -191,7 +199,7 @@ function deepEqualInner(
 				// Map keys according to JS semantics: reference / SameValueZero
 				if (!mapB.has(key)) return false;
 				const valB = mapB.get(key);
-				if (!deepEqualInner(valA, valB, visited)) return false;
+				if (!deepEqualInner(valA, valB, visited, depth + 1)) return false;
 			}
 			return true;
 		}
@@ -272,6 +280,7 @@ function comparePlainObjects(
 	objA: object,
 	objB: object,
 	visited: VisitedPairs,
+	depth: number,
 ): boolean {
 	const recA = objA as Record<string | symbol, unknown>;
 	const recB = objB as Record<string | symbol, unknown>;
@@ -300,12 +309,12 @@ function comparePlainObjects(
 	}
 
 	for (const key of stringKeysA) {
-		if (!deepEqualInner(recA[key], recB[key], visited)) {
+		if (!deepEqualInner(recA[key], recB[key], visited, depth + 1)) {
 			return false;
 		}
 	}
 	for (const key of symbolKeysA) {
-		if (!deepEqualInner(recA[key], recB[key], visited)) {
+		if (!deepEqualInner(recA[key], recB[key], visited, depth + 1)) {
 			return false;
 		}
 	}

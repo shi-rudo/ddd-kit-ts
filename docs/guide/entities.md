@@ -380,10 +380,11 @@ The ownership rules are precise:
 
 The entity constructor and `setState(...)` reject an own `"__proto__"` data key
 on plain object, null-prototype object, or array state. The event-sourced
-`apply(...)` and replay apply the same check to the handler result, and the
-event constructors apply it to the payload. The check looks at the root
-object only; nested objects are not walked. Validate and normalize untrusted
-JSON at the boundary before it reaches domain objects.
+`apply(...)` and replay apply the same check to the fold result. These
+checks look at the root object only; they do not walk nested objects. The
+event constructors check the payload and the metadata at every depth, as a
+part of the plain-data copy. Validate and normalize untrusted JSON at the
+boundary before it reaches domain objects.
 
 ## Choosing the shape
 
