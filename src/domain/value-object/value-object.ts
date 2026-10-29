@@ -6,6 +6,7 @@ import {
 import { deepEqual } from "../../internal/structural/deep-equal";
 import { deepEqualExcept } from "../../internal/structural/deep-equal-except";
 import { builtInTag } from "../../internal/structural/is-built-in";
+import { MAX_NESTING_DEPTH } from "../../internal/structural/nesting-depth";
 import { copyPlainData } from "../../internal/structural/plain-data";
 import { installMutatorShadows } from "../../internal/structural/shadowed-mutators";
 
@@ -70,19 +71,30 @@ function rejectValueObjectAsInput(input: unknown, entry: string): void {
  * the first such match, so the RegExp keeps matching instead. A view or a
  * RegExp passes through whole: an expando property on it stays open, and
  * the walk does not enter its subtree.
+ *
+ * A value nested deeper than 100 levels throws a `TypeError`, and the walk
+ * then marks none of the objects that it entered as frozen.
  */
 // Every object that a deep freeze entered. A later walk stops at such an
 // object, so a state written as `{ ...state, status }` costs the root
 // object, not the whole graph. The walk marks an object before it
-// descends, so a cycle ends at the mark.
+// descends, so a cycle ends at the mark. A walk that fails removes its
+// marks again, because a marked object that it did not freeze would stay
+// open for every later walk.
 const DEEP_FROZEN = new WeakSet<object>();
 
 export function deepFreeze<T>(obj: T): Readonly<T> {
-	freezeDeep(obj);
+	const marked: object[] = [];
+	try {
+		freezeDeep(obj, 0, marked);
+	} catch (error) {
+		for (const entered of marked) DEEP_FROZEN.delete(entered);
+		throw error;
+	}
 	return obj as Readonly<T>;
 }
 
-function freezeDeep(obj: unknown): void {
+function freezeDeep(obj: unknown, depth: number, marked: object[]): void {
 	if (obj === null || typeof obj !== "object" || DEEP_FROZEN.has(obj)) {
 		return;
 	}
@@ -90,18 +102,26 @@ function freezeDeep(obj: unknown): void {
 	if (ArrayBuffer.isView(obj)) return;
 	const tag = builtInTag(obj);
 	if (tag === "[object RegExp]") return;
+	if (depth >= MAX_NESTING_DEPTH) {
+		throw new TypeError(
+			`deepFreeze: the value is nested deeper than ${MAX_NESTING_DEPTH} levels`,
+		);
+	}
 	DEEP_FROZEN.add(obj);
+	marked.push(obj);
 
 	// Date/Map/Set keep internal-slot mutability under Object.freeze:
 	// shadow their mutators and freeze Map/Set contents (entries are not
 	// own keys, so the key walk below would miss them).
 	if (tag === "[object Map]") {
 		for (const [key, value] of obj as Map<unknown, unknown>) {
-			freezeDeep(key);
-			freezeDeep(value);
+			freezeDeep(key, depth + 1, marked);
+			freezeDeep(value, depth + 1, marked);
 		}
 	} else if (tag === "[object Set]") {
-		for (const member of obj as Set<unknown>) freezeDeep(member);
+		for (const member of obj as Set<unknown>) {
+			freezeDeep(member, depth + 1, marked);
+		}
 	}
 	if (
 		tag === "[object Date]" ||
@@ -113,7 +133,11 @@ function freezeDeep(obj: unknown): void {
 
 	// Reflect.ownKeys returns both string and symbol own keys.
 	for (const key of Reflect.ownKeys(obj)) {
-		freezeDeep((obj as Record<string | symbol, unknown>)[key]);
+		freezeDeep(
+			(obj as Record<string | symbol, unknown>)[key],
+			depth + 1,
+			marked,
+		);
 	}
 	Object.freeze(obj);
 }

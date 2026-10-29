@@ -122,7 +122,9 @@ immutable. Run one kit version per process during a cutover.
   function, a symbol, a class instance, a `RegExp`, binary data, an `Error`,
   an accessor, or a symbol-keyed or hidden property. A key of a `Map` and a
   member of a `Set` must be a primitive, and an own `__proto__` key throws
-  `PROTOTYPE_POLLUTION` at any depth. A value object with a private field
+  `PROTOTYPE_POLLUTION` at any depth. Nesting deeper than 100 levels throws a
+  `TypeError`; `deepFreeze`, `deepEqual`, and the JSON check of the command
+  and integration messages share that limit. A value object with a private field
   no longer becomes an empty record without an error. Map a value object to
   plain data first. `toJSON()` of a kit `ValueObject` is shallow, so map a
   nested value object too. The metadata
@@ -618,6 +620,9 @@ immutable. Run one kit version per process during a cutover.
   it as a class instance.
 - `deepFreeze` keeps a global or sticky `RegExp` usable. Before, a match on a
   frozen pattern threw.
+- A `deepFreeze` that throws, for example on a failing getter, leaves no
+  object marked as frozen. Before, a later `deepFreeze` stopped at such an
+  object, and the object stayed open without an error.
 - `deepOmit` keeps non-enumerable own string properties, and its
   `ignoreKeyPredicate` receives a stable path. `deepEqual` compares an opaque
   object, for example a generator or a `WeakRef`, by identity.

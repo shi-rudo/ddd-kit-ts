@@ -744,8 +744,10 @@ and its private fields. Map such a value to plain data first, for example an
 error to its message and code. `toJSON()` of a kit `ValueObject` is shallow,
 so map a nested value object too. The metadata must be a plain object or
 absent: `null`, a string, a number, an array, or a `Map` throws a `TypeError`.
-`EventMetadata` fields are readonly, and the metadata gains `traceparent` and
-`tracestate`.
+A payload or metadata nested deeper than 100 levels throws a `TypeError` that
+names the path. In 2.2.0 such a value overflowed the stack with `RangeError`
+after about 1,100 levels. `EventMetadata` fields are readonly, and the
+metadata gains `traceparent` and `tracestate`.
 
 #### Entity state is protected, and its field is private
 
@@ -1751,3 +1753,12 @@ The root entry no longer exports `capturePersistenceBaseline`,
 - `toPublicErrorView` accepts an `onCatalogError` observer. A failure of the
   catalog still returns the fallback view, and the observer now receives the
   failure.
+
+**After rc.16.**
+
+- Every walk of the kit stops at 100 levels of nesting. The plain-data copy,
+  `deepFreeze`, and `deepEqual` throw a `TypeError` past it, and the command
+  and integration messages fail with `INVALID_COMMAND_MESSAGE` and
+  `INVALID_INTEGRATION_MESSAGE`. In rc.16 a value nested about 1,100 levels
+  deep overflowed the stack with `RangeError`. Flatten deeper data, for
+  example a tree into a list of nodes with parent ids.

@@ -234,3 +234,30 @@ describe("copyPlainData", () => {
 		expect(() => copyPlainData(value, options)).toThrow("state.nested");
 	});
 });
+
+/** A value with `levels` levels of nested records: 1 level is `{}`. */
+function nestedRecords(levels: number): Record<string, unknown> {
+	let value: Record<string, unknown> = {};
+	for (let level = 1; level < levels; level += 1) value = { child: value };
+	return value;
+}
+
+/** A value with `levels` levels of nested arrays: 1 level is `[]`. */
+function nestedArrays(levels: number): unknown[] {
+	let value: unknown[] = [];
+	for (let level = 1; level < levels; level += 1) value = [value];
+	return value;
+}
+
+describe("copyPlainData nesting", () => {
+	it("copies 100 levels of nesting", () => {
+		expect(copyPlainData(nestedRecords(100))).toEqual(nestedRecords(100));
+		expect(copyPlainData(nestedArrays(100))).toEqual(nestedArrays(100));
+	});
+
+	it("rejects a 101st level with a TypeError, also where a recursive walk would overflow the stack", () => {
+		expect(() => copyPlainData(nestedRecords(101))).toThrow(TypeError);
+		expect(() => copyPlainData(nestedArrays(101))).toThrow(TypeError);
+		expect(() => copyPlainData(nestedRecords(5000))).toThrow(TypeError);
+	});
+});

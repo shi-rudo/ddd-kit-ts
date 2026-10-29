@@ -1,3 +1,5 @@
+import { MAX_NESTING_DEPTH } from "./structural/nesting-depth";
+
 /** A primitive value represented without loss by JSON. */
 export type JsonPrimitive = boolean | null | number | string;
 
@@ -18,7 +20,8 @@ export function isJsonObject(value: unknown): value is JsonObject {
 type InvalidJsonValue = (path: string, reason: string) => never;
 
 /**
- * Proves that JSON serialization preserves a value exactly.
+ * Proves that JSON serialization preserves a value exactly, and that the
+ * value is nested at most 100 levels deep.
  *
  * The caller owns the boundary-specific error type through `invalid`.
  */
@@ -27,6 +30,7 @@ export function assertJsonValue(
 	path: string,
 	invalid: InvalidJsonValue,
 	active = new WeakSet<object>(),
+	depth = 0,
 ): asserts value is JsonValue {
 	if (value === null) return;
 	switch (typeof value) {
@@ -48,6 +52,12 @@ export function assertJsonValue(
 
 	if (active.has(value)) {
 		invalid(path, "cyclic references are not JSON-safe");
+	}
+	if (depth >= MAX_NESTING_DEPTH) {
+		invalid(
+			path,
+			`values nested deeper than ${MAX_NESTING_DEPTH} levels are not accepted`,
+		);
 	}
 	active.add(value);
 	if (Array.isArray(value)) {
@@ -83,7 +93,13 @@ export function assertJsonValue(
 					"accessor and non-enumerable array elements are not JSON-safe",
 				);
 			}
-			assertJsonValue(descriptor.value, `${path}[${index}]`, invalid, active);
+			assertJsonValue(
+				descriptor.value,
+				`${path}[${index}]`,
+				invalid,
+				active,
+				depth + 1,
+			);
 		}
 		active.delete(value);
 		return;
@@ -116,7 +132,7 @@ export function assertJsonValue(
 				"accessor and non-enumerable properties are not JSON-safe",
 			);
 		}
-		assertJsonValue(descriptor.value, childPath, invalid, active);
+		assertJsonValue(descriptor.value, childPath, invalid, active, depth + 1);
 	}
 	active.delete(value);
 }

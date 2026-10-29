@@ -495,3 +495,33 @@ describe("deepEqual – opaque exotics (unlisted tags)", () => {
 		expect(deepEqual(a, a)).toBe(true);
 	});
 });
+
+/** A value with `levels` levels of nested records: 1 level is `{}`. */
+function nestedRecords(levels: number): Record<string, unknown> {
+	let value: Record<string, unknown> = {};
+	for (let level = 1; level < levels; level += 1) value = { child: value };
+	return value;
+}
+
+/** A value with `levels` levels of nested arrays: 1 level is `[]`. */
+function nestedArrays(levels: number): unknown[] {
+	let value: unknown[] = [];
+	for (let level = 1; level < levels; level += 1) value = [value];
+	return value;
+}
+
+describe("deepEqual – nesting", () => {
+	it("compares 100 levels of nesting", () => {
+		expect(deepEqual(nestedRecords(100), nestedRecords(100))).toBe(true);
+		expect(deepEqual(nestedArrays(100), nestedArrays(100))).toBe(true);
+	});
+
+	it("rejects a 101st level with a TypeError instead of an answer, also where a recursive walk would overflow the stack", () => {
+		expect(() => deepEqual(nestedRecords(101), nestedRecords(101))).toThrow(
+			TypeError,
+		);
+		expect(() => deepEqual(nestedArrays(5000), nestedArrays(5000))).toThrow(
+			TypeError,
+		);
+	});
+});

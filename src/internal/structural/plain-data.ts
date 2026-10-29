@@ -1,4 +1,5 @@
 import { prototypePollutionError } from "../../errors/kit-errors";
+import { MAX_NESTING_DEPTH } from "./nesting-depth";
 
 /** Options for {@link copyPlainData}. */
 export interface CopyPlainDataOptions {
@@ -19,7 +20,8 @@ export interface CopyPlainDataOptions {
  * Returns a copy of `value` under the plain-data rule of the kit (see "One
  * rule for plain data" in the design decisions). One walk builds the copy
  * and checks each value as it copies it. A value outside the rule throws a
- * `TypeError` that names the path. An own `__proto__` key throws
+ * `TypeError` that names the path, and so does nesting deeper than 100
+ * levels. An own `__proto__` key throws
  * `PROTOTYPE_POLLUTION`. Cycles and shared references survive the copy.
  * The copy holds objects of the local realm only.
  */
@@ -64,6 +66,7 @@ function copyValue(value: unknown, walk: Walk): unknown {
 
 	if (Array.isArray(value)) {
 		if (!hasBuiltInPrototypeChain(value)) rejectClassInstance(value, walk);
+		assertNestingDepth(walk);
 		const copy: unknown[] = new Array(value.length);
 		walk.copies.set(value, copy);
 		copyOwnProperties(value, copy, walk);
@@ -72,6 +75,7 @@ function copyValue(value: unknown, walk: Walk): unknown {
 
 	const prototype: object | null = Object.getPrototypeOf(value);
 	if (prototype === null || Object.getPrototypeOf(prototype) === null) {
+		assertNestingDepth(walk);
 		const copy: Record<string, unknown> =
 			prototype === null ? Object.create(null) : {};
 		walk.copies.set(value, copy);
@@ -90,6 +94,7 @@ function copyValue(value: unknown, walk: Walk): unknown {
 	if (!hasBuiltInPrototypeChain(value) || !COPIED_TAGS.has(tag)) {
 		rejectObject(value, tag, walk);
 	}
+	assertNestingDepth(walk);
 	if (tag === "[object Map]") {
 		const copy = new Map<unknown, unknown>();
 		walk.copies.set(value, copy);
@@ -239,6 +244,15 @@ function rejectClassInstance(value: object, walk: Walk): never {
 	const described =
 		typeof name === "string" && name !== "" ? name : "anonymous class";
 	reject(walk, `is a class instance (${described}); map it to plain data`);
+}
+
+function assertNestingDepth(walk: Walk): void {
+	if (walk.path.length >= MAX_NESTING_DEPTH) {
+		reject(
+			walk,
+			`is nested deeper than ${MAX_NESTING_DEPTH} levels; flatten the data`,
+		);
+	}
 }
 
 function reject(walk: Walk, reason: string): never {
