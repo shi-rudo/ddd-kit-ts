@@ -508,6 +508,9 @@ immutable. Run one kit version per process during a cutover.
 
 #### Documentation and tooling
 
+- `SECURITY.md` maps the security boundaries of the kit: what reaches a
+  client, what reaches a log, the checks for untrusted input, and the known
+  gaps. It names GitHub private vulnerability reporting as the channel.
 - The docs build fails when a public signature names a type that no entry
   exports. typedoc treats its validation warnings as errors.
 - The API docs cover every entry point: `@shirudo/ddd-kit`, `/testing`,
