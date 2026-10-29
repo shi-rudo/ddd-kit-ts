@@ -93,7 +93,7 @@ function onOneConnection(
 			return {
 				store: {
 					schedule: (deadline) => store.schedule(deadline),
-					cancel: (scope, key) => store.cancel(scope, key),
+					cancel: (processName, key) => store.cancel(processName, key),
 					due: (now, limit) => exclusive(() => store.due(now, limit)),
 					markDelivered: (ids) => exclusive(() => store.markDelivered(ids)),
 					markFailed: (id, error) =>

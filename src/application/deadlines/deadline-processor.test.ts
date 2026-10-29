@@ -74,7 +74,7 @@ async function seeded(
 	const store = new InMemoryDeadlineStore<Payload>(storeOptions);
 	for (const entry of entries) {
 		await store.schedule({
-			scope: "s",
+			processName: "s",
 			key: entry.key,
 			dueAt: entry.dueAt ?? at(T0),
 			payload: { kind: entry.kind ?? entry.key },
@@ -89,7 +89,7 @@ function countingStore(
 	let dueCalls = 0;
 	return {
 		schedule: (deadline) => inner.schedule(deadline),
-		cancel: (scope, key) => inner.cancel(scope, key),
+		cancel: (processName, key) => inner.cancel(processName, key),
 		due: (now, limit, context) => {
 			dueCalls += 1;
 			return inner.due(now, limit, context);
@@ -145,7 +145,12 @@ describe("DeadlineProcessor", () => {
 		await expect(processor.drainOnce()).resolves.toBe("stopped");
 
 		expect(observed).toMatchObject([
-			{ scope: "s", key: "poison", attempts: 1, payload: { kind: "poison" } },
+			{
+				processName: "s",
+				key: "poison",
+				attempts: 1,
+				payload: { kind: "poison" },
+			},
 		]);
 	});
 
@@ -370,7 +375,7 @@ describe("DeadlineProcessor", () => {
 		let context: ExecutionContext | undefined;
 		const store: DeadlineStore<Payload> = {
 			schedule: (deadline) => inner.schedule(deadline),
-			cancel: (scope, key) => inner.cancel(scope, key),
+			cancel: (processName, key) => inner.cancel(processName, key),
 			due: (_now, _limit, received?: ExecutionContext) => {
 				context = received;
 				return new Promise(() => {});
@@ -411,7 +416,7 @@ describe("DeadlineProcessor", () => {
 		});
 		const store: DeadlineStore<Payload> = {
 			schedule: (deadline) => inner.schedule(deadline),
-			cancel: (scope, key) => inner.cancel(scope, key),
+			cancel: (processName, key) => inner.cancel(processName, key),
 			due: (now, limit) => inner.due(now, limit),
 			markDelivered: (_ids, received?: ExecutionContext) => {
 				context = received;
@@ -463,7 +468,7 @@ describe("DeadlineProcessor", () => {
 		let ackCalls = 0;
 		const store: DeadlineStore<Payload> = {
 			schedule: (deadline) => inner.schedule(deadline),
-			cancel: (scope, key) => inner.cancel(scope, key),
+			cancel: (processName, key) => inner.cancel(processName, key),
 			due: (now, limit) => inner.due(now, limit),
 			markDelivered: async (ids) => {
 				ackCalls += 1;

@@ -1,7 +1,7 @@
 /**
  * One deadline due for delivery, as returned by
  * {@link DeadlineStore.due}. `deliveryId` identifies this scheduled
- * INCARNATION of the deadline, not the `(scope, key)` address: a
+ * INCARNATION of the deadline, not the `(processName, key)` address: a
  * reschedule replaces the incarnation, and acknowledging a stale
  * incarnation must never consume the new one (see
  * {@link DeadlineStore.markDelivered}).
@@ -9,8 +9,8 @@
 export interface DueDeadline<TPayload = unknown> {
 	/** Opaque per-incarnation id used for `markDelivered`/`markFailed`. */
 	readonly deliveryId: string;
-	/** The namespace half of the address, e.g. a process or policy name. */
-	readonly scope: string;
+	/** The process half of the address, e.g. `checkout-saga`. */
+	readonly processName: string;
 	/** The instance half of the address, e.g. a saga or reservation id. */
 	readonly key: string;
 	/** When the deadline was due. */
@@ -43,8 +43,8 @@ export interface DeadLetterDeadline<TPayload = unknown>
  * consumer (the outbox guide's `drainOnce` pattern fits; the deadlines
  * guide shows the wiring).
  *
- * Addressing is the `(scope, key)` pair, so one table serves every
- * waiting process in an application: `scope` names the policy
+ * Addressing is the `(processName, key)` pair, so one table serves every
+ * waiting process in an application: `processName` names the process
  * ("checkout-saga", "reservation-hold"), `key` the instance. There is
  * at most ONE pending deadline per address; `schedule` on an existing
  * address replaces it (that IS the reschedule operation), and each
@@ -95,24 +95,24 @@ export interface DeadLetterDeadline<TPayload = unknown>
  */
 export interface DeadlineStore<TPayload = unknown> {
 	/**
-	 * Schedules (or reschedules) the deadline at `(scope, key)`: at most
+	 * Schedules (or reschedules) the deadline at `(processName, key)`: at most
 	 * one pending deadline exists per address, and scheduling an
 	 * occupied address replaces its due time, payload, attempt count,
 	 * and incarnation. Called inside the write transaction.
 	 */
 	schedule(deadline: {
-		scope: string;
+		processName: string;
 		key: string;
 		dueAt: Date;
 		payload: TPayload;
 	}): Promise<void>;
 
 	/**
-	 * Removes the pending deadline at `(scope, key)`; a no-op when none
+	 * Removes the pending deadline at `(processName, key)`; a no-op when none
 	 * exists (the awaited input arrived in time and the wait is over).
 	 * Called inside the write transaction.
 	 */
-	cancel(scope: string, key: string): Promise<void>;
+	cancel(processName: string, key: string): Promise<void>;
 
 	/**
 	 * Up to `limit` deadlines with `dueAt <= now` that are neither
