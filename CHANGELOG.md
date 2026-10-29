@@ -533,6 +533,19 @@ immutable. Run one kit version per process during a cutover.
 
 ### Fixed
 
+- The command idempotency guide used the raw `Idempotency-Key` header as the
+  key. The JSDoc of `IdempotentCommitRequest.key` listed a client-supplied
+  header as a key. A raw header puts all clients into one key space, so one
+  client can replay or block the request of another client. The guide and
+  the JSDoc now qualify a client key with the command name and the
+  authenticated actor. If you copied the earlier example, qualify your key
+  the same way. The store finds a record only under the exact key text. A
+  retry of a request from before the switch therefore finds no record and
+  runs the command again. Switch only when no retry of an earlier request
+  can still arrive. If your key already holds a command name, keep that
+  name. For example, keep `edge.confirm-order.v1` of the earlier edge
+  runtimes guide, because a new name changes every key.
+
 - `OutboxDispatcher` ends a pass when `getPending` returns a record that the
   same pass already acknowledged, and reports
   `AcknowledgedRecordPendingError` (code `ACKNOWLEDGED_RECORD_PENDING`) to

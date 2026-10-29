@@ -44,9 +44,9 @@ import type { JsonValue } from "../../../internal/json-value";
  * declare function createOrderDeliveryKey(messageId: string): string;
  *
  * // This application service invokes the handler through withIdempotentCommit.
- * // createOrderDeliveryKey scopes the message id by consumer. The service
- * // fingerprints the complete CreateOrder intention and commits that claim,
- * // the aggregate write, outbox entries, and outcome together.
+ * // createOrderDeliveryKey qualifies the message id with the consumer. The
+ * // service fingerprints the complete CreateOrder intention and commits
+ * // that claim, the aggregate write, outbox entries, and outcome together.
  * declare function executeIdempotentCreateOrder(
  *   deliveryKey: string,
  *   command: CreateOrderCommand,
