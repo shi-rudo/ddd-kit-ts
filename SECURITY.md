@@ -195,8 +195,10 @@ therefore choose how the kit classifies its error.
   candidate publishes under `next`.
 - A merge to `main` requires every job of the CI workflow (`ci.yml`): the
   tests on Node 24 and 26, the edge runtime smoke test, and the docs build.
-  The branch protection of `main` holds this list. If you add a job to
-  `ci.yml`, add it to that list too.
+  The branch protection of `main` requires only the job `ci-passed`. That
+  job needs every other job of `ci.yml` and fails if one of them did not
+  succeed. `test/architecture/ci-required-checks.test.ts` fails if a job is
+  missing from its `needs`.
 
 ## Known gaps
 

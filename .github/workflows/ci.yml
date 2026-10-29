@@ -98,3 +98,24 @@ jobs:
 
       - name: Built package in edge runtimes
         run: pnpm test:edge-runtime
+
+  ci-passed:
+    # The only required check of main. It needs every other job, so a new
+    # job joins the merge gate in this file.
+    # test/architecture/ci-required-checks.test.ts fails while a job is
+    # missing from needs. always() keeps this job from being skipped after a
+    # failed job, because GitHub counts a skipped required check as passed.
+    if: always()
+    needs: [verify, docs, edge-runtime-smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every needed job succeeded
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          for result in $RESULTS; do
+            if [ "$result" != "success" ]; then
+              echo "A needed job ended with the result '$result'."
+              exit 1
+            fi
+          done

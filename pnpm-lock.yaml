@@ -82,6 +82,9 @@ importers:
       vitest:
         specifier: 4.1.10
         version: 4.1.10(@edge-runtime/vm@5.0.0)(@vitest/browser-preview@4.1.10)(@vitest/coverage-v8@4.1.10)(@voidzero-dev/vite-plus-core@0.2.9(@typescript/typescript6@6.0.2)(esbuild@0.28.2)(yaml@2.9.0))
+      yaml:
+        specifier: ^2.9.0
+        version: 2.9.0
 
 packages:
 

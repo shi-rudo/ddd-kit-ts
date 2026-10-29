@@ -94,7 +94,8 @@
 		"vite-plus": "catalog:",
 		"vitepress": "2.0.0-alpha.18",
 		"vitepress-plugin-llms": "^1.13.5",
-		"vitest": "catalog:"
+		"vitest": "catalog:",
+		"yaml": "^2.9.0"
 	},
 	"private": false,
 	"author": "Shirudo",
