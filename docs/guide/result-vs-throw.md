@@ -353,8 +353,10 @@ if (error instanceof KitWiringError && error.code === "TRANSACTION_CLOSED") {
 }
 ```
 
-`error.details` holds safe diagnostic data, for example the aggregate
-identity, the operation, or a reason code, and the log object carries it. If a
+`error.details` holds diagnostic data for the log, for example the aggregate
+identity, the operation, or a reason code, and the log object carries it. A
+code that rejects a value, for example `INVALID_VERSION`, carries that value,
+so never send `details` to a client. If a
 second failure occurred while the kit handled the first one, for example a
 mapper that threw while it classified a handler error, the second failure is
 `error.secondaryCause`. The first one stays `error.cause`.
