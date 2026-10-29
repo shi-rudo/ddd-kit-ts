@@ -77,9 +77,11 @@ the consumer decides where that object goes.
   the redaction of `@shirudo/base-error`.
 - Some codes put the rejected input value into `details`, for example
   `INVALID_VERSION`.
-- `EVENT_PAYLOAD_INVALID` writes up to three issue messages of the schema
-  into its message and keeps every issue. A validator message can embed the
-  rejected value.
+- `EVENT_PAYLOAD_INVALID` names only the paths of up to three issues in its
+  message. Its `issues` keep the messages of the schema, and a validator
+  message can embed the rejected value. If a logger writes `issues`, it
+  writes these messages. With pino, mask them with
+  `redact: ["err.issues[*].message"]`.
 - A wrapped driver error stays as `cause`. A dead letter of the in-memory
   outbox keeps the full event and the message of the last error.
 - A kit error logs each field that its class declares, at every depth of a
@@ -121,12 +123,14 @@ the consumer decides where that object goes.
 
 ## Idempotency
 
-The kit does not validate or scope an idempotency key. If a raw client
+The kit does not validate or qualify an idempotency key. If a raw client
 header is the key, one client can replay or block the request of another
-client. Scope the key to the command and to the authenticated actor.
-Fingerprint the complete business intention. The
-[edge runtimes guide](docs/guide/edge-runtimes.md) shows both. A key with
-another fingerprint fails with `IDEMPOTENCY_KEY_REUSE`.
+client. Qualify a client key with the command name and the authenticated
+actor. Qualify a message id with the name of the consumer. Fingerprint the
+complete business intention. The
+[edge runtimes guide](docs/guide/edge-runtimes.md) shows the client key, and
+[CQRS & Buses](docs/guide/cqrs-and-buses.md) shows the message id. A key
+with another fingerprint fails with `IDEMPOTENCY_KEY_REUSE`.
 
 ## Identifiers and randomness
 

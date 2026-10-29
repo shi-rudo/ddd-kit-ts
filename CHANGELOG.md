@@ -400,7 +400,9 @@ immutable. Run one kit version per process during a cutover.
   schema output is the payload: the kit copies it under the plain-data rule
   and freezes the copy. A failed schema throws
   `DomainEventValidationError` with the code `EVENT_PAYLOAD_INVALID` and the
-  issues; a schema that returns a Promise throws `EVENT_PAYLOAD_SCHEMA_ASYNC`.
+  issues. Its message names only the paths of the issues, because a validator
+  message can embed the rejected value. A schema that returns a Promise
+  throws `EVENT_PAYLOAD_SCHEMA_ASYNC`.
   Use strict object schemas: a plain `z.object` drops unknown keys without an
   error. The kit copies the Standard Schema types and adds no dependency.
 - The root entry exports the types `Fold` and `CreateEventOptions`. A
@@ -534,6 +536,19 @@ immutable. Run one kit version per process during a cutover.
   `llms-full.txt` from the guides. The package never contained the file.
 
 ### Fixed
+
+- The command idempotency guide used the raw `Idempotency-Key` header as the
+  key. The JSDoc of `IdempotentCommitRequest.key` listed a client-supplied
+  header as a key. A raw header puts all clients into one key space, so one
+  client can replay or block the request of another client. The guide and
+  the JSDoc now qualify a client key with the command name and the
+  authenticated actor. If you copied the earlier example, qualify your key
+  the same way. The store finds a record only under the exact key text. A
+  retry of a request from before the switch therefore finds no record and
+  runs the command again. Switch only when no retry of an earlier request
+  can still arrive. If your key already holds a command name, keep that
+  name. For example, keep `edge.confirm-order.v1` of the earlier edge
+  runtimes guide, because a new name changes every key.
 
 - `OutboxDispatcher` ends a pass when `getPending` returns a record that the
   same pass already acknowledged, and reports

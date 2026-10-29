@@ -142,7 +142,7 @@ export function ownDefinedPayload(
 		throw new DomainEventValidationError(
 			"EVENT_PAYLOAD_INVALID",
 			"payload",
-			`${operation}: the payload of "${definition.type}" does not match its schema: ${describeIssues(issues)}`,
+			`${operation}: the payload of "${definition.type}" does not match its schema ${describeIssuePaths(issues)}`,
 			issues,
 		);
 	}
@@ -180,19 +180,25 @@ function ownIssues(
 
 const DESCRIBED_ISSUES = 3;
 
-function describeIssues(
+/**
+ * Names the paths of the issues and leaves out their messages. The default
+ * message of a validator can embed the rejected value, and the error message
+ * reaches every stack and string render, where no redaction applies. The
+ * messages stay in `issues`.
+ */
+function describeIssuePaths(
 	issues: ReadonlyArray<DomainEventPayloadIssue>,
 ): string {
-	if (issues.length === 0) return "the schema reported no issue text";
+	if (issues.length === 0) return "and reports no issue.";
 	const described = issues
 		.slice(0, DESCRIBED_ISSUES)
 		.map((issue) =>
-			issue.path.length === 0
-				? issue.message
-				: `${issue.path.map(String).join(".")}: ${issue.message}`,
+			issue.path.length === 0 ? "the root" : issue.path.map(String).join("."),
 		);
 	const more = issues.length - described.length;
-	return more > 0
-		? `${described.join("; ")}; and ${more} more`
-		: described.join("; ");
+	const paths =
+		more > 0
+			? `${described.join("; ")}; and ${more} more`
+			: described.join("; ");
+	return `at ${paths}. The issues of the error hold the messages.`;
 }

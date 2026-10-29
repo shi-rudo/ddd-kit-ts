@@ -187,6 +187,30 @@ describe("an event created from a definition", () => {
 		});
 	});
 
+	it("keeps the issue messages out of the error message, because a validator message can embed the rejected value", () => {
+		const SecretSet = defineDomainEvent("SecretSet", {
+			payload: standardSchema<unknown, unknown>(() => ({
+				issues: [
+					{
+						message: 'Expected 12 characters, got "hunter2"',
+						path: ["secret"],
+					},
+				],
+			})),
+		});
+
+		const rejection = rejectionOf(() =>
+			createDomainEvent(SecretSet, { secret: "hunter2" }),
+		) as DomainEventValidationError;
+
+		expect(rejection.code).toBe("EVENT_PAYLOAD_INVALID");
+		expect(rejection.message).not.toContain("hunter2");
+		expect(String(rejection.stack)).not.toContain("hunter2");
+		expect(rejection.issues).toEqual([
+			{ message: 'Expected 12 characters, got "hunter2"', path: ["secret"] },
+		]);
+	});
+
 	it("rejects a schema that validates asynchronously", () => {
 		const later = defineDomainEvent("CheckedLater", {
 			payload: standardSchema<unknown, unknown>(async (value) => ({ value })),
