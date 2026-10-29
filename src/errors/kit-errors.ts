@@ -198,8 +198,10 @@ export interface KitWiringErrorOptions<TCode extends KitWiringErrorCode> {
 	/** Technical message for logs and debugging, never for clients. */
 	readonly message: string;
 	/**
-	 * Safe diagnostic data, for example an aggregate identity, an operation,
-	 * an event type, or a reason code. Never an error object or raw input.
+	 * Diagnostic data for the log, for example an aggregate identity, an
+	 * operation, an event type, or a reason code. Never an error object. A
+	 * code that rejects a value, for example `INVALID_VERSION`, carries that
+	 * value, so `details` is log data and never client data.
 	 */
 	readonly details?: Readonly<Record<string, unknown>>;
 	/** The failure that the kit handled when it found the defect. */
@@ -214,7 +216,8 @@ export interface KitWiringErrorOptions<TCode extends KitWiringErrorCode> {
  * generic domain or infrastructure handler may absorb it. One class carries
  * every wiring code: match on `code`, never on the message.
  *
- * `details` holds safe diagnostic data only, and the log object carries it.
+ * `details` holds diagnostic data for the log, and the log object carries
+ * it.
  * A second failure that occurred while the kit handled `cause`, for example
  * a mapper that threw while it classified the error, is `secondaryCause`.
  */
@@ -655,19 +658,17 @@ export class InvalidCommandMessageError extends InfrastructureError<"INVALID_COM
 }
 
 /**
- * Thrown by `Entity` (constructor and `setState`), by the event-sourced
- * fold (`apply` and replay), by the event constructors for the payload,
- * and by the event metadata helpers (`createDomainEvent`'s
- * `options.metadata`, `mergeMetadata`, `copyMetadata`) when the value
- * carries an own `"__proto__"` data key:
- * the shape `JSON.parse` produces for hostile DB rows or request bodies
- * handed to reconstitute factories. Such a key can never be legitimate
- * domain state; accepting it would hand a prototype-pollution payload to
- * every downstream consumer that copies the state through `[[Set]]`
- * (`Object.assign`, for-in assignment loops), and dropping it would be
- * silent data mutation. The check looks at the root object only; nested
- * objects are not walked, and a class instance is an ownership transfer
- * that passes.
+ * Thrown when a value carries an own `"__proto__"` data key. `JSON.parse`
+ * gives this shape for a hostile DB row or request body. Such a key is never
+ * legitimate domain state. If the kit accepted it, each later copy through
+ * `[[Set]]` (`Object.assign`, a for-in assignment loop) would receive a
+ * prototype-pollution payload. If the kit dropped it, the data would change
+ * silently.
+ *
+ * Two checks throw it. The plain-data copy looks at every depth. The state
+ * check looks at the root object only, and a class instance passes it as an
+ * ownership transfer. SECURITY.md, section "Untrusted input", lists where
+ * each check runs.
  *
  * Deliberately **not** a `DomainError` or `InfrastructureError` (same
  * posture as `MISSING_HANDLER`): untrusted input reaching the
