@@ -8,13 +8,18 @@ const dueAt = new Date("2026-07-15T08:00:00.000Z");
 describe("InMemoryDeadlineStore capacity", () => {
 	it("allows replacing an address at capacity and cancel releases its slot", async () => {
 		const store = new InMemoryDeadlineStore({ maxRecords: 1 });
-		await store.schedule({ scope: "orders", key: "o-1", dueAt, payload: 1 });
+		await store.schedule({
+			processName: "orders",
+			key: "o-1",
+			dueAt,
+			payload: 1,
+		});
 
 		await expect(
-			store.schedule({ scope: "orders", key: "o-1", dueAt, payload: 2 }),
+			store.schedule({ processName: "orders", key: "o-1", dueAt, payload: 2 }),
 		).resolves.toBeUndefined();
 		await expect(
-			store.schedule({ scope: "orders", key: "o-2", dueAt, payload: 3 }),
+			store.schedule({ processName: "orders", key: "o-2", dueAt, payload: 3 }),
 		).rejects.toMatchObject({
 			code: "IN_MEMORY_CAPACITY_EXCEEDED",
 			store: "InMemoryDeadlineStore",
@@ -27,7 +32,7 @@ describe("InMemoryDeadlineStore capacity", () => {
 
 		await store.cancel("orders", "o-1");
 		await expect(
-			store.schedule({ scope: "orders", key: "o-2", dueAt, payload: 3 }),
+			store.schedule({ processName: "orders", key: "o-2", dueAt, payload: 3 }),
 		).resolves.toBeUndefined();
 	});
 
@@ -36,18 +41,23 @@ describe("InMemoryDeadlineStore capacity", () => {
 			maxRecords: 1,
 			maxDeliveryAttempts: 1,
 		});
-		await store.schedule({ scope: "orders", key: "o-1", dueAt, payload: 1 });
+		await store.schedule({
+			processName: "orders",
+			key: "o-1",
+			dueAt,
+			payload: 1,
+		});
 		const [record] = await store.due(dueAt, 1);
 		if (record === undefined)
 			throw new Error("expected the scheduled deadline");
 		await store.markFailed(record.deliveryId, new Error("poison"));
 
 		await expect(
-			store.schedule({ scope: "orders", key: "o-2", dueAt, payload: 2 }),
+			store.schedule({ processName: "orders", key: "o-2", dueAt, payload: 2 }),
 		).rejects.toBeInstanceOf(InMemoryCapacityExceededError);
 		await store.markDelivered([record.deliveryId]);
 		await expect(
-			store.schedule({ scope: "orders", key: "o-2", dueAt, payload: 2 }),
+			store.schedule({ processName: "orders", key: "o-2", dueAt, payload: 2 }),
 		).resolves.toBeUndefined();
 	});
 
@@ -65,7 +75,12 @@ describe("InMemoryDeadlineStore in an InMemoryTransactionScope", () => {
 	it("restores attempts and the pending state after a rolled-back dead-lettering", async () => {
 		const store = new InMemoryDeadlineStore({ maxDeliveryAttempts: 2 });
 		const scope = new InMemoryTransactionScope([store]);
-		await store.schedule({ scope: "orders", key: "o-1", dueAt, payload: 1 });
+		await store.schedule({
+			processName: "orders",
+			key: "o-1",
+			dueAt,
+			payload: 1,
+		});
 		const [record] = await store.due(dueAt, 1);
 		if (record === undefined) throw new Error("expected a due deadline");
 		await store.markFailed(record.deliveryId, "first");
@@ -112,7 +127,7 @@ describe("InMemoryDeadlineStore in an InMemoryTransactionScope", () => {
 		const store = new InMemoryDeadlineStore();
 		const scope = new InMemoryTransactionScope([store]);
 		await scope.transactional(() =>
-			store.schedule({ scope: "orders", key: "o-1", dueAt, payload: 1 }),
+			store.schedule({ processName: "orders", key: "o-1", dueAt, payload: 1 }),
 		);
 
 		const duringTransaction = await dueWhileOpen(scope, store, () =>
@@ -127,11 +142,11 @@ describe("InMemoryDeadlineStore in an InMemoryTransactionScope", () => {
 		const store = new InMemoryDeadlineStore();
 		const scope = new InMemoryTransactionScope([store]);
 		await scope.transactional(() =>
-			store.schedule({ scope: "orders", key: "o-1", dueAt, payload: 1 }),
+			store.schedule({ processName: "orders", key: "o-1", dueAt, payload: 1 }),
 		);
 
 		const duringTransaction = await dueWhileOpen(scope, store, () =>
-			store.schedule({ scope: "orders", key: "o-1", dueAt, payload: 2 }),
+			store.schedule({ processName: "orders", key: "o-1", dueAt, payload: 2 }),
 		);
 
 		expect(duringTransaction).toMatchObject([{ key: "o-1", payload: 1 }]);
@@ -144,7 +159,7 @@ describe("InMemoryDeadlineStore in an InMemoryTransactionScope", () => {
 		const store = new InMemoryDeadlineStore();
 		const scope = new InMemoryTransactionScope([store]);
 		await scope.transactional(() =>
-			store.schedule({ scope: "orders", key: "o-1", dueAt, payload: 1 }),
+			store.schedule({ processName: "orders", key: "o-1", dueAt, payload: 1 }),
 		);
 		let releaseWork!: () => void;
 		const workReleased = new Promise<void>((resolve) => {
@@ -175,7 +190,7 @@ describe("InMemoryDeadlineStore in an InMemoryTransactionScope", () => {
 		const store = new InMemoryDeadlineStore({ maxDeliveryAttempts: 1 });
 		const scope = new InMemoryTransactionScope([store]);
 		await scope.transactional(() =>
-			store.schedule({ scope: "orders", key: "o-1", dueAt, payload: 1 }),
+			store.schedule({ processName: "orders", key: "o-1", dueAt, payload: 1 }),
 		);
 		const [committed] = await store.due(dueAt, 10);
 		let releaseWork!: () => void;
@@ -217,7 +232,7 @@ describe("InMemoryDeadlineStore in an InMemoryTransactionScope", () => {
 		const store = new InMemoryDeadlineStore({ maxDeliveryAttempts: 5 });
 		const scope = new InMemoryTransactionScope([store]);
 		await scope.transactional(() =>
-			store.schedule({ scope: "orders", key: "o-1", dueAt, payload: 1 }),
+			store.schedule({ processName: "orders", key: "o-1", dueAt, payload: 1 }),
 		);
 		const [committed] = await store.due(dueAt, 10);
 		let began!: () => void;
@@ -239,7 +254,12 @@ describe("InMemoryDeadlineStore in an InMemoryTransactionScope", () => {
 		const transaction = scope.transactional(async () => {
 			began();
 			await failureReported;
-			await store.schedule({ scope: "orders", key: "o-1", dueAt, payload: 2 });
+			await store.schedule({
+				processName: "orders",
+				key: "o-1",
+				dueAt,
+				payload: 2,
+			});
 			rescheduled();
 			await workReleased;
 		});
@@ -261,7 +281,7 @@ describe("InMemoryDeadlineStore in an InMemoryTransactionScope", () => {
 		const store = new InMemoryDeadlineStore({ maxDeliveryAttempts: 2 });
 		const scope = new InMemoryTransactionScope([store]);
 		await scope.transactional(() =>
-			store.schedule({ scope: "orders", key: "o-1", dueAt, payload: 1 }),
+			store.schedule({ processName: "orders", key: "o-1", dueAt, payload: 1 }),
 		);
 		let releaseWork!: () => void;
 		const workReleased = new Promise<void>((resolve) => {
@@ -298,13 +318,18 @@ describe("InMemoryDeadlineStore in an InMemoryTransactionScope", () => {
 		});
 		const scope = new InMemoryTransactionScope([store]);
 		await scope.transactional(() =>
-			store.schedule({ scope: "orders", key: "o-1", dueAt, payload: 1 }),
+			store.schedule({ processName: "orders", key: "o-1", dueAt, payload: 1 }),
 		);
 		const [committed] = await store.due(dueAt, 10);
 
 		const duringTransaction = await dueWhileOpen(scope, store, async () => {
 			await store
-				.schedule({ scope: "orders", key: "o-1", dueAt, payload: () => 2 })
+				.schedule({
+					processName: "orders",
+					key: "o-1",
+					dueAt,
+					payload: () => 2,
+				})
 				.catch(() => {});
 			await store.markFailed(committed?.deliveryId ?? "", "boom");
 		});
@@ -318,7 +343,7 @@ describe("InMemoryDeadlineStore in an InMemoryTransactionScope", () => {
 		const store = new InMemoryDeadlineStore();
 		const scope = new InMemoryTransactionScope([store]);
 		await scope.transactional(() =>
-			store.schedule({ scope: "orders", key: "o-1", dueAt, payload: 1 }),
+			store.schedule({ processName: "orders", key: "o-1", dueAt, payload: 1 }),
 		);
 		let release!: () => void;
 		const released = new Promise<void>((resolve) => {
@@ -330,7 +355,12 @@ describe("InMemoryDeadlineStore in an InMemoryTransactionScope", () => {
 		});
 
 		const transaction = scope.transactional(async () => {
-			await store.schedule({ scope: "orders", key: "o-2", dueAt, payload: 2 });
+			await store.schedule({
+				processName: "orders",
+				key: "o-2",
+				dueAt,
+				payload: 2,
+			});
 			scheduled();
 			await released;
 		});
@@ -350,7 +380,7 @@ describe("InMemoryDeadlineStore in an InMemoryTransactionScope", () => {
 		const scope = new InMemoryTransactionScope([store]);
 
 		await scope.transactional(() =>
-			store.schedule({ scope: "orders", key: "o-1", dueAt, payload: 1 }),
+			store.schedule({ processName: "orders", key: "o-1", dueAt, payload: 1 }),
 		);
 
 		expect(await store.due(dueAt, 10)).toMatchObject([{ key: "o-1" }]);
