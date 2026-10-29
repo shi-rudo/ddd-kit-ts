@@ -77,9 +77,11 @@ the consumer decides where that object goes.
   the redaction of `@shirudo/base-error`.
 - Some codes put the rejected input value into `details`, for example
   `INVALID_VERSION`.
-- `EVENT_PAYLOAD_INVALID` writes up to three issue messages of the schema
-  into its message and keeps every issue. A validator message can embed the
-  rejected value.
+- `EVENT_PAYLOAD_INVALID` names only the paths of up to three issues in its
+  message. Its `issues` keep the messages of the schema, and a validator
+  message can embed the rejected value. If a logger writes `issues`, it
+  writes these messages. With pino, mask them with
+  `redact: ["err.issues[*].message"]`.
 - A wrapped driver error stays as `cause`. A dead letter of the in-memory
   outbox keeps the full event and the message of the last error.
 - A kit error logs each field that its class declares, at every depth of a
