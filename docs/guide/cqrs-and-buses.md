@@ -447,10 +447,10 @@ declare function recordCommandOutcome(
 ): Promise<void>;
 declare function stableHash(command: PlaceOrderIntention): string;
 
-const PLACE_ORDER_CONSUMER = "orders.place-order.v1";
+const PLACE_ORDER_CONSUMER_NAME = "orders.place-order.v1";
 
-function scopedMessageKey(scope: string, messageId: string): string {
-  return JSON.stringify([scope, messageId]);
+function qualifiedMessageKey(consumerName: string, messageId: string): string {
+  return JSON.stringify([consumerName, messageId]);
 }
 
 async function consumePlaceOrder(delivery: QueueDelivery): Promise<void> {
@@ -482,7 +482,7 @@ async function consumePlaceOrder(delivery: QueueDelivery): Promise<void> {
     type: "PlaceOrder",
     ...decoded.value,
   };
-  const deliveryKey = scopedMessageKey(PLACE_ORDER_CONSUMER, messageId.value);
+  const deliveryKey = qualifiedMessageKey(PLACE_ORDER_CONSUMER_NAME, messageId.value);
   const command: PlaceOrderCommand = {
     ...intention,
     correlationId: correlationId.value,
@@ -503,15 +503,15 @@ SQS, Kafka, and other brokers use different names and settlement rules, but the
 order stays the same: bound, decode, convert, dispatch, record the outcome, then
 settle. The adapter must expose a stable delivery identity within this consumer.
 For Kafka that is commonly topic, partition, and offset; other brokers may
-combine a queue or producer identity with their message id. `scopedMessageKey`
-then separates this consumer from every other command stream that shares the
-idempotency store. The fingerprint includes the command type and complete
+combine a queue or producer identity with their message id.
+`qualifiedMessageKey` then separates this consumer from every other command
+stream that shares the idempotency store. The fingerprint includes the command type and complete
 business input, so a matching key can only replay the same intention.
 
 With a transactional idempotency store, `withIdempotentCommit` stores the key,
 fingerprint, outcome, aggregate write, and outbox entry in the application's
-transaction. The separate `recordCommandOutcome` observer uses the same scoped
-delivery key and must also be idempotent because an acknowledgement can fail
+transaction. The separate `recordCommandOutcome` observer uses the same
+qualified delivery key and must also be idempotent because an acknowledgement can fail
 after that observer succeeds. A correlation id helps tracing; it does not make
 an at-least-once delivery safe to repeat. See
 [Idempotent Commands](./idempotency.md).

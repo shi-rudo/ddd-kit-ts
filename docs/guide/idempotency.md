@@ -29,11 +29,11 @@ exactly-once boundary across two stores.
 const outcome = await withIdempotentCommit(
   { scope, outbox, idempotency },
   {
-    key: request.headers.get("Idempotency-Key")!,
-    fingerprint: stableHash(command),
+    key: qualifiedCommandKey(CONFIRM_ORDER_COMMAND_NAME, actorId, clientKey),
+    fingerprint: stableHash(intention),
   },
   async (tx, registration) => {
-    const loaded = await loadOrderForDirectCommit(tx, command.orderId);
+    const loaded = await loadOrderForDirectCommit(tx, intention.orderId);
     const order = loaded.aggregate;
     order.confirm();
     await updateOrderForDirectCommit(tx, order, loaded.expectedVersion);
@@ -44,9 +44,21 @@ const outcome = await withIdempotentCommit(
 );
 ```
 
-The fingerprint is part of the safety contract. Reusing a key for different
-content throws `IdempotencyKeyReuseError` instead of replaying the answer to a
-different command.
+`clientKey` is the `Idempotency-Key` header after the boundary validated it.
+`actorId` comes from the verified principal, not from the request body.
+`intention` holds the command data and the actor, but no idempotency data. The
+kit does not validate or qualify a key. If the raw header is the key, all
+clients share one key space. Then a client that knows the key of another
+client can replay or block that request. So qualify the client key with the
+command name and the authenticated actor. The
+[edge runtimes guide](./edge-runtimes.md) defines `qualifiedCommandKey`,
+`CONFIRM_ORDER_COMMAND_NAME`, and `intention`, and it shows the complete
+boundary.
+
+The fingerprint is part of the safety contract. Hash the complete business
+intention. Reusing a key for different content throws
+`IdempotencyKeyReuseError` instead of replaying the answer to a different
+command.
 
 ## Leases and fencing
 
