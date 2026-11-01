@@ -500,6 +500,7 @@ interface DispatchTrackingOutbox<Evt extends AnyDomainEvent>
     context?: ExecutionContext,
   ): Promise<DeadLetterRecord<Evt> | undefined>;
   deadLetters(): Promise<ReadonlyArray<DeadLetterRecord<Evt>>>;
+  requeueDeadLetters(dispatchIds: ReadonlyArray<string>): Promise<void>;
 }
 ```
 
@@ -522,9 +523,13 @@ cannot alter delivery state.
 
 Recovery is explicit:
 
-- Fix the cause and re-add the event. `InMemoryOutbox` requeues a dead-lettered
-  event with a fresh attempt budget.
+- Fix the cause and call `requeueDeadLetters` with the `dispatchId` of each
+  record. The record returns to its commit-order place in `getPending`, with a
+  fresh attempt budget. A repeated call does nothing.
 - Deliver the event manually and call `markDispatched` to clear it.
+
+A repeated `add` does not requeue. `add` dedupes on the `eventId`, so a late
+retry of a use case cannot revive a dead letter.
 
 The dispatcher classifies delivery failures before consuming the poison
 ceiling:

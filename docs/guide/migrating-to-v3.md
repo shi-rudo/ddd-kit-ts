@@ -1085,6 +1085,24 @@ takes no such option. The commit envelope carries the position: an outbox
 record reads `position.aggregateVersion`, next to `commitSequence` and
 `commitSize`. The compiler flags a read of `event.aggregateVersion`.
 
+#### A dead letter returns through `requeueDeadLetters`
+
+A repeated `add` no longer requeues a dead letter. The retry dedupes and the
+record stays dead, and the compiler does not flag the old call. Call
+`requeueDeadLetters` with the `dispatchId` of each record.
+
+```ts
+// before
+await outbox.add([event]);
+
+// after
+await outbox.requeueDeadLetters([deadLetter.dispatchId]);
+```
+
+A custom `DispatchTrackingOutbox` implements the new required method. It moves
+each named dead letter back to pending with a fresh attempt budget, and it does
+nothing for any other id. `createOutboxContractTests` proves this behavior.
+
 ### Command and query buses
 
 #### An unregistered message type throws
@@ -1767,3 +1785,6 @@ The root entry no longer exports `capturePersistenceBaseline`,
   `cancel` need no change, because `cancel` takes both values by position. A
   durable adapter maps its stored column to `processName`. Rename the column
   too, so that the schema and the port use the same term.
+- `DispatchTrackingOutbox` has a required `requeueDeadLetters(dispatchIds)`,
+  and a repeated `add` no longer requeues a dead letter. See
+  [A dead letter returns through `requeueDeadLetters`](#a-dead-letter-returns-through-requeuedeadletters).

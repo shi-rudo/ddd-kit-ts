@@ -242,6 +242,11 @@ immutable. Run one kit version per process during a cutover.
 - `OutboxWriter` has a required `endEventSources(sources)`, and so does the
   new `CommandOutboxWriter`. A custom outbox marks the head of each removed
   aggregate's source as ended and rejects a new event of an ended source.
+- `DispatchTrackingOutbox` has a required `requeueDeadLetters(dispatchIds)`.
+  It returns a dead letter to its commit-order place in `getPending` with a
+  fresh attempt budget. A repeated `add` no longer requeues a dead letter: the
+  retry dedupes, so a late retry of a use case cannot revive it, and
+  `INSERT ... ON CONFLICT DO NOTHING` stays a correct `add`.
 
 #### Command and query buses
 
