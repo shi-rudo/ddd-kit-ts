@@ -48,6 +48,7 @@
 		"test": "vp test",
 		"test:coverage": "vp test --coverage --coverage.include='src/**'",
 		"test:edge-runtime": "pnpm build && node scripts/run-edge-runtime-smoke.mjs",
+		"test:pg": "pnpm --filter @shirudo/ddd-kit-pg test",
 		"audit:prod": "pnpm audit --prod",
 		"benchmark:aggregate-hot-path": "pnpm build && node --expose-gc benchmarks/aggregate-hot-path.mjs",
 		"benchmark:event-stamping": "pnpm build && node --expose-gc benchmarks/domain-event-stamping.mjs",

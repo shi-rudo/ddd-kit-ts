@@ -1,0 +1,37 @@
+# @shirudo/ddd-kit-pg
+
+PostgreSQL adapters for `@shirudo/ddd-kit`. The adapters run the contract suites
+of the kit against a real database in CI.
+
+This package is not published yet.
+
+## The executor
+
+An adapter owns no connection. It runs its statements on a `PgQueryExecutor`, so
+the statements join your transaction.
+
+```ts
+import { fromPg } from "@shirudo/ddd-kit-pg";
+
+const client = await pool.connect();
+const executor = fromPg(client);
+```
+
+## Peer dependencies
+
+The package takes `@shirudo/ddd-kit` as a peer dependency and does not bundle it,
+so a process loads one copy of the kit.
+
+Each peer range starts at the version that the CI of this package certifies, for
+`@shirudo/ddd-kit` and for `pg`. It ends before the next major version. A new
+major version needs a new certification, and then a new peer range.
+
+## Tests
+
+The tests start PostgreSQL in Docker, so Docker must run. The package reads the
+kit from its `dist` directory, so build the kit first.
+
+```sh
+pnpm build
+pnpm test:pg
+```
