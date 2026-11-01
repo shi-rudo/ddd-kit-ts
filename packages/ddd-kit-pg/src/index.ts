@@ -3,6 +3,7 @@ export {
 	PgCommitRolledBackError,
 	PgRetryableTransactionFailureError,
 } from "./pg-errors";
+export { PgIdempotencyStore } from "./pg-idempotency-store";
 export {
 	fromPg,
 	type PgQueryExecutor,

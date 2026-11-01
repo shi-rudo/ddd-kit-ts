@@ -13,3 +13,6 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `PgRetryableTransactionFailureError`, and a `COMMIT` that rolled back as a
   `PgCommitRolledBackError`. It survives a lost connection, and it closes its
   executor when the transaction ends.
+- `PgIdempotencyStore`, the transactional `IdempotencyStore`, with its table in
+  `sql/idempotency.sql`. A claim of a key that another open transaction holds
+  throws `IdempotencyInFlightError` at once and blocks no connection.

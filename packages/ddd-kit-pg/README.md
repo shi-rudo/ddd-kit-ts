@@ -35,6 +35,22 @@ without an error. If your callback catches that failure and resolves, the scope
 rejects with `PgCommitRolledBackError`. Rethrow the failure, or run the statement
 in a savepoint.
 
+## The tables
+
+The package ships each table as a SQL file in `sql/`. Run the files that you need
+with your migration tool, in the schema of your aggregates. A store then writes
+in the transaction of your command.
+
+| Store | File |
+| --- | --- |
+| `PgIdempotencyStore` | `sql/idempotency.sql` |
+
+## Idempotency
+
+`PgIdempotencyStore` keeps each record until you delete it. Delete old records
+with your own job, for example by `completed_at`. A retry of a deleted key runs
+the command again.
+
 ## Peer dependencies
 
 The package takes `@shirudo/ddd-kit` as a peer dependency and does not bundle it,

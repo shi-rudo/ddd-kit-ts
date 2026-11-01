@@ -1,10 +1,13 @@
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { Pool, type PoolConfig } from "pg";
 import { inject } from "vite-plus/test";
 
 export interface IsolatedSchema {
 	/** A pool whose connections resolve unqualified names in this schema. */
 	readonly pool: Pool;
+	/** Runs a shipped DDL file of `sql/` in this schema. */
+	applySql(fileName: string): Promise<void>;
 	teardown(): Promise<void>;
 }
 
@@ -26,6 +29,10 @@ export async function openIsolatedSchema(
 	});
 	return {
 		pool,
+		applySql: async (fileName) => {
+			const file = new URL(`../sql/${fileName}`, import.meta.url);
+			await pool.query(await readFile(file, "utf8"));
+		},
 		teardown: async () => {
 			await pool.end();
 			await admin.query(`DROP SCHEMA ${schema} CASCADE`);

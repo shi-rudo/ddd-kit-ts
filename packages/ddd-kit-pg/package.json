@@ -22,7 +22,8 @@
 	},
 	"sideEffects": false,
 	"files": [
-		"dist"
+		"dist",
+		"sql"
 	],
 	"scripts": {
 		"build": "vp pack",
