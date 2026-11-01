@@ -1,4 +1,5 @@
 import {
+	assertJsonSafe,
 	type IdempotencyClaim,
 	type IdempotencyClaimHandle,
 	IdempotencyInFlightError,
@@ -27,7 +28,9 @@ interface IdempotencyRow {
  * advisory lock in `claim` gives the answer without that wait, and the
  * transaction end releases it.
  *
- * The outcome is stored as JSON, so it must be plain data.
+ * The store keeps the outcome as JSON. `complete` rejects an outcome that JSON
+ * does not keep exactly, for example one with a `Date`, because a replay would
+ * otherwise return a changed value. An outcome of `undefined` is allowed.
  */
 export class PgIdempotencyStore implements IdempotencyStore<PgQueryExecutor> {
 	readonly family = "transactional";
@@ -88,6 +91,9 @@ export class PgIdempotencyStore implements IdempotencyStore<PgQueryExecutor> {
 		{ key, token }: IdempotencyClaimHandle,
 		outcome: unknown,
 	): Promise<void> {
+		if (outcome !== undefined) {
+			assertJsonSafe(outcome, `PgIdempotencyStore outcome of key "${key}"`);
+		}
 		const { rows } = await executor.query(
 			`UPDATE ddd_kit_idempotency
 			SET status = 'completed', outcome = $3::jsonb, completed_at = now()

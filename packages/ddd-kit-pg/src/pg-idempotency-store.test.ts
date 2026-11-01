@@ -76,6 +76,16 @@ describe("PgIdempotencyStore", () => {
 		await opened.database.teardown();
 	});
 
+	it("rejects an outcome that JSON does not keep and names the path", async () => {
+		const opened = await openStore();
+
+		await expect(
+			claimAndComplete(opened, "key", { confirmedAt: new Date(0) }),
+		).rejects.toThrow(/outcome of key "key": \$\.confirmedAt is not JSON-safe/);
+
+		await opened.database.teardown();
+	});
+
 	describe("a claim while another transaction holds the key", () => {
 		/** Holds the claim in an open transaction until the returned function ends it. */
 		const holdClaim = async (
