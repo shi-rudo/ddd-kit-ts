@@ -44,12 +44,58 @@ in the transaction of your command.
 | Store | File |
 | --- | --- |
 | `PgIdempotencyStore` | `sql/idempotency.sql` |
+| `PgEventStore` | `sql/event-stream.sql` |
 
 ## Idempotency
 
 `PgIdempotencyStore` keeps each record until you delete it. Delete old records
 with your own job, for example by `completed_at`. A retry of a deleted key runs
 the command again.
+
+A store rejects an outcome that JSON does not keep exactly, for example one with
+a `Date`. Return plain JSON from the use case.
+
+## Events
+
+`PgEventStore` runs on the executor of one transaction. Build it inside the
+callback of the scope.
+
+The table keeps JSON. JSON does not keep a `Date`, a `Map`, a `Set`, a `bigint`,
+or `undefined` inside a payload, so `append` rejects such a value and names its
+path. If your events hold such a value, map it with a `PgEventCodec`. Upcasting
+runs in the same place.
+
+```ts
+import { type PgEventCodec, PgEventStore } from "@shirudo/ddd-kit-pg";
+
+const codec: PgEventCodec<OrderEvent> = {
+  encode: (event) =>
+    event.type === "OrderShipped"
+      ? {
+          ...event,
+          payload: { shippedAt: event.payload.shippedAt.toISOString() },
+        }
+      : event,
+  decode: (stored) =>
+    stored.type === "OrderShipped"
+      ? {
+          ...stored,
+          type: "OrderShipped",
+          payload: { shippedAt: new Date(stored.payload.shippedAt) },
+        }
+      : (stored as OrderEvent),
+};
+
+const store = new PgEventStore<OrderEvent>(executor, { codec });
+```
+
+A test against `InMemoryEventStore` does not show a missing mapping, because that
+store keeps every plain value. Run the contract suites against PostgreSQL.
+
+A read rejects a gap in a stream with `PgEventStreamCorruptError`. A read cannot
+see missing events at the end of a stream, because the highest position is the
+head. Set `statement_timeout`: an abort signal stops the wait of a read, not the
+statement on the connection.
 
 ## Peer dependencies
 

@@ -1,5 +1,5 @@
 import { findInCauseChain } from "@shirudo/base-error";
-import { InfrastructureError } from "@shirudo/ddd-kit";
+import { type AggregateIdentity, InfrastructureError } from "@shirudo/ddd-kit";
 
 /** PostgreSQL ended the transaction, and a new transaction can succeed. */
 const RETRYABLE_SQLSTATES: ReadonlySet<string> = new Set([
@@ -43,6 +43,36 @@ export class PgCommitRolledBackError extends InfrastructureError<"PG_COMMIT_ROLL
 				"Rethrow the failure of a statement, or run the statement in a " +
 				"savepoint.",
 		});
+	}
+}
+
+/**
+ * A stream has a gap at a position. An event store must reject this, because a
+ * replay would otherwise fold a truncated stream without an error. Only a
+ * change outside `PgEventStore` causes it, for example a manual `DELETE` or a
+ * partial restore.
+ */
+export class PgEventStreamCorruptError extends InfrastructureError<"PG_EVENT_STREAM_CORRUPT"> {
+	readonly identity: AggregateIdentity;
+	readonly expectedPosition: number;
+	readonly actualPosition: number;
+
+	constructor(options: {
+		readonly identity: AggregateIdentity;
+		readonly expectedPosition: number;
+		readonly actualPosition: number;
+	}) {
+		super({
+			code: "PG_EVENT_STREAM_CORRUPT",
+			message:
+				`The stream ${options.identity.aggregateType}/` +
+				`${options.identity.aggregateId} has a gap: the read expected position ` +
+				`${options.expectedPosition} and found ${options.actualPosition}. ` +
+				"A change outside PgEventStore removed events. Restore the stream.",
+		});
+		this.identity = options.identity;
+		this.expectedPosition = options.expectedPosition;
+		this.actualPosition = options.actualPosition;
 	}
 }
 

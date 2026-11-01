@@ -15,4 +15,10 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   executor when the transaction ends.
 - `PgIdempotencyStore`, the transactional `IdempotencyStore`, with its table in
   `sql/idempotency.sql`. A claim of a key that another open transaction holds
-  throws `IdempotencyInFlightError` at once and blocks no connection.
+  throws `IdempotencyInFlightError` at once and blocks no connection. `complete`
+  rejects an outcome that JSON does not keep exactly.
+- `PgEventStore`, with its table in `sql/event-stream.sql`, and `PgEventCodec`
+  to map a `Date`, a `Map`, a `Set`, a `bigint`, or `undefined` inside a payload
+  to JSON and back. Upcasting runs in the same codec. `append` rejects a value
+  that JSON does not keep. A gap in a stream throws
+  `PgEventStreamCorruptError`.
