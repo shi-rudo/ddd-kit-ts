@@ -1762,3 +1762,8 @@ The root entry no longer exports `capturePersistenceBaseline`,
   `INVALID_INTEGRATION_MESSAGE`. In rc.16 a value nested about 1,100 levels
   deep overflowed the stack with `RangeError`. Flatten deeper data, for
   example a tree into a list of nodes with parent ids.
+- The deadline address is `(processName, key)`. The field `scope` of
+  `DueDeadline` and of the `schedule` input is now `processName`. Calls of
+  `cancel` need no change, because `cancel` takes both values by position. A
+  durable adapter maps its stored column to `processName`. Rename the column
+  too, so that the schema and the port use the same term.

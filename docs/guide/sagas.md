@@ -188,7 +188,7 @@ async function reactToOrderPlaced(event: OrderPlaced): Promise<void> {
       // The wait for the payment gets its wake-up call, in the same
       // transaction as the state that started waiting.
       await deadlines.schedule({
-        scope: "checkout-saga",
+        processName: "checkout-saga",
         key: String(saga.id),
         dueAt: addMinutes(now(), 30),
         payload: { kind: "payment-timeout" },

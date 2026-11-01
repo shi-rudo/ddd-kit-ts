@@ -117,7 +117,7 @@ export function createDeadlineStoreContractTests(
 			run: inEnv(async (env) => {
 				await env.run(() =>
 					env.store.schedule({
-						scope: "checkout-saga",
+						processName: "checkout-saga",
 						key: "order-1",
 						dueAt: at(T1),
 						payload: { kind: "payment-timeout" },
@@ -136,7 +136,11 @@ export function createDeadlineStoreContractTests(
 				);
 				const record = dueExactly[0];
 				assert(record !== undefined, "expected the due deadline");
-				assertEqual(record.scope, "checkout-saga", "scope must round-trip");
+				assertEqual(
+					record.processName,
+					"checkout-saga",
+					"processName must round-trip",
+				);
 				assertEqual(record.key, "order-1", "key must round-trip");
 				assertEqual(
 					record.dueAt.getTime(),
@@ -155,19 +159,19 @@ export function createDeadlineStoreContractTests(
 			run: inEnv(async (env) => {
 				await env.run(async () => {
 					await env.store.schedule({
-						scope: "s",
+						processName: "s",
 						key: "late",
 						dueAt: at(T2),
 						payload: { kind: "late" },
 					});
 					await env.store.schedule({
-						scope: "s",
+						processName: "s",
 						key: "early",
 						dueAt: at(T0),
 						payload: { kind: "early" },
 					});
 					await env.store.schedule({
-						scope: "s",
+						processName: "s",
 						key: "middle",
 						dueAt: at(T1),
 						payload: { kind: "middle" },
@@ -190,7 +194,7 @@ export function createDeadlineStoreContractTests(
 			run: inEnv(async (env) => {
 				await env.run(() =>
 					env.store.schedule({
-						scope: "s",
+						processName: "s",
 						key: "k",
 						dueAt: at(T0),
 						payload: { kind: "x" },
@@ -214,13 +218,13 @@ export function createDeadlineStoreContractTests(
 			run: inEnv(async (env) => {
 				await env.run(async () => {
 					await env.store.schedule({
-						scope: "s",
+						processName: "s",
 						key: "keep",
 						dueAt: at(T0),
 						payload: { kind: "keep" },
 					});
 					await env.store.schedule({
-						scope: "s",
+						processName: "s",
 						key: "drop",
 						dueAt: at(T0),
 						payload: { kind: "drop" },
@@ -239,17 +243,17 @@ export function createDeadlineStoreContractTests(
 			}),
 		},
 		{
-			name: "addresses are isolated per scope",
+			name: "addresses are isolated per process name",
 			run: inEnv(async (env) => {
 				await env.run(async () => {
 					await env.store.schedule({
-						scope: "reservation-hold",
+						processName: "reservation-hold",
 						key: "id-1",
 						dueAt: at(T0),
 						payload: { kind: "hold" },
 					});
 					await env.store.schedule({
-						scope: "checkout-saga",
+						processName: "checkout-saga",
 						key: "id-1",
 						dueAt: at(T0),
 						payload: { kind: "timeout" },
@@ -258,8 +262,8 @@ export function createDeadlineStoreContractTests(
 				});
 				const due = await env.store.due(at(T1), 10);
 				assert(
-					due.length === 1 && due[0]?.scope === "checkout-saga",
-					"the same key under another scope is a different deadline",
+					due.length === 1 && due[0]?.processName === "checkout-saga",
+					"the same key under another process name is a different deadline",
 				);
 			}),
 		},
@@ -273,7 +277,7 @@ export function createDeadlineStoreContractTests(
 				run: inEnv(async (env) => {
 					await env.run(() =>
 						env.store.schedule({
-							scope: "s",
+							processName: "s",
 							key: "k",
 							dueAt: at(T0),
 							payload: { kind: "first", step: 1 },
@@ -285,7 +289,7 @@ export function createDeadlineStoreContractTests(
 					// Reschedule while the first incarnation is in flight.
 					await env.run(() =>
 						env.store.schedule({
-							scope: "s",
+							processName: "s",
 							key: "k",
 							dueAt: at(T1),
 							payload: { kind: "second", step: 2 },
@@ -318,7 +322,7 @@ export function createDeadlineStoreContractTests(
 			run: inEnv(async (env) => {
 				await env.run(() =>
 					env.store.schedule({
-						scope: "s",
+						processName: "s",
 						key: "k",
 						dueAt: at(T0),
 						payload: { kind: "first" },
@@ -329,7 +333,7 @@ export function createDeadlineStoreContractTests(
 				await env.store.markDelivered([first.deliveryId]);
 				await env.run(() =>
 					env.store.schedule({
-						scope: "s",
+						processName: "s",
 						key: "k",
 						dueAt: at(T1),
 						payload: { kind: "again" },
@@ -347,7 +351,7 @@ export function createDeadlineStoreContractTests(
 			run: inEnv(async (env) => {
 				await env.run(() =>
 					env.store.schedule({
-						scope: "s",
+						processName: "s",
 						key: "poison",
 						dueAt: at(T0),
 						payload: { kind: "poison" },
@@ -413,13 +417,13 @@ export function createDeadlineStoreContractTests(
 				run: inEnv(async (env) => {
 					await env.run(async () => {
 						await env.store.schedule({
-							scope: "s",
+							processName: "s",
 							key: "poison",
 							dueAt: at(T0),
 							payload: { kind: "poison" },
 						});
 						await env.store.schedule({
-							scope: "s",
+							processName: "s",
 							key: "healthy",
 							dueAt: at(T0),
 							payload: { kind: "healthy" },
@@ -449,7 +453,7 @@ export function createDeadlineStoreContractTests(
 			run: inEnv(async (env) => {
 				await env.run(() =>
 					env.store.schedule({
-						scope: "s",
+						processName: "s",
 						key: "k",
 						dueAt: at(T0),
 						payload: { kind: "first" },
@@ -464,7 +468,7 @@ export function createDeadlineStoreContractTests(
 				// fresh incarnation, and it dead-letters too.
 				await env.run(() =>
 					env.store.schedule({
-						scope: "s",
+						processName: "s",
 						key: "k",
 						dueAt: at(T1),
 						payload: { kind: "second" },
@@ -496,7 +500,7 @@ export function createDeadlineStoreContractTests(
 			run: inEnv(async (env) => {
 				await env.run(() =>
 					env.store.schedule({
-						scope: "s",
+						processName: "s",
 						key: "k",
 						dueAt: at(T0),
 						payload: { kind: "x" },
@@ -540,7 +544,7 @@ export function createDeadlineStoreContractTests(
 					await env
 						.runRolledBack(() =>
 							env.store.schedule({
-								scope: "s",
+								processName: "s",
 								key: "ghost",
 								dueAt: at(T0),
 								payload: { kind: "ghost" },
@@ -576,7 +580,7 @@ export function createDeadlineStoreContractTests(
 					}
 					await env.run(() =>
 						env.store.schedule({
-							scope: "s",
+							processName: "s",
 							key: "k",
 							dueAt: at(T0),
 							payload: { kind: "x" },

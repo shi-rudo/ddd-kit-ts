@@ -18,9 +18,9 @@ on the poll side.
 
 ## Scheduling belongs in the write transaction
 
-The address of a deadline is a `(scope, key)` pair, so one table serves every
-waiting process in the application. `scope` names the policy, `key` the
-instance:
+The address of a deadline is a `(processName, key)` pair, so one table serves
+every waiting process in the application. `processName` names the process,
+`key` the instance:
 
 ```ts
 await withCommit({ scope, outbox }, async (tx, registration) => {
@@ -36,7 +36,7 @@ await withCommit({ scope, outbox }, async (tx, registration) => {
   // a saga that committed "waiting for payment" without its deadline is a
   // process that never wakes up.
   await deadlines.schedule({
-    scope: "checkout-saga",
+    processName: "checkout-saga",
     key: String(saga.id),
     dueAt: addMinutes(now, 30),
     payload: { kind: "payment-timeout", paymentId },
@@ -195,7 +195,7 @@ already covers it.
 `deadLetters()` is the set to wire into durable alerting. A growing dead-letter
 set means processes that stopped waking up. The required `onDeadLetter`
 observer gives an immediate signal from the exact ceiling-crossing
-`markFailed` call, but it is best-effort: a process can stop after the store
+`markFailed` call, but it is best-effort: the poller can stop after the store
 commits the transition and before the callback runs. Reconcile by polling the
 store; observer throws and rejected promises are neutralized so monitoring
 cannot change delivery state.

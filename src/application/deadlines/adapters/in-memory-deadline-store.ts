@@ -27,7 +27,7 @@ export interface InMemoryDeadlineStoreOptions {
 
 interface StoredDeadline<TPayload> {
 	deliveryId: string;
-	scope: string;
+	processName: string;
 	key: string;
 	dueAt: Date;
 	payload: TPayload;
@@ -132,16 +132,16 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 	}
 
 	async schedule(deadline: {
-		scope: string;
+		processName: string;
 		key: string;
 		dueAt: Date;
 		payload: TPayload;
 	}): Promise<void> {
-		const scope = deadline.scope;
+		const processName = deadline.processName;
 		const key = deadline.key;
 		const dueAt = new Date(deadline.dueAt);
 		const payload = structuredClone(deadline.payload);
-		const deadlineAddress = address(scope, key);
+		const deadlineAddress = address(processName, key);
 		if (
 			!this.pending.has(deadlineAddress) &&
 			this.maxRecords !== undefined &&
@@ -161,7 +161,7 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 		// the successor.
 		const incarnation: StoredDeadline<TPayload> = {
 			deliveryId: `deadline-${sequence}`,
-			scope,
+			processName,
 			key,
 			dueAt,
 			payload,
@@ -172,8 +172,8 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 		this.pending.set(deadlineAddress, incarnation);
 	}
 
-	async cancel(scope: string, key: string): Promise<void> {
-		const deadlineAddress = address(scope, key);
+	async cancel(processName: string, key: string): Promise<void> {
+		const deadlineAddress = address(processName, key);
 		this.recordCommittedVersion(deadlineAddress);
 		this.pending.delete(deadlineAddress);
 	}
@@ -311,7 +311,7 @@ function toRecord<TPayload>(
 ): DueDeadline<TPayload> {
 	return {
 		deliveryId: deadline.deliveryId,
-		scope: deadline.scope,
+		processName: deadline.processName,
 		key: deadline.key,
 		dueAt: new Date(deadline.dueAt),
 		payload: structuredClone(deadline.payload),
@@ -319,7 +319,7 @@ function toRecord<TPayload>(
 	};
 }
 
-/** NUL-separated so no scope/key concatenation can collide. */
-function address(scope: string, key: string): string {
-	return `${scope}\u0000${key}`;
+/** NUL-separated so no processName/key concatenation can collide. */
+function address(processName: string, key: string): string {
+	return `${processName}\u0000${key}`;
 }

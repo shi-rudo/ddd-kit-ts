@@ -481,7 +481,9 @@ immutable. Run one kit version per process during a cutover.
   `createProjectionCheckpointStoreContractTests`. The projector rejects a gap
   or a changed receipt before it applies an event.
 - Durable deadlines: the `DeadlineStore` port, `DeadlineProcessor`,
-  `InMemoryDeadlineStore`, and `createDeadlineStoreContractTests`.
+  `InMemoryDeadlineStore`, and `createDeadlineStoreContractTests`. A deadline
+  has the address `(processName, key)`: the name of the waiting process and
+  the instance.
 - `domainErrorToResult` turns the listed `DomainError` classes into `Err` and
   rethrows everything else.
 - `DUPLICATE_HANDLER_REGISTRATION` names a second handler for one message
