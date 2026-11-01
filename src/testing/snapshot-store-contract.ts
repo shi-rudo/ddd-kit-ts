@@ -6,8 +6,10 @@ import type { SnapshotStore } from "../persistence/snapshot-store/snapshot-store
 import {
 	assert,
 	assertEqual,
+	assertKeptOrRejected,
 	bindContractEnvironment,
 	type ContractTest,
+	plainDataThatJsonDoesNotKeep,
 } from "./contract-assertions";
 
 /** One contract test; bind with `(test.skipped ? it.skip : it)(test.name, test.run)`. */
@@ -245,6 +247,21 @@ export function createSnapshotStoreContractTests(
 					5,
 					"load must hand out a copy, never live internal state",
 				);
+			}),
+		},
+		{
+			name: "fidelity: a value that JSON does not keep is stored exactly or rejected",
+			run: inEnv(async (env) => {
+				const state =
+					plainDataThatJsonDoesNotKeep() as SnapshotStoreContractState;
+				await assertKeptOrRejected({
+					subject: "A snapshot store",
+					write: () =>
+						env.store.save(identity("Order", "o-1"), snapshot(1, state)),
+					read: async () =>
+						(await env.store.load(identity("Order", "o-1")))?.state,
+					expected: state,
+				});
 			}),
 		},
 	];

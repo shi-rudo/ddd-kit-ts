@@ -79,6 +79,10 @@ export interface OutboxWriter<Evt extends AnyDomainEvent> {
 	 * sequence, and commit size. Reusing an `eventId` for another source or
 	 * position is a caller bug: adapters that retain the conflicting record
 	 * should reject it rather than replace or silently reinterpret it as a retry.
+	 *
+	 * **Fidelity:** a read returns each payload and metadata value exactly as
+	 * added, or `add` rejects. Never change a value without an error. See "One
+	 * rule for plain data" in the design decisions.
 	 */
 	add: (events: ReadonlyArray<EventCommitCandidate<Evt>>) => Promise<void>;
 

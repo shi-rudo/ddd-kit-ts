@@ -222,6 +222,9 @@ export interface EventStore<Evt extends AnyDomainEvent>
 	 *     a `TypeError`, before any write. A direct `withCommit` callback can
 	 *     append before its registration stamps the events; this check makes
 	 *     that mistake fail instead of storing ids that the outbox never sees.
+	 *  8. **Fidelity:** a read returns each payload and metadata value exactly
+	 *     as appended, or the append rejects. Never change a value without an
+	 *     error. See "One rule for plain data" in the design decisions.
 	 *
 	 * An empty `events` array is a no-op; implementations resolve without
 	 * touching the store (an ES repository skips `append` for aggregates

@@ -12,11 +12,13 @@ import { isDispatchTrackingOutbox } from "../messaging/outbox/ports";
 import {
 	assert,
 	assertEqual,
+	assertKeptOrRejected,
 	bindContractEnvironment,
 	type ContractTest,
 	captureRejection,
 	describeError,
 	gatedContractTest,
+	plainDataThatJsonDoesNotKeep,
 } from "./contract-assertions";
 
 /** One contract test; bind with `(test.skipped ? it.skip : it)(test.name, test.run)`. */
@@ -194,6 +196,19 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 	};
 
 	const tests: OutboxContractTest[] = [
+		{
+			name: "fidelity: a value that JSON does not keep is stored exactly or rejected",
+			run: inEnv(async (env) => {
+				const payload = plainDataThatJsonDoesNotKeep();
+				const event = { ...harness.createEvent(70), payload } as Evt;
+				await assertKeptOrRejected({
+					subject: "An outbox",
+					write: () => env.addCommitted(commit([event])),
+					read: async () => (await env.outbox.getPending(1))[0]?.event.payload,
+					expected: payload,
+				});
+			}),
+		},
 		{
 			name: "finalizes complete commit receipts and links the next eventful commit",
 			run: inEnv(async (env) => {

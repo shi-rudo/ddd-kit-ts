@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { assertJsonValue } from "./json-value";
+import { assertJsonSafe, assertJsonValue } from "./json-value";
 
 /** A value with `levels` levels of nested records: 1 level is `{}`. */
 function nestedRecords(levels: number): Record<string, unknown> {
@@ -24,6 +24,29 @@ class InvalidJson extends Error {
 const invalid = (path: string): never => {
 	throw new InvalidJson(path);
 };
+
+describe("assertJsonSafe", () => {
+	it("accepts a value that JSON keeps exactly", () => {
+		expect(() =>
+			assertJsonSafe({ text: "a", items: [1, null, true] }, "the payload"),
+		).not.toThrow();
+	});
+
+	it.each([
+		["a Date", { at: new Date(0) }, "$.at"],
+		["a Map", { counts: new Map() }, "$.counts"],
+		["a Set", { tags: new Set() }, "$.tags"],
+		["a bigint", { large: 1n }, "$.large"],
+		["undefined", { absent: undefined }, "$.absent"],
+		["NaN", { ratio: Number.NaN }, "$.ratio"],
+		["an array hole", { items: new Array(1) }, "$.items[0]"],
+	])("throws a TypeError that names the path of %s", (_name, value, path) => {
+		expect(() => assertJsonSafe(value, "the payload")).toThrow(TypeError);
+		expect(() => assertJsonSafe(value, "the payload")).toThrow(
+			`the payload: ${path}`,
+		);
+	});
+});
 
 describe("assertJsonValue nesting", () => {
 	it("accepts 100 levels of nesting", () => {

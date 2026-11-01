@@ -5,6 +5,10 @@ import {
 	type DomainEvent,
 } from "../domain/event/domain-event";
 import { InMemoryEventStore } from "../persistence/event-store/adapters/in-memory-event-store";
+import type {
+	ReadStreamOptions,
+	StreamReadResult,
+} from "../persistence/event-store/event-store";
 import { createEventStoreContractTests } from "./index";
 
 type ContractStepRecorded = DomainEvent<
@@ -12,24 +16,44 @@ type ContractStepRecorded = DomainEvent<
 	{ sequence: number }
 >;
 
+/** A store whose read loses what JSON does not keep, without an error. */
+class StoreThatLosesValuesInJson extends InMemoryEventStore<ContractStepRecorded> {
+	override async readStream(
+		stream: AggregateIdentity,
+		options: ReadStreamOptions,
+	): Promise<StreamReadResult<ContractStepRecorded>> {
+		const read = await super.readStream(stream, options);
+		if (!read.exists) return read;
+		return {
+			...read,
+			events: read.events.map((event) => ({
+				...event,
+				payload: JSON.parse(JSON.stringify(event.payload)),
+			})),
+		};
+	}
+}
+
+const harness = {
+	createEnvironment: async () => ({
+		store: new InMemoryEventStore<ContractStepRecorded>(),
+	}),
+	createCollidingStreamKeys: (): readonly [
+		AggregateIdentity,
+		AggregateIdentity,
+	] => [
+		{ aggregateType: "ContractAlpha", aggregateId: "shared-1" },
+		{ aggregateType: "ContractBeta", aggregateId: "shared-1" },
+	],
+	createEvent: (
+		stream: AggregateIdentity,
+		sequence: number,
+	): ContractStepRecorded =>
+		createDomainEvent("ContractStepRecorded", { sequence }, stream),
+};
+
 describe("event-store adapter contract", () => {
-	const contractTests = createEventStoreContractTests({
-		createEnvironment: async () => ({
-			store: new InMemoryEventStore<ContractStepRecorded>(),
-		}),
-		createCollidingStreamKeys: (): readonly [
-			AggregateIdentity,
-			AggregateIdentity,
-		] => [
-			{ aggregateType: "ContractAlpha", aggregateId: "shared-1" },
-			{ aggregateType: "ContractBeta", aggregateId: "shared-1" },
-		],
-		createEvent: (
-			stream: AggregateIdentity,
-			sequence: number,
-		): ContractStepRecorded =>
-			createDomainEvent("ContractStepRecorded", { sequence }, stream),
-	});
+	const contractTests = createEventStoreContractTests(harness);
 
 	it("lists every contract test by name", () => {
 		expect(contractTests.map(({ name }) => name)).toEqual([
@@ -54,10 +78,24 @@ describe("event-store adapter contract", () => {
 			"OCC: duplicate create is rejected atomically with a sanctioned kit error",
 			"OCC: an expectedVersion ahead of an absent stream conflicts without creating it",
 			"read ownership: a mutation attempt cannot mutate the stream",
+			"fidelity: a value that JSON does not keep is stored exactly or rejected",
 		]);
 	});
 
 	for (const test of contractTests) {
 		it(test.name, test.run);
 	}
+
+	it("the fidelity test kills a store that changes a value through JSON", async () => {
+		const fidelityTest = createEventStoreContractTests({
+			...harness,
+			createEnvironment: async () => ({
+				store: new StoreThatLosesValuesInJson(),
+			}),
+		}).find((test) => test.name.startsWith("fidelity:"));
+
+		await expect(fidelityTest?.run()).rejects.toThrow(
+			/changed a Date, Map, Set, or undefined value/,
+		);
+	});
 });

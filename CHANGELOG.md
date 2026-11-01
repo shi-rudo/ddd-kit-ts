@@ -172,6 +172,13 @@ immutable. Run one kit version per process during a cutover.
 
 #### Event store
 
+- A durable adapter keeps a value exactly or rejects it, and it never changes a
+  value without an error. The contract suites of the event store, the outbox,
+  both idempotency stores, the deadline store, and the snapshot store check
+  this with a `Date`, a `Map`, a `Set`, and `undefined`. An adapter that passes
+  these values through a raw `JSON.stringify` now fails its suite.
+  See
+  [One rule for plain data](docs/guide/design-decisions.md#one-rule-for-plain-data).
 - `EventStore.append` and `readStream` take an `AggregateIdentity` in place
   of the raw id. The same id under two aggregate types is two streams. A
   production schema keys a stream on `(aggregate_type, aggregate_id,
@@ -314,6 +321,9 @@ immutable. Run one kit version per process during a cutover.
 
 #### Persistence
 
+- `assertJsonSafe(value, subject)` throws a `TypeError` that names the path when
+  JSON does not keep a value exactly. An adapter that stores plain data as JSON
+  calls it before it writes.
 - `versionedFlush` builds a flush from the store statements. It owns the
   branches of the flush contract: a unique violation on `add` becomes
   `DuplicateAggregateError`, and a compare-and-set that matches no row

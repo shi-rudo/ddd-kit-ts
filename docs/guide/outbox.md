@@ -272,6 +272,11 @@ create table event_source_head (
 );
 ```
 
+The `payload` column holds JSON, and JSON does not keep a `Date`, a `Map`, a
+`Set`, a `bigint`, or `undefined`. Map such a value to JSON before the write, or
+call `assertJsonSafe` and reject it. Never let `JSON.stringify` change it. See
+[One rule for plain data](./design-decisions.md#one-rule-for-plain-data).
+
 That idempotency rule assumes the ID still identifies the same qualified source
 and candidate commit position. The same `eventId` arriving for another
 `aggregateType`, `aggregateId`, aggregate version, commit sequence, or commit

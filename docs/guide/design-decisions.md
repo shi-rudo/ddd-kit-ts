@@ -176,6 +176,20 @@ The copy is the data that the kit keeps, so the walk checks the copy only,
 once. Messages that leave the process, the command messages and the
 integration messages, follow the stricter JSON rule instead.
 
+A durable adapter follows one more rule: it keeps a value exactly or rejects
+it, and it never changes a value without an error. JSON does not keep a `Date`,
+a `Map`, a `Set`, a `bigint`, or `undefined`. An adapter that stores JSON
+therefore calls `assertJsonSafe` before it writes. An application that uses
+such a value maps it at the adapter boundary, per event type: to JSON on the
+write, and back on the read. Upcasting runs at the same place. The contract
+suites check this rule.
+
+The kit does not put type tags into the stored JSON. A stored event is a
+long-lived contract. A reader in SQL or in another language would have to know
+the tag format, and that format could never change. The in-memory adapters keep
+every plain value, so a test against them does not show a missing mapping. Run
+the contract suites against the real store.
+
 Every walk of the kit stops at 100 levels of nesting: the plain-data copy, the
 JSON rule, `deepFreeze`, and `deepEqual`. A recursive walk overflows the stack
 of Node.js and workerd after about 1,100 levels, and the stack that the caller

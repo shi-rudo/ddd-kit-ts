@@ -2,11 +2,13 @@ import { describe, expect, it } from "vite-plus/test";
 import { ConcurrencyConflictError } from "../errors/kit-errors";
 import {
 	assertChainContainsKitError,
+	assertKeptOrRejected,
 	assertRunPermitsOverlappingCalls,
 	awaitOverlappingCall,
 	captureRejection,
 	describeError,
 	parkRunCall,
+	plainDataThatJsonDoesNotKeep,
 } from "./contract-assertions";
 import { serializedCalls } from "./serialized-calls";
 
@@ -24,6 +26,37 @@ const legacyConflict = () => {
 	error.name = "ConcurrencyConflictError";
 	return error;
 };
+
+describe("assertKeptOrRejected", () => {
+	const fidelity = (read: unknown, write = async () => {}) => ({
+		subject: "A store",
+		write,
+		read: async () => read,
+		expected: plainDataThatJsonDoesNotKeep(),
+	});
+
+	it("passes when the read returns an equal value", async () => {
+		await expect(
+			assertKeptOrRejected(fidelity(plainDataThatJsonDoesNotKeep())),
+		).resolves.toBeUndefined();
+	});
+
+	it("passes when the write rejects", async () => {
+		await expect(
+			assertKeptOrRejected(
+				fidelity("never read", async () => {
+					throw new TypeError("not JSON");
+				}),
+			),
+		).resolves.toBeUndefined();
+	});
+
+	it("fails when the read returns a changed value", async () => {
+		await expect(
+			assertKeptOrRejected(fidelity({ at: "2026-01-05T10:20:30.456Z" })),
+		).rejects.toThrow(/A store changed a Date, Map, Set, or undefined value/);
+	});
+});
 
 describe("assertChainContainsKitError", () => {
 	it("passes when the code is found anywhere in the cause chain", () => {

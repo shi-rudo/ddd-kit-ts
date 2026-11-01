@@ -224,6 +224,7 @@ const INDEX_SURFACE = [
 	"StateStoredAggregate",
 	"UnitOfWork",
 	"ValueObject",
+	"assertJsonSafe",
 	"captureAggregateSnapshot",
 	"classifyConcurrencyConflict",
 	"copyMetadata",

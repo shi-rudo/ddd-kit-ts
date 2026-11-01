@@ -13,6 +13,7 @@ import {
 import type { AggregateWriteIntent } from "../application/unit-of-work/persistence-contract";
 import { isStampedDomainEvent } from "../domain/event/domain-event";
 import { runBoundedExecution } from "../internal/async/execution";
+import { deepEqual } from "../internal/structural/deep-equal";
 
 /**
  * One entry of a contract test suite. Every suite (repository,
@@ -80,6 +81,40 @@ export function captureRejection(promise: Promise<unknown>): Promise<unknown> {
 	return promise.then(
 		() => undefined,
 		(error: unknown) => error,
+	);
+}
+
+/**
+ * Plain data that the kit allows and that `JSON.stringify` changes without an
+ * error. It holds no `bigint`, because `JSON.stringify` throws for one, and a
+ * raw JSON adapter would then count as an adapter that rejects.
+ */
+export function plainDataThatJsonDoesNotKeep(): unknown {
+	return {
+		at: new Date("2026-01-05T10:20:30.456Z"),
+		tags: new Set(["a"]),
+		counts: new Map([["a", 1]]),
+		nested: { absent: undefined },
+	};
+}
+
+/**
+ * The fidelity rule of a durable port: an adapter keeps a value exactly or
+ * rejects it, and it never changes a value without an error.
+ */
+export async function assertKeptOrRejected(fidelity: {
+	readonly subject: string;
+	readonly write: () => Promise<unknown>;
+	readonly read: () => Promise<unknown>;
+	readonly expected: unknown;
+}): Promise<void> {
+	const rejection = await captureRejection(fidelity.write());
+	if (rejection !== undefined) return;
+	assert(
+		deepEqual(await fidelity.read(), fidelity.expected),
+		`${fidelity.subject} changed a Date, Map, Set, or undefined value without ` +
+			"an error. Keep each value exactly, or reject the write. An adapter " +
+			"that stores JSON can call assertJsonSafe before it writes.",
 	);
 }
 

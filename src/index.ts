@@ -279,6 +279,8 @@ export type {
 	DeliveryFailureClassifier,
 	DeliveryFailureKind,
 } from "./internal/delivery-failure";
+// JSON proof for an adapter that stores plain data as JSON
+export { assertJsonSafe } from "./internal/json-value";
 export type { StandardSchemaV1 } from "./internal/standard-schema";
 // Structural equality and copies
 export { deepEqual } from "./internal/structural/deep-equal";

@@ -1767,3 +1767,10 @@ The root entry no longer exports `capturePersistenceBaseline`,
   `cancel` need no change, because `cancel` takes both values by position. A
   durable adapter maps its stored column to `processName`. Rename the column
   too, so that the schema and the port use the same term.
+- A durable adapter keeps a value exactly or rejects it. The contract suites of
+  the event store, the outbox, both idempotency stores, the deadline store, and
+  the snapshot store check this. A custom adapter that stores JSON now fails its
+  suite if `JSON.stringify` changes a `Date`, a `Map`, a `Set`, or `undefined`.
+  Call `assertJsonSafe` before the write, and map such a value at the adapter
+  boundary. See
+  [One rule for plain data](./design-decisions.md#one-rule-for-plain-data).

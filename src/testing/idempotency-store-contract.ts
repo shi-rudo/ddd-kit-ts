@@ -8,9 +8,11 @@ import {
 	assert,
 	assertChainContainsKitError,
 	assertEqual,
+	assertKeptOrRejected,
 	bindContractEnvironment,
 	type ContractTest,
 	captureRejection,
+	plainDataThatJsonDoesNotKeep,
 } from "./contract-assertions";
 
 /** One contract test; bind with `(test.skipped ? it.skip : it)(test.name, test.run)`. */
@@ -158,6 +160,34 @@ export function createIdempotencyStoreContractTests<TCtx>(
 					"claimed",
 					"a rolled-back claim and complete must leave the key claimable",
 				);
+			}),
+		},
+		{
+			name: "fidelity: a value that JSON does not keep is stored exactly or rejected",
+			run: inEnv(async (env) => {
+				const outcome = plainDataThatJsonDoesNotKeep();
+				await assertKeptOrRejected({
+					subject: "An idempotency store",
+					write: () =>
+						env.run(async (ctx) => {
+							const claim = claimedHandle(
+								await env.store.claim(ctx, "key-1", "fp-1"),
+								"a fresh key must be claimed",
+							);
+							await env.store.complete(ctx, claim, outcome);
+						}),
+					read: async () => {
+						const replay = await env.run((ctx) =>
+							env.store.claim(ctx, "key-1", "fp-1"),
+						);
+						assert(
+							replay.status === "completed",
+							"a committed complete must replay as completed",
+						);
+						return replay.outcome;
+					},
+					expected: outcome,
+				});
 			}),
 		},
 	];

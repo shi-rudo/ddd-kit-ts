@@ -6,9 +6,11 @@ import { deepEqual } from "../internal/structural/deep-equal";
 import {
 	assert,
 	assertEqual,
+	assertKeptOrRejected,
 	bindContractEnvironment,
 	type ContractTest,
 	gatedContractTest,
+	plainDataThatJsonDoesNotKeep,
 } from "./contract-assertions";
 
 /** One contract test; bind with `(test.skipped ? it.skip : it)(test.name, test.run)`. */
@@ -112,6 +114,27 @@ export function createDeadlineStoreContractTests(
 	}
 
 	return [
+		{
+			name: "fidelity: a value that JSON does not keep is stored exactly or rejected",
+			run: inEnv(async (env) => {
+				const payload =
+					plainDataThatJsonDoesNotKeep() as DeadlineStoreContractPayload;
+				await assertKeptOrRejected({
+					subject: "A deadline store",
+					write: () =>
+						env.run(() =>
+							env.store.schedule({
+								processName: "checkout-saga",
+								key: "order-1",
+								dueAt: at(T1),
+								payload,
+							}),
+						),
+					read: async () => (await env.store.due(at(T1), 10))[0]?.payload,
+					expected: payload,
+				});
+			}),
+		},
 		{
 			name: "a deadline is invisible before its due time and delivered from it onward",
 			run: inEnv(async (env) => {
