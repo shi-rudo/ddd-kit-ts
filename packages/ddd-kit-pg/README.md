@@ -17,6 +17,24 @@ const client = await pool.connect();
 const executor = fromPg(client);
 ```
 
+## The transaction scope
+
+`PgTransactionScope` is a `TransactionScope` for a project that uses `pg`
+directly. Wrap it in `RetryingTransactionScope` to retry a serialization failure
+or a deadlock.
+
+```ts
+import { RetryingTransactionScope } from "@shirudo/ddd-kit";
+import { PgTransactionScope } from "@shirudo/ddd-kit-pg";
+
+const scope = new RetryingTransactionScope(new PgTransactionScope(pool));
+```
+
+A failed statement aborts a PostgreSQL transaction, and `COMMIT` then rolls back
+without an error. If your callback catches that failure and resolves, the scope
+rejects with `PgCommitRolledBackError`. Rethrow the failure, or run the statement
+in a savepoint.
+
 ## Peer dependencies
 
 The package takes `@shirudo/ddd-kit` as a peer dependency and does not bundle it,
