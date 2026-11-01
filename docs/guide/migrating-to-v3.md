@@ -1087,9 +1087,13 @@ record reads `position.aggregateVersion`, next to `commitSequence` and
 
 #### A dead letter returns through `requeueDeadLetters`
 
-A repeated `add` no longer requeues a dead letter. The retry dedupes and the
-record stays dead, and the compiler does not flag the old call. Call
-`requeueDeadLetters` with the `dispatchId` of each record.
+**Nothing reports this change.** A repeated `add` no longer requeues a dead
+letter. The call resolves without an error, the compiler does not flag it, and
+the event stays undelivered.
+
+Search your scripts and runbooks for an `add` that requeues a dead letter.
+Change each one to `requeueDeadLetters` with the `dispatchId` of the record. A
+missed call shows only in `deadLetters()`, because the record stays there.
 
 ```ts
 // before
@@ -1785,6 +1789,7 @@ The root entry no longer exports `capturePersistenceBaseline`,
   `cancel` need no change, because `cancel` takes both values by position. A
   durable adapter maps its stored column to `processName`. Rename the column
   too, so that the schema and the port use the same term.
-- `DispatchTrackingOutbox` has a required `requeueDeadLetters(dispatchIds)`,
-  and a repeated `add` no longer requeues a dead letter. See
+- `DispatchTrackingOutbox` has a required `requeueDeadLetters(dispatchIds)`.
+  A repeated `add` no longer requeues a dead letter: the call resolves without
+  an error, and the event stays undelivered. See
   [A dead letter returns through `requeueDeadLetters`](#a-dead-letter-returns-through-requeuedeadletters).

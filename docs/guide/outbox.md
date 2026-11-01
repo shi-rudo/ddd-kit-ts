@@ -528,8 +528,9 @@ Recovery is explicit:
   fresh attempt budget. A repeated call does nothing.
 - Deliver the event manually and call `markDispatched` to clear it.
 
-A repeated `add` does not requeue. `add` dedupes on the `eventId`, so a late
-retry of a use case cannot revive a dead letter.
+A repeated `add` does not requeue. The call resolves without an error, and the
+record stays dead. `add` dedupes on the `eventId`, so a late retry of a use case
+cannot revive a dead letter.
 
 The dispatcher classifies delivery failures before consuming the poison
 ceiling:

@@ -245,8 +245,10 @@ immutable. Run one kit version per process during a cutover.
 - `DispatchTrackingOutbox` has a required `requeueDeadLetters(dispatchIds)`.
   It returns a dead letter to its commit-order place in `getPending` with a
   fresh attempt budget. A repeated `add` no longer requeues a dead letter: the
-  retry dedupes, so a late retry of a use case cannot revive it, and
-  `INSERT ... ON CONFLICT DO NOTHING` stays a correct `add`.
+  call resolves without an error, and the event stays undelivered. So a late
+  retry of a use case cannot revive it, and `INSERT ... ON CONFLICT DO NOTHING`
+  stays a correct `add`. Neither the compiler nor the runtime reports an old
+  `add` that was meant to requeue.
 
 #### Command and query buses
 
