@@ -47,6 +47,31 @@ export class PgCommitRolledBackError extends InfrastructureError<"PG_COMMIT_ROLL
 }
 
 /**
+ * The `ROLLBACK` after a failed callback failed too, so the state of the
+ * connection is unknown. The rollback failure is the `cause`. `workFailure` is a
+ * field and not in the cause chain, because `UnitOfWork` reads a chain that
+ * holds the work failure as a successful rollback.
+ */
+export class PgRollbackFailedError extends InfrastructureError<"PG_ROLLBACK_FAILED"> {
+	readonly workFailure: unknown;
+
+	constructor(options: {
+		readonly cause: unknown;
+		readonly workFailure: unknown;
+	}) {
+		super({
+			code: "PG_ROLLBACK_FAILED",
+			message:
+				"The ROLLBACK after a failed callback failed too. The cause is the " +
+				"rollback failure, and workFailure is the failure of the callback. " +
+				"PostgreSQL ends the transaction when the connection closes.",
+			cause: options.cause,
+		});
+		this.workFailure = options.workFailure;
+	}
+}
+
+/**
  * A stream has a gap at a position. An event store must reject this, because a
  * replay would otherwise fold a truncated stream without an error. Only a
  * change outside `PgEventStore` causes it, for example a manual `DELETE` or a
