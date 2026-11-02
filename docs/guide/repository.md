@@ -766,6 +766,15 @@ re-creation that commits only state passes until the aggregate commits its
 first event. `outboxWriterAcceptingEventLoss` keeps no heads and detects
 nothing.
 
+This is the standard way to erase personal data from an event-sourced aggregate,
+when the application needs no history of it. The event-store port has no delete
+method, so the flush of the definition deletes the stream in the adapter. The
+stream goes, but other copies stay. Purge them too: a snapshot (delete it first),
+outbox records and dead letters, projections, and idempotency outcomes. A message
+that already left the process cannot come back, so its consumers must react to
+the erasure event. Ask your data protection officer whether this meets your
+legal duties.
+
 Bulk retention cleanup is a different port. Do not hydrate thousands of
 aggregates only to delete rows with no business decision. Define an
 infrastructure capability such as `ExpiredOrderPurger.purgeExpired(before)`

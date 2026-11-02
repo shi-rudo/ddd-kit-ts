@@ -132,6 +132,38 @@ export class PgEventStore<Evt extends AnyDomainEvent>
 		}
 	}
 
+	/**
+	 * Deletes the whole stream in the transaction of the executor, for example
+	 * to erase personal data. The version guard rejects a stream that changed
+	 * after the load. Delete a snapshot of the aggregate first. A removed identity
+	 * stays removed: give a new aggregate a new id.
+	 */
+	async removeStream(
+		stream: AggregateIdentity,
+		{ expectedVersion }: EventStoreAppendOptions,
+	): Promise<void> {
+		const { rows } = await this.executor.query<{ head: string | null }>(
+			`SELECT max(position)::text AS head
+			FROM ddd_kit_event_stream
+			WHERE aggregate_type = $1 AND aggregate_id = $2`,
+			[stream.aggregateType, stream.aggregateId],
+		);
+		const head = Number(rows[0]?.head ?? 0);
+		if (head !== expectedVersion) {
+			throw new ConcurrencyConflictError({
+				identity: stream,
+				expectedVersion,
+				reason: "stale_version",
+				actualVersion: head,
+			});
+		}
+		await this.executor.query(
+			`DELETE FROM ddd_kit_event_stream
+			WHERE aggregate_type = $1 AND aggregate_id = $2`,
+			[stream.aggregateType, stream.aggregateId],
+		);
+	}
+
 	private encodeForAppend(
 		stream: AggregateIdentity,
 		event: Evt,

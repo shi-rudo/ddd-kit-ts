@@ -21,4 +21,5 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   to map a `Date`, a `Map`, a `Set`, a `bigint`, or `undefined` inside a payload
   to JSON and back. Upcasting runs in the same codec. `append` rejects a value
   that JSON does not keep. A gap in a stream throws
-  `PgEventStreamCorruptError`.
+  `PgEventStreamCorruptError`. `removeStream` deletes a whole stream, for example
+  to erase personal data.

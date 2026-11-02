@@ -92,6 +92,11 @@ const store = new PgEventStore<OrderEvent>(executor, { codec });
 A test against `InMemoryEventStore` does not show a missing mapping, because that
 store keeps every plain value. Run the contract suites against PostgreSQL.
 
+To erase the personal data of an aggregate, call `removeStream` from the flush
+of a repository definition with `physicalRemoval: true`. The history of the
+aggregate is then gone. Delete its snapshot first, and purge the other copies of
+the data: outbox records, projections, and idempotency outcomes.
+
 A read rejects a gap in a stream with `PgEventStreamCorruptError`. A read cannot
 see missing events at the end of a stream, because the highest position is the
 head. Set `statement_timeout`: an abort signal stops the wait of a read, not the

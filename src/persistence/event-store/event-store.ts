@@ -208,8 +208,12 @@ export interface EventStore<Evt extends AnyDomainEvent>
 	 *     key, OCC predicate, and read predicate.
 	 *  4. **Order:** events are stored in the given array order, appended
 	 *     after the existing stream tail.
-	 *  5. **Append-only:** stored events are never edited or deleted;
-	 *     corrections are new (compensating) events.
+	 *  5. **Append-only:** stored events are never edited, and this port
+	 *     deletes nothing; corrections are new (compensating) events. A
+	 *     physical removal deletes a whole stream, for example to erase
+	 *     personal data. It runs in the adapter, through a repository
+	 *     definition with `physicalRemoval`. See "Domain deletion versus
+	 *     physical removal" in the repository guide.
 	 *  6. **Replay integrity:** reads order by the persisted stream position
 	 *     and reject duplicate or non-contiguous positions where the backing
 	 *     store exposes them. The portable contract suite proves observable

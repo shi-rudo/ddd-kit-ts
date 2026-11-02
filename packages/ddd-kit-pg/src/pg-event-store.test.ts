@@ -328,6 +328,81 @@ describe("PgEventStore", () => {
 		});
 	});
 
+	describe("removeStream", () => {
+		it("deletes the whole stream, so a read reports it as absent", async () => {
+			const { store, teardown } = await openStore();
+			await store.append(stream, [noteWritten({}), noteWritten({})], {
+				expectedVersion: 0,
+			});
+
+			await store.removeStream(stream, { expectedVersion: 2 });
+
+			expect(await store.readStream(stream, { limit: 1 })).toEqual({
+				exists: false,
+				lastVersion: 0,
+				events: [],
+			});
+			await teardown();
+		});
+
+		it("leaves another stream with the same id untouched", async () => {
+			const { store, teardown } = await openStore();
+			const other = { aggregateType: "Other", aggregateId: stream.aggregateId };
+			await store.append(stream, [noteWritten({})], { expectedVersion: 0 });
+			await store.append(
+				other,
+				[
+					createDomainEvent(
+						"NoteWritten",
+						{},
+						{
+							eventId: "other-1",
+							...other,
+						},
+					),
+				],
+				{ expectedVersion: 0 },
+			);
+
+			await store.removeStream(stream, { expectedVersion: 1 });
+
+			expect((await store.readStream(other, { limit: 1 })).exists).toBe(true);
+			await teardown();
+		});
+
+		it("rejects a stale version and keeps the stream", async () => {
+			const { store, teardown } = await openStore();
+			await store.append(stream, [noteWritten({}), noteWritten({})], {
+				expectedVersion: 0,
+			});
+
+			await expect(
+				store.removeStream(stream, { expectedVersion: 1 }),
+			).rejects.toMatchObject({
+				code: "CONCURRENCY_CONFLICT",
+				reason: "stale_version",
+				actualVersion: 2,
+			});
+
+			const read = await store.readStream(stream, { limit: 1 });
+			expect(read.lastVersion).toBe(2);
+			await teardown();
+		});
+
+		it("rolls back with the transaction", async () => {
+			const { client, store, teardown } = await openStore();
+			await store.append(stream, [noteWritten({})], { expectedVersion: 0 });
+
+			await client.query("BEGIN");
+			await store.removeStream(stream, { expectedVersion: 1 });
+			await client.query("ROLLBACK");
+
+			const read = await store.readStream(stream, { limit: 1 });
+			expect(read.exists).toBe(true);
+			await teardown();
+		});
+	});
+
 	describe("the abort signal of a read", () => {
 		const hangingExecutor: PgQueryExecutor = {
 			query: () => new Promise(() => {}),
