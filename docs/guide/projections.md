@@ -693,8 +693,10 @@ Dead-lettering projection events is not free, but it no longer permits silent
 loss: a later event from the same aggregate cannot advance the checkpoint past
 the missing sequence/commit.
 
-The normal remediation is a code/data fix followed by redelivery of the missing
-event, or a projection rebuild. Wire `deadLetters()` to alerting.
+The normal remediation is a code/data fix, or a projection rebuild. After the
+fix, call `requeueDeadLetters` for the missing event and for each later event
+that dead-lettered on the gap. `getPending` returns them in commit order. Wire
+`deadLetters()` to alerting.
 
 ## Projection vs Process Manager
 

@@ -797,6 +797,182 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 				);
 			}),
 		}),
+		trackingGate({
+			name: "requeueDeadLetters returns a dead letter to pending with a fresh attempt budget",
+			run: inEnv(async (env) => {
+				const outbox = env.outbox;
+				assert(
+					isDispatchTrackingOutbox(outbox),
+					"harness declared a tracking outbox",
+				);
+				await env.addCommitted(commit([harness.createEvent(1)]));
+				const [record] = await outbox.getPending(1);
+				assert(record !== undefined, "expected a pending record");
+				for (let i = 0; i < attemptCeiling; i++) {
+					await outbox.markFailed(record.dispatchId, new Error("poison"));
+				}
+
+				await outbox.requeueDeadLetters([record.dispatchId]);
+
+				assertEqual(
+					(await outbox.deadLetters()).length,
+					0,
+					"a requeued record must leave the dead-letter set",
+				);
+				const [requeued] = await outbox.getPending(1);
+				assertEqual(
+					requeued?.dispatchId,
+					record.dispatchId,
+					"a requeued record must keep its dispatchId",
+				);
+				assertEqual(
+					requeued?.event.eventId,
+					record.event.eventId,
+					"a requeued record must keep its event",
+				);
+				let transition: DeadLetterRecord<Evt> | undefined;
+				for (let i = 0; i < attemptCeiling; i++) {
+					assertEqual(
+						transition,
+						undefined,
+						"a requeued record must get a fresh attempt budget",
+					);
+					transition = await outbox.markFailed(
+						record.dispatchId,
+						new Error("still poison"),
+					);
+				}
+				assertEqual(
+					transition?.attempts,
+					attemptCeiling,
+					"a requeued record must dead-letter again at the attempt ceiling",
+				);
+			}),
+		}),
+		trackingGate({
+			name: "a requeued record returns to its commit-order place",
+			run: inEnv(async (env) => {
+				const outbox = env.outbox;
+				assert(
+					isDispatchTrackingOutbox(outbox),
+					"harness declared a tracking outbox",
+				);
+				const poison = harness.createEvent(1);
+				const successor = harness.createEvent(2);
+				await env.addCommitted(commit([poison, successor]));
+				const [record] = await outbox.getPending(1);
+				assert(record !== undefined, "expected a pending record");
+				for (let i = 0; i < attemptCeiling; i++) {
+					await outbox.markFailed(record.dispatchId, new Error("poison"));
+				}
+
+				await outbox.requeueDeadLetters([record.dispatchId]);
+
+				const pending = await outbox.getPending(10);
+				assertEqual(
+					pending.map((pendingRecord) => pendingRecord.event.eventId).join(),
+					[poison.eventId, successor.eventId].join(),
+					"getPending must return a requeued record before its successor",
+				);
+			}),
+		}),
+		trackingGate({
+			name: "requeueDeadLetters ignores unknown and dispatched ids",
+			run: inEnv(async (env) => {
+				const outbox = env.outbox;
+				assert(
+					isDispatchTrackingOutbox(outbox),
+					"harness declared a tracking outbox",
+				);
+				await env.addCommitted(commit([harness.createEvent(1)]));
+				const [record] = await outbox.getPending(1);
+				assert(record !== undefined, "expected a pending record");
+				await outbox.markDispatched([record.dispatchId]);
+
+				await outbox.requeueDeadLetters([record.dispatchId, "no-such-id"]);
+
+				assertEqual(
+					(await outbox.getPending(10)).length,
+					0,
+					"a requeue of a dispatched or unknown id must not resurrect a record",
+				);
+			}),
+		}),
+		trackingGate(
+			gatedContractTest(
+				{
+					capability: "non-claiming getPending",
+					satisfiedBy: !harness.claimsOnGetPending,
+				},
+				gatedContractTest(
+					{
+						capability: "failuresToDeadLetter >= 2",
+						satisfiedBy: attemptCeiling >= 2,
+					},
+					{
+						name: "requeueDeadLetters leaves the attempts of a pending record untouched",
+						run: inEnv(async (env) => {
+							const outbox = env.outbox;
+							assert(
+								isDispatchTrackingOutbox(outbox),
+								"harness declared a tracking outbox",
+							);
+							await env.addCommitted(commit([harness.createEvent(1)]));
+							const [record] = await outbox.getPending(1);
+							assert(record !== undefined, "expected a pending record");
+							await outbox.markFailed(record.dispatchId, new Error("boom"));
+
+							await outbox.requeueDeadLetters([record.dispatchId]);
+
+							const [after] = await outbox.getPending(1);
+							assertEqual(
+								after?.attempts,
+								1,
+								"a repeated requeue must not reset the budget of a pending record",
+							);
+						}),
+					},
+				),
+			),
+		),
+		trackingGate(
+			gatedContractTest(
+				{
+					capability: "dedupesOnEventId",
+					satisfiedBy: harness.dedupesOnEventId === true,
+				},
+				{
+					name: "an exact retry of add leaves a dead letter dead",
+					run: inEnv(async (env) => {
+						const outbox = env.outbox;
+						assert(
+							isDispatchTrackingOutbox(outbox),
+							"harness declared a tracking outbox",
+						);
+						const original = commit([harness.createEvent(1)]);
+						await env.addCommitted(original);
+						const [record] = await outbox.getPending(1);
+						assert(record !== undefined, "expected a pending record");
+						for (let i = 0; i < attemptCeiling; i++) {
+							await outbox.markFailed(record.dispatchId, new Error("poison"));
+						}
+
+						await env.addCommitted(original);
+
+						assertEqual(
+							(await outbox.getPending(10)).length,
+							0,
+							"a late retry of add must not revive a dead letter",
+						);
+						assertEqual(
+							(await outbox.deadLetters()).length,
+							1,
+							"a late retry of add must keep the dead letter",
+						);
+					}),
+				},
+			),
+		),
 	);
 
 	return tests;

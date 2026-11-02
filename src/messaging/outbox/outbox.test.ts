@@ -219,7 +219,7 @@ describe("InMemoryOutbox in an InMemoryTransactionScope", () => {
 		await outbox.markFailed("evt-1", new Error("broker down"));
 
 		const transaction = await holdOpen(scope, () =>
-			outbox.add([candidate(event, 1)]),
+			outbox.requeueDeadLetters(["evt-1"]),
 		);
 		const duringTransaction = await pendingIds(outbox);
 		await transaction.commit();
@@ -348,7 +348,7 @@ describe("InMemoryOutbox in an InMemoryTransactionScope", () => {
 		const transaction = await afterBeginAndOutsideWrite(
 			scope,
 			() => outbox.markFailed("evt-1", new Error("poison")),
-			() => outbox.add([candidate(event, 1)]),
+			() => outbox.requeueDeadLetters(["evt-1"]),
 		);
 		const duringTransaction = await pendingIds(outbox);
 		await transaction.commit();
@@ -382,7 +382,7 @@ describe("InMemoryOutbox in an InMemoryTransactionScope", () => {
 			await outbox.add([candidate(event, 1)]);
 			firstWritten();
 			await deadLetter;
-			await outbox.add([candidate(event, 1)]);
+			await outbox.requeueDeadLetters(["evt-1"]);
 			secondWritten();
 			await released;
 		});
@@ -526,6 +526,7 @@ describe("InMemoryOutbox", () => {
 			await outbox.markFailed(event.eventId, new Error("poison"));
 			expect(await outbox.deadLetters()).toHaveLength(1);
 			await expect(outbox.add([candidate(event)])).resolves.toBeUndefined();
+			await outbox.requeueDeadLetters([event.eventId]);
 			expect(await outbox.deadLetters()).toEqual([]);
 			expect(await outbox.getPending()).toHaveLength(1);
 		});
@@ -1459,28 +1460,133 @@ describe("InMemoryOutbox", () => {
 			expect(pending[0]?.attempts).toBe(1);
 		});
 
-		it("re-adding a dead-lettered event requeues it with a fresh attempts budget", async () => {
-			// add() is the natural inverse of deadLetters() for requeue
-			// tooling: after the handler bug is fixed, re-adding the event
-			// moves it back into automatic dispatch instead of silently
-			// succeeding while the event stays dead.
+		it("requeueDeadLetters returns a dead letter to pending with a fresh attempts budget", async () => {
 			const outbox = new InMemoryOutbox<OrderCreated>({
 				maxDeliveryAttempts: 1,
 			});
 			const e = createDomainEvent("OrderCreated", { orderId: "o-1" });
 			await outbox.add([candidate(e)]);
 			await outbox.markFailed(e.eventId, new Error("poison"));
-			expect(await outbox.deadLetters()).toHaveLength(1);
+
+			await outbox.requeueDeadLetters([e.eventId]);
+
+			expect(await outbox.deadLetters()).toHaveLength(0);
+			expect(await outbox.getPending()).toMatchObject([
+				{ dispatchId: e.eventId, event: e, attempts: 0 },
+			]);
+		});
+
+		it("requeueDeadLetters restores the commit order of the pending records", async () => {
+			const outbox = new InMemoryOutbox<OrderCreated>({
+				maxDeliveryAttempts: 1,
+			});
+			const events = ["o-1", "o-2", "o-3"].map((orderId) =>
+				createDomainEvent(
+					"OrderCreated",
+					{ orderId },
+					{ eventId: `evt-${orderId}`, aggregateId: orderId },
+				),
+			);
+			await outbox.add(events.map((event) => candidate(event)));
+			await outbox.markFailed("evt-o-1", new Error("poison"));
+			await outbox.markFailed("evt-o-2", new Error("poison"));
+
+			await outbox.requeueDeadLetters(["evt-o-2", "evt-o-1"]);
+
+			const pending = await outbox.getPending();
+			expect(pending.map((record) => record.dispatchId)).toEqual([
+				"evt-o-1",
+				"evt-o-2",
+				"evt-o-3",
+			]);
+		});
+
+		it("deadLetters reports only the fields of the dead-letter record", async () => {
+			const outbox = new InMemoryOutbox<OrderCreated>({
+				maxDeliveryAttempts: 1,
+			});
+			const e = createDomainEvent("OrderCreated", { orderId: "o-1" });
+			await outbox.add([candidate(e)]);
+
+			const transition = await outbox.markFailed(
+				e.eventId,
+				new Error("poison"),
+			);
+
+			const [deadLetter] = await outbox.deadLetters();
+			expect(Object.keys(deadLetter ?? {}).sort()).toEqual([
+				"attempts",
+				"dispatchId",
+				"event",
+				"lastError",
+				"position",
+				"source",
+			]);
+			expect(transition).toEqual(deadLetter);
+		});
+
+		it("requeueDeadLetters ignores a pending, a dispatched, and an unknown id", async () => {
+			const outbox = new InMemoryOutbox<OrderCreated>();
+			const pendingEvent = createDomainEvent("OrderCreated", {
+				orderId: "o-1",
+			});
+			const dispatchedEvent = createDomainEvent("OrderCreated", {
+				orderId: "o-2",
+			});
+			await outbox.add([candidate(pendingEvent), candidate(dispatchedEvent)]);
+			await outbox.markFailed(pendingEvent.eventId, new Error("boom"));
+			await outbox.markDispatched([dispatchedEvent.eventId]);
+
+			await outbox.requeueDeadLetters([
+				pendingEvent.eventId,
+				dispatchedEvent.eventId,
+				"no-such-id",
+			]);
+
+			expect(await outbox.getPending()).toMatchObject([
+				{ dispatchId: pendingEvent.eventId, attempts: 1 },
+			]);
+		});
+
+		it("a rollback returns a requeued record to the dead letters", async () => {
+			const outbox = new InMemoryOutbox<OrderCreated>({
+				maxDeliveryAttempts: 1,
+			});
+			const scope = new InMemoryTransactionScope([outbox]);
+			const e = createDomainEvent("OrderCreated", { orderId: "o-1" });
+			await scope.transactional(() => outbox.add([candidate(e)]));
+			await outbox.markFailed(e.eventId, new Error("poison"));
+
+			await expect(
+				scope.transactional(async () => {
+					await outbox.requeueDeadLetters([e.eventId]);
+					throw new Error("rolled back");
+				}),
+			).rejects.toThrow("rolled back");
+
+			expect(await outbox.getPending()).toEqual([]);
+			expect(await outbox.deadLetters()).toMatchObject([
+				{ dispatchId: e.eventId },
+			]);
+		});
+
+		it("an exact retry of add leaves a dead letter dead", async () => {
+			const outbox = new InMemoryOutbox<OrderCreated>({
+				maxDeliveryAttempts: 1,
+			});
+			const e = createDomainEvent("OrderCreated", { orderId: "o-1" });
+			await outbox.add([candidate(e)]);
+			await outbox.markFailed(e.eventId, new Error("poison"));
 
 			await outbox.add([candidate(e)]);
 
-			expect(await outbox.deadLetters()).toHaveLength(0);
-			const pending = await outbox.getPending();
-			expect(pending).toHaveLength(1);
-			expect(pending[0]?.attempts).toBe(0);
+			expect(await outbox.getPending()).toEqual([]);
+			expect(await outbox.deadLetters()).toMatchObject([
+				{ dispatchId: e.eventId, attempts: 1 },
+			]);
 		});
 
-		it("rejects requeueing a dead-lettered eventId at a different commit position", async () => {
+		it("rejects re-adding a dead-lettered eventId at a different commit position", async () => {
 			const outbox = new InMemoryOutbox<OrderCreated>({
 				maxDeliveryAttempts: 1,
 			});
