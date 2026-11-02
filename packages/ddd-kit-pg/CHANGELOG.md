@@ -23,3 +23,8 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   that JSON does not keep. A gap in a stream throws
   `PgEventStreamCorruptError`. `removeStream` deletes a whole stream, for example
   to erase personal data.
+- `PgOutbox`, a `DispatchTrackingOutbox` with its tables in `sql/outbox.sql`. It
+  writes on the transaction that `add` receives, links each commit to its
+  predecessor, and rejects a new event of an ended source. With `claim`, several
+  dispatchers can run at once, and they keep the order per aggregate. A record
+  of a crashed dispatcher returns when its lease ends.

@@ -1,4 +1,4 @@
-import type { ClientBase } from "pg";
+import type { ClientBase, Pool } from "pg";
 
 /** The result of one statement. Use `RETURNING` to count the changed rows. */
 export interface PgQueryResult<Row> {
@@ -29,6 +29,20 @@ export function fromPg(client: ClientBase): PgQueryExecutor {
 	return {
 		query: async (text, values) => {
 			const { rows } = await client.query(text, values && [...values]);
+			return { rows };
+		},
+	};
+}
+
+/**
+ * Makes a `pg` pool an executor for statements that need no transaction, for
+ * example the polls of an outbox. Each statement runs on any free connection,
+ * so it cannot join a transaction.
+ */
+export function fromPgPool(pool: Pick<Pool, "query">): PgQueryExecutor {
+	return {
+		query: async (text, values) => {
+			const { rows } = await pool.query(text, values && [...values]);
 			return { rows };
 		},
 	};

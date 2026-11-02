@@ -1,7 +1,6 @@
 import {
 	type AggregateConfig,
 	type AggregateIdentity,
-	type CommittedDomainEvent,
 	type DomainEvent,
 	defineRepository,
 	EventSourcedAggregate,
@@ -24,6 +23,7 @@ import {
 } from "@shirudo/ddd-kit/testing";
 import { describe, expect, it } from "vite-plus/test";
 import { PgEventStore } from "../src/pg-event-store";
+import { PgOutbox } from "../src/pg-outbox";
 import { fromPg, type PgQueryExecutor } from "../src/pg-query-executor";
 import { PgTransactionScope } from "../src/pg-transaction-scope";
 import { openIsolatedSchema } from "./isolated-schema";
@@ -138,14 +138,6 @@ class PgOrderReadAdapter {
 	}
 }
 
-const OUTBOX_DDL = `CREATE TABLE contract_outbox (
-	recorded bigserial PRIMARY KEY,
-	event_id text NOT NULL,
-	aggregate_version integer NOT NULL,
-	commit_sequence integer NOT NULL,
-	commit_size integer NOT NULL
-)`;
-
 type Environment = EsRepositoryContractEnvironment<ContractOrder, OrderRenamed>;
 
 let mutations = 0;
@@ -159,7 +151,10 @@ const tests = createEsRepositoryContractTests<ContractOrder, OrderRenamed>({
 	createEnvironment: async () => {
 		const database = await openIsolatedSchema();
 		await database.applySql("event-stream.sql");
-		await database.pool.query(OUTBOX_DDL);
+		await database.applySql("outbox.sql");
+		const pgOutbox = new PgOutbox<OrderRenamed>({
+			pool: database.pool,
+		});
 		const pgScope: TransactionScope<PgQueryExecutor> = new PgTransactionScope(
 			database.pool,
 		);
@@ -175,21 +170,10 @@ const tests = createEsRepositoryContractTests<ContractOrder, OrderRenamed>({
 							nextOutboxFailure = undefined;
 							throw failure;
 						}
-						for (const { event, position } of candidates) {
-							await executor.query(
-								`INSERT INTO contract_outbox
-								(event_id, aggregate_version, commit_sequence, commit_size)
-								VALUES ($1, $2, $3, $4)`,
-								[
-									event.eventId,
-									position.aggregateVersion,
-									position.commitSequence,
-									position.commitSize,
-								],
-							);
-						}
+						await pgOutbox.add(candidates, executor);
 					},
-					endEventSources: async () => {},
+					endEventSources: (sources, executor) =>
+						pgOutbox.endEventSources(sources, executor),
 				};
 				return new UnitOfWork({
 					scope: pgScope,
@@ -221,22 +205,7 @@ const tests = createEsRepositoryContractTests<ContractOrder, OrderRenamed>({
 			failNextOutboxWrite: (error) => {
 				nextOutboxFailure = error;
 			},
-			committedOutboxEvents: async () => {
-				const { rows } = await database.pool.query(
-					"SELECT * FROM contract_outbox ORDER BY recorded",
-				);
-				return rows.map(
-					(row) =>
-						({
-							event: { eventId: row.event_id },
-							position: {
-								aggregateVersion: row.aggregate_version,
-								commitSequence: row.commit_sequence,
-								commitSize: row.commit_size,
-							},
-						}) as CommittedDomainEvent<OrderRenamed>,
-				);
-			},
+			committedOutboxEvents: () => pgOutbox.getPending(1_000),
 			committedStreamEvents: async (stream, options) => {
 				const client = await database.pool.connect();
 				try {

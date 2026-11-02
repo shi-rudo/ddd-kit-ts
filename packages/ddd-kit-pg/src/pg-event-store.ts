@@ -1,7 +1,6 @@
 import {
 	type AggregateIdentity,
 	type AnyDomainEvent,
-	assertJsonSafe,
 	ConcurrencyConflictError,
 	DuplicateAggregateError,
 	type EventStore,
@@ -13,6 +12,13 @@ import {
 import { PgEventStreamCorruptError } from "./pg-errors";
 import type { PgEventCodec } from "./pg-event-codec";
 import type { PgQueryExecutor } from "./pg-query-executor";
+import { rejectOnAbort } from "./reject-on-abort";
+import {
+	decodeStoredEvent,
+	encodeStoredEvent,
+	type StoredEventRow,
+	storedEventColumns,
+} from "./stored-event";
 
 /** SQLSTATE `unique_violation`: another writer took a stream position first. */
 const UNIQUE_VIOLATION = "23505";
@@ -22,18 +28,11 @@ export interface PgEventStoreOptions<Evt extends AnyDomainEvent> {
 	readonly codec?: PgEventCodec<Evt> | undefined;
 }
 
-interface EventStreamRow {
+interface EventStreamRow extends StoredEventRow {
 	/** `NULL` for an absent stream. */
 	readonly last_version: string | null;
 	/** `NULL` when the requested window of the stream is empty. */
 	readonly position: string | null;
-	readonly event_id: string;
-	readonly event_type: string;
-	readonly schema_version: number;
-	readonly occurred_at: Date;
-	/** `jsonb` as text, because `pg` parses SQL NULL and JSON null to the same value. */
-	readonly payload: string | null;
-	readonly metadata: string | null;
 }
 
 /**
@@ -170,13 +169,6 @@ export class PgEventStore<Evt extends AnyDomainEvent>
 		index: number,
 	): AnyDomainEvent {
 		const subject = `PgEventStore.append events[${index}]`;
-		if (typeof event.eventId !== "string" || event.eventId === "") {
-			throw new TypeError(
-				`${subject} has no eventId. Stamp the event before the append: the ` +
-					"commit stamps it when a write registers its aggregate, and " +
-					"stampPendingEvents stamps it before that.",
-			);
-		}
 		const isForeign =
 			(event.aggregateType !== undefined &&
 				event.aggregateType !== stream.aggregateType) ||
@@ -192,14 +184,7 @@ export class PgEventStore<Evt extends AnyDomainEvent>
 				details: { eventId: event.eventId, eventType: event.type },
 			});
 		}
-		const stored = this.options.codec?.encode(event) ?? event;
-		if (stored.payload !== undefined) {
-			assertJsonSafe(stored.payload, `${subject} payload`);
-		}
-		if (stored.metadata !== undefined) {
-			assertJsonSafe(stored.metadata, `${subject} metadata`);
-		}
-		return stored;
+		return encodeStoredEvent(event, this.options.codec, subject);
 	}
 
 	async readStream(
@@ -223,12 +208,7 @@ export class PgEventStore<Evt extends AnyDomainEvent>
 				SELECT
 					head.last_version::text AS last_version,
 					event.position::text AS position,
-					event.event_id,
-					event.event_type,
-					event.schema_version,
-					event.occurred_at,
-					event.payload::text AS payload,
-					event.metadata::text AS metadata
+					${storedEventColumns("event")}
 				FROM head
 				LEFT JOIN ddd_kit_event_stream AS event
 					ON event.aggregate_type = $1
@@ -266,22 +246,10 @@ export class PgEventStore<Evt extends AnyDomainEvent>
 		return {
 			exists: true,
 			lastVersion: Number(lastVersion),
-			events: pageRows.map((row) => this.decodeRow(stream, row)),
+			events: pageRows.map((row) =>
+				decodeStoredEvent(row, stream, this.options.codec),
+			),
 		};
-	}
-
-	private decodeRow(stream: AggregateIdentity, row: EventStreamRow): Evt {
-		const stored: AnyDomainEvent = {
-			eventId: row.event_id,
-			type: row.event_type,
-			aggregateType: stream.aggregateType,
-			aggregateId: stream.aggregateId,
-			payload: row.payload === null ? undefined : JSON.parse(row.payload),
-			occurredAt: row.occurred_at,
-			schemaVersion: row.schema_version,
-			...(row.metadata === null ? {} : { metadata: JSON.parse(row.metadata) }),
-		};
-		return this.options.codec?.decode(stored) ?? (stored as Evt);
 	}
 }
 
@@ -302,16 +270,4 @@ function assertStreamPosition(
 			`PgEventStore: ${name} must be a non-negative safe integer, got ${String(value)}`,
 		);
 	}
-}
-
-/** Stops the wait for `work` when the signal aborts. */
-function rejectOnAbort<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
-	if (signal === undefined) return work;
-	return new Promise<T>((resolve, reject) => {
-		const onAbort = () => reject(signal.reason);
-		signal.addEventListener("abort", onAbort, { once: true });
-		work
-			.then(resolve, reject)
-			.finally(() => signal.removeEventListener("abort", onAbort));
-	});
 }

@@ -8,6 +8,7 @@ describe("the public API of the package", () => {
 			"PgEventStore",
 			"PgEventStreamCorruptError",
 			"PgIdempotencyStore",
+			"PgOutbox",
 			"PgRetryableTransactionFailureError",
 			"PgTransactionScope",
 			"fromPg",

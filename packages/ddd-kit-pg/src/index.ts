@@ -7,6 +7,7 @@ export {
 export type { PgEventCodec } from "./pg-event-codec";
 export { PgEventStore, type PgEventStoreOptions } from "./pg-event-store";
 export { PgIdempotencyStore } from "./pg-idempotency-store";
+export { PgOutbox, type PgOutboxOptions } from "./pg-outbox";
 export {
 	fromPg,
 	type PgQueryExecutor,

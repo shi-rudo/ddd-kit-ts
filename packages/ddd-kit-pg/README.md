@@ -45,6 +45,7 @@ in the transaction of your command.
 | --- | --- |
 | `PgIdempotencyStore` | `sql/idempotency.sql` |
 | `PgEventStore` | `sql/event-stream.sql` |
+| `PgOutbox` | `sql/outbox.sql` |
 
 ## Idempotency
 
@@ -101,6 +102,30 @@ A read rejects a gap in a stream with `PgEventStreamCorruptError`. A read cannot
 see missing events at the end of a stream, because the highest position is the
 head. Set `statement_timeout`: an abort signal stops the wait of a read, not the
 statement on the connection.
+
+## Outbox
+
+One `PgOutbox` can serve every request, because `withCommit` hands it the open
+transaction. The dispatcher polls on the pool.
+
+```ts
+import { PgOutbox, PgTransactionScope } from "@shirudo/ddd-kit-pg";
+
+const outbox = new PgOutbox<OrderEvent>({ pool, codec });
+const scope = new PgTransactionScope(pool);
+```
+
+Without `claim`, run one dispatcher per outbox. With `claim: { leaseMs }`, several
+dispatchers can run at once. A poll holds back a later event of an aggregate while
+an earlier one is claimed, so the order per aggregate stays. Choose a lease longer
+than one delivery: a record returns to the other dispatchers when its lease ends,
+and it is then delivered twice. The claims of all dispatchers run one after
+another, each in a short transaction.
+
+The table keeps delivered records and dead letters. Wire `deadLetters()` to your
+alerts, and delete old delivered records with your own job. Never delete a row of
+`ddd_kit_outbox_source_head` whose `ended` is true: the removed aggregate could
+then come back under its old id.
 
 ## Peer dependencies
 
