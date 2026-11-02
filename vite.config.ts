@@ -5,8 +5,14 @@ export default defineConfig({
 		// Keep repository copies out of the suite. A Stryker sandbox is left
 		// behind when a mutation run crashes, and an agent worktree lives
 		// under `.claude/`. Either one silently doubles every test and masks
-		// the real counts.
-		exclude: [...defaultExclude, ".stryker-tmp/**", ".claude/**"],
+		// the real counts. A package under `packages/` runs its own suite,
+		// because that suite needs Docker.
+		exclude: [
+			...defaultExclude,
+			".stryker-tmp/**",
+			".claude/**",
+			"packages/**",
+		],
 	},
 	pack: {
 		entry: {

@@ -1,0 +1,50 @@
+{
+	"name": "@shirudo/ddd-kit-pg",
+	"version": "0.0.0",
+	"private": true,
+	"description": "PostgreSQL adapters for @shirudo/ddd-kit, certified by the contract suites of the kit",
+	"type": "module",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/shi-rudo/ddd-kit-ts.git",
+		"directory": "packages/ddd-kit-pg"
+	},
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"engines": {
+		"node": ">=24"
+	},
+	"sideEffects": false,
+	"files": [
+		"dist"
+	],
+	"scripts": {
+		"build": "vp pack",
+		"test": "vp test",
+		"typecheck": "tsc -p tsconfig.json"
+	},
+	"license": "MIT",
+	"peerDependencies": {
+		"@shirudo/ddd-kit": "^3.0.0-rc.16",
+		"pg": "^8.23.1"
+	},
+	"devDependencies": {
+		"@shirudo/base-error": "^9.0.0",
+		"@shirudo/ddd-kit": "workspace:*",
+		"@shirudo/result": "^1.1.1",
+		"@testcontainers/postgresql": "12.2.1",
+		"@types/node": "^24.19.2",
+		"@types/pg": "^8.23.1",
+		"pg": "^8.23.1",
+		"typescript": "npm:@typescript/typescript6@6.0.2",
+		"vite": "catalog:",
+		"vite-plus": "catalog:",
+		"vitest": "catalog:"
+	}
+}

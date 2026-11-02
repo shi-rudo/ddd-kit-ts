@@ -99,6 +99,36 @@ jobs:
       - name: Built package in edge runtimes
         run: pnpm test:edge-runtime
 
+  postgres-adapters:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.13.1
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # The package imports the kit from dist, like a consumer does.
+      - name: Build the kit
+        run: pnpm build
+
+      - name: Typecheck
+        run: pnpm --filter @shirudo/ddd-kit-pg typecheck
+
+      - name: Contract suites against real PostgreSQL
+        run: pnpm test:pg
+
+      - name: Build
+        run: pnpm --filter @shirudo/ddd-kit-pg build
+
   ci-passed:
     # The only required check of main. It needs every other job, so a new
     # job joins the merge gate in this file.
@@ -106,7 +136,7 @@ jobs:
     # missing from needs. always() keeps this job from being skipped after a
     # failed job, because GitHub counts a skipped required check as passed.
     if: always()
-    needs: [verify, docs, edge-runtime-smoke]
+    needs: [verify, docs, edge-runtime-smoke, postgres-adapters]
     runs-on: ubuntu-latest
     steps:
       - name: Every needed job succeeded
