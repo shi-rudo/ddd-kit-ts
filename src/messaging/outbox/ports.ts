@@ -191,9 +191,10 @@ export interface Outbox<Evt extends AnyDomainEvent, TCtx = unknown>
  * the dispatcher a bounded-retry story: report each failed delivery via
  * {@link markFailed}; the implementation moves records past its
  * attempt ceiling to a dead-letter set that `getPending` no longer
- * returns, and {@link deadLetters} exposes them for alerting, manual
- * inspection, and redelivery (deliver by hand, then ack via
- * `markDispatched`, which also clears dead-lettered records).
+ * returns, and {@link deadLetters} exposes them for alerting and manual
+ * inspection. After the fix, {@link requeueDeadLetters} returns a record to
+ * automatic dispatch. A delivery by hand followed by `markDispatched` also
+ * clears a dead-lettered record.
  *
  * See the outbox guide's dispatcher recipe for the retry-then-dead-letter
  * loop this port shape supports.
@@ -230,18 +231,31 @@ export interface DispatchTrackingOutbox<
 	 * between this store transition and its immediate observer callback.
 	 */
 	deadLetters: () => Promise<ReadonlyArray<DeadLetterRecord<Evt>>>;
+
+	/**
+	 * Moves the named dead-lettered records back to pending. Each record keeps
+	 * its `dispatchId`, event, source, and position, and gets a fresh attempt
+	 * budget. `getPending` returns it at its commit-order place again. A SQL
+	 * adapter gets this from the position column.
+	 *
+	 * A no-op for an id that is not dead-lettered: unknown, pending, or
+	 * dispatched. A repeated call therefore does not reset an attempt budget.
+	 * `add` does not requeue: an exact retry of `add` leaves a dead letter dead,
+	 * so a late retry of a use case cannot revive it.
+	 */
+	requeueDeadLetters: (dispatchIds: ReadonlyArray<string>) => Promise<void>;
 }
 
 /**
  * Discriminates a {@link DispatchTrackingOutbox} from a plain
  * {@link Outbox} at runtime. The single source of truth for the check;
  * the dispatcher and the contract suite both use it, so what counts as
- * a tracking outbox cannot drift between them. Both tracking methods
- * must be present: a plain adapter that happens to expose an unrelated
- * `markFailed` helper must not be mistaken for one that implements the
- * tracking protocol and then be fed `(dispatchId, error)` arguments it
- * never asked for. Internal plumbing, not exported from the package
- * entries.
+ * a tracking outbox cannot drift between them. The two methods that the
+ * dispatcher calls must be present: a plain adapter that happens to expose
+ * an unrelated `markFailed` helper must not be mistaken for one that
+ * implements the tracking protocol and then be fed `(dispatchId, error)`
+ * arguments it never asked for. Internal plumbing, not exported from the
+ * package entries.
  */
 export function isDispatchTrackingOutbox<Evt extends AnyDomainEvent, TCtx>(
 	outbox: Outbox<Evt, TCtx> | DispatchTrackingOutbox<Evt, TCtx>,

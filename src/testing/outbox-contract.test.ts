@@ -4,8 +4,9 @@ import {
 	createDomainEvent,
 	type DomainEvent,
 } from "../domain/event/domain-event";
+import type { EventCommitCandidate } from "../messaging/committed-event";
 import { InMemoryOutbox } from "../messaging/outbox/outbox";
-import type { Outbox } from "../messaging/outbox/ports";
+import type { Outbox, OutboxRecord } from "../messaging/outbox/ports";
 import { InMemoryTransactionScope } from "../persistence/repository/adapters/in-memory-transaction-scope";
 import type { InMemoryTransaction } from "../persistence/repository/in-memory-transaction";
 import {
@@ -26,6 +27,40 @@ class OutboxKeepingRolledBackWrites extends InMemoryOutbox<TestEvent> {
 			commit: () => transaction.commit(),
 			rollback: () => transaction.commit(),
 		};
+	}
+}
+
+/** An outbox whose `add` revives a dead letter: the requeue tests must reject it. */
+class OutboxRequeuingOnAdd extends InMemoryOutbox<TestEvent> {
+	override async add(
+		events: ReadonlyArray<EventCommitCandidate<TestEvent>>,
+	): Promise<void> {
+		await super.add(events);
+		await this.requeueDeadLetters(events.map(({ event }) => event.eventId));
+	}
+}
+
+/** An outbox that returns a requeued record last: the requeue tests must reject it. */
+class OutboxRequeuingAtTheTail extends InMemoryOutbox<TestEvent> {
+	private readonly requeuedIds = new Set<string>();
+
+	override async requeueDeadLetters(
+		dispatchIds: ReadonlyArray<string>,
+	): Promise<void> {
+		await super.requeueDeadLetters(dispatchIds);
+		for (const id of dispatchIds) this.requeuedIds.add(id);
+	}
+
+	override async getPending(
+		limit?: number,
+	): Promise<ReadonlyArray<OutboxRecord<TestEvent>>> {
+		const pending = await super.getPending();
+		const isRequeued = (record: OutboxRecord<TestEvent>) =>
+			this.requeuedIds.has(record.dispatchId);
+		return [
+			...pending.filter((record) => !isRequeued(record)),
+			...pending.filter(isRequeued),
+		].slice(0, limit);
 	}
 }
 
@@ -191,12 +226,39 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 		);
 	});
 
+	it("the requeue tests kill an adapter whose add revives a dead letter", async () => {
+		const mutant = createInMemoryHarness(
+			() => new OutboxRequeuingOnAdd({ maxDeliveryAttempts: MAX_ATTEMPTS }),
+		);
+		const retryTest = createOutboxContractTests(mutant).find(
+			(test) => test.name === "an exact retry of add leaves a dead letter dead",
+		);
+		expect(retryTest).toBeDefined();
+		await expect(retryTest?.run()).rejects.toThrow(
+			/a late retry of add must not revive a dead letter/,
+		);
+	});
+
+	it("the requeue tests kill an adapter that returns a requeued record last", async () => {
+		const mutant = createInMemoryHarness(
+			() => new OutboxRequeuingAtTheTail({ maxDeliveryAttempts: MAX_ATTEMPTS }),
+		);
+		const orderTest = createOutboxContractTests(mutant).find(
+			(test) =>
+				test.name === "a requeued record returns to its commit-order place",
+		);
+		expect(orderTest).toBeDefined();
+		await expect(orderTest?.run()).rejects.toThrow(
+			/must return a requeued record before its successor/,
+		);
+	});
+
 	it("a plain-outbox harness marks the tracking tests as skipped, with a loud run()", async () => {
 		const plain = createInMemoryHarness();
 		plain.failuresToDeadLetter = undefined;
 		const plainTests = createOutboxContractTests(plain);
 		const skipped = plainTests.filter((test) => test.skipped);
-		expect(skipped.length).toBe(4); // the four tracking tests
+		expect(skipped.length).toBe(9); // the nine tracking tests
 		await expect(skipped[1]?.run()).rejects.toThrow("skipped");
 	});
 
@@ -205,16 +267,18 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 		claiming.claimsOnGetPending = true;
 		const claimingTests = createOutboxContractTests(claiming);
 		const skipped = claimingTests.filter((test) => test.skipped);
-		// Head stability, re-ack non-disturbance, and attempts surfacing all
-		// re-poll records an earlier poll returned without resolving them.
+		// Head stability, re-ack non-disturbance, attempts surfacing, and the
+		// requeue of a pending record all re-poll records an earlier poll
+		// returned without resolving them.
 		expect(skipped.map((test) => test.skipped?.capability)).toEqual([
+			"non-claiming getPending",
 			"non-claiming getPending",
 			"non-claiming getPending",
 			"non-claiming getPending",
 		]);
 	});
 
-	it("a ceiling-of-one harness skips the attempts-surfacing test", () => {
+	it("a ceiling-of-one harness skips the tests that observe the attempts of a pending record", () => {
 		const immediate = createInMemoryHarness();
 		immediate.failuresToDeadLetter = 1;
 		const immediateTests = createOutboxContractTests(immediate);
@@ -223,15 +287,17 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 		// could observe its attempt count; the other tracking tests run.
 		expect(skipped.map((test) => test.skipped?.capability)).toEqual([
 			"failuresToDeadLetter >= 2",
+			"failuresToDeadLetter >= 2",
 		]);
 	});
 
-	it("a harness without the eventId unique key skips the dedupe test", () => {
+	it("a harness without the eventId unique key skips the dedupe tests", () => {
 		const noDedupe = createInMemoryHarness();
 		noDedupe.dedupesOnEventId = undefined;
 		const noDedupeTests = createOutboxContractTests(noDedupe);
 		const skipped = noDedupeTests.filter((test) => test.skipped);
 		expect(skipped.map((test) => test.skipped?.capability)).toEqual([
+			"dedupesOnEventId",
 			"dedupesOnEventId",
 			"dedupesOnEventId",
 		]);

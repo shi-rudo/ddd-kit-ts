@@ -92,6 +92,8 @@ type TrackedRecord<Evt extends AnyDomainEvent> = {
 	event: Evt;
 	source: OutboxRecord<Evt>["source"];
 	position: OutboxRecord<Evt>["position"];
+	/** The commit-order place across all sources, kept for a requeue. */
+	persistedOrder: number;
 	attempts: number;
 	lastError?: string;
 };
@@ -136,8 +138,8 @@ type DispatchedEventReceipt = {
  *
  * Dispatch tracking: `markFailed` increments the record's attempt count
  * and, at `maxDeliveryAttempts`, moves it to the dead-letter set
- * exposed by `deadLetters()`. Re-`add`ing a dead-lettered event
- * requeues it with a fresh attempts budget (the operator-facing
+ * exposed by `deadLetters()`. `requeueDeadLetters` returns a record to its
+ * commit-order place with a fresh attempts budget (the operator-facing
  * inverse of `deadLetters()`); `markDispatched` acks pending AND
  * dead-lettered records (manual redelivery then ack).
  * To link future eventful commits, the implementation also retains one
@@ -196,7 +198,8 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 	implements DispatchTrackingOutbox<Evt>, InMemoryTransactionParticipant
 {
 	private readonly pending = new Map<string, TrackedRecord<Evt>>();
-	private readonly dead = new Map<string, DeadLetterRecord<Evt>>();
+	private readonly dead = new Map<string, TrackedRecord<Evt>>();
+	private nextPersistedOrder = 0;
 	/** Latest eventful commit and its predecessor per qualified source. */
 	private readonly sourceCursors = new Map<string, EventSourceCursor>();
 	/** Keys of source cursors whose aggregate was removed. */
@@ -288,17 +291,6 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 			if (deadLetter) {
 				assertSameEventSource(event, source, deadLetter.source);
 				assertSameCandidateReceipt(event, position, deadLetter.position);
-				// Requeue the durable record exactly as committed. A dead letter is a
-				// delivery state, not a new aggregate commit to re-finalize.
-				this.dead.delete(event.eventId);
-				this.recordCommittedVersion(event.eventId);
-				this.pending.set(event.eventId, {
-					dispatchId: deadLetter.dispatchId,
-					event: deadLetter.event,
-					source: deadLetter.source,
-					position: deadLetter.position,
-					attempts: 0,
-				});
 				continue;
 			}
 			const sourceKey = encodeAggregateIdentity(source);
@@ -420,6 +412,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				event,
 				source,
 				position: ownedPosition,
+				persistedOrder: this.nextPersistedOrder++,
 				attempts: 0,
 			});
 		}
@@ -821,23 +814,45 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 		if (record.attempts >= this.maxDeliveryAttempts) {
 			this.pending.delete(dispatchId);
 			this.forgetCommittedVersion(dispatchId);
-			const deadLetter: DeadLetterRecord<Evt> = {
-				dispatchId: record.dispatchId,
-				event: record.event,
-				source: record.source,
-				position: record.position,
-				attempts: record.attempts,
-				lastError: record.lastError,
-			};
-			this.dead.set(dispatchId, deadLetter);
-			return { ...deadLetter };
+			this.dead.set(dispatchId, record);
+			return deadLetterRecord(record);
 		}
 		return undefined;
 	}
 
 	async deadLetters(): Promise<ReadonlyArray<DeadLetterRecord<Evt>>> {
-		return [...this.dead.values()].map((record) => ({ ...record }));
+		return [...this.dead.values()].map(deadLetterRecord);
 	}
+
+	async requeueDeadLetters(dispatchIds: ReadonlyArray<string>): Promise<void> {
+		for (const id of dispatchIds) {
+			const deadLetter = this.dead.get(id);
+			if (deadLetter === undefined) continue;
+			this.dead.delete(id);
+			this.recordCommittedVersion(id);
+			this.pending.set(id, { ...deadLetter, attempts: 0 });
+		}
+		refill(
+			this.pending,
+			[...this.pending].sort(
+				([, first], [, second]) => first.persistedOrder - second.persistedOrder,
+			),
+		);
+	}
+}
+
+/** The public view of a dead letter, without the bookkeeping of the adapter. */
+function deadLetterRecord<Evt extends AnyDomainEvent>(
+	record: TrackedRecord<Evt>,
+): DeadLetterRecord<Evt> {
+	return {
+		dispatchId: record.dispatchId,
+		event: record.event,
+		source: record.source,
+		position: record.position,
+		attempts: record.attempts,
+		lastError: record.lastError,
+	};
 }
 
 function cursorWithEvent(
