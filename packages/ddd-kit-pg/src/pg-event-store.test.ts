@@ -42,6 +42,26 @@ async function openStore(codec?: PgEventCodec<NoteWritten>) {
 	};
 }
 
+/** Starts `work`, and resolves when `client` waits for a lock of another writer. */
+const startAndWaitUntilBlocked = async (
+	pool: Pool,
+	client: PoolClient,
+	work: () => Promise<void>,
+): Promise<{ readonly settled: Promise<unknown> }> => {
+	const { rows } = await client.query("SELECT pg_backend_pid() AS pid");
+	const settled = work().then(
+		() => undefined,
+		(error: unknown) => error,
+	);
+	for (;;) {
+		const activity = await pool.query(
+			"SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1",
+			[rows[0].pid],
+		);
+		if (activity.rows[0]?.wait_event_type === "Lock") return { settled };
+	}
+};
+
 describe("PgEventStore contract suite", () => {
 	const tests = createEventStoreContractTests<NoteWritten>({
 		createEnvironment: async () => {
@@ -241,26 +261,6 @@ describe("PgEventStore", () => {
 			await work(fromPg(client));
 		};
 
-		/** Starts `work`, and resolves when `client` waits for a lock of another writer. */
-		const startAndWaitUntilBlocked = async (
-			pool: Pool,
-			client: PoolClient,
-			work: () => Promise<void>,
-		): Promise<{ readonly settled: Promise<unknown> }> => {
-			const { rows } = await client.query("SELECT pg_backend_pid() AS pid");
-			const settled = work().then(
-				() => undefined,
-				(error: unknown) => error,
-			);
-			for (;;) {
-				const activity = await pool.query(
-					"SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1",
-					[rows[0].pid],
-				);
-				if (activity.rows[0]?.wait_event_type === "Lock") return { settled };
-			}
-		};
-
 		it("the second writer of a new stream gets DuplicateAggregateError", async () => {
 			const { pool, teardown } = await openStore();
 			const first = await pool.connect();
@@ -285,10 +285,32 @@ describe("PgEventStore", () => {
 
 			expect(await racing.settled).toMatchObject({
 				code: "DUPLICATE_AGGREGATE",
-				cause: { code: "23505" },
 			});
 			await second.query("ROLLBACK");
 			first.release();
+			second.release();
+			await teardown();
+		});
+
+		it("maps a unique violation at REPEATABLE READ, where the stale snapshot hides the head", async () => {
+			const { pool, store, teardown } = await openStore();
+			const second = await pool.connect();
+			await second.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
+			await second.query("SELECT 1 FROM ddd_kit_event_stream");
+			await store.append(stream, [noteWritten({})], { expectedVersion: 0 });
+
+			await expect(
+				new PgEventStore<NoteWritten>(fromPg(second)).append(
+					stream,
+					[noteWritten({})],
+					{ expectedVersion: 0 },
+				),
+			).rejects.toMatchObject({
+				code: "DUPLICATE_AGGREGATE",
+				cause: { code: "23505" },
+			});
+
+			await second.query("ROLLBACK");
 			second.release();
 			await teardown();
 		});
@@ -319,7 +341,7 @@ describe("PgEventStore", () => {
 			expect(await racing.settled).toMatchObject({
 				code: "CONCURRENCY_CONFLICT",
 				retryable: true,
-				cause: { code: "23505" },
+				actualVersion: 2,
 			});
 			await second.query("ROLLBACK");
 			first.release();
@@ -386,6 +408,69 @@ describe("PgEventStore", () => {
 
 			const read = await store.readStream(stream, { limit: 1 });
 			expect(read.lastVersion).toBe(2);
+			await teardown();
+		});
+
+		it("waits for an open append and then rejects it as stale, so no event survives the removal", async () => {
+			const { pool, store, teardown } = await openStore();
+			await store.append(stream, [noteWritten({})], { expectedVersion: 0 });
+			const appender = await pool.connect();
+			const remover = await pool.connect();
+			await appender.query("BEGIN");
+			await new PgEventStore<NoteWritten>(fromPg(appender)).append(
+				stream,
+				[noteWritten({})],
+				{ expectedVersion: 1 },
+			);
+
+			const removal = await startAndWaitUntilBlocked(pool, remover, () =>
+				new PgEventStore<NoteWritten>(fromPg(remover)).removeStream(stream, {
+					expectedVersion: 1,
+				}),
+			);
+			await appender.query("COMMIT");
+
+			expect(await removal.settled).toMatchObject({
+				code: "CONCURRENCY_CONFLICT",
+				actualVersion: 2,
+			});
+			expect((await store.readStream(stream, { limit: 10 })).lastVersion).toBe(
+				2,
+			);
+			appender.release();
+			remover.release();
+			await teardown();
+		});
+
+		it("makes an append that waited for it fail, so no event lands in a removed stream", async () => {
+			const { pool, store, teardown } = await openStore();
+			await store.append(stream, [noteWritten({})], { expectedVersion: 0 });
+			const appender = await pool.connect();
+			const remover = await pool.connect();
+			await remover.query("BEGIN");
+			await new PgEventStore<NoteWritten>(fromPg(remover)).removeStream(
+				stream,
+				{
+					expectedVersion: 1,
+				},
+			);
+
+			const append = await startAndWaitUntilBlocked(pool, appender, () =>
+				new PgEventStore<NoteWritten>(fromPg(appender)).append(
+					stream,
+					[noteWritten({})],
+					{ expectedVersion: 1 },
+				),
+			);
+			await remover.query("COMMIT");
+
+			expect(await append.settled).toMatchObject({
+				code: "CONCURRENCY_CONFLICT",
+				actualVersion: 0,
+			});
+			expect((await store.readStream(stream, { limit: 1 })).exists).toBe(false);
+			appender.release();
+			remover.release();
 			await teardown();
 		});
 

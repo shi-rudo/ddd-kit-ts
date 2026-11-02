@@ -67,13 +67,7 @@ export class PgEventStore<Evt extends AnyDomainEvent>
 			this.encodeForAppend(stream, event, index),
 		);
 
-		const { rows } = await this.executor.query<{ head: string | null }>(
-			`SELECT max(position)::text AS head
-			FROM ddd_kit_event_stream
-			WHERE aggregate_type = $1 AND aggregate_id = $2`,
-			[stream.aggregateType, stream.aggregateId],
-		);
-		const head = Number(rows[0]?.head ?? 0);
+		const head = await this.lockStreamAndReadHead(stream);
 		if (head !== expectedVersion) {
 			if (expectedVersion === 0) {
 				throw new DuplicateAggregateError({ identity: stream });
@@ -133,21 +127,16 @@ export class PgEventStore<Evt extends AnyDomainEvent>
 
 	/**
 	 * Deletes the whole stream in the transaction of the executor, for example
-	 * to erase personal data. The version guard rejects a stream that changed
-	 * after the load. Delete a snapshot of the aggregate first. A removed identity
+	 * to erase personal data. Call it inside a transaction. The version guard
+	 * rejects a stream that changed after the load, and an open append finishes
+	 * first. Delete a snapshot of the aggregate first. A removed identity
 	 * stays removed: give a new aggregate a new id.
 	 */
 	async removeStream(
 		stream: AggregateIdentity,
 		{ expectedVersion }: EventStoreAppendOptions,
 	): Promise<void> {
-		const { rows } = await this.executor.query<{ head: string | null }>(
-			`SELECT max(position)::text AS head
-			FROM ddd_kit_event_stream
-			WHERE aggregate_type = $1 AND aggregate_id = $2`,
-			[stream.aggregateType, stream.aggregateId],
-		);
-		const head = Number(rows[0]?.head ?? 0);
+		const head = await this.lockStreamAndReadHead(stream);
 		if (head !== expectedVersion) {
 			throw new ConcurrencyConflictError({
 				identity: stream,
@@ -161,6 +150,33 @@ export class PgEventStore<Evt extends AnyDomainEvent>
 			WHERE aggregate_type = $1 AND aggregate_id = $2`,
 			[stream.aggregateType, stream.aggregateId],
 		);
+	}
+
+	/**
+	 * Holds a lock on the stream until the transaction ends, and reads the head
+	 * after it. An append and a removal would otherwise miss each other: a DELETE
+	 * does not see a position that an open append inserted, and that event would
+	 * survive the removal. These are two statements, because READ COMMITTED gives
+	 * each statement a new snapshot. In one statement, the snapshot would come
+	 * before the wait. A transaction-wide snapshot, as in REPEATABLE READ, still
+	 * reads the old head, so run a removal at READ COMMITTED.
+	 */
+	private async lockStreamAndReadHead(
+		stream: AggregateIdentity,
+	): Promise<number> {
+		await this.executor.query(
+			`SELECT pg_advisory_xact_lock(
+				hashtextextended(current_schema() || '/ddd_kit_event_stream/' || $1, 0)
+			)`,
+			[JSON.stringify([stream.aggregateType, stream.aggregateId])],
+		);
+		const { rows } = await this.executor.query<{ head: string | null }>(
+			`SELECT max(position)::text AS head
+			FROM ddd_kit_event_stream
+			WHERE aggregate_type = $1 AND aggregate_id = $2`,
+			[stream.aggregateType, stream.aggregateId],
+		);
+		return Number(rows[0]?.head ?? 0);
 	}
 
 	private encodeForAppend(
