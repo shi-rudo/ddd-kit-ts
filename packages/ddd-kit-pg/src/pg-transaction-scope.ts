@@ -3,6 +3,7 @@ import type { PoolClient } from "pg";
 import {
 	classifyTransactionFailure,
 	PgCommitRolledBackError,
+	PgRollbackFailedError,
 } from "./pg-errors";
 import { fromPg, type PgQueryExecutor } from "./pg-query-executor";
 
@@ -18,8 +19,9 @@ export interface PgClientPool {
  *
  * A work failure reaches the caller unchanged, or as a
  * `PgRetryableTransactionFailureError` for a serialization failure or a
- * deadlock. A failed `ROLLBACK` reaches the caller as the driver error, so
- * that `UnitOfWork` reports a `RollbackError`.
+ * deadlock. A failed `ROLLBACK` reaches the caller as a
+ * `PgRollbackFailedError`, which names both failures. `UnitOfWork` reports it as
+ * a `RollbackError`.
  *
  * The scope destroys the connection after a failed `BEGIN`, `ROLLBACK`, or
  * `COMMIT`, because its state is then unknown.
@@ -44,10 +46,13 @@ export class PgTransactionScope implements TransactionScope<PgQueryExecutor> {
 			try {
 				result = await fn(session.executor);
 			} catch (workFailure) {
-				await client.query("ROLLBACK");
+				// A statement after this point would run outside the transaction.
+				session.close();
+				await rollback(client, workFailure);
 				transactionEnded = true;
 				throw classifyTransactionFailure(workFailure);
 			}
+			session.close();
 			await commit(client);
 			transactionEnded = true;
 			return result;
@@ -56,6 +61,17 @@ export class PgTransactionScope implements TransactionScope<PgQueryExecutor> {
 			client.off("error", onConnectionError);
 			client.release(!transactionEnded || connectionLost);
 		}
+	}
+}
+
+async function rollback(
+	client: PoolClient,
+	workFailure: unknown,
+): Promise<void> {
+	try {
+		await client.query("ROLLBACK");
+	} catch (rollbackFailure) {
+		throw new PgRollbackFailedError({ cause: rollbackFailure, workFailure });
 	}
 }
 

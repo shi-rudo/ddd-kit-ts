@@ -1,5 +1,9 @@
 import { someChainRetryable } from "@shirudo/base-error";
-import { RetryingTransactionScope } from "@shirudo/ddd-kit";
+import {
+	outboxWriterAcceptingEventLoss,
+	RetryingTransactionScope,
+	UnitOfWork,
+} from "@shirudo/ddd-kit";
 import type { PoolClient } from "pg";
 import {
 	afterEach,
@@ -16,6 +20,7 @@ import {
 import {
 	PgCommitRolledBackError,
 	PgRetryableTransactionFailureError,
+	PgRollbackFailedError,
 } from "./pg-errors";
 import type { PgQueryExecutor } from "./pg-query-executor";
 import { PgTransactionScope } from "./pg-transaction-scope";
@@ -216,6 +221,28 @@ describe("PgTransactionScope", () => {
 		});
 	});
 
+	it.each([
+		["the rollback", "rolled back", true],
+		["the commit", "committed", false],
+	])(
+		"rejects a statement that arrives during %s, so it cannot run outside the transaction",
+		async (_phase, _result, workFails) => {
+			let late: Promise<unknown> = Promise.resolve();
+
+			await scope
+				.transactional(async (executor) => {
+					late = new Promise((resolve) => setImmediate(resolve))
+						.then(() => increment(executor, 2))
+						.catch((error: unknown) => error);
+					if (workFails) throw new Error("the work failed");
+				})
+				.catch(() => {});
+
+			expect(await late).toMatchObject({ code: "TRANSACTION_CLOSED" });
+			expect(await counterValue(2)).toBe(0);
+		},
+	);
+
 	it("survives a lost connection and rejects without ending the process", async () => {
 		const single = await openIsolatedSchema({ max: 1 });
 		const singleScope = new PgTransactionScope(single.pool);
@@ -231,15 +258,45 @@ describe("PgTransactionScope", () => {
 		await single.teardown();
 	});
 
-	it("rejects with the rollback failure, so that the caller can see it", async () => {
+	describe("a failed ROLLBACK", () => {
 		const rollbackFailure = new Error("the ROLLBACK failed");
-		const { client, pool } = poolRejecting("ROLLBACK", rollbackFailure);
+		const workFailure = new Error("the work failed");
 
-		await expect(
-			new PgTransactionScope(pool).transactional(async () => {
-				throw new Error("the work failed");
-			}),
-		).rejects.toBe(rollbackFailure);
-		expect(client.release).toHaveBeenCalledWith(true);
+		it("rejects with both failures and destroys the connection", async () => {
+			const { client, pool } = poolRejecting("ROLLBACK", rollbackFailure);
+
+			const failure = await new PgTransactionScope(pool)
+				.transactional(async () => {
+					throw workFailure;
+				})
+				.catch((error: unknown) => error);
+
+			expect(failure).toBeInstanceOf(PgRollbackFailedError);
+			expect(failure).toMatchObject({
+				code: "PG_ROLLBACK_FAILED",
+				cause: rollbackFailure,
+				workFailure,
+			});
+			expect(client.release).toHaveBeenCalledWith(true);
+		});
+
+		it("still reaches UnitOfWork as a RollbackError that names the work failure", async () => {
+			const { pool } = poolRejecting("ROLLBACK", rollbackFailure);
+			const unitOfWork = new UnitOfWork({
+				scope: new PgTransactionScope(pool),
+				outbox: outboxWriterAcceptingEventLoss(),
+				repositories: {},
+			});
+
+			await expect(
+				unitOfWork.run(async () => {
+					throw workFailure;
+				}),
+			).rejects.toMatchObject({
+				code: "ROLLBACK_FAILED",
+				cause: workFailure,
+				rollbackCause: { code: "PG_ROLLBACK_FAILED" },
+			});
+		});
 	});
 });

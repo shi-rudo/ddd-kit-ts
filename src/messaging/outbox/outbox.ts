@@ -171,9 +171,9 @@ type DispatchedEventReceipt = {
  * `getPending` returns a record that the transaction wrote as it was
  * committed at the first write, with its current attempts. It skips a record
  * that was not pending at that write, such as a new or a requeued record. A
- * rollback also undoes an acknowledgement or a failure report that a
- * dispatcher made while the transaction was open. The dispatcher then
- * delivers that record again.
+ * rollback also undoes an acknowledgement, a failure report, or a requeue that
+ * code outside the transaction made while it was open. The dispatcher then
+ * delivers that record again, and a requeued record is dead again.
  *
  * @example
  * ```ts
@@ -825,13 +825,16 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 	}
 
 	async requeueDeadLetters(dispatchIds: ReadonlyArray<string>): Promise<void> {
+		let moved = false;
 		for (const id of dispatchIds) {
 			const deadLetter = this.dead.get(id);
 			if (deadLetter === undefined) continue;
 			this.dead.delete(id);
 			this.recordCommittedVersion(id);
 			this.pending.set(id, { ...deadLetter, attempts: 0 });
+			moved = true;
 		}
+		if (!moved) return;
 		refill(
 			this.pending,
 			[...this.pending].sort(

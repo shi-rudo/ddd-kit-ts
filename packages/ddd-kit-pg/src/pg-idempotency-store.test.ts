@@ -176,6 +176,35 @@ describe("PgIdempotencyStore", () => {
 		});
 	});
 
+	it("keeps one key of two schemas apart, so a tenant does not block another", async () => {
+		const tenantA = await openStore();
+		const tenantB = await openStore();
+		let claimed!: () => void;
+		const hasClaim = new Promise<void>((resolve) => {
+			claimed = resolve;
+		});
+		let release!: () => void;
+		const released = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const holder = tenantA.scope.transactional(async (ctx) => {
+			await tenantA.store.claim(ctx, "order-1", "fingerprint");
+			claimed();
+			await released;
+		});
+		await hasClaim;
+
+		const claim = await tenantB.scope.transactional((ctx) =>
+			tenantB.store.claim(ctx, "order-1", "fingerprint"),
+		);
+
+		expect(claim.status).toBe("claimed");
+		release();
+		await holder;
+		await tenantA.database.teardown();
+		await tenantB.database.teardown();
+	});
+
 	describe("with withIdempotentCommit", () => {
 		const confirmOrder = (
 			{ scope, store }: Awaited<ReturnType<typeof openStore>>,

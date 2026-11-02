@@ -6,7 +6,6 @@ import {
 	type ExecutionContext,
 } from "@shirudo/ddd-kit";
 import type { PgQueryExecutor } from "./pg-query-executor";
-import { rejectOnAbort } from "./reject-on-abort";
 
 const DEFAULT_MAX_DELIVERY_ATTEMPTS = 5;
 
@@ -51,8 +50,14 @@ export class PgDeadlineStore<TPayload = unknown>
 		private readonly executor: PgQueryExecutor,
 		options: PgDeadlineStoreOptions = {},
 	) {
-		this.maxDeliveryAttempts =
+		const attempts =
 			options.maxDeliveryAttempts ?? DEFAULT_MAX_DELIVERY_ATTEMPTS;
+		if (!Number.isSafeInteger(attempts) || attempts < 1) {
+			throw new RangeError(
+				`PgDeadlineStore: maxDeliveryAttempts must be a positive integer, got ${String(attempts)}`,
+			);
+		}
+		this.maxDeliveryAttempts = attempts;
 	}
 
 	async schedule(deadline: {
@@ -108,16 +113,14 @@ export class PgDeadlineStore<TPayload = unknown>
 		}
 		if (limit === 0) return [];
 		context?.signal.throwIfAborted();
-		const { rows } = await rejectOnAbort(
-			this.executor.query<DeadlineRow>(
-				`SELECT ${DEADLINE_COLUMNS}
-				FROM ddd_kit_deadline
-				WHERE status = 'pending' AND due_at <= $1
-				ORDER BY due_at, sequence
-				LIMIT $2`,
-				[now.toISOString(), limit],
-			),
-			context?.signal,
+		const { rows } = await this.executor.query<DeadlineRow>(
+			`SELECT ${DEADLINE_COLUMNS}
+			FROM ddd_kit_deadline
+			WHERE status = 'pending' AND due_at <= $1
+			ORDER BY due_at, sequence
+			LIMIT $2`,
+			[now.toISOString(), limit],
+			context,
 		);
 		return rows.map((row) => toDueDeadline<TPayload>(row));
 	}
@@ -127,12 +130,10 @@ export class PgDeadlineStore<TPayload = unknown>
 		context?: ExecutionContext,
 	): Promise<void> {
 		context?.signal.throwIfAborted();
-		await rejectOnAbort(
-			this.executor.query(
-				"DELETE FROM ddd_kit_deadline WHERE delivery_id = ANY($1::text[])",
-				[deliveryIds],
-			),
-			context?.signal,
+		await this.executor.query(
+			"DELETE FROM ddd_kit_deadline WHERE delivery_id = ANY($1::text[])",
+			[deliveryIds],
+			context,
 		);
 	}
 
@@ -144,18 +145,18 @@ export class PgDeadlineStore<TPayload = unknown>
 		context?.signal.throwIfAborted();
 		const lastError =
 			error instanceof Error ? error.message : String(error ?? "unknown");
-		const { rows } = await rejectOnAbort(
-			this.executor.query<DeadlineRow & { readonly status: string }>(
-				`UPDATE ddd_kit_deadline
-				SET
-					attempts = attempts + 1,
-					last_error = $2,
-					status = CASE WHEN attempts + 1 >= $3 THEN 'dead' ELSE 'pending' END
-				WHERE delivery_id = $1 AND status = 'pending'
-				RETURNING ${DEADLINE_COLUMNS}, status`,
-				[deliveryId, lastError, this.maxDeliveryAttempts],
-			),
-			context?.signal,
+		const { rows } = await this.executor.query<
+			DeadlineRow & { readonly status: string }
+		>(
+			`UPDATE ddd_kit_deadline
+			SET
+				attempts = attempts + 1,
+				last_error = $2,
+				status = CASE WHEN attempts + 1 >= $3 THEN 'dead' ELSE 'pending' END
+			WHERE delivery_id = $1 AND status = 'pending'
+			RETURNING ${DEADLINE_COLUMNS}, status`,
+			[deliveryId, lastError, this.maxDeliveryAttempts],
+			context,
 		);
 		const row = rows[0];
 		return row?.status === "dead" ? toDeadLetter<TPayload>(row) : undefined;

@@ -10,8 +10,9 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   caller, and the `fromPg` bridge for a `pg` client.
 - `PgTransactionScope`, a `TransactionScope` over a `pg` pool. It reports a
   serialization failure or a deadlock as a retryable
-  `PgRetryableTransactionFailureError`, and a `COMMIT` that rolled back as a
-  `PgCommitRolledBackError`. It survives a lost connection, and it closes its
+  `PgRetryableTransactionFailureError`, a `COMMIT` that rolled back as a
+  `PgCommitRolledBackError`, and a failed `ROLLBACK` as a
+  `PgRollbackFailedError` that keeps both failures. It survives a lost connection, and it closes its
   executor when the transaction ends.
 - `PgIdempotencyStore`, the transactional `IdempotencyStore`, with its table in
   `sql/idempotency.sql`. A claim of a key that another open transaction holds
@@ -27,7 +28,8 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   writes on the transaction that `add` receives, links each commit to its
   predecessor, and rejects a new event of an ended source. With `claim`, several
   dispatchers can run at once, and they keep the order per aggregate. A record
-  of a crashed dispatcher returns when its lease ends.
+  of a crashed dispatcher returns when its lease ends. A dispatcher deadline
+  cancels a poll in the database, and an aborted claim rolls back.
 - `PgDeadlineStore`, `PgProjectionCheckpointStore`, and `PgSnapshotStore`, with
   their tables in `sql/`, and `fromPgPool` for the statements that need no
   transaction.

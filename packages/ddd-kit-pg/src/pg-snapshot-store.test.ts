@@ -1,7 +1,7 @@
 import { createSnapshotStoreContractTests } from "@shirudo/ddd-kit/testing";
 import { describe, expect, it } from "vite-plus/test";
 import { openIsolatedSchema } from "../test/isolated-schema";
-import { fromPgPool } from "./pg-query-executor";
+import { fromPgPool } from "./pg-pool-executor";
 import { PgSnapshotStore } from "./pg-snapshot-store";
 
 describe("PgSnapshotStore contract suite", () => {

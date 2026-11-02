@@ -101,9 +101,9 @@ export interface OutboxContractHarness<Evt extends AnyDomainEvent> {
 	 * reports move a record to the dead-letter set (the adapter's
 	 * configured attempt ceiling). Omit for plain `Outbox` adapters;
 	 * the dispatch-tracking tests are then marked skipped. With a
-	 * ceiling of 1 the attempts-surfacing test is marked skipped too:
-	 * observing attempts on a PENDING record needs a record that
-	 * survives one failure.
+	 * ceiling of 1 the tests that observe the attempts of a pending record
+	 * (attempts surfacing, a requeue of a pending record) are marked skipped
+	 * too: they need a record that survives one failure.
 	 */
 	failuresToDeadLetter?: number;
 
@@ -127,20 +127,38 @@ export interface OutboxContractHarness<Evt extends AnyDomainEvent> {
 	 * records for competing dispatchers (lease, visibility timeout,
 	 * `FOR UPDATE SKIP LOCKED`), as the port sanctions. Every test that
 	 * re-polls records a previous poll returned without resolving them
-	 * (head stability, re-ack non-disturbance, attempts surfacing)
-	 * assumes a non-claiming read and is marked skipped for claiming
+	 * (head stability, re-ack non-disturbance, attempts surfacing, a requeue
+	 * of a pending record) assumes a non-claiming read and is marked skipped for claiming
 	 * adapters; prove your claim/expiry semantics in your own suite.
 	 */
 	claimsOnGetPending?: boolean;
 
 	/**
 	 * Declare `true` when `add()` dedupes on `eventId` (the unique-key
-	 * constraint the port RECOMMENDS). The dedupe test is gated on this:
-	 * an adapter without the constraint satisfies the port's normative
+	 * constraint the port RECOMMENDS). The dedupe tests of a pending record and
+	 * of an ended source are gated on this: an adapter without the constraint satisfies the port's normative
 	 * requirements and must not fail the suite, but the skip stays
 	 * visible as the unproven recommendation it is.
 	 */
 	dedupesOnEventId?: boolean;
+}
+
+/**
+ * `isDispatchTrackingOutbox` checks only what the dispatcher needs. A tracking
+ * adapter also owes the operator the requeue, so the suite names that gap.
+ */
+function assertTrackingOutbox<Evt extends AnyDomainEvent>(
+	outbox: Outbox<Evt, never> | DispatchTrackingOutbox<Evt, never>,
+): asserts outbox is DispatchTrackingOutbox<Evt, never> {
+	assert(
+		isDispatchTrackingOutbox(outbox),
+		"harness declared a tracking outbox",
+	);
+	assert(
+		typeof (outbox as DispatchTrackingOutbox<Evt, never>).requeueDeadLetters ===
+			"function",
+		"a DispatchTrackingOutbox must implement requeueDeadLetters",
+	);
 }
 
 /**
@@ -407,6 +425,31 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 						expectedIds.slice(0, pending.length),
 					),
 					"records must come back in the order add() persisted them",
+				);
+			}),
+		},
+		{
+			name: "getPending returns the commit order across sources, not the order of versions",
+			run: inEnv(async (env) => {
+				const committedFirst: AggregateIdentity = {
+					aggregateType: "Order",
+					aggregateId: "committed-first",
+				};
+				const committedSecond: AggregateIdentity = {
+					aggregateType: "Order",
+					aggregateId: "committed-second",
+				};
+				const first = harness.createEvent(1);
+				const second = harness.createEvent(2);
+				await env.addCommitted(commit([first], 5, committedFirst));
+				await env.addCommitted(commit([second], 1, committedSecond));
+
+				const records = await takeAndAck(env, 2);
+
+				assertEqual(
+					records.map(({ event }) => event.eventId).join(),
+					[first.eventId, second.eventId].join(),
+					"getPending must order by commit, not by aggregate version",
 				);
 			}),
 		},
@@ -683,10 +726,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 						name: "markFailed increments attempts surfaced on pending records",
 						run: inEnv(async (env) => {
 							const outbox = env.outbox;
-							assert(
-								isDispatchTrackingOutbox(outbox),
-								"harness declared a tracking outbox",
-							);
+							assertTrackingOutbox(outbox);
 							await env.addCommitted(commit([harness.createEvent(1)]));
 							const [record] = await outbox.getPending(1);
 							assert(record !== undefined, "expected a pending record");
@@ -706,10 +746,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 			name: "reaching the attempt ceiling dead-letters the record and unblocks getPending",
 			run: inEnv(async (env) => {
 				const outbox = env.outbox;
-				assert(
-					isDispatchTrackingOutbox(outbox),
-					"harness declared a tracking outbox",
-				);
+				assertTrackingOutbox(outbox);
 				await env.addCommitted(
 					commit([harness.createEvent(1), harness.createEvent(2)]),
 				);
@@ -768,10 +805,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 			name: "markFailed on unknown or dispatched ids never resurrects a record",
 			run: inEnv(async (env) => {
 				const outbox = env.outbox;
-				assert(
-					isDispatchTrackingOutbox(outbox),
-					"harness declared a tracking outbox",
-				);
+				assertTrackingOutbox(outbox);
 				await env.addCommitted(commit([harness.createEvent(1)]));
 				const [record] = await outbox.getPending(1);
 				assert(record !== undefined, "expected a pending record");
@@ -794,10 +828,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 			name: "markDispatched clears a dead-lettered record (manual redelivery then ack)",
 			run: inEnv(async (env) => {
 				const outbox = env.outbox;
-				assert(
-					isDispatchTrackingOutbox(outbox),
-					"harness declared a tracking outbox",
-				);
+				assertTrackingOutbox(outbox);
 				await env.addCommitted(commit([harness.createEvent(1)]));
 				const [record] = await outbox.getPending(1);
 				assert(record !== undefined, "expected a pending record");
@@ -816,10 +847,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 			name: "requeueDeadLetters returns a dead letter to pending with a fresh attempt budget",
 			run: inEnv(async (env) => {
 				const outbox = env.outbox;
-				assert(
-					isDispatchTrackingOutbox(outbox),
-					"harness declared a tracking outbox",
-				);
+				assertTrackingOutbox(outbox);
 				await env.addCommitted(commit([harness.createEvent(1)]));
 				const [record] = await outbox.getPending(1);
 				assert(record !== undefined, "expected a pending record");
@@ -845,6 +873,14 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 					record.event.eventId,
 					"a requeued record must keep its event",
 				);
+				assert(
+					deepEqual(requeued?.source, record.source),
+					"a requeued record must keep its source",
+				);
+				assert(
+					deepEqual(requeued?.position, record.position),
+					"a requeued record must keep its commit position: a dead letter is a delivery state, not a new commit",
+				);
 				let transition: DeadLetterRecord<Evt> | undefined;
 				for (let i = 0; i < attemptCeiling; i++) {
 					assertEqual(
@@ -868,10 +904,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 			name: "a requeued record returns to its commit-order place",
 			run: inEnv(async (env) => {
 				const outbox = env.outbox;
-				assert(
-					isDispatchTrackingOutbox(outbox),
-					"harness declared a tracking outbox",
-				);
+				assertTrackingOutbox(outbox);
 				const poison = harness.createEvent(1);
 				const successor = harness.createEvent(2);
 				await env.addCommitted(commit([poison, successor]));
@@ -883,11 +916,47 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 
 				await outbox.requeueDeadLetters([record.dispatchId]);
 
-				const pending = await outbox.getPending(10);
+				// "Up to limit": short pages are port-legal, so one record is enough.
+				const [first] = await outbox.getPending(1);
 				assertEqual(
-					pending.map((pendingRecord) => pendingRecord.event.eventId).join(),
-					[poison.eventId, successor.eventId].join(),
+					first?.event.eventId,
+					poison.eventId,
 					"getPending must return a requeued record before its successor",
+				);
+			}),
+		}),
+		trackingGate({
+			name: "requeueDeadLetters moves only the named dead letters",
+			run: inEnv(async (env) => {
+				const outbox = env.outbox;
+				assertTrackingOutbox(outbox);
+				await env.addCommitted(
+					commit([harness.createEvent(1), harness.createEvent(2)]),
+				);
+				const deadLetterIds: string[] = [];
+				for (let index = 0; index < 2; index += 1) {
+					const [record] = await outbox.getPending(1);
+					assert(record !== undefined, "expected a pending record");
+					for (let i = 0; i < attemptCeiling; i++) {
+						await outbox.markFailed(record.dispatchId, new Error("poison"));
+					}
+					deadLetterIds.push(record.dispatchId);
+				}
+				const [named, other] = deadLetterIds;
+				assert(named !== undefined, "expected two dead letters");
+
+				await outbox.requeueDeadLetters([named]);
+
+				const dead = await outbox.deadLetters();
+				assertEqual(
+					dead.map((record) => record.dispatchId).join(),
+					other,
+					"a requeue of one id must leave every other dead letter dead",
+				);
+				assertEqual(
+					(await outbox.getPending(10)).map((r) => r.dispatchId).join(),
+					named,
+					"only the named record may return to pending",
 				);
 			}),
 		}),
@@ -895,10 +964,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 			name: "requeueDeadLetters ignores unknown and dispatched ids",
 			run: inEnv(async (env) => {
 				const outbox = env.outbox;
-				assert(
-					isDispatchTrackingOutbox(outbox),
-					"harness declared a tracking outbox",
-				);
+				assertTrackingOutbox(outbox);
 				await env.addCommitted(commit([harness.createEvent(1)]));
 				const [record] = await outbox.getPending(1);
 				assert(record !== undefined, "expected a pending record");
@@ -928,10 +994,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 						name: "requeueDeadLetters leaves the attempts of a pending record untouched",
 						run: inEnv(async (env) => {
 							const outbox = env.outbox;
-							assert(
-								isDispatchTrackingOutbox(outbox),
-								"harness declared a tracking outbox",
-							);
+							assertTrackingOutbox(outbox);
 							await env.addCommitted(commit([harness.createEvent(1)]));
 							const [record] = await outbox.getPending(1);
 							assert(record !== undefined, "expected a pending record");
@@ -950,44 +1013,33 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 				),
 			),
 		),
-		trackingGate(
-			gatedContractTest(
-				{
-					capability: "dedupesOnEventId",
-					satisfiedBy: harness.dedupesOnEventId === true,
-				},
-				{
-					name: "an exact retry of add leaves a dead letter dead",
-					run: inEnv(async (env) => {
-						const outbox = env.outbox;
-						assert(
-							isDispatchTrackingOutbox(outbox),
-							"harness declared a tracking outbox",
-						);
-						const original = commit([harness.createEvent(1)]);
-						await env.addCommitted(original);
-						const [record] = await outbox.getPending(1);
-						assert(record !== undefined, "expected a pending record");
-						for (let i = 0; i < attemptCeiling; i++) {
-							await outbox.markFailed(record.dispatchId, new Error("poison"));
-						}
+		trackingGate({
+			name: "an exact retry of add leaves a dead letter dead",
+			run: inEnv(async (env) => {
+				const outbox = env.outbox;
+				assertTrackingOutbox(outbox);
+				const original = commit([harness.createEvent(1)]);
+				await env.addCommitted(original);
+				const [record] = await outbox.getPending(1);
+				assert(record !== undefined, "expected a pending record");
+				for (let i = 0; i < attemptCeiling; i++) {
+					await outbox.markFailed(record.dispatchId, new Error("poison"));
+				}
 
-						await env.addCommitted(original);
+				await env.addCommitted(original);
 
-						assertEqual(
-							(await outbox.getPending(10)).length,
-							0,
-							"a late retry of add must not revive a dead letter",
-						);
-						assertEqual(
-							(await outbox.deadLetters()).length,
-							1,
-							"a late retry of add must keep the dead letter",
-						);
-					}),
-				},
-			),
-		),
+				assertEqual(
+					(await outbox.getPending(10)).length,
+					0,
+					"a late retry of add must not revive a dead letter",
+				);
+				assertEqual(
+					(await outbox.deadLetters()).length,
+					1,
+					"a late retry of add must keep the dead letter",
+				);
+			}),
+		}),
 	);
 
 	return tests;

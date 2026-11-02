@@ -106,6 +106,12 @@ see missing events at the end of a stream, because the highest position is the
 head. Set `statement_timeout`: an abort signal stops the wait of a read, not the
 statement on the connection.
 
+An append and a removal take a lock per stream, so they run one after the other. A
+transaction that writes several streams can deadlock with another one in the
+opposite order. `PgTransactionScope` reports this as retryable, so wrap it in
+`RetryingTransactionScope`. Run a removal at READ COMMITTED, the default of
+PostgreSQL.
+
 ## Outbox
 
 One `PgOutbox` can serve every request, because `withCommit` hands it the open
@@ -123,7 +129,8 @@ dispatchers can run at once. A poll holds back a later event of an aggregate whi
 an earlier one is claimed, so the order per aggregate stays. Choose a lease longer
 than one delivery: a record returns to the other dispatchers when its lease ends,
 and it is then delivered twice. The claims of all dispatchers run one after
-another, each in a short transaction.
+another, each in a short transaction. A dispatcher deadline cancels a poll in the
+database. A claim that its caller aborted rolls back.
 
 The table keeps delivered records and dead letters. Wire `deadLetters()` to your
 alerts, and delete old delivered records with your own job. Never delete a row of

@@ -161,7 +161,8 @@ export interface OutboxDispatcherOptions<Evt extends AnyDomainEvent> {
 	 * (`markFailed` and `deadLetters` both present). A wrapper or
 	 * decorator around a tracking outbox must forward both methods;
 	 * one that exposes only the plain `Outbox` surface silently turns
-	 * bounded retries off.
+	 * bounded retries off. It must also forward `requeueDeadLetters`, which
+	 * an operator calls.
 	 *
 	 * The dispatcher never writes, so `never` accepts an outbox of any
 	 * transaction type.
@@ -324,7 +325,10 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 	readonly usesDispatchTracking: boolean;
 
 	/** The tracking view of the outbox, when it qualifies (see above). */
-	private readonly trackingOutbox?: DispatchTrackingOutbox<Evt, never>;
+	private readonly trackingOutbox?: Pick<
+		DispatchTrackingOutbox<Evt, never>,
+		"markFailed"
+	>;
 
 	constructor(options: OutboxDispatcherOptions<Evt>) {
 		super("OutboxDispatcher", options);

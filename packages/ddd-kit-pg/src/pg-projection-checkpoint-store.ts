@@ -26,7 +26,8 @@ export class PgProjectionCheckpointStore
 	/**
 	 * Holds an advisory lock per key until the transaction ends. A row lock would
 	 * not work, because the first event of an aggregate has no row to lock. The
-	 * sorted order prevents a deadlock. A hash collision only serializes more.
+	 * sorted order prevents a deadlock. An advisory lock holds across a database,
+	 * so the key names the schema. A hash collision only serializes more.
 	 */
 	async withCheckpointLocks<R>(
 		tx: PgQueryExecutor,
@@ -42,9 +43,10 @@ export class PgProjectionCheckpointStore
 			),
 		].sort();
 		for (const key of keys) {
-			await tx.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
-				key,
-			]);
+			await tx.query(
+				"SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || $1, 0))",
+				[key],
+			);
 		}
 		return work();
 	}

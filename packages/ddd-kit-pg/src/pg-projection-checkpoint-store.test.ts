@@ -8,8 +8,9 @@ import { createProjectionCheckpointStoreContractTests } from "@shirudo/ddd-kit/t
 import { describe, expect, it } from "vite-plus/test";
 import { openIsolatedSchema } from "../test/isolated-schema";
 import { PgOutbox } from "./pg-outbox";
+import { fromPgPool } from "./pg-pool-executor";
 import { PgProjectionCheckpointStore } from "./pg-projection-checkpoint-store";
-import { fromPgPool, type PgQueryExecutor } from "./pg-query-executor";
+import type { PgQueryExecutor } from "./pg-query-executor";
 import { PgTransactionScope } from "./pg-transaction-scope";
 
 const ROLLBACK = new Error("the contract suite asked for a rollback");

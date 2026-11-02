@@ -3,10 +3,12 @@ import {
 	createDeadlineStoreContractTests,
 	type DeadlineStoreContractPayload,
 } from "@shirudo/ddd-kit/testing";
+import type { Pool } from "pg";
 import { describe, expect, it } from "vite-plus/test";
 import { openIsolatedSchema } from "../test/isolated-schema";
 import { PgDeadlineStore } from "./pg-deadline-store";
-import { fromPgPool, type PgQueryExecutor } from "./pg-query-executor";
+import { fromPgPool } from "./pg-pool-executor";
+import type { PgQueryExecutor } from "./pg-query-executor";
 import { PgTransactionScope } from "./pg-transaction-scope";
 
 const ATTEMPT_CEILING = 3;
@@ -193,8 +195,41 @@ describe("PgDeadlineStore", () => {
 		await database.teardown();
 	});
 
+	it("cancels a poll in the database when the deadline passes", async () => {
+		const { database, store } = await openStore();
+		const blocker = await database.pool.connect();
+		await blocker.query("BEGIN");
+		await blocker.query("LOCK TABLE ddd_kit_deadline IN ACCESS EXCLUSIVE MODE");
+
+		await expect(
+			store.due(at, 1, {
+				signal: new AbortController().signal,
+				deadlineAt: Date.now() + 100,
+			}),
+		).rejects.toMatchObject({ code: "57014" });
+
+		await blocker.query("ROLLBACK");
+		blocker.release();
+		await database.teardown();
+	});
+
+	it.each([
+		["no delivery attempts", 0],
+		["NaN attempts", Number.NaN],
+		["attempts that are not an integer", 1.5],
+	])("rejects %s at construction", (_name, maxDeliveryAttempts) => {
+		const executor: PgQueryExecutor = { query: async () => ({ rows: [] }) };
+
+		expect(
+			() => new PgDeadlineStore(executor, { maxDeliveryAttempts }),
+		).toThrow(/maxDeliveryAttempts must be a positive integer/);
+	});
+
 	it("stops waiting for a hanging poll when the signal aborts", async () => {
-		const hanging: PgQueryExecutor = { query: () => new Promise(() => {}) };
+		const hanging = fromPgPool({
+			query: () => new Promise(() => {}),
+			connect: () => new Promise(() => {}),
+		} as unknown as Pool);
 		const controller = new AbortController();
 		const reason = new Error("the deadline passed");
 
