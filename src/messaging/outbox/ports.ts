@@ -43,13 +43,21 @@ export interface DeadLetterRecord<Evt extends AnyDomainEvent>
  *
  * Implement ONLY this interface to plug in an external delivery
  * solution: `add()` writes into that solution's outbox storage inside
- * the ambient transaction, and its own listener (polling or
+ * the transaction it receives, and its own listener (polling or
  * WAL/CDC-based, such as a Debezium-style connector, a delivery
  * library, or a broker-native outbox) owns delivery entirely. The
  * kit-side poll surface ({@link Outbox}) is then never involved. See
  * the outbox guide, "External dispatchers".
+ *
+ * The caller hands over the transaction that the `TransactionScope` opened.
+ * Write with it: a writer that ignores `tx` still compiles, but its write
+ * does not roll back with the aggregate. The rollback tests of
+ * `createOutboxContractTests` catch this. An outbox that does not use a
+ * transaction, such as `InMemoryOutbox`, leaves the parameter out.
+ *
+ * @template TCtx - The transaction type of the `TransactionScope`.
  */
-export interface OutboxWriter<Evt extends AnyDomainEvent> {
+export interface OutboxWriter<Evt extends AnyDomainEvent, TCtx = unknown> {
 	/**
 	 * Finalizes and persists event commit candidates. Called from inside
 	 * `withCommit`'s transactional callback, atomically with the aggregate
@@ -84,7 +92,10 @@ export interface OutboxWriter<Evt extends AnyDomainEvent> {
 	 * added, or `add` rejects. Never change a value without an error. See "One
 	 * rule for plain data" in the design decisions.
 	 */
-	add: (events: ReadonlyArray<EventCommitCandidate<Evt>>) => Promise<void>;
+	add: (
+		events: ReadonlyArray<EventCommitCandidate<Evt>>,
+		tx: TCtx,
+	) => Promise<void>;
 
 	/**
 	 * Ends the event sources of removed aggregates. Called from inside
@@ -101,7 +112,10 @@ export interface OutboxWriter<Evt extends AnyDomainEvent> {
 	 * stored event stays idempotent, and ending a source twice is not an
 	 * error.
 	 */
-	endEventSources: (sources: ReadonlyArray<AggregateIdentity>) => Promise<void>;
+	endEventSources: (
+		sources: ReadonlyArray<AggregateIdentity>,
+		tx: TCtx,
+	) => Promise<void>;
 }
 
 /**
@@ -136,7 +150,8 @@ export interface OutboxWriter<Evt extends AnyDomainEvent> {
  * late; a late failure update may count its original delivery attempt and must
  * still no-op after the record was dispatched.
  */
-export interface Outbox<Evt extends AnyDomainEvent> extends OutboxWriter<Evt> {
+export interface Outbox<Evt extends AnyDomainEvent, TCtx = unknown>
+	extends OutboxWriter<Evt, TCtx> {
 	/**
 	 * Returns up to `limit` outbox records that have not yet been
 	 * dispatched, **in the order `add()` persisted them** (commit order).
@@ -183,8 +198,10 @@ export interface Outbox<Evt extends AnyDomainEvent> extends OutboxWriter<Evt> {
  * See the outbox guide's dispatcher recipe for the retry-then-dead-letter
  * loop this port shape supports.
  */
-export interface DispatchTrackingOutbox<Evt extends AnyDomainEvent>
-	extends Outbox<Evt> {
+export interface DispatchTrackingOutbox<
+	Evt extends AnyDomainEvent,
+	TCtx = unknown,
+> extends Outbox<Evt, TCtx> {
 	/**
 	 * Records one failed delivery attempt for the given record:
 	 * increments its attempt count (surfaced as
@@ -226,10 +243,10 @@ export interface DispatchTrackingOutbox<Evt extends AnyDomainEvent>
  * never asked for. Internal plumbing, not exported from the package
  * entries.
  */
-export function isDispatchTrackingOutbox<Evt extends AnyDomainEvent>(
-	outbox: Outbox<Evt> | DispatchTrackingOutbox<Evt>,
-): outbox is DispatchTrackingOutbox<Evt> {
-	const candidate = outbox as DispatchTrackingOutbox<Evt>;
+export function isDispatchTrackingOutbox<Evt extends AnyDomainEvent, TCtx>(
+	outbox: Outbox<Evt, TCtx> | DispatchTrackingOutbox<Evt, TCtx>,
+): outbox is DispatchTrackingOutbox<Evt, TCtx> {
+	const candidate = outbox as DispatchTrackingOutbox<Evt, TCtx>;
 	return (
 		typeof candidate.markFailed === "function" &&
 		typeof candidate.deadLetters === "function"

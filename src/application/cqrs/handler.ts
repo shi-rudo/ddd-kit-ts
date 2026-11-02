@@ -44,7 +44,7 @@ export interface WithCommitDeps<Evt extends AnyDomainEvent, TCtx> {
 	 * a default; make it explicit with
 	 * `outboxWriterAcceptingEventLoss()`.
 	 */
-	outbox: OutboxWriter<Evt>;
+	outbox: OutboxWriter<Evt, TCtx>;
 	bus?: EventBus<Evt>;
 	/**
 	 * The chain of the event handler that runs this commit, from
@@ -603,10 +603,10 @@ export async function withCheckedCommit<Evt extends AnyDomainEvent, R, TCtx>(
 					// The bus publishes the events of these same candidates, so the
 					// outbox must not change them. A mutation of the frozen array
 					// throws in strict-mode code and has no effect otherwise.
-					await deps.outbox.add(Object.freeze(candidates));
+					await deps.outbox.add(Object.freeze(candidates), ctx);
 				}
 				if (endedSources.length > 0) {
-					await deps.outbox.endEventSources(Object.freeze(endedSources));
+					await deps.outbox.endEventSources(Object.freeze(endedSources), ctx);
 				}
 				// The caller's own check runs first, so that it names a change in
 				// its own terms, with one code for every kind of change.

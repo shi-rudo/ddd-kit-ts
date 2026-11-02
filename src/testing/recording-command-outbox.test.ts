@@ -7,8 +7,8 @@ describe("recordingCommandOutbox", () => {
 		const outbox = recordingCommandOutbox<PublishedCommand>();
 		const source = { aggregateType: "Checkout", aggregateId: "c-1" };
 
-		await outbox.add([]);
-		await outbox.endEventSources([source]);
+		await outbox.add([], undefined);
+		await outbox.endEventSources([source], undefined);
 
 		expect(outbox.added).toEqual([[]]);
 		expect(outbox.ended).toEqual([[source]]);
@@ -22,7 +22,7 @@ describe("recordingCommandOutbox", () => {
 			},
 		});
 
-		await outbox.add([]);
+		await outbox.add([], undefined);
 
 		expect(calls).toBe(1);
 		expect(outbox.added).toEqual([]);

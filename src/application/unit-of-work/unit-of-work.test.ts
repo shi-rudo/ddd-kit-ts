@@ -4134,7 +4134,7 @@ describe("UnitOfWork", () => {
 				} catch (error) {
 					repeatedCall = error;
 				}
-				await add(candidates);
+				await add(candidates, undefined);
 			};
 			const { uow } = createUow({ outbox });
 

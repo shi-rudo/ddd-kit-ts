@@ -168,25 +168,15 @@ const tests = createEsRepositoryContractTests<ContractOrder, OrderRenamed>({
 
 		const environment: Environment = {
 			run: (work) => {
-				// The outbox port receives no transaction, so a scope and an outbox
-				// of one operation share it here.
-				let transaction: PgQueryExecutor | undefined;
-				const scope: TransactionScope<PgQueryExecutor> = {
-					transactional: (fn, options) =>
-						pgScope.transactional((executor) => {
-							transaction = executor;
-							return fn(executor);
-						}, options),
-				};
-				const outbox: OutboxWriter<OrderRenamed> = {
-					add: async (candidates) => {
+				const outbox: OutboxWriter<OrderRenamed, PgQueryExecutor> = {
+					add: async (candidates, executor) => {
 						if (nextOutboxFailure !== undefined) {
 							const failure = nextOutboxFailure;
 							nextOutboxFailure = undefined;
 							throw failure;
 						}
 						for (const { event, position } of candidates) {
-							await transaction?.query(
+							await executor.query(
 								`INSERT INTO contract_outbox
 								(event_id, aggregate_version, commit_sequence, commit_size)
 								VALUES ($1, $2, $3, $4)`,
@@ -202,7 +192,7 @@ const tests = createEsRepositoryContractTests<ContractOrder, OrderRenamed>({
 					endEventSources: async () => {},
 				};
 				return new UnitOfWork({
-					scope,
+					scope: pgScope,
 					outbox,
 					repositories: {
 						orders: defineRepository<EsContractRepository<ContractOrder>>()({

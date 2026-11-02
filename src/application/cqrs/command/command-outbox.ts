@@ -96,8 +96,15 @@ export interface CommandOutboxCommitCandidate<C extends PublishedCommand> {
  * `message.messageId` as its idempotency key and acknowledges only after the
  * command result has been stored.
  */
-export interface CommandOutboxWriter<C extends PublishedCommand> {
-	add(commits: ReadonlyArray<CommandOutboxCommitCandidate<C>>): Promise<void>;
+export interface CommandOutboxWriter<
+	C extends PublishedCommand,
+	TCtx = unknown,
+> {
+	/** Writes with `tx`, as `OutboxWriter.add` does. */
+	add(
+		commits: ReadonlyArray<CommandOutboxCommitCandidate<C>>,
+		tx: TCtx,
+	): Promise<void>;
 
 	/**
 	 * Ends the source cursors of removed aggregates, in the same transaction
@@ -106,7 +113,10 @@ export interface CommandOutboxWriter<C extends PublishedCommand> {
 	 * stays idempotent. A source without a cursor stays open, and ending a
 	 * source twice is not an error. See `OutboxWriter.endEventSources`.
 	 */
-	endEventSources(sources: ReadonlyArray<AggregateIdentity>): Promise<void>;
+	endEventSources(
+		sources: ReadonlyArray<AggregateIdentity>,
+		tx: TCtx,
+	): Promise<void>;
 }
 
 /** Maps one private accepted event to zero or more addressed commands. */
@@ -136,18 +146,19 @@ export type CommandOutboxMapper<
 export function routeEventsToCommandOutbox<
 	C extends PublishedCommand,
 	Evt extends AnyDomainEvent = AnyDomainEvent,
+	TCtx = unknown,
 >(
-	outbox: CommandOutboxWriter<C>,
+	outbox: CommandOutboxWriter<C, TCtx>,
 	mapper: CommandOutboxMapper<Evt, C>,
-): OutboxWriter<Evt> {
+): OutboxWriter<Evt, TCtx> {
 	return {
-		add: async (events) => {
+		add: async (events, tx) => {
 			const commits = events.map((candidate) =>
 				toCommandCommit(candidate, mapper),
 			);
-			await outbox.add(commits);
+			await outbox.add(commits, tx);
 		},
-		endEventSources: (sources) => outbox.endEventSources(sources),
+		endEventSources: (sources, tx) => outbox.endEventSources(sources, tx),
 	};
 }
 

@@ -29,11 +29,11 @@ export type OutboxContractTest = ContractTest;
  * creates one per test and tears it down afterwards.
  */
 export interface OutboxContractEnvironment<Evt extends AnyDomainEvent> {
-	/** The adapter under test. */
-	outbox: Outbox<Evt> | DispatchTrackingOutbox<Evt>;
+	/** The adapter under test. `never` accepts any transaction type. */
+	outbox: Outbox<Evt, never> | DispatchTrackingOutbox<Evt, never>;
 
 	/**
-	 * Runs `outbox.add(candidates)` inside a transaction that COMMITS, the
+	 * Runs `outbox.add(candidates, tx)` inside a transaction that COMMITS, the
 	 * way `withCommit` calls it in production. The suite supplies complete
 	 * candidates with explicit source, aggregate version, zero-based commit
 	 * sequence, and commit size. For a non-transactional store this is simply

@@ -12,6 +12,7 @@ import { InfrastructureError } from "../../errors/kit-errors";
 import type { EventCommitCandidate } from "../../messaging/committed-event";
 import { InProcessEventBus } from "../../messaging/event-bus/event-bus";
 import type { EventBus, PublishChain } from "../../messaging/event-bus/ports";
+import type { OutboxWriter } from "../../messaging/outbox/ports";
 import type { TransactionScope } from "../../persistence/repository/scope";
 import { recordingOutbox } from "../../testing/recording-outbox";
 import { unattributedAggregate } from "../../testing/unattributed-aggregate";
@@ -2036,6 +2037,62 @@ describe("withCommit", () => {
 			// Rolled back: pending events must survive for a retry.
 			expect(persistedVersionOf(agg)).not.toBe(agg.version);
 		});
+	});
+});
+
+describe("the transaction of the outbox", () => {
+	const order = () =>
+		createMockAggregate([
+			createDomainEvent(
+				"OrderCreated",
+				{ orderId: "order-1" },
+				{ aggregateId: "agg-1", aggregateType: "MockOrder" },
+			),
+		]);
+
+	it("hands the transaction of the scope to add and endEventSources", async () => {
+		const added: unknown[] = [];
+		const ended: unknown[] = [];
+		const scope: TransactionScope<string> = {
+			transactional: async (fn) => fn("transaction-1"),
+		};
+		const outbox: OutboxWriter<TestEvent, string> = {
+			add: async (_events, tx) => {
+				added.push(tx);
+			},
+			endEventSources: async (_sources, tx) => {
+				ended.push(tx);
+			},
+		};
+
+		await withCommit<TestEvent, void, string>(
+			{ scope, outbox },
+			async (_tx, registration) => {
+				registration.registerSaved(order());
+				registration.registerRemoved(order());
+			},
+		);
+
+		expect(added).toEqual(["transaction-1"]);
+		expect(ended).toEqual(["transaction-1"]);
+	});
+
+	it("does not compile with an outbox of another transaction type", () => {
+		const scope: TransactionScope<string> = {
+			transactional: async (fn) => fn("transaction"),
+		};
+		const outbox: OutboxWriter<TestEvent, number> = {
+			add: async () => {},
+			endEventSources: async () => {},
+		};
+		const wiredWithAnotherTransaction = () =>
+			withCommit<TestEvent, void, string>(
+				// @ts-expect-error The outbox writes in a number, the scope opens a string.
+				{ scope, outbox },
+				async () => {},
+			);
+
+		expect(wiredWithAnotherTransaction).toBeTypeOf("function");
 	});
 });
 

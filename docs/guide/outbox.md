@@ -182,14 +182,26 @@ use `UnitOfWork`.
 The write side depends only on `OutboxWriter`:
 
 ```ts
-interface OutboxWriter<Evt extends AnyDomainEvent> {
-  add(events: ReadonlyArray<EventCommitCandidate<Evt>>): Promise<void>;
-  endEventSources(sources: ReadonlyArray<AggregateIdentity>): Promise<void>;
+interface OutboxWriter<Evt extends AnyDomainEvent, TCtx = unknown> {
+  add(
+    events: ReadonlyArray<EventCommitCandidate<Evt>>,
+    tx: TCtx,
+  ): Promise<void>;
+  endEventSources(
+    sources: ReadonlyArray<AggregateIdentity>,
+    tx: TCtx,
+  ): Promise<void>;
 }
 ```
 
 `withCommit` calls `add()` inside the same transaction as the aggregate
-write. The candidate array is frozen, because the in-process bus publishes the
+write, and it hands over the transaction that the `TransactionScope` opened. So
+one writer instance can serve every request. Write with `tx`: a writer that
+ignores it still compiles, but its write does not roll back with the aggregate.
+The rollback tests of `createOutboxContractTests` catch this. An outbox without
+a transaction, such as `InMemoryOutbox`, leaves the parameter out.
+
+The candidate array is frozen, because the in-process bus publishes the
 events of the same candidates. An adapter cannot change it: a `sort`, `push`,
 or `splice` throws, and so does an assignment in strict-mode code. To reorder
 the candidates, copy the array first.
@@ -786,45 +798,43 @@ Debezium, a delivery library, or a platform outbox.
 ```ts
 import type { AnyDomainEvent, OutboxWriter } from "@shirudo/ddd-kit";
 
-function makeOutboxWriter(tx: YourTxHandle): OutboxWriter<AnyDomainEvent> {
-  return {
-    add: async (candidates) => {
-      for (const commit of groupByAggregateCommit(candidates)) {
-        // SELECT ... FOR UPDATE, keyed by aggregateType + aggregateId.
-        const head = await lockEventSourceHead(tx, commit.source);
-        // An ended source rejects new events; a stored event id is a retry.
-        await rejectNewEventsOfEndedSource(tx, head, commit);
+const outboxWriter: OutboxWriter<AnyDomainEvent, YourTxHandle> = {
+  add: async (candidates, tx) => {
+    for (const commit of groupByAggregateCommit(candidates)) {
+      // SELECT ... FOR UPDATE, keyed by aggregateType + aggregateId.
+      const head = await lockEventSourceHead(tx, commit.source);
+      // An ended source rejects new events; a stored event id is a retry.
+      await rejectNewEventsOfEndedSource(tx, head, commit);
 
-        for (const candidate of commit.events) {
-          await insertIntoDeliveryOutbox(tx, {
-            id: candidate.event.eventId,
-            aggregateId: candidate.source.aggregateId,
-            aggregateType: candidate.source.aggregateType,
-            aggregateVersion: candidate.position.aggregateVersion,
-            commitSequence: candidate.position.commitSequence,
-            commitSize: candidate.position.commitSize,
-            previousEventfulAggregateVersion:
-              head.lastEventfulAggregateVersion,
-            type: candidate.event.type,
-            payload: candidate.event,
-          });
-        }
+      for (const candidate of commit.events) {
+        await insertIntoDeliveryOutbox(tx, {
+          id: candidate.event.eventId,
+          aggregateId: candidate.source.aggregateId,
+          aggregateType: candidate.source.aggregateType,
+          aggregateVersion: candidate.position.aggregateVersion,
+          commitSequence: candidate.position.commitSequence,
+          commitSize: candidate.position.commitSize,
+          previousEventfulAggregateVersion:
+            head.lastEventfulAggregateVersion,
+          type: candidate.event.type,
+          payload: candidate.event,
+        });
+      }
 
-        await advanceEventSourceHead(
-          tx,
-          commit.source,
-          commit.aggregateVersion,
-        );
-      }
-    },
-    endEventSources: async (sources) => {
-      for (const source of sources) {
-        // UPDATE ... SET ended = true, keyed by aggregateType + aggregateId.
-        await endEventSourceHead(tx, source);
-      }
-    },
-  };
-}
+      await advanceEventSourceHead(
+        tx,
+        commit.source,
+        commit.aggregateVersion,
+      );
+    }
+  },
+  endEventSources: async (sources, tx) => {
+    for (const source of sources) {
+      // UPDATE ... SET ended = true, keyed by aggregateType + aggregateId.
+      await endEventSourceHead(tx, source);
+    }
+  },
+};
 ```
 
 The helper names above are application-specific pseudocode. The hard

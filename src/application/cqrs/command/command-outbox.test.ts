@@ -4,7 +4,10 @@ import { InvalidCommandMessageError } from "../../../errors/kit-errors";
 import type { EventCommitCandidate } from "../../../messaging/committed-event";
 import { recordingCommandOutbox } from "../../../testing/recording-command-outbox";
 import type { PublishedCommand } from "./command";
-import { routeEventsToCommandOutbox } from "./command-outbox";
+import {
+	type CommandOutboxWriter,
+	routeEventsToCommandOutbox,
+} from "./command-outbox";
 
 type CheckoutAdvancedToShipping = ReturnType<
 	typeof createDomainEvent<
@@ -53,6 +56,24 @@ function processEventCandidate(): EventCommitCandidate<CheckoutAdvancedToShippin
 }
 
 describe("routeEventsToCommandOutbox", () => {
+	it("hands the transaction to the command outbox", async () => {
+		const received: unknown[] = [];
+		const commandOutbox: CommandOutboxWriter<RequestShipping, string> = {
+			add: async (_commits, tx) => {
+				received.push(tx);
+			},
+			endEventSources: async (_sources, tx) => {
+				received.push(tx);
+			},
+		};
+		const writer = routeEventsToCommandOutbox(commandOutbox, () => []);
+
+		await writer.add([processEventCandidate()], "transaction");
+		await writer.endEventSources([], "transaction");
+
+		expect(received).toEqual(["transaction", "transaction"]);
+	});
+
 	it("persists an addressed command without exposing the private process event", async () => {
 		const commandOutbox = recordingCommandOutbox<RequestShipping>();
 		const writer = routeEventsToCommandOutbox(
@@ -79,7 +100,7 @@ describe("routeEventsToCommandOutbox", () => {
 			},
 		);
 
-		await writer.add([processEventCandidate()]);
+		await writer.add([processEventCandidate()], undefined);
 
 		expect(commandOutbox.added).toEqual([
 			[
@@ -127,7 +148,7 @@ describe("routeEventsToCommandOutbox", () => {
 		const commandOutbox = recordingCommandOutbox<PublishedCommand>();
 		const writer = routeEventsToCommandOutbox(commandOutbox, () => []);
 
-		await writer.add([processEventCandidate()]);
+		await writer.add([processEventCandidate()], undefined);
 
 		expect(commandOutbox.added[0]).toEqual([
 			{
@@ -163,7 +184,7 @@ describe("routeEventsToCommandOutbox", () => {
 			},
 		]);
 
-		await writer.add([processEventCandidate()]);
+		await writer.add([processEventCandidate()], undefined);
 
 		const [commit] = commandOutbox.added[0] ?? [];
 		expect(commit?.messages.map((message) => message.command.type)).toEqual([
@@ -196,7 +217,7 @@ describe("routeEventsToCommandOutbox", () => {
 			],
 		);
 
-		await writer.add([processEventCandidate()]);
+		await writer.add([processEventCandidate()], undefined);
 		(mutableCommand.payload as { shipmentId: string }).shipmentId = "changed";
 
 		const recorded = commandOutbox.added[0]?.[0];
@@ -220,9 +241,9 @@ describe("routeEventsToCommandOutbox", () => {
 			},
 		]);
 
-		await expect(writer.add([processEventCandidate()])).rejects.toThrow(
-			/destination/,
-		);
+		await expect(
+			writer.add([processEventCandidate()], undefined),
+		).rejects.toThrow(/destination/);
 		expect(commandOutbox.added).toEqual([]);
 	});
 
@@ -234,9 +255,9 @@ describe("routeEventsToCommandOutbox", () => {
 		}>;
 		const writer = routeEventsToCommandOutbox(commandOutbox, () => sparse);
 
-		await expect(writer.add([processEventCandidate()])).rejects.toThrow(
-			/entry must be an object/,
-		);
+		await expect(
+			writer.add([processEventCandidate()], undefined),
+		).rejects.toThrow(/entry must be an object/);
 		expect(commandOutbox.added).toEqual([]);
 	});
 
@@ -253,7 +274,7 @@ describe("routeEventsToCommandOutbox", () => {
 			},
 		]);
 
-		await writer.add([processEventCandidate()]);
+		await writer.add([processEventCandidate()], undefined);
 
 		const payload = commandOutbox.added[0]?.[0]?.messages[0]?.command.payload;
 		expect(Object.is((payload as { delta: number }).delta, 0)).toBe(true);
@@ -271,9 +292,9 @@ describe("routeEventsToCommandOutbox", () => {
 			},
 		]);
 
-		await expect(writer.add([processEventCandidate()])).rejects.toThrow(
-			InvalidCommandMessageError,
-		);
+		await expect(
+			writer.add([processEventCandidate()], undefined),
+		).rejects.toThrow(InvalidCommandMessageError);
 		expect(commandOutbox.added).toEqual([]);
 	});
 
@@ -290,9 +311,9 @@ describe("routeEventsToCommandOutbox", () => {
 			},
 		]);
 
-		await expect(writer.add([processEventCandidate()])).rejects.toThrow(
-			InvalidCommandMessageError,
-		);
+		await expect(
+			writer.add([processEventCandidate()], undefined),
+		).rejects.toThrow(InvalidCommandMessageError);
 		expect(commandOutbox.added).toEqual([]);
 	});
 
@@ -311,7 +332,7 @@ describe("routeEventsToCommandOutbox", () => {
 			},
 		]);
 
-		await writer.add([processEventCandidate()]);
+		await writer.add([processEventCandidate()], undefined);
 
 		const message = commandOutbox.added[0]?.[0]?.messages[0];
 		expect(message?.command.type).toBe("RequestShipping");
@@ -333,7 +354,7 @@ describe("routeEventsToCommandOutbox", () => {
 			},
 		]);
 
-		await writer.add([processEventCandidate()]);
+		await writer.add([processEventCandidate()], undefined);
 
 		expect(commandOutbox.added[0]?.[0]?.messages[0]).not.toHaveProperty(
 			"tracestate",
@@ -356,7 +377,7 @@ describe("routeEventsToCommandOutbox", () => {
 			},
 		]);
 
-		await writer.add([processEventCandidate()]);
+		await writer.add([processEventCandidate()], undefined);
 
 		expect(commandOutbox.added[0]?.[0]?.messages[0]?.traceparent).toBe(
 			traceparent,
@@ -380,7 +401,7 @@ describe("routeEventsToCommandOutbox", () => {
 			},
 		]);
 
-		await writer.add([processEventCandidate()]);
+		await writer.add([processEventCandidate()], undefined);
 
 		expect(commandOutbox.added[0]?.[0]?.messages[0]?.tracestate).toBe(
 			"vendor1=abc,vendor2=def",
@@ -402,7 +423,7 @@ describe("routeEventsToCommandOutbox", () => {
 			},
 		]);
 
-		await writer.add([processEventCandidate()]);
+		await writer.add([processEventCandidate()], undefined);
 
 		const message = commandOutbox.added[0]?.[0]?.messages[0];
 		expect(message?.traceparent).toBe(

@@ -163,9 +163,9 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 		const createEnvironment = mutant.createEnvironment;
 		mutant.createEnvironment = async () => {
 			const environment = await createEnvironment();
-			const realOutbox = environment.outbox;
+			const realOutbox = environment.outbox as Outbox<TestEvent>;
 			const outbox: Outbox<TestEvent> = {
-				add: (events) => realOutbox.add(events),
+				add: (events) => realOutbox.add(events, undefined),
 				getPending: async (limit) =>
 					(await realOutbox.getPending(limit)).map((record) => ({
 						...record,
@@ -175,7 +175,8 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 						},
 					})),
 				markDispatched: (ids) => realOutbox.markDispatched(ids),
-				endEventSources: (sources) => realOutbox.endEventSources(sources),
+				endEventSources: (sources) =>
+					realOutbox.endEventSources(sources, undefined),
 			};
 			return { ...environment, outbox };
 		};

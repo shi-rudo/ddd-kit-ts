@@ -162,8 +162,11 @@ export interface OutboxDispatcherOptions<Evt extends AnyDomainEvent> {
 	 * decorator around a tracking outbox must forward both methods;
 	 * one that exposes only the plain `Outbox` surface silently turns
 	 * bounded retries off.
+	 *
+	 * The dispatcher never writes, so `never` accepts an outbox of any
+	 * transaction type.
 	 */
-	outbox: Outbox<Evt> | DispatchTrackingOutbox<Evt>;
+	outbox: Outbox<Evt, never> | DispatchTrackingOutbox<Evt, never>;
 
 	/** Where events go; see {@link OutboxSink}. */
 	sink: OutboxSink<Evt>;
@@ -300,7 +303,9 @@ export interface OutboxDispatcherOptions<Evt extends AnyDomainEvent> {
  * ```
  */
 export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
-	private readonly outbox: Outbox<Evt> | DispatchTrackingOutbox<Evt>;
+	private readonly outbox:
+		| Outbox<Evt, never>
+		| DispatchTrackingOutbox<Evt, never>;
 	private readonly sink: OutboxSink<Evt>;
 	private readonly classifyFailure?: DeliveryFailureClassifier;
 	private readonly observers: OutboxDispatcherObservers<Evt>;
@@ -319,7 +324,7 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 	readonly usesDispatchTracking: boolean;
 
 	/** The tracking view of the outbox, when it qualifies (see above). */
-	private readonly trackingOutbox?: DispatchTrackingOutbox<Evt>;
+	private readonly trackingOutbox?: DispatchTrackingOutbox<Evt, never>;
 
 	constructor(options: OutboxDispatcherOptions<Evt>) {
 		super("OutboxDispatcher", options);

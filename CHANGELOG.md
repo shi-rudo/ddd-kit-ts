@@ -246,6 +246,10 @@ immutable. Run one kit version per process during a cutover.
   identity, and the commit `position`. `DispatchTrackingOutbox.markFailed`
   returns the dead-letter record on the call that crosses the attempt
   ceiling. The poll methods accept an optional `ExecutionContext`.
+- `OutboxWriter` and `CommandOutboxWriter` receive the transaction:
+  `add(candidates, tx)` and `endEventSources(sources, tx)`. Before, a writer had
+  no way to reach the transaction that `withCommit` opened. A writer that ignores
+  `tx` still compiles, and the rollback tests of its contract suite catch it.
 - `OutboxWriter` has a required `endEventSources(sources)`, and so does the
   new `CommandOutboxWriter`. A custom outbox marks the head of each removed
   aggregate's source as ended and rejects a new event of an ended source.

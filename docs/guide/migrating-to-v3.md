@@ -1068,8 +1068,10 @@ implementation.
 #### The outbox stores committed events
 
 `OutboxWriter.add` takes `EventCommitCandidate` values from `withCommit`,
-not bare events. The array is frozen: an adapter reads it and does not
-change it. An `OutboxRecord` is a `CommittedDomainEvent` with a
+not bare events, and the transaction as its second argument. Write with that
+transaction. A durable writer that ignores it still compiles, but its write does
+not roll back with the aggregate. The array is frozen: an adapter reads it and
+does not change it. An `OutboxRecord` is a `CommittedDomainEvent` with a
 `dispatchId`: it carries `event`, the `source` identity, and the commit
 `position`. `DispatchTrackingOutbox.markFailed` returns the dead-letter record
 on the call that crosses the attempt ceiling, and `undefined` otherwise. The
@@ -1774,3 +1776,9 @@ The root entry no longer exports `capturePersistenceBaseline`,
   Call `assertJsonSafe` before the write, and map such a value at the adapter
   boundary. See
   [One rule for plain data](./design-decisions.md#one-rule-for-plain-data).
+- `OutboxWriter` and `CommandOutboxWriter` receive the transaction:
+  `add(candidates, tx)` and `endEventSources(sources, tx)`, with the type
+  `OutboxWriter<Evt, TCtx>`. A durable writer writes with `tx`. If yours found
+  the transaction through a closure or `AsyncLocalStorage`, remove that. A
+  direct call of a writer now passes the transaction as well. `InMemoryOutbox`
+  users need no change.
