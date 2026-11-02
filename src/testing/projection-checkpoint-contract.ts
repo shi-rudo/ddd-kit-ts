@@ -418,34 +418,55 @@ export function createProjectionCheckpointStoreContractTests<TCtx>(
 				// smuggled into the type vs. into the id. Whatever encoding
 				// the adapter uses (composite column, JSON tuple, nested
 				// key), these aggregate identities must keep distinct watermarks.
-				const inType: AggregateIdentity = {
-					aggregateType: "A\u0000B",
-					aggregateId: "C",
-				};
-				const inId: AggregateIdentity = {
-					aggregateType: "A",
-					aggregateId: "B\u0000C",
-				};
-				await env.run(async (ctx) => {
-					await env.store.save(
-						ctx,
-						"order-list",
-						inType,
-						checkpoint(pos(10, 0)),
+				const identitiesAround = (separator: string) =>
+					[
+						{ aggregateType: `A${separator}B`, aggregateId: "C" },
+						{ aggregateType: "A", aggregateId: `B${separator}C` },
+					] as const;
+				const saveAndLoad = async (separator: string) => {
+					const [inType, inId] = identitiesAround(separator);
+					await env.run(async (ctx) => {
+						await env.store.save(
+							ctx,
+							"order-list",
+							inType,
+							checkpoint(pos(10, 0)),
+						);
+						await env.store.save(
+							ctx,
+							"order-list",
+							inId,
+							checkpoint(pos(1, 0)),
+						);
+					});
+					const [first, second] = await env.run((ctx) =>
+						Promise.all([
+							env.store.load(ctx, "order-list", inType),
+							env.store.load(ctx, "order-list", inId),
+						]),
 					);
-					await env.store.save(ctx, "order-list", inId, checkpoint(pos(1, 0)));
-				});
-				const [first, second] = await env.run((ctx) =>
-					Promise.all([
-						env.store.load(ctx, "order-list", inType),
-						env.store.load(ctx, "order-list", inId),
-					]),
+					assert(
+						first?.position.aggregateVersion === 10 &&
+							second?.position.aggregateVersion === 1,
+						"two aggregate identities that differ only in where a hostile separator sits must not share a watermark",
+					);
+				};
+				for (const separator of ["\u001f", "/", ":", "|"]) {
+					await saveAndLoad(separator);
+				}
+				// A PostgreSQL text column cannot hold a NUL byte. An adapter may
+				// reject the identity, but it must not mix the two.
+				const rejection = await captureRejection(
+					env.run((ctx) =>
+						env.store.save(
+							ctx,
+							"order-list",
+							identitiesAround("\u0000")[0],
+							checkpoint(pos(10, 0)),
+						),
+					),
 				);
-				assert(
-					first?.position.aggregateVersion === 10 &&
-						second?.position.aggregateVersion === 1,
-					"two aggregate identities that differ only in where a hostile separator sits must not share a watermark",
-				);
+				if (rejection === undefined) await saveAndLoad("\u0000");
 			}),
 		},
 		{
