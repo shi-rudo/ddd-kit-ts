@@ -8,11 +8,15 @@ import {
 	KitWiringError,
 	type OutboxRecord,
 } from "@shirudo/ddd-kit";
-import type { Pool } from "pg";
 import type { PgEventCodec } from "./pg-event-codec";
-import { fromPgPool, type PgQueryExecutor } from "./pg-query-executor";
+import {
+	fromPgPool,
+	inBoundedTransaction,
+	type PgPollPool,
+	setStatementDeadline,
+} from "./pg-pool-executor";
+import type { PgQueryExecutor } from "./pg-query-executor";
 import { PgTransactionScope } from "./pg-transaction-scope";
-import { rejectOnAbort } from "./reject-on-abort";
 import {
 	decodeStoredEvent,
 	encodeStoredEvent,
@@ -28,7 +32,7 @@ export interface PgOutboxOptions<Evt extends AnyDomainEvent> {
 	 * Runs the poll statements. The write statements run on the transaction that
 	 * `add` receives.
 	 */
-	readonly pool: Pick<Pool, "query" | "connect">;
+	readonly pool: PgPollPool;
 	/** The failed deliveries that move a record to the dead letters. Default `5`. */
 	readonly maxDeliveryAttempts?: number | undefined;
 	/**
@@ -86,17 +90,20 @@ export class PgOutbox<Evt extends AnyDomainEvent>
 	implements DispatchTrackingOutbox<Evt, PgQueryExecutor>
 {
 	private readonly poll: PgQueryExecutor;
-	private readonly claimScope: PgTransactionScope;
+	private readonly pool: PgPollPool;
 	private readonly maxDeliveryAttempts: number;
 	private readonly leaseMs: number | undefined;
 	private readonly codec: PgEventCodec<Evt> | undefined;
 
 	constructor(options: PgOutboxOptions<Evt>) {
+		this.pool = options.pool;
 		this.poll = fromPgPool(options.pool);
-		this.claimScope = new PgTransactionScope(options.pool);
-		this.maxDeliveryAttempts =
-			options.maxDeliveryAttempts ?? DEFAULT_MAX_DELIVERY_ATTEMPTS;
-		this.leaseMs = options.claim?.leaseMs;
+		this.maxDeliveryAttempts = positiveInteger(
+			"maxDeliveryAttempts",
+			options.maxDeliveryAttempts ?? DEFAULT_MAX_DELIVERY_ATTEMPTS,
+		);
+		this.leaseMs =
+			options.claim && positiveInteger("leaseMs", options.claim.leaseMs);
 		this.codec = options.codec;
 	}
 
@@ -140,19 +147,18 @@ export class PgOutbox<Evt extends AnyDomainEvent>
 	): Promise<ReadonlyArray<OutboxRecord<Evt>>> {
 		if (!(limit > 0)) return [];
 		context?.signal.throwIfAborted();
-		const { rows } = await rejectOnAbort(
+		const { rows } =
 			this.leaseMs === undefined
-				? this.poll.query<OutboxRow>(
+				? await this.poll.query<OutboxRow>(
 						`SELECT ${OUTBOX_COLUMNS}
 						FROM ddd_kit_outbox AS outbox
 						WHERE outbox.status = 'pending'
 						ORDER BY outbox.position
 						LIMIT $1`,
 						[limit],
+						context,
 					)
-				: this.claimPending(limit, this.leaseMs),
-			context?.signal,
-		);
+				: await this.claimPending(limit, this.leaseMs, context);
 		return rows.map((row) => this.toRecord(row));
 	}
 
@@ -162,44 +168,59 @@ export class PgOutbox<Evt extends AnyDomainEvent>
 	 * the lock. The poll would then miss the claim of the poll before it, and hand
 	 * a later event of a source to another dispatcher.
 	 */
-	private claimPending(limit: number, leaseMs: number) {
-		return this.claimScope.transactional(async (tx) => {
+	private claimPending(
+		limit: number,
+		leaseMs: number,
+		context: ExecutionContext | undefined,
+	) {
+		const claim = async (tx: PgQueryExecutor) => {
 			await tx.query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED");
 			await tx.query(
-				"SELECT pg_advisory_xact_lock(hashtext('ddd_kit_outbox'))",
+				`SELECT pg_advisory_xact_lock(
+					hashtextextended(current_schema() || '/ddd_kit_outbox', 0)
+				)`,
 			);
+			if (context !== undefined) await setStatementDeadline(tx, context);
+			// clock_timestamp and not now: now is the start of the transaction, before
+			// the wait for the lock, and that wait would shorten the lease.
 			return tx.query<OutboxRow>(
 				`WITH chosen AS (
-				SELECT candidate.position
-				FROM ddd_kit_outbox AS candidate
-				WHERE candidate.status = 'pending'
-					AND (candidate.claimed_until IS NULL OR candidate.claimed_until <= now())
-					AND NOT EXISTS (
-						SELECT 1
-						FROM ddd_kit_outbox AS earlier
-						WHERE earlier.aggregate_type = candidate.aggregate_type
-							AND earlier.aggregate_id = candidate.aggregate_id
-							AND earlier.position < candidate.position
-							AND earlier.status = 'pending'
-							AND earlier.claimed_until > now()
-					)
-				ORDER BY candidate.position
-				LIMIT $1
-				FOR UPDATE OF candidate SKIP LOCKED
-			),
-			claimed AS (
-				UPDATE ddd_kit_outbox AS target
-				SET claimed_until = now() + $2 * interval '1 millisecond'
-				FROM chosen
-				WHERE target.position = chosen.position
-				RETURNING target.*
-			)
-			SELECT ${OUTBOX_COLUMNS}
-			FROM claimed AS outbox
-			ORDER BY outbox.position`,
+					SELECT candidate.position
+					FROM ddd_kit_outbox AS candidate
+					WHERE candidate.status = 'pending'
+						AND (
+							candidate.claimed_until IS NULL
+							OR candidate.claimed_until <= clock_timestamp()
+						)
+						AND NOT EXISTS (
+							SELECT 1
+							FROM ddd_kit_outbox AS earlier
+							WHERE earlier.aggregate_type = candidate.aggregate_type
+								AND earlier.aggregate_id = candidate.aggregate_id
+								AND earlier.position < candidate.position
+								AND earlier.status = 'pending'
+								AND earlier.claimed_until > clock_timestamp()
+						)
+					ORDER BY candidate.position
+					LIMIT $1
+					FOR UPDATE OF candidate SKIP LOCKED
+				),
+				claimed AS (
+					UPDATE ddd_kit_outbox AS target
+					SET claimed_until = clock_timestamp() + $2 * interval '1 millisecond'
+					FROM chosen
+					WHERE target.position = chosen.position
+					RETURNING target.*
+				)
+				SELECT ${OUTBOX_COLUMNS}
+				FROM claimed AS outbox
+				ORDER BY outbox.position`,
 				[limit, leaseMs],
 			);
-		});
+		};
+		return context === undefined
+			? new PgTransactionScope(this.pool).transactional(claim)
+			: inBoundedTransaction(this.pool, context, claim);
 	}
 
 	async markDispatched(
@@ -207,14 +228,12 @@ export class PgOutbox<Evt extends AnyDomainEvent>
 		context?: ExecutionContext,
 	): Promise<void> {
 		context?.signal.throwIfAborted();
-		await rejectOnAbort(
-			this.poll.query(
-				`UPDATE ddd_kit_outbox
-				SET status = 'dispatched', dispatched_at = now(), claimed_until = NULL
-				WHERE event_id = ANY($1::text[]) AND status IN ('pending', 'dead')`,
-				[dispatchIds],
-			),
-			context?.signal,
+		await this.poll.query(
+			`UPDATE ddd_kit_outbox
+			SET status = 'dispatched', dispatched_at = now(), claimed_until = NULL
+			WHERE event_id = ANY($1::text[]) AND status IN ('pending', 'dead')`,
+			[dispatchIds],
+			context,
 		);
 	}
 
@@ -226,23 +245,23 @@ export class PgOutbox<Evt extends AnyDomainEvent>
 		context?.signal.throwIfAborted();
 		const lastError =
 			error instanceof Error ? error.message : String(error ?? "unknown");
-		const { rows } = await rejectOnAbort(
-			this.poll.query<OutboxRow & { readonly status: string }>(
-				`WITH failed AS (
-					UPDATE ddd_kit_outbox
-					SET
-						attempts = attempts + 1,
-						last_error = $2,
-						claimed_until = NULL,
-						status = CASE WHEN attempts + 1 >= $3 THEN 'dead' ELSE 'pending' END
-					WHERE event_id = $1 AND status = 'pending'
-					RETURNING *
-				)
-				SELECT ${OUTBOX_COLUMNS}, outbox.status
-				FROM failed AS outbox`,
-				[dispatchId, lastError, this.maxDeliveryAttempts],
-			),
-			context?.signal,
+		const { rows } = await this.poll.query<
+			OutboxRow & { readonly status: string }
+		>(
+			`WITH failed AS (
+				UPDATE ddd_kit_outbox
+				SET
+					attempts = attempts + 1,
+					last_error = $2,
+					claimed_until = NULL,
+					status = CASE WHEN attempts + 1 >= $3 THEN 'dead' ELSE 'pending' END
+				WHERE event_id = $1 AND status = 'pending'
+				RETURNING *
+			)
+			SELECT ${OUTBOX_COLUMNS}, outbox.status
+			FROM failed AS outbox`,
+			[dispatchId, lastError, this.maxDeliveryAttempts],
+			context,
 		);
 		const row = rows[0];
 		return row?.status === "dead" ? this.toDeadLetter(row) : undefined;
@@ -320,9 +339,13 @@ async function addOne<Evt extends AnyDomainEvent>(
 	);
 	const { rows: heads } = await tx.query<{
 		readonly head: string | null;
+		readonly last_commit_event_ids: ReadonlyArray<string>;
 		readonly ended: boolean;
 	}>(
-		`SELECT last_eventful_aggregate_version::text AS head, ended
+		`SELECT
+			last_eventful_aggregate_version::text AS head,
+			last_commit_event_ids,
+			ended
 		FROM ddd_kit_outbox_source_head
 		WHERE aggregate_type = $1 AND aggregate_id = $2
 		FOR UPDATE`,
@@ -361,6 +384,15 @@ async function addOne<Evt extends AnyDomainEvent>(
 			event,
 			"its id already identifies another event, at another source or position",
 		);
+	}
+
+	// The record of the head commit can be gone after a purge. The head still
+	// names its events, so a retry of one stays a retry.
+	if (
+		position.aggregateVersion === head &&
+		headRow?.last_commit_event_ids.includes(event.eventId)
+	) {
+		return;
 	}
 
 	if (headRow?.ended === true) {
@@ -414,6 +446,12 @@ async function addOne<Evt extends AnyDomainEvent>(
 				);
 			}
 			predecessor = sibling.previous === null ? null : Number(sibling.previous);
+		} else {
+			throw rejected(
+				event,
+				`aggregate version ${position.aggregateVersion} is the head of its ` +
+					"event source, and the head names other events",
+			);
 		}
 	}
 
@@ -441,10 +479,30 @@ async function addOne<Evt extends AnyDomainEvent>(
 	);
 	await tx.query(
 		`UPDATE ddd_kit_outbox_source_head
-		SET last_eventful_aggregate_version = $3
+		SET
+			last_commit_event_ids = CASE
+				WHEN last_eventful_aggregate_version = $3
+					THEN array_append(last_commit_event_ids, $4::text)
+				ELSE ARRAY[$4::text]
+			END,
+			last_eventful_aggregate_version = $3
 		WHERE aggregate_type = $1 AND aggregate_id = $2`,
-		[source.aggregateType, source.aggregateId, position.aggregateVersion],
+		[
+			source.aggregateType,
+			source.aggregateId,
+			position.aggregateVersion,
+			event.eventId,
+		],
 	);
+}
+
+function positiveInteger(name: string, value: number): number {
+	if (!Number.isSafeInteger(value) || value < 1) {
+		throw new RangeError(
+			`PgOutbox: ${name} must be a positive integer, got ${String(value)}`,
+		);
+	}
+	return value;
 }
 
 function rejected(

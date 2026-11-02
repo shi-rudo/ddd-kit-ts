@@ -38,6 +38,8 @@ CREATE TABLE ddd_kit_outbox_source_head (
 	aggregate_id text NOT NULL,
 	-- NULL until the first event of the source.
 	last_eventful_aggregate_version bigint,
+	-- The events of that commit. A retry of one stays a retry after a purge.
+	last_commit_event_ids text[] NOT NULL DEFAULT '{}',
 	ended boolean NOT NULL DEFAULT false,
 	PRIMARY KEY (aggregate_type, aggregate_id)
 );

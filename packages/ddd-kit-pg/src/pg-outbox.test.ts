@@ -186,6 +186,73 @@ describe("PgOutbox", () => {
 		await teardown();
 	});
 
+	describe("after the purge of a delivered record", () => {
+		const addDeliverAndPurge = async (opened: {
+			add: (
+				candidates: ReadonlyArray<EventCommitCandidate<ThingHappened>>,
+			) => Promise<void>;
+			outbox: PgOutbox<ThingHappened>;
+			database: { pool: Pool };
+		}) => {
+			await opened.add([candidate(eventNamed("event-5"), 5)]);
+			await opened.outbox.markDispatched(["event-5"]);
+			await opened.database.pool.query("DELETE FROM ddd_kit_outbox");
+		};
+
+		it("treats an exact retry at the head as a retry, so nothing is delivered again", async () => {
+			const opened = await openOutbox();
+			await addDeliverAndPurge(opened);
+
+			await opened.add([candidate(eventNamed("event-5"), 5)]);
+
+			expect(await opened.outbox.getPending()).toEqual([]);
+			await opened.teardown();
+		});
+
+		it("rejects another event at the head version, because the head proves another commit", async () => {
+			const opened = await openOutbox();
+			await addDeliverAndPurge(opened);
+
+			await expect(
+				opened.add([candidate(eventNamed("event-other"), 5)]),
+			).rejects.toMatchObject({ code: "EVENT_COLLECTION_FAILED" });
+
+			expect(await opened.outbox.getPending()).toEqual([]);
+			await opened.teardown();
+		});
+
+		it("links the next commit to the head", async () => {
+			const opened = await openOutbox();
+			await addDeliverAndPurge(opened);
+
+			await opened.add([candidate(eventNamed("event-6"), 6)]);
+
+			const [record] = await opened.outbox.getPending();
+			expect(record?.position.previousEventfulAggregateVersion).toBe(5);
+			await opened.teardown();
+		});
+	});
+
+	it.each([
+		["a lease of zero", { claim: { leaseMs: 0 } }, "leaseMs"],
+		["a negative lease", { claim: { leaseMs: -1 } }, "leaseMs"],
+		["a lease that is not an integer", { claim: { leaseMs: 1.5 } }, "leaseMs"],
+		["no delivery attempts", { maxDeliveryAttempts: 0 }, "maxDeliveryAttempts"],
+		[
+			"NaN attempts",
+			{ maxDeliveryAttempts: Number.NaN },
+			"maxDeliveryAttempts",
+		],
+	])("rejects %s at construction", (_name, options, field) => {
+		expect(
+			() =>
+				new PgOutbox<ThingHappened>({
+					pool: {} as Pool,
+					...options,
+				}),
+		).toThrow(new RegExp(`${field} must be a positive integer`));
+	});
+
 	it("serializes two transactions of one source, so both link to their predecessor", async () => {
 		const { add, outbox, teardown } = await openOutbox();
 
@@ -330,6 +397,76 @@ describe("PgOutbox", () => {
 			const reclaimed = await outbox.getPending(10);
 
 			expect(reclaimed.map((r) => r.dispatchId)).toEqual(["event-1"]);
+			await teardown();
+		});
+
+		it("starts the lease after the wait for the claim lock", async () => {
+			const { add, database, outbox, teardown } = await openOutbox({
+				claim: { leaseMs: 60_000 },
+			});
+			await add([candidate(eventNamed("event-1"))]);
+			const holder = await database.pool.connect();
+			await holder.query("BEGIN");
+			const { rows: keys } = await holder.query(
+				"SELECT hashtextextended(current_schema() || '/ddd_kit_outbox', 0) AS key",
+			);
+			await holder.query("SELECT pg_advisory_xact_lock($1::bigint)", [
+				keys[0].key,
+			]);
+			const start = Date.now();
+			const claiming = outbox.getPending(10);
+			await new Promise((resolve) => setTimeout(resolve, 200));
+			await holder.query("COMMIT");
+			holder.release();
+			await claiming;
+
+			const { rows } = await database.pool.query(
+				"SELECT extract(epoch FROM claimed_until) * 1000 AS until FROM ddd_kit_outbox",
+			);
+			expect(Number(rows[0].until)).toBeGreaterThanOrEqual(
+				start + 200 + 60_000 - 50,
+			);
+			await teardown();
+		});
+
+		it("rolls back a claim that the caller aborted, so no record is stranded", async () => {
+			const { add, outbox, teardown } = await openOutbox({
+				claim: { leaseMs: 60_000 },
+			});
+			await add([candidate(eventNamed("event-1"))]);
+			const controller = new AbortController();
+
+			const poll = outbox.getPending(10, {
+				signal: controller.signal,
+				deadlineAt: Date.now() + 5_000,
+			});
+			controller.abort(new Error("the deadline passed"));
+			await expect(poll).rejects.toThrow("the deadline passed");
+
+			await expect
+				.poll(async () =>
+					(await outbox.getPending(10)).map((r) => r.dispatchId),
+				)
+				.toEqual(["event-1"]);
+			await teardown();
+		});
+
+		it("cancels a statement in the database when the deadline passes", async () => {
+			const { add, database, outbox, teardown } = await openOutbox();
+			await add([candidate(eventNamed("event-1"))]);
+			const blocker = await database.pool.connect();
+			await blocker.query("BEGIN");
+			await blocker.query("LOCK TABLE ddd_kit_outbox IN ACCESS EXCLUSIVE MODE");
+
+			await expect(
+				outbox.getPending(10, {
+					signal: new AbortController().signal,
+					deadlineAt: Date.now() + 100,
+				}),
+			).rejects.toMatchObject({ code: "57014" });
+
+			await blocker.query("ROLLBACK");
+			blocker.release();
 			await teardown();
 		});
 

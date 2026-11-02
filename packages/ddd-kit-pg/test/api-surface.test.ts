@@ -10,8 +10,10 @@ describe("the public API of the package", () => {
 			"PgIdempotencyStore",
 			"PgOutbox",
 			"PgRetryableTransactionFailureError",
+			"PgRollbackFailedError",
 			"PgTransactionScope",
 			"fromPg",
+			"fromPgPool",
 		]);
 	});
 });
