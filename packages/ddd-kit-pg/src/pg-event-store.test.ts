@@ -92,6 +92,20 @@ describe("PgEventStore", () => {
 		await teardown();
 	});
 
+	it("rejects a NUL byte in a payload, which PostgreSQL cannot keep, and writes nothing", async () => {
+		const { store, teardown } = await openStore();
+
+		await expect(
+			store.append(stream, [noteWritten({ text: "a\u0000b" })], {
+				expectedVersion: 0,
+			}),
+		).rejects.toMatchObject({ code: "22P05" });
+
+		const read = await store.readStream(stream, { limit: 1 });
+		expect(read.exists).toBe(false);
+		await teardown();
+	});
+
 	it("keeps every field of the envelope", async () => {
 		const { store, teardown } = await openStore();
 		const event = noteWritten(

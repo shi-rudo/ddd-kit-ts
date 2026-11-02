@@ -5,13 +5,17 @@ describe("the public API of the package", () => {
 	it("exports exactly the pinned runtime names", () => {
 		expect(Object.keys(api).sort()).toEqual([
 			"PgCommitRolledBackError",
+			"PgDeadlineStore",
 			"PgEventStore",
 			"PgEventStreamCorruptError",
 			"PgIdempotencyStore",
 			"PgOutbox",
+			"PgProjectionCheckpointStore",
 			"PgRetryableTransactionFailureError",
+			"PgSnapshotStore",
 			"PgTransactionScope",
 			"fromPg",
+			"fromPgPool",
 		]);
 	});
 });

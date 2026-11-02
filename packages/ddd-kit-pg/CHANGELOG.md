@@ -28,3 +28,6 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   predecessor, and rejects a new event of an ended source. With `claim`, several
   dispatchers can run at once, and they keep the order per aggregate. A record
   of a crashed dispatcher returns when its lease ends.
+- `PgDeadlineStore`, `PgProjectionCheckpointStore`, and `PgSnapshotStore`, with
+  their tables in `sql/`, and `fromPgPool` for the statements that need no
+  transaction.
