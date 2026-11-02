@@ -234,32 +234,41 @@ export interface DispatchTrackingOutbox<
 
 	/**
 	 * Moves the named dead-lettered records back to pending. Each record keeps
-	 * its `dispatchId`, event, source, and position, and gets a fresh attempt
-	 * budget. `getPending` returns it at its commit-order place again. A SQL
-	 * adapter gets this from the position column.
+	 * its `dispatchId`, event, source, and commit position, and gets a fresh
+	 * attempt budget. `getPending` returns it in commit order again, so before
+	 * the records that committed after it.
 	 *
 	 * A no-op for an id that is not dead-lettered: unknown, pending, or
 	 * dispatched. A repeated call therefore does not reset an attempt budget.
 	 * `add` does not requeue: an exact retry of `add` leaves a dead letter dead,
 	 * so a late retry of a use case cannot revive it.
+	 *
+	 * An operator calls this outside the write transaction, like the rest of
+	 * the poll side, so the port has no transaction parameter.
 	 */
-	requeueDeadLetters: (dispatchIds: ReadonlyArray<string>) => Promise<void>;
+	requeueDeadLetters: (
+		dispatchIds: ReadonlyArray<string>,
+		context?: ExecutionContext,
+	) => Promise<void>;
 }
 
 /**
  * Discriminates a {@link DispatchTrackingOutbox} from a plain
  * {@link Outbox} at runtime. The single source of truth for the check;
  * the dispatcher and the contract suite both use it, so what counts as
- * a tracking outbox cannot drift between them. The two methods that the
- * dispatcher calls must be present: a plain adapter that happens to expose
- * an unrelated `markFailed` helper must not be mistaken for one that
- * implements the tracking protocol and then be fed `(dispatchId, error)`
- * arguments it never asked for. Internal plumbing, not exported from the
+ * a tracking outbox cannot drift between them. `markFailed` and `deadLetters`
+ * must both be present: a plain adapter that happens to expose an unrelated
+ * `markFailed` helper must not be mistaken for one that implements the
+ * tracking protocol and then be fed `(dispatchId, error)` arguments it never
+ * asked for. The check leaves out `requeueDeadLetters`, which the dispatcher
+ * does not call: an adapter without it must not lose its bounded retries. The
+ * contract suite names that gap. Internal plumbing, not exported from the
  * package entries.
  */
 export function isDispatchTrackingOutbox<Evt extends AnyDomainEvent, TCtx>(
 	outbox: Outbox<Evt, TCtx> | DispatchTrackingOutbox<Evt, TCtx>,
-): outbox is DispatchTrackingOutbox<Evt, TCtx> {
+): outbox is Outbox<Evt, TCtx> &
+	Pick<DispatchTrackingOutbox<Evt, TCtx>, "markFailed" | "deadLetters"> {
 	const candidate = outbox as DispatchTrackingOutbox<Evt, TCtx>;
 	return (
 		typeof candidate.markFailed === "function" &&

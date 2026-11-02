@@ -1099,7 +1099,7 @@ missed call shows only in `deadLetters()`, because the record stays there.
 
 ```ts
 // before
-await outbox.add([event]);
+await outbox.add([candidate]);
 
 // after
 await outbox.requeueDeadLetters([deadLetter.dispatchId]);

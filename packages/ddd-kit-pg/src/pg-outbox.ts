@@ -277,12 +277,16 @@ export class PgOutbox<Evt extends AnyDomainEvent>
 		return rows.map((row) => this.toDeadLetter(row));
 	}
 
-	async requeueDeadLetters(dispatchIds: ReadonlyArray<string>): Promise<void> {
+	async requeueDeadLetters(
+		dispatchIds: ReadonlyArray<string>,
+		context?: ExecutionContext,
+	): Promise<void> {
 		await this.poll.query(
 			`UPDATE ddd_kit_outbox
 			SET status = 'pending', attempts = 0, last_error = NULL, claimed_until = NULL
 			WHERE event_id = ANY($1::text[]) AND status = 'dead'`,
 			[dispatchIds],
+			context,
 		);
 	}
 

@@ -517,7 +517,10 @@ interface DispatchTrackingOutbox<Evt extends AnyDomainEvent>
     context?: ExecutionContext,
   ): Promise<DeadLetterRecord<Evt> | undefined>;
   deadLetters(): Promise<ReadonlyArray<DeadLetterRecord<Evt>>>;
-  requeueDeadLetters(dispatchIds: ReadonlyArray<string>): Promise<void>;
+  requeueDeadLetters(
+    dispatchIds: ReadonlyArray<string>,
+    context?: ExecutionContext,
+  ): Promise<void>;
 }
 ```
 
@@ -542,7 +545,8 @@ Recovery is explicit:
 
 - Fix the cause and call `requeueDeadLetters` with the `dispatchId` of each
   record. The record returns to its commit-order place in `getPending`, with a
-  fresh attempt budget. A repeated call does nothing.
+  fresh attempt budget. A repeated call does nothing. Call it outside the write
+  transaction.
 - Deliver the event manually and call `markDispatched` to clear it.
 
 A repeated `add` does not requeue. The call resolves without an error, and the
