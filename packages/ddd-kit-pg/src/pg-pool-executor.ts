@@ -12,19 +12,22 @@ export type PgPollPool = Pick<Pool, "query" | "connect">;
  * caller, for example the polls of an outbox. Each statement runs on any free
  * connection. A statement with a `context` runs in a short transaction of its
  * own, because a statement timeout needs one: the database cancels the statement
- * at the deadline, so that it cannot hold a connection of the pool.
+ * at the deadline, so that it cannot hold a connection of the pool. That
+ * transaction runs at READ COMMITTED, because no caller retries a serialization
+ * failure of a poll statement.
  */
 export function fromPgPool(pool: PgPollPool): PgQueryExecutor {
+	const scope = new PgTransactionScope(pool, {
+		isolationLevel: "read committed",
+	});
 	return {
 		query: async (text, values, context) => {
 			if (context === undefined) {
 				const { rows } = await pool.query(text, values && [...values]);
 				return { rows };
 			}
-			return inBoundedTransaction(
-				new PgTransactionScope(pool),
-				context,
-				async (tx) => tx.query(text, values),
+			return inBoundedTransaction(scope, context, async (tx) =>
+				tx.query(text, values),
 			);
 		},
 	};
