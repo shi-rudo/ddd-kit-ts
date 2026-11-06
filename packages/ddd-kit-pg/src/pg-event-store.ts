@@ -133,8 +133,10 @@ export class PgEventStore<Evt extends AnyDomainEvent>
 	 * to erase personal data. Call it inside a transaction at READ COMMITTED: it
 	 * rejects another isolation level with `PgUnsupportedIsolationLevelError`.
 	 * The version guard rejects a stream that changed after the load, and an
-	 * open append finishes first. Delete a snapshot of the aggregate first. A
-	 * removed identity stays removed: give a new aggregate a new id.
+	 * open append finishes first. Delete a snapshot of the aggregate first. The
+	 * store keeps no mark of a removed stream, so an append at version 0 creates
+	 * it again. Give a new aggregate a new id: `PgOutbox` rejects an event of the
+	 * old id, because the removal ended its event source.
 	 */
 	async removeStream(
 		stream: AggregateIdentity,

@@ -71,7 +71,10 @@ The table keeps JSON. JSON does not keep a `Date`, a `Map`, a `Set`, a `bigint`,
 or `undefined` inside a payload, so `append` rejects such a value and names its
 path. If your events hold such a value, map it with a `PgEventCodec`. Upcasting
 runs in the same place. The codec must keep the `eventId`, and `append` rejects an
-event whose id the codec changed.
+event whose id the codec changed. If `decode` throws for a stored event, a read of
+its stream and a poll of the outbox stop there with `PgEventDecodeError`, which
+names the event. So deploy a codec that decodes a new event type to every
+process before any process writes that type.
 
 ```ts
 import { type PgEventCodec, PgEventStore } from "@shirudo/ddd-kit-pg";
