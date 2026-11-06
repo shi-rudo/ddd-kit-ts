@@ -1808,3 +1808,6 @@ The root entry no longer exports `capturePersistenceBaseline`,
   the transaction through a closure or `AsyncLocalStorage`, remove that. A
   direct call of a writer now passes the transaction as well. `InMemoryOutbox`
   users need no change.
+- The deadline contract suite checks that a failure report without an error
+  keeps the reason of an earlier report. A custom deadline store that writes a
+  placeholder such as `unknown` over the recorded reason now fails the suite.

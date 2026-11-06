@@ -145,16 +145,15 @@ export class PgDeadlineStore<TPayload = unknown>
 		context?.signal.throwIfAborted();
 		// PostgreSQL text cannot hold a NUL byte, and the UPDATE would then fail on
 		// every attempt.
-		const lastError = (
-			error instanceof Error ? error.message : String(error ?? "unknown")
-		).replaceAll("\u0000", "\uFFFD");
+		const lastError =
+			error === undefined ? null : String(error).replaceAll("\u0000", "\uFFFD");
 		const { rows } = await this.executor.query<
 			DeadlineRow & { readonly status: string }
 		>(
 			`UPDATE ddd_kit_deadline
 			SET
 				attempts = attempts + 1,
-				last_error = $2,
+				last_error = coalesce($2, last_error),
 				status = CASE WHEN attempts + 1 >= $3 THEN 'dead' ELSE 'pending' END
 			WHERE delivery_id = $1 AND status = 'pending'
 			RETURNING ${DEADLINE_COLUMNS}, status`,

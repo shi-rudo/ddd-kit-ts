@@ -184,6 +184,8 @@ immutable. Run one kit version per process during a cutover.
 - The identity test of the checkpoint contract suite runs with several separators.
   For a NUL byte, it allows a rejection, because a PostgreSQL text column cannot
   hold one. Before, no PostgreSQL adapter could pass the suite.
+- The deadline contract suite checks that a failure report without an error
+  keeps the reason of an earlier report, as `InMemoryDeadlineStore` does.
 - `EventStore.append` and `readStream` take an `AggregateIdentity` in place
   of the raw id. The same id under two aggregate types is two streams. A
   production schema keys a stream on `(aggregate_type, aggregate_id,

@@ -430,6 +430,30 @@ export function createDeadlineStoreContractTests(
 				);
 			}),
 		},
+		{
+			name: "a failure report without an error keeps the reason of an earlier report",
+			run: inEnv(async (env) => {
+				await env.run(() =>
+					env.store.schedule({
+						processName: "s",
+						key: "poison",
+						dueAt: at(T0),
+						payload: { kind: "poison" },
+					}),
+				);
+				const [poison] = await env.store.due(at(T1), 1);
+				assert(poison !== undefined, "expected the due deadline");
+				await env.store.markFailed(poison.deliveryId, new Error("broker down"));
+				for (let i = 1; i < ceiling; i++) {
+					await env.store.markFailed(poison.deliveryId);
+				}
+				const [dead] = await env.store.deadLetters();
+				assert(
+					dead?.lastError?.includes("broker down") === true,
+					`a failure report without an error must not replace the recorded reason "broker down", got ${String(dead?.lastError)}`,
+				);
+			}),
+		},
 		// Observing attempts on a pending record, and a neighbor's continued
 		// flow, both need re-polls of records an earlier poll returned
 		// without resolving them; claiming adapters legitimately hold those
