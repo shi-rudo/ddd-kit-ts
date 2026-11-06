@@ -260,7 +260,8 @@ immutable. Run one kit version per process during a cutover.
   call resolves without an error, and the event stays undelivered. So a late
   retry of a use case cannot revive it, and `INSERT ... ON CONFLICT DO NOTHING`
   stays a correct `add`. Neither the compiler nor the runtime reports an old
-  `add` that was meant to requeue.
+  `add` that was meant to requeue. The outbox contract suite also accepts an
+  adapter without the `eventId` dedupe that rejects such a retry.
 
 #### Command and query buses
 

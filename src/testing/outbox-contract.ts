@@ -1029,7 +1029,8 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 					await outbox.markFailed(record.dispatchId, new Error("poison"));
 				}
 
-				await env.addCommitted(original);
+				// Without the recommended eventId dedupe, add may reject the retry.
+				await captureRejection(env.addCommitted(original));
 
 				assertEqual(
 					(await outbox.getPending(10)).length,
