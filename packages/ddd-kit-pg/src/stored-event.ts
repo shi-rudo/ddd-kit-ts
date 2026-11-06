@@ -40,6 +40,13 @@ export function encodeStoredEvent<Evt extends AnyDomainEvent>(
 		);
 	}
 	const stored = codec?.encode(event) ?? event;
+	if (stored.eventId !== event.eventId) {
+		throw new TypeError(
+			`${subject}: the codec changed the eventId from "${event.eventId}" to ` +
+				`"${String(stored.eventId)}". Keep the eventId in encode: a retry ` +
+				"finds its stored event by that id.",
+		);
+	}
 	if (stored.payload !== undefined) {
 		assertJsonSafe(stored.payload, `${subject} payload`);
 	}

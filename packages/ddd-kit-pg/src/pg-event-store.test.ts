@@ -3,7 +3,10 @@ import { createDomainEvent } from "@shirudo/ddd-kit";
 import { createEventStoreContractTests } from "@shirudo/ddd-kit/testing";
 import type { Pool, PoolClient } from "pg";
 import { describe, expect, it } from "vite-plus/test";
-import { openIsolatedSchema } from "../test/isolated-schema";
+import {
+	openIsolatedSchema,
+	openTablesBehindPrivateSchemas,
+} from "../test/isolated-schema";
 import { PgUnsupportedIsolationLevelError } from "./pg-errors";
 import type { PgEventCodec } from "./pg-event-codec";
 import { PgEventStore } from "./pg-event-store";
@@ -195,6 +198,23 @@ describe("PgEventStore", () => {
 				"SELECT payload FROM ddd_kit_event_stream",
 			);
 			expect(rows[0].payload).toEqual({ at: at.toISOString() });
+			await teardown();
+		});
+
+		it("rejects a codec that changes the eventId, with a TypeError and no write", async () => {
+			const { store, teardown } = await openStore({
+				encode: ({ eventId: _dropped, ...event }) =>
+					event as unknown as NoteWritten,
+				decode: (stored) => stored as NoteWritten,
+			});
+
+			const failure = await store
+				.append(stream, [noteWritten({})], { expectedVersion: 0 })
+				.catch((error: unknown) => error);
+
+			expect(failure).toBeInstanceOf(TypeError);
+			expect((failure as Error).message).toMatch(/codec changed the eventId/);
+			expect((await store.readStream(stream, { limit: 1 })).exists).toBe(false);
 			await teardown();
 		});
 
@@ -485,6 +505,83 @@ describe("PgEventStore", () => {
 
 			const read = await store.readStream(stream, { limit: 1 });
 			expect(read.exists).toBe(true);
+			await teardown();
+		});
+
+		it.each(["REPEATABLE READ", "SERIALIZABLE"])(
+			"makes an append at %s fail after a removal that committed during the transaction",
+			async (level) => {
+				const { pool, store, teardown } = await openStore();
+				await store.append(stream, [noteWritten({})], { expectedVersion: 0 });
+				const appender = await pool.connect();
+				await appender.query(`BEGIN ISOLATION LEVEL ${level}`);
+				const appending = new PgEventStore<NoteWritten>(fromPg(appender));
+				await appending.readStream(stream, { limit: 1 });
+				await store.removeStream(stream, { expectedVersion: 1 });
+
+				const failure = await appending
+					.append(stream, [noteWritten({})], { expectedVersion: 1 })
+					.catch((error: unknown) => error);
+				await appender.query("ROLLBACK");
+
+				expect(failure).toMatchObject({ code: "40001" });
+				expect((await store.readStream(stream, { limit: 1 })).exists).toBe(
+					false,
+				);
+				appender.release();
+				await teardown();
+			},
+		);
+
+		it("makes a removal of another role wait for an open append, although its search_path starts with another schema", async () => {
+			const {
+				pools: [first, second],
+				teardown,
+			} = await openTablesBehindPrivateSchemas("event-stream.sql");
+			const appender = await first.connect();
+			const remover = await second.connect();
+			await new PgEventStore<NoteWritten>(fromPg(appender)).append(
+				stream,
+				[noteWritten({})],
+				{ expectedVersion: 0 },
+			);
+			await appender.query("BEGIN");
+			await new PgEventStore<NoteWritten>(fromPg(appender)).append(
+				stream,
+				[noteWritten({})],
+				{ expectedVersion: 1 },
+			);
+			await remover.query("BEGIN");
+			const { rows } = await remover.query("SELECT pg_backend_pid() AS pid");
+
+			let settled = false;
+			const removal = new PgEventStore<NoteWritten>(fromPg(remover))
+				.removeStream(stream, { expectedVersion: 1 })
+				.then(
+					() => undefined,
+					(error: unknown) => error,
+				)
+				.finally(() => {
+					settled = true;
+				});
+			for (;;) {
+				const activity = await first.query(
+					"SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1",
+					[rows[0].pid],
+				);
+				if (settled || activity.rows[0]?.wait_event_type === "Lock") break;
+			}
+			await appender.query("COMMIT");
+			const failure = await removal;
+			await remover.query("ROLLBACK");
+
+			expect(failure).toMatchObject({ code: "CONCURRENCY_CONFLICT" });
+			const read = await new PgEventStore<NoteWritten>(
+				fromPg(appender),
+			).readStream(stream, { limit: 10 });
+			expect(read.lastVersion).toBe(2);
+			appender.release();
+			remover.release();
 			await teardown();
 		});
 

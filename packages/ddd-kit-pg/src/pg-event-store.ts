@@ -182,21 +182,30 @@ export class PgEventStore<Evt extends AnyDomainEvent>
 	 * does not see a position that an open append inserted, and that event would
 	 * survive the removal. These are two statements, because READ COMMITTED gives
 	 * each statement a new snapshot. In one statement, the snapshot would come
-	 * before the wait.
+	 * before the wait. The lock key names the table by its OID, so that every
+	 * search path that resolves the table computes the same key.
+	 *
+	 * The head read locks the last event with FOR KEY SHARE. At REPEATABLE READ or
+	 * SERIALIZABLE, the snapshot can still show a stream that a removal deleted
+	 * and committed. PostgreSQL then rejects the lock with the retryable 40001,
+	 * and the append does not bring the stream back.
 	 */
 	private async lockStreamAndReadHead(
 		stream: AggregateIdentity,
 	): Promise<number> {
 		await this.executor.query(
 			`SELECT pg_advisory_xact_lock(
-				hashtextextended(current_schema() || '/ddd_kit_event_stream/' || $1, 0)
+				hashtextextended('ddd_kit_event_stream'::regclass::oid::text || '/' || $1, 0)
 			)`,
 			[JSON.stringify([stream.aggregateType, stream.aggregateId])],
 		);
-		const { rows } = await this.executor.query<{ head: string | null }>(
-			`SELECT max(position)::text AS head
+		const { rows } = await this.executor.query<{ head: string }>(
+			`SELECT position::text AS head
 			FROM ddd_kit_event_stream
-			WHERE aggregate_type = $1 AND aggregate_id = $2`,
+			WHERE aggregate_type = $1 AND aggregate_id = $2
+			ORDER BY position DESC
+			LIMIT 1
+			FOR KEY SHARE`,
 			[stream.aggregateType, stream.aggregateId],
 		);
 		return Number(rows[0]?.head ?? 0);
