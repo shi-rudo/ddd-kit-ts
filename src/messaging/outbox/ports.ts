@@ -154,13 +154,17 @@ export interface Outbox<Evt extends AnyDomainEvent, TCtx = unknown>
 	extends OutboxWriter<Evt, TCtx> {
 	/**
 	 * Returns up to `limit` outbox records that have not yet been
-	 * dispatched, **in the order `add()` persisted them** (commit order).
-	 * The ordering is part of the port contract: `withCommit` promises
-	 * subscribers per-aggregate causal order, and a sequential dispatcher
-	 * can only honor that promise when this read is ordered. SQL-backed
-	 * implementations need a monotonic position column (an auto-increment
-	 * primary key works) and an `ORDER BY` on it; a bare `SELECT` returns
-	 * rows in storage order, not insertion order. The dispatcher polls
+	 * dispatched, **in the order of their positions**. Within one event
+	 * source, that is the commit order: the adapter serializes the writers of
+	 * a source, so a later commit gets a later position. Across sources, two
+	 * concurrent transactions can commit in the other order than their
+	 * positions, so the port promises no order between sources. The ordering
+	 * is part of the port contract: `withCommit` promises subscribers
+	 * per-aggregate causal order, and a sequential dispatcher can only honor
+	 * that promise when this read is ordered. SQL-backed implementations need
+	 * a monotonic position column (an auto-increment primary key works) and an
+	 * `ORDER BY` on it; a bare `SELECT` returns rows in storage order, not
+	 * insertion order. The dispatcher polls
 	 * this on a schedule. When `limit` is omitted, the implementation
 	 * decides on a default page size. The bundled dispatcher always supplies
 	 * `context`; it is optional only so existing adapters remain assignable.
@@ -235,8 +239,8 @@ export interface DispatchTrackingOutbox<
 	/**
 	 * Moves the named dead-lettered records back to pending. Each record keeps
 	 * its `dispatchId`, event, source, and commit position, and gets a fresh
-	 * attempt budget. `getPending` returns it in commit order again, so before
-	 * the records that committed after it.
+	 * attempt budget. `getPending` returns it at its position again, so before
+	 * the records of its source that committed after it.
 	 *
 	 * A no-op for an id that is not dead-lettered: unknown, pending, or
 	 * dispatched. A repeated call therefore does not reset an attempt budget.

@@ -695,7 +695,8 @@ the missing sequence/commit.
 
 The normal remediation is a code/data fix, or a projection rebuild. After the
 fix, call `requeueDeadLetters` for the missing event and for each later event
-that dead-lettered on the gap. `getPending` returns them in commit order. Wire
+that dead-lettered on the gap. `getPending` returns them in commit order within
+their source. Wire
 `deadLetters()` to alerting.
 
 ## Projection vs Process Manager

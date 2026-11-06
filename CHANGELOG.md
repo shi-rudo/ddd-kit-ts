@@ -263,6 +263,11 @@ immutable. Run one kit version per process during a cutover.
   stays a correct `add`. Neither the compiler nor the runtime reports an old
   `add` that was meant to requeue. The outbox contract suite also accepts an
   adapter without the `eventId` dedupe that rejects such a retry.
+- `Outbox.getPending` promises the commit order within each event source, and
+  the order of positions across sources. Two concurrent transactions can commit
+  in the other order than their auto-increment positions, so a polling adapter
+  never gave a commit order across sources. Subscribers that need an order
+  across aggregates model it explicitly, as the outbox guide describes.
 
 #### Command and query buses
 

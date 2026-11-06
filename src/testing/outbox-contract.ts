@@ -433,7 +433,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 			}),
 		},
 		{
-			name: "getPending returns the commit order across sources, not the order of versions",
+			name: "getPending returns sequential commits of two sources in commit order, not in the order of versions",
 			run: inEnv(async (env) => {
 				const committedFirst: AggregateIdentity = {
 					aggregateType: "Order",

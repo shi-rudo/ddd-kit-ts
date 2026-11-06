@@ -246,9 +246,12 @@ interface Outbox<Evt extends AnyDomainEvent, TCtx = unknown>
 }
 ```
 
-`getPending` must return records in commit order. In SQL, that means a
-monotonic position column and an `ORDER BY`. A bare `SELECT` is not an
-ordering guarantee.
+`getPending` must return records in the order of their positions. Within one
+event source, that is the commit order, because the writers of a source run one
+after the other. Across sources, two concurrent transactions can commit in the
+other order than their positions, so the port promises no order between
+sources. In SQL, the position is a monotonic column with an `ORDER BY`. A bare
+`SELECT` is not an ordering guarantee.
 
 `markDispatched` must be idempotent. Re-acking a dispatched id or an unknown
 id should be a no-op. This lets the dispatcher recover from partial failures,
@@ -467,7 +470,8 @@ The dispatcher has a narrow contract:
 
 - It is at-least-once. A crash after publish but before ack means the record
   will be delivered again.
-- It dispatches sequentially in commit order.
+- It dispatches sequentially in the order of `getPending`: the commit order
+  within each event source.
 - It stops the batch on the first delivery failure.
 - It aborts each sink through its `ExecutionContext` after `deliveryTimeoutMs`
   (30 seconds by default). A sink that ignores the signal cannot keep the
