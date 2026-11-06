@@ -30,6 +30,10 @@ import { PgTransactionScope } from "@shirudo/ddd-kit-pg";
 const scope = new RetryingTransactionScope(new PgTransactionScope(pool));
 ```
 
+Each transaction runs at the default isolation level of the database. To set a
+level, pass `isolationLevel`, for example
+`new PgTransactionScope(pool, { isolationLevel: "read committed" })`.
+
 A failed statement aborts a PostgreSQL transaction, and `COMMIT` then rolls back
 without an error. If your callback catches that failure and resolves, the scope
 rejects with `PgCommitRolledBackError`. Rethrow the failure, or run the statement
@@ -106,8 +110,9 @@ statement on the connection.
 An append and a removal take a lock per stream, so they run one after the other. A
 transaction that writes several streams can deadlock with another one in the
 opposite order. `PgTransactionScope` reports this as retryable, so wrap it in
-`RetryingTransactionScope`. Run a removal at READ COMMITTED, the default of
-PostgreSQL.
+`RetryingTransactionScope`. A removal runs only at READ COMMITTED, the default of
+PostgreSQL. At another level, it throws `PgUnsupportedIsolationLevelError` and
+deletes nothing.
 
 ## Outbox
 
@@ -125,9 +130,13 @@ Without `claim`, run one dispatcher per outbox. With `claim: { leaseMs }`, sever
 dispatchers can run at once. A poll holds back a later event of an aggregate while
 an earlier one is claimed, so the order per aggregate stays. Choose a lease longer
 than one delivery: a record returns to the other dispatchers when its lease ends,
-and it is then delivered twice. The claims of all dispatchers run one after
-another, each in a short transaction. A dispatcher deadline cancels a poll in the
-database. A claim that its caller aborted rolls back.
+and it is then delivered twice. A record whose delivery failed also waits for the
+end of its lease, so a late failure report cannot release the claim of another
+dispatcher. The claims of all dispatchers run one after another, each in a short
+transaction at READ COMMITTED. A dispatcher deadline cancels a poll in the
+database. If the caller aborts a claim before its `COMMIT`, the claim rolls back.
+An abort during the `COMMIT` cannot stop it, and the records then wait for the
+end of their lease.
 
 The table keeps delivered records and dead letters. Wire `deadLetters()` to your
 alerts, and delete old delivered records with your own job. Never delete a row of
