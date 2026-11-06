@@ -9,8 +9,9 @@ import {
 	assertKeptOrRejected,
 	bindContractEnvironment,
 	type ContractTest,
+	ContractViolation,
 	gatedContractTest,
-	plainDataThatJsonDoesNotKeep,
+	plainValuesThatJsonDoesNotKeep,
 } from "./contract-assertions";
 
 /** One contract test; bind with `(test.skipped ? it.skip : it)(test.name, test.run)`. */
@@ -108,19 +109,19 @@ export function createDeadlineStoreContractTests(
 	const inEnv = bindContractEnvironment(() => harness.createEnvironment());
 	const ceiling = harness.failuresToDeadLetter;
 	if (!Number.isInteger(ceiling) || ceiling < 2) {
-		throw new Error(
+		throw new ContractViolation(
 			"Contract violated: failuresToDeadLetter must be an integer >= 2; observing attempts on a pending deadline needs one that survives a failure",
 		);
 	}
 
 	return [
-		{
-			name: "fidelity: a value that JSON does not keep is stored exactly or rejected",
+		...plainValuesThatJsonDoesNotKeep().map(({ name, data }) => ({
+			name: `fidelity: ${name} is stored exactly or rejected`,
 			run: inEnv(async (env) => {
-				const payload =
-					plainDataThatJsonDoesNotKeep() as DeadlineStoreContractPayload;
+				const payload = data as DeadlineStoreContractPayload;
 				await assertKeptOrRejected({
 					subject: "A deadline store",
+					valueName: name,
 					write: () =>
 						env.run(() =>
 							env.store.schedule({
@@ -134,7 +135,7 @@ export function createDeadlineStoreContractTests(
 					expected: payload,
 				});
 			}),
-		},
+		})),
 		{
 			name: "a deadline is invisible before its due time and delivered from it onward",
 			run: inEnv(async (env) => {
@@ -560,7 +561,7 @@ export function createDeadlineStoreContractTests(
 				name: "a rolled-back schedule leaves no deadline behind",
 				run: inEnv(async (env) => {
 					if (!env.runRolledBack) {
-						throw new Error(
+						throw new ContractViolation(
 							"Contract violated: harness declared providesRolledBackRuns but the environment lacks runRolledBack",
 						);
 					}
@@ -597,7 +598,7 @@ export function createDeadlineStoreContractTests(
 				name: "a rolled-back cancel leaves the deadline in place",
 				run: inEnv(async (env) => {
 					if (!env.runRolledBack) {
-						throw new Error(
+						throw new ContractViolation(
 							"Contract violated: harness declared providesRolledBackRuns but the environment lacks runRolledBack",
 						);
 					}

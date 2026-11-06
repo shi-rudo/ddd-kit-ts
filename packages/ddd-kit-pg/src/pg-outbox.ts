@@ -37,9 +37,10 @@ export interface PgOutboxOptions<Evt extends AnyDomainEvent> {
 	readonly maxDeliveryAttempts?: number | undefined;
 	/**
 	 * Lets several dispatchers run at once: `getPending` claims its records for
-	 * `leaseMs`. A record of a crashed dispatcher returns when the lease ends.
-	 * Choose a lease longer than a delivery. Without this option, run one
-	 * dispatcher per outbox.
+	 * `leaseMs`. A record returns to the polls when its lease ends: the record of
+	 * a crashed dispatcher, and also a record whose delivery failed. Choose a
+	 * lease longer than a delivery. Without this option, run one dispatcher per
+	 * outbox.
 	 */
 	readonly claim?: { readonly leaseMs: number } | undefined;
 	/** Maps events to JSON and back. Without it, payloads must already be JSON. */
@@ -90,14 +91,17 @@ export class PgOutbox<Evt extends AnyDomainEvent>
 	implements DispatchTrackingOutbox<Evt, PgQueryExecutor>
 {
 	private readonly poll: PgQueryExecutor;
-	private readonly pool: PgPollPool;
+	private readonly claimScope: PgTransactionScope;
 	private readonly maxDeliveryAttempts: number;
 	private readonly leaseMs: number | undefined;
 	private readonly codec: PgEventCodec<Evt> | undefined;
 
 	constructor(options: PgOutboxOptions<Evt>) {
-		this.pool = options.pool;
 		this.poll = fromPgPool(options.pool);
+		// The claim needs a new snapshot after the wait for its lock.
+		this.claimScope = new PgTransactionScope(options.pool, {
+			isolationLevel: "read committed",
+		});
 		this.maxDeliveryAttempts = positiveInteger(
 			"maxDeliveryAttempts",
 			options.maxDeliveryAttempts ?? DEFAULT_MAX_DELIVERY_ATTEMPTS,
@@ -145,8 +149,12 @@ export class PgOutbox<Evt extends AnyDomainEvent>
 		limit: number = DEFAULT_PAGE_SIZE,
 		context?: ExecutionContext,
 	): Promise<ReadonlyArray<OutboxRecord<Evt>>> {
-		if (!(limit > 0)) return [];
-		context?.signal.throwIfAborted();
+		if (!Number.isSafeInteger(limit)) {
+			throw new RangeError(
+				`PgOutbox: limit must be an integer, got ${String(limit)}`,
+			);
+		}
+		if (limit < 1) return [];
 		const { rows } =
 			this.leaseMs === undefined
 				? await this.poll.query<OutboxRow>(
@@ -174,18 +182,21 @@ export class PgOutbox<Evt extends AnyDomainEvent>
 		context: ExecutionContext | undefined,
 	) {
 		const claim = async (tx: PgQueryExecutor) => {
-			await tx.query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED");
 			await tx.query(
 				`SELECT pg_advisory_xact_lock(
-					hashtextextended(current_schema() || '/ddd_kit_outbox', 0)
+					hashtextextended('ddd_kit_outbox'::regclass::oid::text, 0)
 				)`,
 			);
 			if (context !== undefined) await setStatementDeadline(tx, context);
 			// clock_timestamp and not now: now is the start of the transaction, before
 			// the wait for the lock, and that wait would shorten the lease.
+			// SKIP LOCKED passes over a row that another statement holds, for example
+			// a late markFailed after its lease. A later event of that source must
+			// then wait too, so chosen keeps an event only after every earlier
+			// pending event of its source in the same claim.
 			return tx.query<OutboxRow>(
-				`WITH chosen AS (
-					SELECT candidate.position
+				`WITH locked AS (
+					SELECT candidate.position, candidate.aggregate_type, candidate.aggregate_id
 					FROM ddd_kit_outbox AS candidate
 					WHERE candidate.status = 'pending'
 						AND (
@@ -205,6 +216,19 @@ export class PgOutbox<Evt extends AnyDomainEvent>
 					LIMIT $1
 					FOR UPDATE OF candidate SKIP LOCKED
 				),
+				chosen AS (
+					SELECT locked.position
+					FROM locked
+					WHERE NOT EXISTS (
+						SELECT 1
+						FROM ddd_kit_outbox AS earlier
+						WHERE earlier.aggregate_type = locked.aggregate_type
+							AND earlier.aggregate_id = locked.aggregate_id
+							AND earlier.position < locked.position
+							AND earlier.status = 'pending'
+							AND earlier.position NOT IN (SELECT position FROM locked)
+					)
+				),
 				claimed AS (
 					UPDATE ddd_kit_outbox AS target
 					SET claimed_until = clock_timestamp() + $2 * interval '1 millisecond'
@@ -219,15 +243,14 @@ export class PgOutbox<Evt extends AnyDomainEvent>
 			);
 		};
 		return context === undefined
-			? new PgTransactionScope(this.pool).transactional(claim)
-			: inBoundedTransaction(this.pool, context, claim);
+			? this.claimScope.transactional(claim)
+			: inBoundedTransaction(this.claimScope, context, claim);
 	}
 
 	async markDispatched(
 		dispatchIds: ReadonlyArray<string>,
 		context?: ExecutionContext,
 	): Promise<void> {
-		context?.signal.throwIfAborted();
 		await this.poll.query(
 			`UPDATE ddd_kit_outbox
 			SET status = 'dispatched', dispatched_at = now(), claimed_until = NULL
@@ -242,9 +265,11 @@ export class PgOutbox<Evt extends AnyDomainEvent>
 		error?: unknown,
 		context?: ExecutionContext,
 	): Promise<DeadLetterRecord<Evt> | undefined> {
-		context?.signal.throwIfAborted();
-		const lastError =
-			error instanceof Error ? error.message : String(error ?? "unknown");
+		// PostgreSQL text cannot hold a NUL byte, and the UPDATE would then fail on
+		// every attempt.
+		const lastError = (
+			error instanceof Error ? error.message : String(error ?? "unknown")
+		).replaceAll("\u0000", "\uFFFD");
 		const { rows } = await this.poll.query<
 			OutboxRow & { readonly status: string }
 		>(
@@ -253,7 +278,6 @@ export class PgOutbox<Evt extends AnyDomainEvent>
 				SET
 					attempts = attempts + 1,
 					last_error = $2,
-					claimed_until = NULL,
 					status = CASE WHEN attempts + 1 >= $3 THEN 'dead' ELSE 'pending' END
 				WHERE event_id = $1 AND status = 'pending'
 				RETURNING *

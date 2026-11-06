@@ -9,6 +9,7 @@ import { createOutboxContractTests } from "@shirudo/ddd-kit/testing";
 import type { Pool } from "pg";
 import { describe, expect, it } from "vite-plus/test";
 import { openIsolatedSchema } from "../test/isolated-schema";
+import { PgEventDecodeError } from "./pg-errors";
 import type { PgEventCodec } from "./pg-event-codec";
 import { PgOutbox } from "./pg-outbox";
 import type { PgQueryExecutor } from "./pg-query-executor";
@@ -35,13 +36,15 @@ function candidate(
 	};
 }
 
-async function openOutbox(
-	options: {
-		claim?: { leaseMs: number };
-		codec?: PgEventCodec<ThingHappened>;
-	} = {},
-) {
-	const database = await openIsolatedSchema();
+async function openOutbox({
+	defaultTransactionIsolation,
+	...options
+}: {
+	claim?: { leaseMs: number };
+	codec?: PgEventCodec<ThingHappened>;
+	defaultTransactionIsolation?: string;
+} = {}) {
+	const database = await openIsolatedSchema({ defaultTransactionIsolation });
 	await database.applySql("outbox.sql");
 	const scope = new PgTransactionScope(database.pool);
 	const outbox = new PgOutbox<ThingHappened>({
@@ -144,6 +147,54 @@ describe("PgOutbox", () => {
 			"SELECT payload FROM ddd_kit_outbox",
 		);
 		expect(rows[0].payload).toEqual({ at: at.toISOString() });
+		await teardown();
+	});
+
+	it("names the stored event that the codec cannot decode", async () => {
+		const { add, outbox, teardown } = await openOutbox({
+			codec: {
+				encode: (event) => event,
+				decode: () => {
+					throw new Error("unknown schema version");
+				},
+			},
+		});
+		await add([candidate(eventNamed("event-1"))]);
+
+		const failure = await outbox
+			.getPending(10)
+			.catch((error: unknown) => error);
+
+		expect(failure).toBeInstanceOf(PgEventDecodeError);
+		expect(failure).toMatchObject({
+			code: "PG_EVENT_DECODE_FAILED",
+			eventId: "event-1",
+			identity: { aggregateType: "Thing", aggregateId: "a-1" },
+			cause: { message: "unknown schema version" },
+		});
+		await teardown();
+	});
+
+	it("counts a failure whose message holds a NUL byte", async () => {
+		const { add, database, outbox, teardown } = await openOutbox();
+		await add([candidate(eventNamed("event-1"))]);
+
+		await outbox.markFailed("event-1", new Error("the broker said \u0000"));
+
+		expect(await outbox.getPending(10)).toMatchObject([
+			{ dispatchId: "event-1", attempts: 1 },
+		]);
+		const { rows } = await database.pool.query(
+			"SELECT last_error FROM ddd_kit_outbox",
+		);
+		expect(rows[0].last_error).toBe("the broker said \uFFFD");
+		await teardown();
+	});
+
+	it("rejects a limit that is not an integer", async () => {
+		const { outbox, teardown } = await openOutbox();
+
+		await expect(outbox.getPending(2.5)).rejects.toThrow(RangeError);
 		await teardown();
 	});
 
@@ -408,7 +459,7 @@ describe("PgOutbox", () => {
 			const holder = await database.pool.connect();
 			await holder.query("BEGIN");
 			const { rows: keys } = await holder.query(
-				"SELECT hashtextextended(current_schema() || '/ddd_kit_outbox', 0) AS key",
+				"SELECT hashtextextended('ddd_kit_outbox'::regclass::oid::text, 0) AS key",
 			);
 			await holder.query("SELECT pg_advisory_xact_lock($1::bigint)", [
 				keys[0].key,
@@ -470,17 +521,80 @@ describe("PgOutbox", () => {
 			await teardown();
 		});
 
-		it("releases the claim of a failed record, so the next poll retries it", async () => {
+		it.each(["repeatable read", "serializable"])(
+			"claims with a context on a database whose default isolation is %s",
+			async (defaultTransactionIsolation) => {
+				const { add, outbox, teardown } = await openOutbox({
+					claim: { leaseMs: 60_000 },
+					defaultTransactionIsolation,
+				});
+				await add([candidate(eventNamed("event-1"))]);
+
+				const claimed = await outbox.getPending(10, {
+					signal: new AbortController().signal,
+					deadlineAt: Date.now() + 5_000,
+				});
+
+				expect(claimed.map((r) => r.dispatchId)).toEqual(["event-1"]);
+				await teardown();
+			},
+		);
+
+		it("retries a failed record when its lease ends, and counts the attempt", async () => {
 			const { add, outbox, teardown } = await openOutbox({
-				claim: { leaseMs: 60_000 },
+				claim: { leaseMs: 500 },
 			});
 			await add([candidate(eventNamed("event-1"))]);
 			await outbox.getPending(10);
 
 			await outbox.markFailed("event-1", new Error("the broker is down"));
 
-			const retried = await outbox.getPending(10);
-			expect(retried).toMatchObject([{ dispatchId: "event-1", attempts: 1 }]);
+			expect(await outbox.getPending(10)).toEqual([]);
+			await expect
+				.poll(() => outbox.getPending(10), { timeout: 3_000 })
+				.toMatchObject([{ dispatchId: "event-1", attempts: 1 }]);
+			await teardown();
+		});
+
+		it("holds back a later event while another statement locks the earlier one after its lease", async () => {
+			const { add, database, outbox, teardown } = await openOutbox({
+				claim: { leaseMs: 1 },
+			});
+			await add([candidate(eventNamed("event-1"), 1)]);
+			await add([candidate(eventNamed("event-2"), 2)]);
+			await outbox.getPending(1);
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			const lateAcknowledgement = await database.pool.connect();
+			await lateAcknowledgement.query("BEGIN");
+			await lateAcknowledgement.query(
+				"SELECT 1 FROM ddd_kit_outbox WHERE event_id = 'event-1' FOR UPDATE",
+			);
+
+			const claimed = await outbox.getPending(10);
+
+			expect(claimed).toEqual([]);
+			await lateAcknowledgement.query("ROLLBACK");
+			lateAcknowledgement.release();
+			await teardown();
+		});
+
+		it("keeps the claim of another dispatcher when a failure report comes after the lease", async () => {
+			const { add, database, outbox, teardown } = await openOutbox({
+				claim: { leaseMs: 1 },
+			});
+			const otherDispatcher = new PgOutbox<ThingHappened>({
+				pool: database.pool,
+				maxDeliveryAttempts: ATTEMPT_CEILING,
+				claim: { leaseMs: 60_000 },
+			});
+			await add([candidate(eventNamed("event-1"))]);
+			await outbox.getPending(10);
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			await otherDispatcher.getPending(10);
+
+			await outbox.markFailed("event-1", new Error("the late failure"));
+
+			expect(await otherDispatcher.getPending(10)).toEqual([]);
 			await teardown();
 		});
 	});

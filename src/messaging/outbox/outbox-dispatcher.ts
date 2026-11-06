@@ -62,7 +62,7 @@ export interface OutboxDispatcherObservers<Evt extends AnyDomainEvent> {
  * producer); {@link eventBusSink} adapts the in-process `EventBus` for
  * setups without a broker.
  *
- * The sink is called once per record, sequentially, in commit order. A
+ * The sink is called once per record, sequentially, in the order of `getPending`. A
  * throw signals delivery failure; the dispatcher stops the batch,
  * reports the failure, and retries later (see the dispatcher contract).
  * Sinks must tolerate duplicate delivery: the dispatcher is
@@ -248,7 +248,7 @@ export interface OutboxDispatcherOptions<Evt extends AnyDomainEvent> {
  *   full gap-proof commit cursor
  *   (`domain-event-design.md`).
  * - **Sequential, stop-on-failure.** Records dispatch one at a time in
- *   commit order, and the first failure stops the batch: continuing
+ *   the order of `getPending`, and the first failure stops the batch: continuing
  *   past a failed event would break the per-aggregate causal order
  *   `withCommit` promises subscribers. The price is head-of-line
  *   blocking; the escape is the tracking outbox's attempt ceiling,

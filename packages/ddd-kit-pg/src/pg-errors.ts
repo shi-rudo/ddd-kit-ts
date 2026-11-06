@@ -101,6 +101,71 @@ export class PgEventStreamCorruptError extends InfrastructureError<"PG_EVENT_STR
 	}
 }
 
+/**
+ * The codec threw for a stored event. A read of its stream and a poll of the
+ * outbox stop at this event until a codec decodes it, for example after the
+ * deploy of a new event type reaches every process. The codec failure is the
+ * `cause`.
+ */
+export class PgEventDecodeError extends InfrastructureError<"PG_EVENT_DECODE_FAILED"> {
+	readonly eventId: string;
+	readonly eventType: string;
+	readonly schemaVersion: number;
+	readonly identity: AggregateIdentity;
+
+	constructor(options: {
+		readonly eventId: string;
+		readonly eventType: string;
+		readonly schemaVersion: number;
+		readonly identity: AggregateIdentity;
+		readonly cause: unknown;
+	}) {
+		super({
+			code: "PG_EVENT_DECODE_FAILED",
+			message:
+				`The codec could not decode the stored event ${options.eventId} ` +
+				`(${options.eventType}, schema version ${options.schemaVersion}) of ` +
+				`${options.identity.aggregateType}/${options.identity.aggregateId}. ` +
+				"Deploy a codec that decodes it. A read of the stream and a poll of " +
+				"the outbox stop at this event until then.",
+			cause: options.cause,
+		});
+		this.eventId = options.eventId;
+		this.eventType = options.eventType;
+		this.schemaVersion = options.schemaVersion;
+		this.identity = options.identity;
+	}
+}
+
+/**
+ * `PgEventStore.removeStream` ran at an isolation level with one snapshot for the
+ * whole transaction. A retry does not help: begin the transaction at READ
+ * COMMITTED.
+ */
+export class PgUnsupportedIsolationLevelError extends InfrastructureError<"PG_UNSUPPORTED_ISOLATION_LEVEL"> {
+	readonly isolationLevel: string;
+	readonly identity: AggregateIdentity;
+
+	constructor(options: {
+		readonly isolationLevel: string;
+		readonly identity: AggregateIdentity;
+	}) {
+		super({
+			code: "PG_UNSUPPORTED_ISOLATION_LEVEL",
+			message:
+				`PgEventStore.removeStream ran at ${options.isolationLevel.toUpperCase()} ` +
+				`on ${options.identity.aggregateType}/${options.identity.aggregateId}. ` +
+				"A removal needs READ COMMITTED. A snapshot for the whole transaction " +
+				"misses an append that commits while the removal waits for the lock, " +
+				"and that event would survive the removal. Begin the transaction at READ " +
+				"COMMITTED, for example with the isolationLevel option of " +
+				"PgTransactionScope.",
+		});
+		this.isolationLevel = options.isolationLevel;
+		this.identity = options.identity;
+	}
+}
+
 function hasRetryableSqlState(error: unknown): error is { code: string } {
 	const code = (error as { code?: unknown } | null | undefined)?.code;
 	return typeof code === "string" && RETRYABLE_SQLSTATES.has(code);

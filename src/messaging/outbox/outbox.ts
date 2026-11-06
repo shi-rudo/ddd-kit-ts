@@ -134,7 +134,8 @@ type DispatchedEventReceipt = {
  * object, an `eventId` or `type` that is not an own string data property, a
  * source field that is not a string, or a position that is not a valid
  * commit position. Insertion order is preserved:
- * `getPending` returns records in commit order, as the port contract requires.
+ * `getPending` returns records in commit order, which satisfies the position
+ * order that the port contract requires.
  *
  * Dispatch tracking: `markFailed` increments the record's attempt count
  * and, at `maxDeliveryAttempts`, moves it to the dead-letter set

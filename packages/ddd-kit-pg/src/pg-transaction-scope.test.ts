@@ -106,6 +106,96 @@ describe("PgTransactionScope", () => {
 		await single.teardown();
 	});
 
+	describe("the isolation level", () => {
+		const isolationOf = (executor: PgQueryExecutor) =>
+			executor
+				.query<{ level: string }>(
+					"SELECT current_setting('transaction_isolation') AS level",
+				)
+				.then(({ rows }) => rows[0]?.level);
+
+		it("begins the transaction at the level of its options", async () => {
+			const serializable = await openIsolatedSchema({
+				defaultTransactionIsolation: "serializable",
+			});
+
+			const level = await new PgTransactionScope(serializable.pool, {
+				isolationLevel: "read committed",
+			}).transactional(isolationOf);
+
+			expect(level).toBe("read committed");
+			await serializable.teardown();
+		});
+
+		it("keeps the default level of the database without an option", async () => {
+			const serializable = await openIsolatedSchema({
+				defaultTransactionIsolation: "serializable",
+			});
+
+			const level = await new PgTransactionScope(
+				serializable.pool,
+			).transactional(isolationOf);
+
+			expect(level).toBe("serializable");
+			await serializable.teardown();
+		});
+
+		it("rejects an unknown level when it is constructed", () => {
+			expect(
+				() =>
+					new PgTransactionScope(database.pool, {
+						isolationLevel: "snapshot" as "serializable",
+					}),
+			).toThrow(RangeError);
+		});
+	});
+
+	describe("a COMMIT that PostgreSQL answered with a failure", () => {
+		const backendPid = (executor: PgQueryExecutor) =>
+			executor
+				.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")
+				.then(({ rows }) => rows[0]?.pid);
+
+		it("returns the connection to the pool after a constraint fails at the COMMIT", async () => {
+			const single = await openIsolatedSchema({ max: 1 });
+			await single.pool.query(
+				"CREATE TABLE ticket (id int UNIQUE DEFERRABLE INITIALLY DEFERRED)",
+			);
+			const singleScope = new PgTransactionScope(single.pool);
+			let pidOfFailedCommit: number | undefined;
+
+			const failure = await singleScope
+				.transactional(async (executor) => {
+					pidOfFailedCommit = await backendPid(executor);
+					await executor.query("INSERT INTO ticket VALUES (1), (1)");
+				})
+				.catch((error: unknown) => error);
+			const pidAfter = await singleScope.transactional(backendPid);
+
+			expect(failure).toMatchObject({ code: "23505" });
+			expect(pidAfter).toBe(pidOfFailedCommit);
+			await single.teardown();
+		});
+
+		it("returns the connection to the pool after a COMMIT that rolled back", async () => {
+			const single = await openIsolatedSchema({ max: 1 });
+			const singleScope = new PgTransactionScope(single.pool);
+			let pidOfFailedCommit: number | undefined;
+
+			const failure = await singleScope
+				.transactional(async (executor) => {
+					pidOfFailedCommit = await backendPid(executor);
+					await executor.query("SELECT 1 / 0").catch(() => {});
+				})
+				.catch((error: unknown) => error);
+			const pidAfter = await singleScope.transactional(backendPid);
+
+			expect(failure).toBeInstanceOf(PgCommitRolledBackError);
+			expect(pidAfter).toBe(pidOfFailedCommit);
+			await single.teardown();
+		});
+	});
+
 	describe("a failure that a new attempt can resolve", () => {
 		/** Loses the race of a REPEATABLE READ update once, which gives SQLSTATE 40001. */
 		const loseSerializationRace = async (executor: PgQueryExecutor) => {

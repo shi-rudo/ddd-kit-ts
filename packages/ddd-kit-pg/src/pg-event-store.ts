@@ -9,7 +9,10 @@ import {
 	type ReadStreamOptions,
 	type StreamReadResult,
 } from "@shirudo/ddd-kit";
-import { PgEventStreamCorruptError } from "./pg-errors";
+import {
+	PgEventStreamCorruptError,
+	PgUnsupportedIsolationLevelError,
+} from "./pg-errors";
 import type { PgEventCodec } from "./pg-event-codec";
 import type { PgQueryExecutor } from "./pg-query-executor";
 import { rejectOnAbort } from "./reject-on-abort";
@@ -127,15 +130,19 @@ export class PgEventStore<Evt extends AnyDomainEvent>
 
 	/**
 	 * Deletes the whole stream in the transaction of the executor, for example
-	 * to erase personal data. Call it inside a transaction. The version guard
-	 * rejects a stream that changed after the load, and an open append finishes
-	 * first. Delete a snapshot of the aggregate first. A removed identity
-	 * stays removed: give a new aggregate a new id.
+	 * to erase personal data. Call it inside a transaction at READ COMMITTED: it
+	 * rejects another isolation level with `PgUnsupportedIsolationLevelError`.
+	 * The version guard rejects a stream that changed after the load, and an
+	 * open append finishes first. Delete a snapshot of the aggregate first. The
+	 * store keeps no mark of a removed stream, so an append at version 0 creates
+	 * it again. Give a new aggregate a new id: `PgOutbox` rejects an event of the
+	 * old id, because the removal ended its event source.
 	 */
 	async removeStream(
 		stream: AggregateIdentity,
 		{ expectedVersion }: EventStoreAppendOptions,
 	): Promise<void> {
+		await this.requireReadCommitted(stream);
 		const head = await this.lockStreamAndReadHead(stream);
 		if (head !== expectedVersion) {
 			throw new ConcurrencyConflictError({
@@ -153,27 +160,54 @@ export class PgEventStore<Evt extends AnyDomainEvent>
 	}
 
 	/**
+	 * A snapshot for the whole transaction, as in REPEATABLE READ, comes before
+	 * the wait for the lock of the stream. The removal would then read the old
+	 * head, and an append that commits during the wait would survive it.
+	 * PostgreSQL runs READ UNCOMMITTED as READ COMMITTED.
+	 */
+	private async requireReadCommitted(stream: AggregateIdentity): Promise<void> {
+		const { rows } = await this.executor.query<{ level: string }>(
+			"SELECT current_setting('transaction_isolation') AS level",
+		);
+		const level = rows[0]?.level ?? "unknown";
+		if (level !== "read committed" && level !== "read uncommitted") {
+			throw new PgUnsupportedIsolationLevelError({
+				isolationLevel: level,
+				identity: stream,
+			});
+		}
+	}
+
+	/**
 	 * Holds a lock on the stream until the transaction ends, and reads the head
 	 * after it. An append and a removal would otherwise miss each other: a DELETE
 	 * does not see a position that an open append inserted, and that event would
 	 * survive the removal. These are two statements, because READ COMMITTED gives
 	 * each statement a new snapshot. In one statement, the snapshot would come
-	 * before the wait. A transaction-wide snapshot, as in REPEATABLE READ, still
-	 * reads the old head, so run a removal at READ COMMITTED.
+	 * before the wait. The lock key names the table by its OID, so that every
+	 * search path that resolves the table computes the same key.
+	 *
+	 * The head read locks the last event with FOR KEY SHARE. At REPEATABLE READ or
+	 * SERIALIZABLE, the snapshot can still show a stream that a removal deleted
+	 * and committed. PostgreSQL then rejects the lock with the retryable 40001,
+	 * and the append does not bring the stream back.
 	 */
 	private async lockStreamAndReadHead(
 		stream: AggregateIdentity,
 	): Promise<number> {
 		await this.executor.query(
 			`SELECT pg_advisory_xact_lock(
-				hashtextextended(current_schema() || '/ddd_kit_event_stream/' || $1, 0)
+				hashtextextended('ddd_kit_event_stream'::regclass::oid::text || '/' || $1, 0)
 			)`,
 			[JSON.stringify([stream.aggregateType, stream.aggregateId])],
 		);
-		const { rows } = await this.executor.query<{ head: string | null }>(
-			`SELECT max(position)::text AS head
+		const { rows } = await this.executor.query<{ head: string }>(
+			`SELECT position::text AS head
 			FROM ddd_kit_event_stream
-			WHERE aggregate_type = $1 AND aggregate_id = $2`,
+			WHERE aggregate_type = $1 AND aggregate_id = $2
+			ORDER BY position DESC
+			LIMIT 1
+			FOR KEY SHARE`,
 			[stream.aggregateType, stream.aggregateId],
 		);
 		return Number(rows[0]?.head ?? 0);

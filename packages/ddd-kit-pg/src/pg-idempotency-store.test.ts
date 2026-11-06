@@ -5,9 +5,12 @@ import {
 } from "@shirudo/ddd-kit";
 import { createIdempotencyStoreContractTests } from "@shirudo/ddd-kit/testing";
 import { describe, expect, it } from "vite-plus/test";
-import { openIsolatedSchema } from "../test/isolated-schema";
+import {
+	openIsolatedSchema,
+	openTablesBehindPrivateSchemas,
+} from "../test/isolated-schema";
 import { PgIdempotencyStore } from "./pg-idempotency-store";
-import type { PgQueryExecutor } from "./pg-query-executor";
+import { fromPg, type PgQueryExecutor } from "./pg-query-executor";
 import { PgTransactionScope } from "./pg-transaction-scope";
 
 const ROLLBACK = new Error("the contract suite asked for a rollback");
@@ -174,6 +177,31 @@ describe("PgIdempotencyStore", () => {
 			await endFirst();
 			await opened.database.teardown();
 		});
+	});
+
+	it("answers a claim of another role on the same table at once, although its search_path starts with another schema", async () => {
+		const {
+			pools: [first, second],
+			teardown,
+		} = await openTablesBehindPrivateSchemas("idempotency.sql");
+		const store = new PgIdempotencyStore();
+		const holder = await first.connect();
+		const contender = await second.connect();
+		await holder.query("BEGIN");
+		await store.claim(fromPg(holder), "key", "fingerprint");
+		await contender.query("BEGIN");
+		await contender.query("SET LOCAL lock_timeout = '2s'");
+
+		const failure = await store
+			.claim(fromPg(contender), "key", "fingerprint")
+			.catch((error: unknown) => error);
+
+		expect(failure).toMatchObject({ code: "IDEMPOTENCY_IN_FLIGHT" });
+		await contender.query("ROLLBACK");
+		await holder.query("ROLLBACK");
+		holder.release();
+		contender.release();
+		await teardown();
 	});
 
 	it("keeps one key of two schemas apart, so a tenant does not block another", async () => {

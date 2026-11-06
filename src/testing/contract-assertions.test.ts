@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import { ConcurrencyConflictError } from "../errors/kit-errors";
 import {
+	assert,
 	assertChainContainsKitError,
 	assertKeptOrRejected,
 	assertRunPermitsOverlappingCalls,
@@ -8,7 +9,6 @@ import {
 	captureRejection,
 	describeError,
 	parkRunCall,
-	plainDataThatJsonDoesNotKeep,
 } from "./contract-assertions";
 import { serializedCalls } from "./serialized-calls";
 
@@ -28,16 +28,18 @@ const legacyConflict = () => {
 };
 
 describe("assertKeptOrRejected", () => {
+	const dated = () => ({ at: new Date("2026-01-05T10:20:30.456Z") });
 	const fidelity = (read: unknown, write = async () => {}) => ({
 		subject: "A store",
+		valueName: "a Date",
 		write,
 		read: async () => read,
-		expected: plainDataThatJsonDoesNotKeep(),
+		expected: dated(),
 	});
 
 	it("passes when the read returns an equal value", async () => {
 		await expect(
-			assertKeptOrRejected(fidelity(plainDataThatJsonDoesNotKeep())),
+			assertKeptOrRejected(fidelity(dated())),
 		).resolves.toBeUndefined();
 	});
 
@@ -51,10 +53,20 @@ describe("assertKeptOrRejected", () => {
 		).resolves.toBeUndefined();
 	});
 
+	it("fails on a contract violation of the suite inside the write, in place of counting it as a rejection", async () => {
+		await expect(
+			assertKeptOrRejected(
+				fidelity("never read", async () => {
+					assert(false, "a fresh key must be claimed");
+				}),
+			),
+		).rejects.toThrow(/a fresh key must be claimed/);
+	});
+
 	it("fails when the read returns a changed value", async () => {
 		await expect(
 			assertKeptOrRejected(fidelity({ at: "2026-01-05T10:20:30.456Z" })),
-		).rejects.toThrow(/A store changed a Date, Map, Set, or undefined value/);
+		).rejects.toThrow(/A store changed a Date without an error/);
 	});
 });
 

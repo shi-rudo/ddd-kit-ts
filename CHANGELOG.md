@@ -175,8 +175,10 @@ immutable. Run one kit version per process during a cutover.
 - A durable adapter keeps a value exactly or rejects it, and it never changes a
   value without an error. The contract suites of the event store, the outbox,
   both idempotency stores, the deadline store, and the snapshot store check
-  this with a `Date`, a `Map`, a `Set`, and `undefined`. An adapter that passes
-  these values through a raw `JSON.stringify` now fails its suite.
+  this with a `Date`, a `Map`, a `Set`, and `undefined`, each in a write of its
+  own. The event store and outbox suites check metadata too. An adapter that passes these values through a raw `JSON.stringify` now
+  fails its suite, also when it rejects one value and changes another. A failed
+  check of the suite inside the write does not count as a rejection.
   See
   [One rule for plain data](docs/guide/design-decisions.md#one-rule-for-plain-data).
 - The identity test of the checkpoint contract suite runs with several separators.
@@ -262,7 +264,13 @@ immutable. Run one kit version per process during a cutover.
   call resolves without an error, and the event stays undelivered. So a late
   retry of a use case cannot revive it, and `INSERT ... ON CONFLICT DO NOTHING`
   stays a correct `add`. Neither the compiler nor the runtime reports an old
-  `add` that was meant to requeue.
+  `add` that was meant to requeue. The outbox contract suite also accepts an
+  adapter without the `eventId` dedupe that rejects such a retry.
+- `Outbox.getPending` promises the commit order within each event source, and
+  the order of positions across sources. Two concurrent transactions can commit
+  in the other order than their auto-increment positions, so a polling adapter
+  never gave a commit order across sources. Subscribers that need an order
+  across aggregates model it explicitly, as the outbox guide describes.
 
 #### Command and query buses
 

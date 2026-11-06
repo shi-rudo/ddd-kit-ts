@@ -40,6 +40,23 @@ class OutboxRequeuingOnAdd extends InMemoryOutbox<TestEvent> {
 	}
 }
 
+/** A port-legal outbox without the eventId dedupe: it rejects an exact retry of add. */
+class OutboxRejectingAnExactRetry extends InMemoryOutbox<TestEvent> {
+	private readonly addedIds = new Set<string>();
+
+	override async add(
+		events: ReadonlyArray<EventCommitCandidate<TestEvent>>,
+	): Promise<void> {
+		for (const { event } of events) {
+			if (this.addedIds.has(event.eventId)) {
+				throw new Error(`event ${event.eventId} is already in the outbox`);
+			}
+		}
+		await super.add(events);
+		for (const { event } of events) this.addedIds.add(event.eventId);
+	}
+}
+
 /** An outbox that requeues every dead letter: the requeue tests must reject it. */
 class OutboxRequeuingEveryDeadLetter extends InMemoryOutbox<TestEvent> {
 	override async requeueDeadLetters(): Promise<void> {
@@ -288,6 +305,31 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 		await expect(retryTest?.run()).rejects.toThrow(
 			/a late retry of add must not revive a dead letter/,
 		);
+	});
+
+	it("the dead-letter retry test accepts a port-legal adapter that rejects an exact retry", async () => {
+		const withoutDedupe = createInMemoryHarness(
+			() =>
+				new OutboxRejectingAnExactRetry({ maxDeliveryAttempts: MAX_ATTEMPTS }),
+		);
+		withoutDedupe.dedupesOnEventId = undefined;
+		const retryTest = createOutboxContractTests(withoutDedupe).find(
+			(test) => test.name === "an exact retry of add leaves a dead letter dead",
+		);
+
+		await expect(retryTest?.run()).resolves.toBeUndefined();
+	});
+
+	it("the dead-letter retry test kills a dedupe adapter that rejects an exact retry", async () => {
+		const declaredDedupe = createInMemoryHarness(
+			() =>
+				new OutboxRejectingAnExactRetry({ maxDeliveryAttempts: MAX_ATTEMPTS }),
+		);
+		const retryTest = createOutboxContractTests(declaredDedupe).find(
+			(test) => test.name === "an exact retry of add leaves a dead letter dead",
+		);
+
+		await expect(retryTest?.run()).rejects.toThrow(/already in the outbox/);
 	});
 
 	it("the requeue tests kill an adapter that returns a requeued record last", async () => {

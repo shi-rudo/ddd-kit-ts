@@ -9,6 +9,7 @@ import {
 	assertEqual,
 	bindContractEnvironment,
 	type ContractTest,
+	ContractViolation,
 	captureRejection,
 	gatedContractTest,
 } from "./contract-assertions";
@@ -155,7 +156,7 @@ export function createProjectionCheckpointStoreContractTests<TCtx>(
 				run: inEnv(async (env) => {
 					const runConcurrently = env.runConcurrently;
 					if (!runConcurrently) {
-						throw new Error(
+						throw new ContractViolation(
 							"Contract violated: harness declared providesConcurrentRuns but the environment lacks runConcurrently",
 						);
 					}
@@ -556,7 +557,7 @@ export function createProjectionCheckpointStoreContractTests<TCtx>(
 				name: "a rolled-back save leaves no checkpoint behind (atomic update+checkpoint)",
 				run: inEnv(async (env) => {
 					if (!env.runRolledBack) {
-						throw new Error(
+						throw new ContractViolation(
 							"Contract violated: harness declared providesRolledBackRuns but the environment lacks runRolledBack",
 						);
 					}

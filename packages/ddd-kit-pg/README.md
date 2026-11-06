@@ -30,6 +30,10 @@ import { PgTransactionScope } from "@shirudo/ddd-kit-pg";
 const scope = new RetryingTransactionScope(new PgTransactionScope(pool));
 ```
 
+Each transaction runs at the default isolation level of the database. To set a
+level, pass `isolationLevel`, for example
+`new PgTransactionScope(pool, { isolationLevel: "read committed" })`.
+
 A failed statement aborts a PostgreSQL transaction, and `COMMIT` then rolls back
 without an error. If your callback catches that failure and resolves, the scope
 rejects with `PgCommitRolledBackError`. Rethrow the failure, or run the statement
@@ -39,7 +43,9 @@ in a savepoint.
 
 The package ships each table as a SQL file in `sql/`. Run the files that you need
 with your migration tool, in the schema of your aggregates. A store then writes
-in the transaction of your command.
+in the transaction of your command. The locks of a store name its table, so two
+roles whose search paths resolve the same table block each other, and two
+schemas with tables of their own do not.
 
 | Store | File |
 | --- | --- |
@@ -67,7 +73,11 @@ callback of the scope.
 The table keeps JSON. JSON does not keep a `Date`, a `Map`, a `Set`, a `bigint`,
 or `undefined` inside a payload, so `append` rejects such a value and names its
 path. If your events hold such a value, map it with a `PgEventCodec`. Upcasting
-runs in the same place.
+runs in the same place. The codec must keep the `eventId`, and `append` rejects an
+event whose id the codec changed. If `decode` throws for a stored event, a read of
+its stream and a poll of the outbox stop there with `PgEventDecodeError`, which
+names the event. So deploy a codec that decodes a new event type to every
+process before any process writes that type.
 
 ```ts
 import { type PgEventCodec, PgEventStore } from "@shirudo/ddd-kit-pg";
@@ -109,8 +119,11 @@ statement on the connection.
 An append and a removal take a lock per stream, so they run one after the other. A
 transaction that writes several streams can deadlock with another one in the
 opposite order. `PgTransactionScope` reports this as retryable, so wrap it in
-`RetryingTransactionScope`. Run a removal at READ COMMITTED, the default of
-PostgreSQL.
+`RetryingTransactionScope`. A removal runs only at READ COMMITTED, the default of
+PostgreSQL. At another level, it throws `PgUnsupportedIsolationLevelError` and
+deletes nothing. An append can run at REPEATABLE READ or SERIALIZABLE. If a
+removal of its stream committed during its transaction, the append fails with
+the retryable SQLSTATE 40001, and the retry reports the conflict.
 
 ## Outbox
 
@@ -126,11 +139,16 @@ const scope = new PgTransactionScope(pool);
 
 Without `claim`, run one dispatcher per outbox. With `claim: { leaseMs }`, several
 dispatchers can run at once. A poll holds back a later event of an aggregate while
-an earlier one is claimed, so the order per aggregate stays. Choose a lease longer
+an earlier one is claimed or locked by another statement, so the order per
+aggregate stays. Choose a lease longer
 than one delivery: a record returns to the other dispatchers when its lease ends,
-and it is then delivered twice. The claims of all dispatchers run one after
-another, each in a short transaction. A dispatcher deadline cancels a poll in the
-database. A claim that its caller aborted rolls back.
+and it is then delivered twice. A record whose delivery failed also waits for the
+end of its lease, so a late failure report cannot release the claim of another
+dispatcher. The claims of all dispatchers run one after another, each in a short
+transaction at READ COMMITTED. A dispatcher deadline cancels a poll in the
+database. If the caller aborts a claim before its `COMMIT`, the claim rolls back.
+An abort during the `COMMIT` cannot stop it, and the records then wait for the
+end of their lease.
 
 The table keeps delivered records and dead letters. Wire `deadLetters()` to your
 alerts, and delete old delivered records with your own job. Never delete a row of

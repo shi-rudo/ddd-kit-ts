@@ -15,10 +15,11 @@ import {
 	assertKeptOrRejected,
 	bindContractEnvironment,
 	type ContractTest,
+	ContractViolation,
 	captureRejection,
 	describeError,
 	gatedContractTest,
-	plainDataThatJsonDoesNotKeep,
+	plainValuesThatJsonDoesNotKeep,
 } from "./contract-assertions";
 
 /** One contract test; bind with `(test.skipped ? it.skip : it)(test.name, test.run)`. */
@@ -42,7 +43,7 @@ export interface OutboxContractEnvironment<Evt extends AnyDomainEvent> {
 	addCommitted(events: ReadonlyArray<EventCommitCandidate<Evt>>): Promise<void>;
 
 	/**
-	 * Optional capability: runs `outbox.add(candidates)` inside a
+	 * Optional capability: runs `outbox.add(candidates, tx)` inside a
 	 * transaction that ROLLS BACK. Enables the rollback-purity test: a
 	 * rolled-back add must leave nothing behind. Transactional adapters
 	 * should always provide this.
@@ -52,7 +53,7 @@ export interface OutboxContractEnvironment<Evt extends AnyDomainEvent> {
 	): Promise<void>;
 
 	/**
-	 * Runs `outbox.endEventSources(sources)` inside a transaction that
+	 * Runs `outbox.endEventSources(sources, tx)` inside a transaction that
 	 * COMMITS, the way `withCommit` calls it for a removal. For a
 	 * non-transactional store this is simply `outbox.endEventSources(sources)`.
 	 */
@@ -61,7 +62,7 @@ export interface OutboxContractEnvironment<Evt extends AnyDomainEvent> {
 	): Promise<void>;
 
 	/**
-	 * Optional capability: runs `outbox.endEventSources(sources)` inside a
+	 * Optional capability: runs `outbox.endEventSources(sources, tx)` inside a
 	 * transaction that ROLLS BACK. Enables the test that a rolled-back
 	 * removal leaves its event source open.
 	 */
@@ -214,19 +215,30 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 	};
 
 	const tests: OutboxContractTest[] = [
-		{
-			name: "fidelity: a value that JSON does not keep is stored exactly or rejected",
-			run: inEnv(async (env) => {
-				const payload = plainDataThatJsonDoesNotKeep();
-				const event = { ...harness.createEvent(70), payload } as Evt;
-				await assertKeptOrRejected({
-					subject: "An outbox",
-					write: () => env.addCommitted(commit([event])),
-					read: async () => (await env.outbox.getPending(1))[0]?.event.payload,
-					expected: payload,
-				});
-			}),
-		},
+		...(["payload", "metadata"] as const).flatMap((field) =>
+			plainValuesThatJsonDoesNotKeep().map(
+				({ name, data }): OutboxContractTest => {
+					const valueName = `${name} in ${field === "payload" ? "a payload" : "metadata"}`;
+					return {
+						name: `fidelity: ${valueName} is stored exactly or rejected`,
+						run: inEnv(async (env) => {
+							const event = {
+								...harness.createEvent(70),
+								[field]: data,
+							} as Evt;
+							await assertKeptOrRejected({
+								subject: "An outbox",
+								valueName,
+								write: () => env.addCommitted(commit([event])),
+								read: async () =>
+									(await env.outbox.getPending(1))[0]?.event[field],
+								expected: data,
+							});
+						}),
+					};
+				},
+			),
+		),
 		{
 			name: "finalizes complete commit receipts and links the next eventful commit",
 			run: inEnv(async (env) => {
@@ -429,7 +441,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 			}),
 		},
 		{
-			name: "getPending returns the commit order across sources, not the order of versions",
+			name: "getPending returns sequential commits of two sources in commit order, not in the order of versions",
 			run: inEnv(async (env) => {
 				const committedFirst: AggregateIdentity = {
 					aggregateType: "Order",
@@ -571,7 +583,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 					} catch (error) {
 						// A bare UNIQUE(eventId) constraint makes the duplicate
 						// INSERT throw; the contract wants an idempotent add.
-						throw new Error(
+						throw new ContractViolation(
 							"Contract violated: add() must swallow a duplicate eventId, not throw. " +
 								"Dedupe means an idempotent add (INSERT ... ON CONFLICT DO NOTHING or " +
 								`equivalent), not a raised unique violation. Got: ${describeError(error)}`,
@@ -625,7 +637,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 				name: "a rolled-back add leaves nothing behind (transactional participation)",
 				run: inEnv(async (env) => {
 					if (!env.addRolledBack) {
-						throw new Error(
+						throw new ContractViolation(
 							"Contract violated: harness declared providesRolledBackAdds but the environment lacks addRolledBack",
 						);
 					}
@@ -667,7 +679,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 				name: "a rolled-back end leaves the event source open (transactional participation)",
 				run: inEnv(async (env) => {
 					if (!env.endEventSourcesRolledBack) {
-						throw new Error(
+						throw new ContractViolation(
 							"Contract violated: harness declared providesRolledBackEnds but the environment lacks endEventSourcesRolledBack",
 						);
 					}
@@ -1026,7 +1038,10 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 					await outbox.markFailed(record.dispatchId, new Error("poison"));
 				}
 
-				await env.addCommitted(original);
+				const retry = env.addCommitted(original);
+				// Without the recommended eventId dedupe, add may reject the retry.
+				if (harness.dedupesOnEventId === true) await retry;
+				else await captureRejection(retry);
 
 				assertEqual(
 					(await outbox.getPending(10)).length,

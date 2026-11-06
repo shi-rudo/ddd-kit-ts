@@ -58,7 +58,8 @@ its events.
    `stampOptions` from the dependencies.
 4. Still inside the transaction, the unit of work freezes and flushes the
    registered receipts. `withCommit` collects every registered aggregate
-   and calls `outbox.add(events)` with the exact batches.
+   and calls `outbox.add(events, tx)` with the exact batches and the
+   transaction of the scope.
 5. The transaction commits.
 6. After commit, `withCommit` acknowledges every saved aggregate through a
    non-exported capability and discards collected events for deleted rows.
@@ -232,7 +233,8 @@ interface OutboxRecord<Evt extends AnyDomainEvent> {
   attempts?: number;
 }
 
-interface Outbox<Evt extends AnyDomainEvent> extends OutboxWriter<Evt> {
+interface Outbox<Evt extends AnyDomainEvent, TCtx = unknown>
+  extends OutboxWriter<Evt, TCtx> {
   getPending(
     limit?: number,
     context?: ExecutionContext,
@@ -244,9 +246,12 @@ interface Outbox<Evt extends AnyDomainEvent> extends OutboxWriter<Evt> {
 }
 ```
 
-`getPending` must return records in commit order. In SQL, that means a
-monotonic position column and an `ORDER BY`. A bare `SELECT` is not an
-ordering guarantee.
+`getPending` must return records in the order of their positions. Within one
+event source, that is the commit order, because the writers of a source run one
+after the other. Across sources, two concurrent transactions can commit in the
+other order than their positions, so the port promises no order between
+sources. In SQL, the position is a monotonic column with an `ORDER BY`. A bare
+`SELECT` is not an ordering guarantee.
 
 `markDispatched` must be idempotent. Re-acking a dispatched id or an unknown
 id should be a no-op. This lets the dispatcher recover from partial failures,
@@ -465,7 +470,8 @@ The dispatcher has a narrow contract:
 
 - It is at-least-once. A crash after publish but before ack means the record
   will be delivered again.
-- It dispatches sequentially in commit order.
+- It dispatches sequentially in the order of `getPending`: the commit order
+  within each event source.
 - It stops the batch on the first delivery failure.
 - It aborts each sink through its `ExecutionContext` after `deliveryTimeoutMs`
   (30 seconds by default). A sink that ignores the signal cannot keep the
@@ -509,8 +515,8 @@ record behind it.
 Use `DispatchTrackingOutbox` when you run a poller:
 
 ```ts
-interface DispatchTrackingOutbox<Evt extends AnyDomainEvent>
-  extends Outbox<Evt> {
+interface DispatchTrackingOutbox<Evt extends AnyDomainEvent, TCtx = unknown>
+  extends Outbox<Evt, TCtx> {
   markFailed(
     dispatchId: string,
     error?: unknown,

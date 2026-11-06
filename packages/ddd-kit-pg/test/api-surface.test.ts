@@ -6,6 +6,7 @@ describe("the public API of the package", () => {
 		expect(Object.keys(api).sort()).toEqual([
 			"PgCommitRolledBackError",
 			"PgDeadlineStore",
+			"PgEventDecodeError",
 			"PgEventStore",
 			"PgEventStreamCorruptError",
 			"PgIdempotencyStore",
@@ -15,6 +16,7 @@ describe("the public API of the package", () => {
 			"PgRollbackFailedError",
 			"PgSnapshotStore",
 			"PgTransactionScope",
+			"PgUnsupportedIsolationLevelError",
 			"fromPg",
 			"fromPgPool",
 		]);

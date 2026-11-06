@@ -12,16 +12,21 @@ export type PgPollPool = Pick<Pool, "query" | "connect">;
  * caller, for example the polls of an outbox. Each statement runs on any free
  * connection. A statement with a `context` runs in a short transaction of its
  * own, because a statement timeout needs one: the database cancels the statement
- * at the deadline, so that it cannot hold a connection of the pool.
+ * at the deadline, so that it cannot hold a connection of the pool. That
+ * transaction runs at READ COMMITTED, because no caller retries a serialization
+ * failure of a poll statement.
  */
 export function fromPgPool(pool: PgPollPool): PgQueryExecutor {
+	const scope = new PgTransactionScope(pool, {
+		isolationLevel: "read committed",
+	});
 	return {
 		query: async (text, values, context) => {
 			if (context === undefined) {
 				const { rows } = await pool.query(text, values && [...values]);
 				return { rows };
 			}
-			return inBoundedTransaction(pool, context, async (tx) =>
+			return inBoundedTransaction(scope, context, async (tx) =>
 				tx.query(text, values),
 			);
 		},
@@ -29,18 +34,19 @@ export function fromPgPool(pool: PgPollPool): PgQueryExecutor {
 }
 
 /**
- * Runs `work` in a transaction that the deadline of `context` bounds in the
- * database. An abort stops the wait of the caller at once, and the transaction
- * then rolls back at its next step, so that aborted work does not commit.
+ * Runs `work` in a transaction of `scope` that the deadline of `context` bounds
+ * in the database. An abort stops the wait of the caller at once. The
+ * transaction then rolls back at its next step, so that work aborted before the
+ * `COMMIT` does not commit. An abort during the `COMMIT` cannot stop it.
  */
 export function inBoundedTransaction<T>(
-	pool: PgPollPool,
+	scope: PgTransactionScope,
 	context: ExecutionContext,
 	work: (tx: PgQueryExecutor) => Promise<T>,
 ): Promise<T> {
 	context.signal.throwIfAborted();
 	return rejectOnAbort(
-		new PgTransactionScope(pool).transactional(async (tx) => {
+		scope.transactional(async (tx) => {
 			await setStatementDeadline(tx, context);
 			const result = await work(tx);
 			context.signal.throwIfAborted();

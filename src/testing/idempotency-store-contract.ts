@@ -12,7 +12,7 @@ import {
 	bindContractEnvironment,
 	type ContractTest,
 	captureRejection,
-	plainDataThatJsonDoesNotKeep,
+	plainValuesThatJsonDoesNotKeep,
 } from "./contract-assertions";
 
 /** One contract test; bind with `(test.skipped ? it.skip : it)(test.name, test.run)`. */
@@ -162,12 +162,12 @@ export function createIdempotencyStoreContractTests<TCtx>(
 				);
 			}),
 		},
-		{
-			name: "fidelity: a value that JSON does not keep is stored exactly or rejected",
+		...plainValuesThatJsonDoesNotKeep().map(({ name, data: outcome }) => ({
+			name: `fidelity: ${name} is stored exactly or rejected`,
 			run: inEnv(async (env) => {
-				const outcome = plainDataThatJsonDoesNotKeep();
 				await assertKeptOrRejected({
 					subject: "An idempotency store",
+					valueName: name,
 					write: () =>
 						env.run(async (ctx) => {
 							const claim = claimedHandle(
@@ -189,6 +189,6 @@ export function createIdempotencyStoreContractTests<TCtx>(
 					expected: outcome,
 				});
 			}),
-		},
+		})),
 	];
 }
