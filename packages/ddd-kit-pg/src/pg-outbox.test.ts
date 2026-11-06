@@ -9,6 +9,7 @@ import { createOutboxContractTests } from "@shirudo/ddd-kit/testing";
 import type { Pool } from "pg";
 import { describe, expect, it } from "vite-plus/test";
 import { openIsolatedSchema } from "../test/isolated-schema";
+import { PgEventDecodeError } from "./pg-errors";
 import type { PgEventCodec } from "./pg-event-codec";
 import { PgOutbox } from "./pg-outbox";
 import type { PgQueryExecutor } from "./pg-query-executor";
@@ -146,6 +147,54 @@ describe("PgOutbox", () => {
 			"SELECT payload FROM ddd_kit_outbox",
 		);
 		expect(rows[0].payload).toEqual({ at: at.toISOString() });
+		await teardown();
+	});
+
+	it("names the stored event that the codec cannot decode", async () => {
+		const { add, outbox, teardown } = await openOutbox({
+			codec: {
+				encode: (event) => event,
+				decode: () => {
+					throw new Error("unknown schema version");
+				},
+			},
+		});
+		await add([candidate(eventNamed("event-1"))]);
+
+		const failure = await outbox
+			.getPending(10)
+			.catch((error: unknown) => error);
+
+		expect(failure).toBeInstanceOf(PgEventDecodeError);
+		expect(failure).toMatchObject({
+			code: "PG_EVENT_DECODE_FAILED",
+			eventId: "event-1",
+			identity: { aggregateType: "Thing", aggregateId: "a-1" },
+			cause: { message: "unknown schema version" },
+		});
+		await teardown();
+	});
+
+	it("counts a failure whose message holds a NUL byte", async () => {
+		const { add, database, outbox, teardown } = await openOutbox();
+		await add([candidate(eventNamed("event-1"))]);
+
+		await outbox.markFailed("event-1", new Error("the broker said \u0000"));
+
+		expect(await outbox.getPending(10)).toMatchObject([
+			{ dispatchId: "event-1", attempts: 1 },
+		]);
+		const { rows } = await database.pool.query(
+			"SELECT last_error FROM ddd_kit_outbox",
+		);
+		expect(rows[0].last_error).toBe("the broker said \uFFFD");
+		await teardown();
+	});
+
+	it("rejects a limit that is not an integer", async () => {
+		const { outbox, teardown } = await openOutbox();
+
+		await expect(outbox.getPending(2.5)).rejects.toThrow(RangeError);
 		await teardown();
 	});
 

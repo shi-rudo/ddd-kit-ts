@@ -149,8 +149,12 @@ export class PgOutbox<Evt extends AnyDomainEvent>
 		limit: number = DEFAULT_PAGE_SIZE,
 		context?: ExecutionContext,
 	): Promise<ReadonlyArray<OutboxRecord<Evt>>> {
-		if (!(limit > 0)) return [];
-		context?.signal.throwIfAborted();
+		if (!Number.isSafeInteger(limit)) {
+			throw new RangeError(
+				`PgOutbox: limit must be an integer, got ${String(limit)}`,
+			);
+		}
+		if (limit < 1) return [];
 		const { rows } =
 			this.leaseMs === undefined
 				? await this.poll.query<OutboxRow>(
@@ -247,7 +251,6 @@ export class PgOutbox<Evt extends AnyDomainEvent>
 		dispatchIds: ReadonlyArray<string>,
 		context?: ExecutionContext,
 	): Promise<void> {
-		context?.signal.throwIfAborted();
 		await this.poll.query(
 			`UPDATE ddd_kit_outbox
 			SET status = 'dispatched', dispatched_at = now(), claimed_until = NULL
@@ -262,9 +265,11 @@ export class PgOutbox<Evt extends AnyDomainEvent>
 		error?: unknown,
 		context?: ExecutionContext,
 	): Promise<DeadLetterRecord<Evt> | undefined> {
-		context?.signal.throwIfAborted();
-		const lastError =
-			error instanceof Error ? error.message : String(error ?? "unknown");
+		// PostgreSQL text cannot hold a NUL byte, and the UPDATE would then fail on
+		// every attempt.
+		const lastError = (
+			error instanceof Error ? error.message : String(error ?? "unknown")
+		).replaceAll("\u0000", "\uFFFD");
 		const { rows } = await this.poll.query<
 			OutboxRow & { readonly status: string }
 		>(
