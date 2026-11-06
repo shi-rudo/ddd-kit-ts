@@ -6,6 +6,7 @@ import {
 } from "../domain/event/domain-event";
 import { InMemoryEventStore } from "../persistence/event-store/adapters/in-memory-event-store";
 import type {
+	EventStoreAppendOptions,
 	ReadStreamOptions,
 	StreamReadResult,
 } from "../persistence/event-store/event-store";
@@ -31,6 +32,32 @@ class StoreThatLosesValuesInJson extends InMemoryEventStore<ContractStepRecorded
 				payload: JSON.parse(JSON.stringify(event.payload)),
 			})),
 		};
+	}
+}
+
+/**
+ * A store that rejects a Set, a Map, and undefined, but changes a Date. Its JSON
+ * replacer never sees the Date, because `toJSON` runs first.
+ */
+class StoreThatChangesOnlyADate extends StoreThatLosesValuesInJson {
+	override async append(
+		stream: AggregateIdentity,
+		events: ReadonlyArray<ContractStepRecorded>,
+		options: EventStoreAppendOptions,
+	): Promise<void> {
+		for (const event of events) {
+			JSON.stringify(event.payload, (_key, value: unknown) => {
+				if (
+					value instanceof Set ||
+					value instanceof Map ||
+					value === undefined
+				) {
+					throw new TypeError("the store keeps only JSON");
+				}
+				return value;
+			});
+		}
+		await super.append(stream, events, options);
 	}
 }
 
@@ -78,7 +105,10 @@ describe("event-store adapter contract", () => {
 			"OCC: duplicate create is rejected atomically with a sanctioned kit error",
 			"OCC: an expectedVersion ahead of an absent stream conflicts without creating it",
 			"read ownership: a mutation attempt cannot mutate the stream",
-			"fidelity: a value that JSON does not keep is stored exactly or rejected",
+			"fidelity: a Date is stored exactly or rejected",
+			"fidelity: a Set is stored exactly or rejected",
+			"fidelity: a Map is stored exactly or rejected",
+			"fidelity: an undefined property is stored exactly or rejected",
 		]);
 	});
 
@@ -95,7 +125,22 @@ describe("event-store adapter contract", () => {
 		}).find((test) => test.name.startsWith("fidelity:"));
 
 		await expect(fidelityTest?.run()).rejects.toThrow(
-			/changed a Date, Map, Set, or undefined value/,
+			/changed a Date without an error/,
+		);
+	});
+
+	it("the fidelity test of a Date kills a store that rejects only the other values", async () => {
+		const dateTest = createEventStoreContractTests({
+			...harness,
+			createEnvironment: async () => ({
+				store: new StoreThatChangesOnlyADate(),
+			}),
+		}).find(
+			(test) => test.name === "fidelity: a Date is stored exactly or rejected",
+		);
+
+		await expect(dateTest?.run()).rejects.toThrow(
+			/An event store changed a Date without an error/,
 		);
 	});
 });

@@ -175,8 +175,9 @@ immutable. Run one kit version per process during a cutover.
 - A durable adapter keeps a value exactly or rejects it, and it never changes a
   value without an error. The contract suites of the event store, the outbox,
   both idempotency stores, the deadline store, and the snapshot store check
-  this with a `Date`, a `Map`, a `Set`, and `undefined`. An adapter that passes
-  these values through a raw `JSON.stringify` now fails its suite.
+  this with a `Date`, a `Map`, a `Set`, and `undefined`, each in a write of its
+  own. An adapter that passes these values through a raw `JSON.stringify` now
+  fails its suite, also when it rejects one value and changes another.
   See
   [One rule for plain data](docs/guide/design-decisions.md#one-rule-for-plain-data).
 - `EventStore.append` and `readStream` take an `AggregateIdentity` in place

@@ -13,7 +13,7 @@ import {
 	type ContractTest,
 	captureRejection,
 	chainContainsRetryable,
-	plainDataThatJsonDoesNotKeep,
+	plainValuesThatJsonDoesNotKeep,
 } from "./contract-assertions";
 
 /** One contract test; bind with `(test.skipped ? it.skip : it)(test.name, test.run)`. */
@@ -380,12 +380,12 @@ export function createLeasedIdempotencyStoreContractTests<TCtx>(
 				);
 			}),
 		},
-		{
-			name: "fidelity: a value that JSON does not keep is stored exactly or rejected",
+		...plainValuesThatJsonDoesNotKeep().map(({ name, data: outcome }) => ({
+			name: `fidelity: ${name} is stored exactly or rejected`,
 			run: inEnv(async (env) => {
-				const outcome = plainDataThatJsonDoesNotKeep();
 				await assertKeptOrRejected({
 					subject: "A leased idempotency store",
+					valueName: name,
 					write: () => completeAndConfirm(env, "key-1", outcome),
 					read: async () => {
 						const replay = await env.run((ctx) =>
@@ -400,6 +400,6 @@ export function createLeasedIdempotencyStoreContractTests<TCtx>(
 					expected: outcome,
 				});
 			}),
-		},
+		})),
 	];
 }

@@ -15,7 +15,7 @@ import {
 	bindContractEnvironment,
 	type ContractTest,
 	captureRejection,
-	plainDataThatJsonDoesNotKeep,
+	plainValuesThatJsonDoesNotKeep,
 } from "./contract-assertions";
 
 /** One named contract test for an EventStore adapter. */
@@ -742,20 +742,23 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 				);
 			}),
 		},
-		{
-			name: "fidelity: a value that JSON does not keep is stored exactly or rejected",
+		...plainValuesThatJsonDoesNotKeep().map(({ name, data }) => ({
+			name: `fidelity: ${name} is stored exactly or rejected`,
 			run: inEnv(async ({ store }) => {
 				const [firstKey] = harness.createCollidingStreamKeys();
-				const payload = plainDataThatJsonDoesNotKeep();
-				const event = { ...harness.createEvent(firstKey, 70), payload } as Evt;
+				const event = {
+					...harness.createEvent(firstKey, 70),
+					payload: data,
+				} as Evt;
 				await assertKeptOrRejected({
 					subject: "An event store",
+					valueName: name,
 					write: () => store.append(firstKey, [event], { expectedVersion: 0 }),
 					read: async () =>
 						(await store.readStream(firstKey, fixtureRead)).events[0]?.payload,
-					expected: payload,
+					expected: data,
 				});
 			}),
-		},
+		})),
 	];
 }

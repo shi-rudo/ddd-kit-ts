@@ -85,17 +85,22 @@ export function captureRejection(promise: Promise<unknown>): Promise<unknown> {
 }
 
 /**
- * Plain data that the kit allows and that `JSON.stringify` changes without an
- * error. It holds no `bigint`, because `JSON.stringify` throws for one, and a
- * raw JSON adapter would then count as an adapter that rejects.
+ * Plain values that the kit allows and that `JSON.stringify` changes without an
+ * error, each in plain data of its own. A suite writes each value alone, so that
+ * the rejection of one value cannot hide the change of another. There is no
+ * `bigint`, because `JSON.stringify` throws for one, and a raw JSON adapter
+ * would then count as an adapter that rejects.
  */
-export function plainDataThatJsonDoesNotKeep(): unknown {
-	return {
-		at: new Date("2026-01-05T10:20:30.456Z"),
-		tags: new Set(["a"]),
-		counts: new Map([["a", 1]]),
-		nested: { absent: undefined },
-	};
+export function plainValuesThatJsonDoesNotKeep(): ReadonlyArray<{
+	readonly name: string;
+	readonly data: unknown;
+}> {
+	return [
+		{ name: "a Date", data: { at: new Date("2026-01-05T10:20:30.456Z") } },
+		{ name: "a Set", data: { tags: new Set(["a"]) } },
+		{ name: "a Map", data: { counts: new Map([["a", 1]]) } },
+		{ name: "an undefined property", data: { nested: { absent: undefined } } },
+	];
 }
 
 /**
@@ -104,6 +109,7 @@ export function plainDataThatJsonDoesNotKeep(): unknown {
  */
 export async function assertKeptOrRejected(fidelity: {
 	readonly subject: string;
+	readonly valueName: string;
 	readonly write: () => Promise<unknown>;
 	readonly read: () => Promise<unknown>;
 	readonly expected: unknown;
@@ -112,9 +118,9 @@ export async function assertKeptOrRejected(fidelity: {
 	if (rejection !== undefined) return;
 	assert(
 		deepEqual(await fidelity.read(), fidelity.expected),
-		`${fidelity.subject} changed a Date, Map, Set, or undefined value without ` +
-			"an error. Keep each value exactly, or reject the write. An adapter " +
-			"that stores JSON can call assertJsonSafe before it writes.",
+		`${fidelity.subject} changed ${fidelity.valueName} without an error. ` +
+			"Keep the value exactly, or reject the write. An adapter that stores " +
+			"JSON can call assertJsonSafe before it writes.",
 	);
 }
 

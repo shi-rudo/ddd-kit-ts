@@ -10,7 +10,7 @@ import {
 	bindContractEnvironment,
 	type ContractTest,
 	gatedContractTest,
-	plainDataThatJsonDoesNotKeep,
+	plainValuesThatJsonDoesNotKeep,
 } from "./contract-assertions";
 
 /** One contract test; bind with `(test.skipped ? it.skip : it)(test.name, test.run)`. */
@@ -114,13 +114,13 @@ export function createDeadlineStoreContractTests(
 	}
 
 	return [
-		{
-			name: "fidelity: a value that JSON does not keep is stored exactly or rejected",
+		...plainValuesThatJsonDoesNotKeep().map(({ name, data }) => ({
+			name: `fidelity: ${name} is stored exactly or rejected`,
 			run: inEnv(async (env) => {
-				const payload =
-					plainDataThatJsonDoesNotKeep() as DeadlineStoreContractPayload;
+				const payload = data as DeadlineStoreContractPayload;
 				await assertKeptOrRejected({
 					subject: "A deadline store",
+					valueName: name,
 					write: () =>
 						env.run(() =>
 							env.store.schedule({
@@ -134,7 +134,7 @@ export function createDeadlineStoreContractTests(
 					expected: payload,
 				});
 			}),
-		},
+		})),
 		{
 			name: "a deadline is invisible before its due time and delivered from it onward",
 			run: inEnv(async (env) => {

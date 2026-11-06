@@ -9,7 +9,7 @@ import {
 	assertKeptOrRejected,
 	bindContractEnvironment,
 	type ContractTest,
-	plainDataThatJsonDoesNotKeep,
+	plainValuesThatJsonDoesNotKeep,
 } from "./contract-assertions";
 
 /** One contract test; bind with `(test.skipped ? it.skip : it)(test.name, test.run)`. */
@@ -249,13 +249,13 @@ export function createSnapshotStoreContractTests(
 				);
 			}),
 		},
-		{
-			name: "fidelity: a value that JSON does not keep is stored exactly or rejected",
+		...plainValuesThatJsonDoesNotKeep().map(({ name, data }) => ({
+			name: `fidelity: ${name} is stored exactly or rejected`,
 			run: inEnv(async (env) => {
-				const state =
-					plainDataThatJsonDoesNotKeep() as SnapshotStoreContractState;
+				const state = data as SnapshotStoreContractState;
 				await assertKeptOrRejected({
 					subject: "A snapshot store",
+					valueName: name,
 					write: () =>
 						env.store.save(identity("Order", "o-1"), snapshot(1, state)),
 					read: async () =>
@@ -263,6 +263,6 @@ export function createSnapshotStoreContractTests(
 					expected: state,
 				});
 			}),
-		},
+		})),
 	];
 }
