@@ -11,6 +11,7 @@ import {
 	assertEqual,
 	bindContractEnvironment,
 	type ContractTest,
+	ContractViolation,
 	captureRejection,
 	describeError,
 	gatedContractTest,
@@ -454,7 +455,7 @@ export function createCommandOutboxContractTests<C extends PublishedCommand>(
 				name: "a rolled-back add leaves no receipt or command behind",
 				run: inEnv(async (env) => {
 					if (!env.addRolledBack) {
-						throw new Error(
+						throw new ContractViolation(
 							"Contract violated: harness declared providesRolledBackAdds but the environment lacks addRolledBack",
 						);
 					}
@@ -476,7 +477,7 @@ export function createCommandOutboxContractTests<C extends PublishedCommand>(
 				name: "a rolled-back end leaves the source open",
 				run: inEnv(async (env) => {
 					if (!env.endEventSourcesRolledBack) {
-						throw new Error(
+						throw new ContractViolation(
 							"Contract violated: harness declared providesRolledBackEnds but the environment lacks endEventSourcesRolledBack",
 						);
 					}

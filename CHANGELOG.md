@@ -177,7 +177,8 @@ immutable. Run one kit version per process during a cutover.
   both idempotency stores, the deadline store, and the snapshot store check
   this with a `Date`, a `Map`, a `Set`, and `undefined`, each in a write of its
   own. An adapter that passes these values through a raw `JSON.stringify` now
-  fails its suite, also when it rejects one value and changes another.
+  fails its suite, also when it rejects one value and changes another. A failed
+  check of the suite inside the write does not count as a rejection.
   See
   [One rule for plain data](docs/guide/design-decisions.md#one-rule-for-plain-data).
 - `EventStore.append` and `readStream` take an `AggregateIdentity` in place

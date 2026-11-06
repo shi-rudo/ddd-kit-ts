@@ -115,6 +115,7 @@ export async function assertKeptOrRejected(fidelity: {
 	readonly expected: unknown;
 }): Promise<void> {
 	const rejection = await captureRejection(fidelity.write());
+	if (rejection instanceof ContractViolation) throw rejection;
 	if (rejection !== undefined) return;
 	assert(
 		deepEqual(await fidelity.read(), fidelity.expected),
@@ -393,9 +394,17 @@ export function sortedCommittedEventIds(
 	return committed.map(({ event }) => event.eventId).sort();
 }
 
+/**
+ * A rule of a contract that the adapter under test broke. The class tells it
+ * apart from a rejection of the adapter, for example in the fidelity check.
+ */
+export class ContractViolation extends Error {
+	override readonly name = "ContractViolation";
+}
+
 export function assert(condition: boolean, message: string): asserts condition {
 	if (!condition) {
-		throw new Error(`Contract violated: ${message}`);
+		throw new ContractViolation(`Contract violated: ${message}`);
 	}
 }
 
@@ -405,7 +414,7 @@ export function assertEqual(
 	message: string,
 ): void {
 	if (actual !== expected) {
-		throw new Error(
+		throw new ContractViolation(
 			`Contract violated: ${message} (expected ${String(expected)}, got ${String(actual)})`,
 		);
 	}
@@ -441,7 +450,7 @@ export function assertChainContainsKitError(
 	if (codes.some((code) => chainContainsErrorNamed(rejection, code))) {
 		return;
 	}
-	throw new Error(`Contract violated: ${message}`);
+	throw new ContractViolation(`Contract violated: ${message}`);
 }
 
 /**
@@ -463,7 +472,7 @@ export function assertChainConflictNamesIntent(
 			? "no CONCURRENCY_CONFLICT"
 			: (conflict as { intent?: unknown }).intent;
 	if (observed === intent) return;
-	throw new Error(
+	throw new ContractViolation(
 		`Contract violated: ${message}; got ${typeof observed === "string" ? observed : String(observed)}`,
 	);
 }

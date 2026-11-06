@@ -9,6 +9,7 @@ import {
 	assertKeptOrRejected,
 	bindContractEnvironment,
 	type ContractTest,
+	ContractViolation,
 	gatedContractTest,
 	plainValuesThatJsonDoesNotKeep,
 } from "./contract-assertions";
@@ -108,7 +109,7 @@ export function createDeadlineStoreContractTests(
 	const inEnv = bindContractEnvironment(() => harness.createEnvironment());
 	const ceiling = harness.failuresToDeadLetter;
 	if (!Number.isInteger(ceiling) || ceiling < 2) {
-		throw new Error(
+		throw new ContractViolation(
 			"Contract violated: failuresToDeadLetter must be an integer >= 2; observing attempts on a pending deadline needs one that survives a failure",
 		);
 	}
@@ -560,7 +561,7 @@ export function createDeadlineStoreContractTests(
 				name: "a rolled-back schedule leaves no deadline behind",
 				run: inEnv(async (env) => {
 					if (!env.runRolledBack) {
-						throw new Error(
+						throw new ContractViolation(
 							"Contract violated: harness declared providesRolledBackRuns but the environment lacks runRolledBack",
 						);
 					}
@@ -597,7 +598,7 @@ export function createDeadlineStoreContractTests(
 				name: "a rolled-back cancel leaves the deadline in place",
 				run: inEnv(async (env) => {
 					if (!env.runRolledBack) {
-						throw new Error(
+						throw new ContractViolation(
 							"Contract violated: harness declared providesRolledBackRuns but the environment lacks runRolledBack",
 						);
 					}

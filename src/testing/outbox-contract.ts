@@ -15,6 +15,7 @@ import {
 	assertKeptOrRejected,
 	bindContractEnvironment,
 	type ContractTest,
+	ContractViolation,
 	captureRejection,
 	describeError,
 	gatedContractTest,
@@ -574,7 +575,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 					} catch (error) {
 						// A bare UNIQUE(eventId) constraint makes the duplicate
 						// INSERT throw; the contract wants an idempotent add.
-						throw new Error(
+						throw new ContractViolation(
 							"Contract violated: add() must swallow a duplicate eventId, not throw. " +
 								"Dedupe means an idempotent add (INSERT ... ON CONFLICT DO NOTHING or " +
 								`equivalent), not a raised unique violation. Got: ${describeError(error)}`,
@@ -628,7 +629,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 				name: "a rolled-back add leaves nothing behind (transactional participation)",
 				run: inEnv(async (env) => {
 					if (!env.addRolledBack) {
-						throw new Error(
+						throw new ContractViolation(
 							"Contract violated: harness declared providesRolledBackAdds but the environment lacks addRolledBack",
 						);
 					}
@@ -670,7 +671,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 				name: "a rolled-back end leaves the event source open (transactional participation)",
 				run: inEnv(async (env) => {
 					if (!env.endEventSourcesRolledBack) {
-						throw new Error(
+						throw new ContractViolation(
 							"Contract violated: harness declared providesRolledBackEnds but the environment lacks endEventSourcesRolledBack",
 						);
 					}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import { ConcurrencyConflictError } from "../errors/kit-errors";
 import {
+	assert,
 	assertChainContainsKitError,
 	assertKeptOrRejected,
 	assertRunPermitsOverlappingCalls,
@@ -50,6 +51,16 @@ describe("assertKeptOrRejected", () => {
 				}),
 			),
 		).resolves.toBeUndefined();
+	});
+
+	it("fails on a contract violation of the suite inside the write, in place of counting it as a rejection", async () => {
+		await expect(
+			assertKeptOrRejected(
+				fidelity("never read", async () => {
+					assert(false, "a fresh key must be claimed");
+				}),
+			),
+		).rejects.toThrow(/a fresh key must be claimed/);
 	});
 
 	it("fails when the read returns a changed value", async () => {
