@@ -28,6 +28,11 @@ CREATE INDEX ddd_kit_outbox_pending
 	ON ddd_kit_outbox (position)
 	WHERE status = 'pending';
 
+-- The claim checks the earlier pending events of a source.
+CREATE INDEX ddd_kit_outbox_pending_source
+	ON ddd_kit_outbox (aggregate_type, aggregate_id, position)
+	WHERE status = 'pending';
+
 CREATE INDEX ddd_kit_outbox_dead
 	ON ddd_kit_outbox (position)
 	WHERE status = 'dead';
