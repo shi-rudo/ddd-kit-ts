@@ -6,11 +6,14 @@ import {
 } from "@shirudo/ddd-kit";
 import { createProjectionCheckpointStoreContractTests } from "@shirudo/ddd-kit/testing";
 import { describe, expect, it } from "vite-plus/test";
-import { openIsolatedSchema } from "../test/isolated-schema";
+import {
+	openIsolatedSchema,
+	openTablesBehindPrivateSchemas,
+} from "../test/isolated-schema";
 import { PgOutbox } from "./pg-outbox";
 import { fromPgPool } from "./pg-pool-executor";
 import { PgProjectionCheckpointStore } from "./pg-projection-checkpoint-store";
-import type { PgQueryExecutor } from "./pg-query-executor";
+import { fromPg, type PgQueryExecutor } from "./pg-query-executor";
 import { PgTransactionScope } from "./pg-transaction-scope";
 
 const ROLLBACK = new Error("the contract suite asked for a rollback");
@@ -50,6 +53,40 @@ describe("PgProjectionCheckpointStore contract suite", () => {
 
 	it("runs with zero skips", () => {
 		expect(tests.filter((test) => test.skipped)).toEqual([]);
+	});
+});
+
+describe("PgProjectionCheckpointStore", () => {
+	it("serializes the checkpoint locks of two roles, although their search paths start with other schemas", async () => {
+		const {
+			pools: [first, second],
+			teardown,
+		} = await openTablesBehindPrivateSchemas("projection-checkpoint.sql");
+		const identity = { aggregateType: "Note", aggregateId: "note-1" };
+		const holder = await first.connect();
+		const contender = await second.connect();
+		await holder.query("BEGIN");
+		await new PgProjectionCheckpointStore(
+			fromPgPool(first),
+		).withCheckpointLocks(fromPg(holder), "notes", [identity], async () => {});
+		await contender.query("BEGIN");
+		await contender.query("SET LOCAL lock_timeout = '500ms'");
+
+		const failure = await new PgProjectionCheckpointStore(fromPgPool(second))
+			.withCheckpointLocks(
+				fromPg(contender),
+				"notes",
+				[identity],
+				async () => {},
+			)
+			.catch((error: unknown) => error);
+
+		expect(failure).toMatchObject({ code: "55P03" });
+		await contender.query("ROLLBACK");
+		await holder.query("ROLLBACK");
+		holder.release();
+		contender.release();
+		await teardown();
 	});
 });
 
