@@ -37,9 +37,10 @@ export interface PgOutboxOptions<Evt extends AnyDomainEvent> {
 	readonly maxDeliveryAttempts?: number | undefined;
 	/**
 	 * Lets several dispatchers run at once: `getPending` claims its records for
-	 * `leaseMs`. A record of a crashed dispatcher returns when the lease ends.
-	 * Choose a lease longer than a delivery. Without this option, run one
-	 * dispatcher per outbox.
+	 * `leaseMs`. A record returns to the polls when its lease ends: the record of
+	 * a crashed dispatcher, and also a record whose delivery failed. Choose a
+	 * lease longer than a delivery. Without this option, run one dispatcher per
+	 * outbox.
 	 */
 	readonly claim?: { readonly leaseMs: number } | undefined;
 	/** Maps events to JSON and back. Without it, payloads must already be JSON. */
@@ -90,14 +91,17 @@ export class PgOutbox<Evt extends AnyDomainEvent>
 	implements DispatchTrackingOutbox<Evt, PgQueryExecutor>
 {
 	private readonly poll: PgQueryExecutor;
-	private readonly pool: PgPollPool;
+	private readonly claimScope: PgTransactionScope;
 	private readonly maxDeliveryAttempts: number;
 	private readonly leaseMs: number | undefined;
 	private readonly codec: PgEventCodec<Evt> | undefined;
 
 	constructor(options: PgOutboxOptions<Evt>) {
-		this.pool = options.pool;
 		this.poll = fromPgPool(options.pool);
+		// The claim needs a new snapshot after the wait for its lock.
+		this.claimScope = new PgTransactionScope(options.pool, {
+			isolationLevel: "read committed",
+		});
 		this.maxDeliveryAttempts = positiveInteger(
 			"maxDeliveryAttempts",
 			options.maxDeliveryAttempts ?? DEFAULT_MAX_DELIVERY_ATTEMPTS,
@@ -174,7 +178,6 @@ export class PgOutbox<Evt extends AnyDomainEvent>
 		context: ExecutionContext | undefined,
 	) {
 		const claim = async (tx: PgQueryExecutor) => {
-			await tx.query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED");
 			await tx.query(
 				`SELECT pg_advisory_xact_lock(
 					hashtextextended(current_schema() || '/ddd_kit_outbox', 0)
@@ -219,8 +222,8 @@ export class PgOutbox<Evt extends AnyDomainEvent>
 			);
 		};
 		return context === undefined
-			? new PgTransactionScope(this.pool).transactional(claim)
-			: inBoundedTransaction(this.pool, context, claim);
+			? this.claimScope.transactional(claim)
+			: inBoundedTransaction(this.claimScope, context, claim);
 	}
 
 	async markDispatched(
@@ -253,7 +256,6 @@ export class PgOutbox<Evt extends AnyDomainEvent>
 				SET
 					attempts = attempts + 1,
 					last_error = $2,
-					claimed_until = NULL,
 					status = CASE WHEN attempts + 1 >= $3 THEN 'dead' ELSE 'pending' END
 				WHERE event_id = $1 AND status = 'pending'
 				RETURNING *

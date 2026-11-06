@@ -1,3 +1,4 @@
+import { findInCauseChain } from "@shirudo/base-error";
 import { KitWiringError, type TransactionScope } from "@shirudo/ddd-kit";
 import type { PoolClient } from "pg";
 import {
@@ -12,6 +13,26 @@ export interface PgClientPool {
 	connect(): Promise<PoolClient>;
 }
 
+/** A transaction isolation level of PostgreSQL. */
+export type PgIsolationLevel =
+	| "read committed"
+	| "repeatable read"
+	| "serializable";
+
+const BEGIN_STATEMENTS: Readonly<Record<PgIsolationLevel, string>> = {
+	"read committed": "BEGIN ISOLATION LEVEL READ COMMITTED",
+	"repeatable read": "BEGIN ISOLATION LEVEL REPEATABLE READ",
+	serializable: "BEGIN ISOLATION LEVEL SERIALIZABLE",
+};
+
+export interface PgTransactionScopeOptions {
+	/**
+	 * The isolation level of each transaction. Without it, a transaction runs at
+	 * the default of the database, `default_transaction_isolation`.
+	 */
+	readonly isolationLevel?: PgIsolationLevel | undefined;
+}
+
 /**
  * A transaction on one connection of a `pg` pool. The callback receives the
  * executor of that transaction. The scope commits when the callback resolves
@@ -23,11 +44,29 @@ export interface PgClientPool {
  * `PgRollbackFailedError`, which names both failures. `UnitOfWork` reports it as
  * a `RollbackError`.
  *
- * The scope destroys the connection after a failed `BEGIN`, `ROLLBACK`, or
- * `COMMIT`, because its state is then unknown.
+ * The scope destroys the connection after a failed `BEGIN` or `ROLLBACK`, and
+ * after a `COMMIT` that PostgreSQL did not answer, because its state is then
+ * unknown. An answered `COMMIT` ends the transaction, also with an error.
  */
 export class PgTransactionScope implements TransactionScope<PgQueryExecutor> {
-	constructor(private readonly pool: PgClientPool) {}
+	private readonly beginStatement: string;
+
+	constructor(
+		private readonly pool: PgClientPool,
+		options: PgTransactionScopeOptions = {},
+	) {
+		const { isolationLevel } = options;
+		if (isolationLevel === undefined) {
+			this.beginStatement = "BEGIN";
+		} else if (Object.hasOwn(BEGIN_STATEMENTS, isolationLevel)) {
+			this.beginStatement = BEGIN_STATEMENTS[isolationLevel];
+		} else {
+			throw new RangeError(
+				`PgTransactionScope: isolationLevel must be one of ` +
+					`${Object.keys(BEGIN_STATEMENTS).join(", ")}, got ${String(isolationLevel)}`,
+			);
+		}
+	}
 
 	async transactional<T>(fn: (ctx: PgQueryExecutor) => Promise<T>): Promise<T> {
 		const client = await this.pool.connect();
@@ -41,7 +80,7 @@ export class PgTransactionScope implements TransactionScope<PgQueryExecutor> {
 		const session = openSession(client);
 		let transactionEnded = false;
 		try {
-			await client.query("BEGIN");
+			await client.query(this.beginStatement);
 			let result: T;
 			try {
 				result = await fn(session.executor);
@@ -53,7 +92,12 @@ export class PgTransactionScope implements TransactionScope<PgQueryExecutor> {
 				throw classifyTransactionFailure(workFailure);
 			}
 			session.close();
-			await commit(client);
+			try {
+				await commit(client);
+			} catch (commitFailure) {
+				transactionEnded = answeredByServer(commitFailure);
+				throw commitFailure;
+			}
 			transactionEnded = true;
 			return result;
 		} finally {
@@ -83,6 +127,27 @@ async function commit(client: PoolClient): Promise<void> {
 		throw classifyTransactionFailure(commitFailure);
 	}
 	if (command === "ROLLBACK") throw new PgCommitRolledBackError();
+}
+
+/** PostgreSQL answered the `COMMIT` with an error, or with the tag `ROLLBACK`. */
+function answeredByServer(commitFailure: unknown): boolean {
+	return (
+		commitFailure instanceof PgCommitRolledBackError ||
+		findInCauseChain(commitFailure, isErrorResponse) !== undefined
+	);
+}
+
+/** An error response of PostgreSQL. A failure of the socket has no severity. */
+function isErrorResponse(
+	error: unknown,
+): error is { readonly code: string; readonly severity: string } {
+	const fields = error as
+		| { readonly code?: unknown; readonly severity?: unknown }
+		| null
+		| undefined;
+	return (
+		typeof fields?.code === "string" && typeof fields.severity === "string"
+	);
 }
 
 /**

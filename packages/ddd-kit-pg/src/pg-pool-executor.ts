@@ -21,26 +21,29 @@ export function fromPgPool(pool: PgPollPool): PgQueryExecutor {
 				const { rows } = await pool.query(text, values && [...values]);
 				return { rows };
 			}
-			return inBoundedTransaction(pool, context, async (tx) =>
-				tx.query(text, values),
+			return inBoundedTransaction(
+				new PgTransactionScope(pool),
+				context,
+				async (tx) => tx.query(text, values),
 			);
 		},
 	};
 }
 
 /**
- * Runs `work` in a transaction that the deadline of `context` bounds in the
- * database. An abort stops the wait of the caller at once, and the transaction
- * then rolls back at its next step, so that aborted work does not commit.
+ * Runs `work` in a transaction of `scope` that the deadline of `context` bounds
+ * in the database. An abort stops the wait of the caller at once. The
+ * transaction then rolls back at its next step, so that work aborted before the
+ * `COMMIT` does not commit. An abort during the `COMMIT` cannot stop it.
  */
 export function inBoundedTransaction<T>(
-	pool: PgPollPool,
+	scope: PgTransactionScope,
 	context: ExecutionContext,
 	work: (tx: PgQueryExecutor) => Promise<T>,
 ): Promise<T> {
 	context.signal.throwIfAborted();
 	return rejectOnAbort(
-		new PgTransactionScope(pool).transactional(async (tx) => {
+		scope.transactional(async (tx) => {
 			await setStatementDeadline(tx, context);
 			const result = await work(tx);
 			context.signal.throwIfAborted();

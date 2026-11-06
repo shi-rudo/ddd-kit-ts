@@ -35,13 +35,15 @@ function candidate(
 	};
 }
 
-async function openOutbox(
-	options: {
-		claim?: { leaseMs: number };
-		codec?: PgEventCodec<ThingHappened>;
-	} = {},
-) {
-	const database = await openIsolatedSchema();
+async function openOutbox({
+	defaultTransactionIsolation,
+	...options
+}: {
+	claim?: { leaseMs: number };
+	codec?: PgEventCodec<ThingHappened>;
+	defaultTransactionIsolation?: string;
+} = {}) {
+	const database = await openIsolatedSchema({ defaultTransactionIsolation });
 	await database.applySql("outbox.sql");
 	const scope = new PgTransactionScope(database.pool);
 	const outbox = new PgOutbox<ThingHappened>({
@@ -470,17 +472,58 @@ describe("PgOutbox", () => {
 			await teardown();
 		});
 
-		it("releases the claim of a failed record, so the next poll retries it", async () => {
+		it.each(["repeatable read", "serializable"])(
+			"claims with a context on a database whose default isolation is %s",
+			async (defaultTransactionIsolation) => {
+				const { add, outbox, teardown } = await openOutbox({
+					claim: { leaseMs: 60_000 },
+					defaultTransactionIsolation,
+				});
+				await add([candidate(eventNamed("event-1"))]);
+
+				const claimed = await outbox.getPending(10, {
+					signal: new AbortController().signal,
+					deadlineAt: Date.now() + 5_000,
+				});
+
+				expect(claimed.map((r) => r.dispatchId)).toEqual(["event-1"]);
+				await teardown();
+			},
+		);
+
+		it("retries a failed record when its lease ends, and counts the attempt", async () => {
 			const { add, outbox, teardown } = await openOutbox({
-				claim: { leaseMs: 60_000 },
+				claim: { leaseMs: 500 },
 			});
 			await add([candidate(eventNamed("event-1"))]);
 			await outbox.getPending(10);
 
 			await outbox.markFailed("event-1", new Error("the broker is down"));
 
-			const retried = await outbox.getPending(10);
-			expect(retried).toMatchObject([{ dispatchId: "event-1", attempts: 1 }]);
+			expect(await outbox.getPending(10)).toEqual([]);
+			await expect
+				.poll(() => outbox.getPending(10), { timeout: 3_000 })
+				.toMatchObject([{ dispatchId: "event-1", attempts: 1 }]);
+			await teardown();
+		});
+
+		it("keeps the claim of another dispatcher when a failure report comes after the lease", async () => {
+			const { add, database, outbox, teardown } = await openOutbox({
+				claim: { leaseMs: 1 },
+			});
+			const otherDispatcher = new PgOutbox<ThingHappened>({
+				pool: database.pool,
+				maxDeliveryAttempts: ATTEMPT_CEILING,
+				claim: { leaseMs: 60_000 },
+			});
+			await add([candidate(eventNamed("event-1"))]);
+			await outbox.getPending(10);
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			await otherDispatcher.getPending(10);
+
+			await outbox.markFailed("event-1", new Error("the late failure"));
+
+			expect(await otherDispatcher.getPending(10)).toEqual([]);
 			await teardown();
 		});
 	});
