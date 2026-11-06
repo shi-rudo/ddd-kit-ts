@@ -1808,3 +1808,12 @@ The root entry no longer exports `capturePersistenceBaseline`,
   the transaction through a closure or `AsyncLocalStorage`, remove that. A
   direct call of a writer now passes the transaction as well. `InMemoryOutbox`
   users need no change.
+- The identity test of the checkpoint contract suite also puts `/`, `:`, `|`,
+  and `\u001f` between the halves of an aggregate identity. A custom checkpoint
+  store that joins the aggregate type and the aggregate id with one of them now
+  fails the suite. Keep the two halves in separate columns, or encode them as a
+  JSON tuple. A store may reject an identity with a NUL byte, but it must not
+  cut the identity at the NUL byte.
+- The deadline contract suite checks that a failure report without an error
+  keeps the reason of an earlier report. A custom deadline store that writes a
+  placeholder such as `unknown` over the recorded reason now fails the suite.
