@@ -101,6 +101,35 @@ export class PgEventStreamCorruptError extends InfrastructureError<"PG_EVENT_STR
 	}
 }
 
+/**
+ * `PgEventStore.removeStream` ran at an isolation level with one snapshot for the
+ * whole transaction. A retry does not help: begin the transaction at READ
+ * COMMITTED.
+ */
+export class PgUnsupportedIsolationLevelError extends InfrastructureError<"PG_UNSUPPORTED_ISOLATION_LEVEL"> {
+	readonly isolationLevel: string;
+	readonly identity: AggregateIdentity;
+
+	constructor(options: {
+		readonly isolationLevel: string;
+		readonly identity: AggregateIdentity;
+	}) {
+		super({
+			code: "PG_UNSUPPORTED_ISOLATION_LEVEL",
+			message:
+				`PgEventStore.removeStream ran at ${options.isolationLevel.toUpperCase()} ` +
+				`on ${options.identity.aggregateType}/${options.identity.aggregateId}. ` +
+				"A removal needs READ COMMITTED. A snapshot for the whole transaction " +
+				"misses an append that commits while the removal waits for the lock, " +
+				"and that event would survive the removal. Begin the transaction at READ " +
+				"COMMITTED, for example with the isolationLevel option of " +
+				"PgTransactionScope.",
+		});
+		this.isolationLevel = options.isolationLevel;
+		this.identity = options.identity;
+	}
+}
+
 function hasRetryableSqlState(error: unknown): error is { code: string } {
 	const code = (error as { code?: unknown } | null | undefined)?.code;
 	return typeof code === "string" && RETRYABLE_SQLSTATES.has(code);

@@ -9,7 +9,10 @@ import {
 	type ReadStreamOptions,
 	type StreamReadResult,
 } from "@shirudo/ddd-kit";
-import { PgEventStreamCorruptError } from "./pg-errors";
+import {
+	PgEventStreamCorruptError,
+	PgUnsupportedIsolationLevelError,
+} from "./pg-errors";
 import type { PgEventCodec } from "./pg-event-codec";
 import type { PgQueryExecutor } from "./pg-query-executor";
 import { rejectOnAbort } from "./reject-on-abort";
@@ -127,15 +130,17 @@ export class PgEventStore<Evt extends AnyDomainEvent>
 
 	/**
 	 * Deletes the whole stream in the transaction of the executor, for example
-	 * to erase personal data. Call it inside a transaction. The version guard
-	 * rejects a stream that changed after the load, and an open append finishes
-	 * first. Delete a snapshot of the aggregate first. A removed identity
-	 * stays removed: give a new aggregate a new id.
+	 * to erase personal data. Call it inside a transaction at READ COMMITTED: it
+	 * rejects another isolation level with `PgUnsupportedIsolationLevelError`.
+	 * The version guard rejects a stream that changed after the load, and an
+	 * open append finishes first. Delete a snapshot of the aggregate first. A
+	 * removed identity stays removed: give a new aggregate a new id.
 	 */
 	async removeStream(
 		stream: AggregateIdentity,
 		{ expectedVersion }: EventStoreAppendOptions,
 	): Promise<void> {
+		await this.requireReadCommitted(stream);
 		const head = await this.lockStreamAndReadHead(stream);
 		if (head !== expectedVersion) {
 			throw new ConcurrencyConflictError({
@@ -153,13 +158,31 @@ export class PgEventStore<Evt extends AnyDomainEvent>
 	}
 
 	/**
+	 * A snapshot for the whole transaction, as in REPEATABLE READ, comes before
+	 * the wait for the lock of the stream. The removal would then read the old
+	 * head, and an append that commits during the wait would survive it.
+	 * PostgreSQL runs READ UNCOMMITTED as READ COMMITTED.
+	 */
+	private async requireReadCommitted(stream: AggregateIdentity): Promise<void> {
+		const { rows } = await this.executor.query<{ level: string }>(
+			"SELECT current_setting('transaction_isolation') AS level",
+		);
+		const level = rows[0]?.level ?? "unknown";
+		if (level !== "read committed" && level !== "read uncommitted") {
+			throw new PgUnsupportedIsolationLevelError({
+				isolationLevel: level,
+				identity: stream,
+			});
+		}
+	}
+
+	/**
 	 * Holds a lock on the stream until the transaction ends, and reads the head
 	 * after it. An append and a removal would otherwise miss each other: a DELETE
 	 * does not see a position that an open append inserted, and that event would
 	 * survive the removal. These are two statements, because READ COMMITTED gives
 	 * each statement a new snapshot. In one statement, the snapshot would come
-	 * before the wait. A transaction-wide snapshot, as in REPEATABLE READ, still
-	 * reads the old head, so run a removal at READ COMMITTED.
+	 * before the wait.
 	 */
 	private async lockStreamAndReadHead(
 		stream: AggregateIdentity,

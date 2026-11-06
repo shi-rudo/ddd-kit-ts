@@ -12,6 +12,7 @@ describe("the public API of the package", () => {
 			"PgRetryableTransactionFailureError",
 			"PgRollbackFailedError",
 			"PgTransactionScope",
+			"PgUnsupportedIsolationLevelError",
 			"fromPg",
 			"fromPgPool",
 		]);

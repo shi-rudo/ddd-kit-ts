@@ -4,6 +4,7 @@ import { createEventStoreContractTests } from "@shirudo/ddd-kit/testing";
 import type { Pool, PoolClient } from "pg";
 import { describe, expect, it } from "vite-plus/test";
 import { openIsolatedSchema } from "../test/isolated-schema";
+import { PgUnsupportedIsolationLevelError } from "./pg-errors";
 import type { PgEventCodec } from "./pg-event-codec";
 import { PgEventStore } from "./pg-event-store";
 import { fromPg, type PgQueryExecutor } from "./pg-query-executor";
@@ -486,6 +487,31 @@ describe("PgEventStore", () => {
 			expect(read.exists).toBe(true);
 			await teardown();
 		});
+
+		it.each(["REPEATABLE READ", "SERIALIZABLE"])(
+			"rejects a removal at %s and keeps the stream",
+			async (level) => {
+				const { client, store, teardown } = await openStore();
+				await store.append(stream, [noteWritten({})], { expectedVersion: 0 });
+
+				await client.query(`BEGIN ISOLATION LEVEL ${level}`);
+				const failure = await store
+					.removeStream(stream, { expectedVersion: 1 })
+					.catch((error: unknown) => error);
+				await client.query("ROLLBACK");
+
+				expect(failure).toBeInstanceOf(PgUnsupportedIsolationLevelError);
+				expect(failure).toMatchObject({
+					code: "PG_UNSUPPORTED_ISOLATION_LEVEL",
+					isolationLevel: level.toLowerCase(),
+					identity: stream,
+				});
+				expect((await store.readStream(stream, { limit: 1 })).exists).toBe(
+					true,
+				);
+				await teardown();
+			},
+		);
 	});
 
 	describe("the abort signal of a read", () => {
