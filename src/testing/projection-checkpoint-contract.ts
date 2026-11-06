@@ -456,18 +456,50 @@ export function createProjectionCheckpointStoreContractTests<TCtx>(
 					await saveAndLoad(separator);
 				}
 				// A PostgreSQL text column cannot hold a NUL byte. An adapter may
-				// reject the identity, but it must not mix the two.
-				const rejection = await captureRejection(
-					env.run((ctx) =>
-						env.store.save(
-							ctx,
-							"order-list",
-							identitiesAround("\u0000")[0],
-							checkpoint(pos(10, 0)),
+				// reject an identity with one, but it must not cut the identity at
+				// the NUL byte.
+				const identitiesWithNulAndTheirCuts = [
+					[
+						{ aggregateType: "A\u0000B", aggregateId: "C" },
+						{ aggregateType: "A", aggregateId: "C" },
+					],
+					[
+						{ aggregateType: "A", aggregateId: "B\u0000C" },
+						{ aggregateType: "A", aggregateId: "B" },
+					],
+				] as const;
+				let rejections = 0;
+				for (const [withNul, cut] of identitiesWithNulAndTheirCuts) {
+					const rejection = await captureRejection(
+						env.run((ctx) =>
+							env.store.save(
+								ctx,
+								"order-list",
+								withNul,
+								checkpoint(pos(10, 0)),
+							),
 						),
-					),
-				);
-				if (rejection === undefined) await saveAndLoad("\u0000");
+					);
+					if (rejection !== undefined) {
+						rejections += 1;
+						continue;
+					}
+					await env.run((ctx) =>
+						env.store.save(ctx, "order-list", cut, checkpoint(pos(1, 0))),
+					);
+					const kept = await env.run((ctx) =>
+						env.store.load(ctx, "order-list", withNul),
+					);
+					const ofCut = await env.run((ctx) =>
+						env.store.load(ctx, "order-list", cut),
+					);
+					assert(
+						kept?.position.aggregateVersion === 10 &&
+							ofCut?.position.aggregateVersion === 1,
+						"an aggregate identity with a NUL byte must not share a watermark with the identity cut at the NUL byte",
+					);
+				}
+				if (rejections === 0) await saveAndLoad("\u0000");
 			}),
 		},
 		{

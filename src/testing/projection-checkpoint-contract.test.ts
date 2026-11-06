@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 import { InMemoryProjectionCheckpointStore } from "../application/projections/adapters/in-memory-checkpoint-store";
+import type {
+	ProjectionCheckpoint,
+	ProjectionPosition,
+} from "../application/projections/ports";
+import type { AggregateIdentity } from "../domain/aggregate/aggregate-identity";
 import { InMemoryTransactionScope } from "../persistence/repository/adapters/in-memory-transaction-scope";
 import {
 	createProjectionCheckpointStoreContractTests,
@@ -8,10 +13,53 @@ import {
 
 const ROLLBACK = Symbol("rollback");
 
-function createInMemoryHarness(): ProjectionCheckpointStoreContractHarness<unknown> {
+/**
+ * A store that rejects a NUL byte in an aggregate type, but cuts an aggregate id
+ * at its first NUL byte, as a C string does.
+ */
+class StoreThatCutsAnIdAtNul extends InMemoryProjectionCheckpointStore {
+	override load(
+		ctx: unknown,
+		projection: string,
+		identity: AggregateIdentity,
+	): Promise<ProjectionCheckpoint | undefined> {
+		return super.load(ctx, projection, cutAtNul(identity));
+	}
+
+	override save(
+		ctx: unknown,
+		projection: string,
+		identity: AggregateIdentity,
+		checkpoint: ProjectionCheckpoint,
+	): Promise<void> {
+		return super.save(ctx, projection, cutAtNul(identity), checkpoint);
+	}
+
+	override hasReached(
+		projection: string,
+		identity: AggregateIdentity,
+		position: ProjectionPosition,
+	): Promise<boolean> {
+		return super.hasReached(projection, cutAtNul(identity), position);
+	}
+}
+
+function cutAtNul(identity: AggregateIdentity): AggregateIdentity {
+	if (identity.aggregateType.includes("\u0000")) {
+		throw new TypeError(
+			"the store cannot keep a NUL byte in an aggregate type",
+		);
+	}
+	const [cutId = ""] = identity.aggregateId.split("\u0000");
+	return { aggregateType: identity.aggregateType, aggregateId: cutId };
+}
+
+function createInMemoryHarness(
+	createStore = () => new InMemoryProjectionCheckpointStore(),
+): ProjectionCheckpointStoreContractHarness<unknown> {
 	return {
 		createEnvironment: async () => {
-			const store = new InMemoryProjectionCheckpointStore();
+			const store = createStore();
 			const scope = new InMemoryTransactionScope([store]);
 			return {
 				store,
@@ -50,5 +98,17 @@ describe("projection-checkpoint-store contract suite against the in-memory refer
 
 	it("no test is skipped for the in-memory reference", () => {
 		expect(tests.filter((test) => test.skipped)).toEqual([]);
+	});
+
+	it("the identity test kills a store that cuts an aggregate id at a NUL byte", async () => {
+		const identityTest = createProjectionCheckpointStoreContractTests(
+			createInMemoryHarness(() => new StoreThatCutsAnIdAtNul()),
+		).find(
+			(test) =>
+				test.name ===
+				"aggregate identity encoding is collision-free even with separator-like characters in either half",
+		);
+
+		await expect(identityTest?.run()).rejects.toThrow(/Contract violated/);
 	});
 });

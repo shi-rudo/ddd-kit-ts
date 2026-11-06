@@ -183,7 +183,8 @@ immutable. Run one kit version per process during a cutover.
   [One rule for plain data](docs/guide/design-decisions.md#one-rule-for-plain-data).
 - The identity test of the checkpoint contract suite runs with several separators.
   For a NUL byte, it allows a rejection, because a PostgreSQL text column cannot
-  hold one. Before, no PostgreSQL adapter could pass the suite.
+  hold one. Before, no PostgreSQL adapter could pass the suite. An adapter that
+  keeps a NUL byte must not cut the identity at it.
 - The deadline contract suite checks that a failure report without an error
   keeps the reason of an earlier report, as `InMemoryDeadlineStore` does.
 - `EventStore.append` and `readStream` take an `AggregateIdentity` in place
