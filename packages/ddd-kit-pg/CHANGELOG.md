@@ -33,7 +33,9 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   isolation level with `PgUnsupportedIsolationLevelError`.
 - `PgOutbox`, a `DispatchTrackingOutbox` with its tables in `sql/outbox.sql`. It
   writes on the transaction that `add` receives, links each commit to its
-  predecessor, and rejects a new event of an ended source. With `claim`, several
+  predecessor, and rejects a new event of an ended source. When a source ends, it
+  deletes the delivered records of the removed aggregate, and each later record
+  at its delivery, so that it keeps no copy of the aggregate. With `claim`, several
   dispatchers can run at once, and they keep the order per aggregate. A record
   of a crashed dispatcher and a failed record return when their lease ends. The
   claim and every poll statement with a deadline run at READ COMMITTED, whatever

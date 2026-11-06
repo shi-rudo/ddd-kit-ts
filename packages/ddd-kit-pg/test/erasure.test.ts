@@ -7,7 +7,6 @@ import {
 	EventSourcedAggregate,
 	type Id,
 	InfrastructureError,
-	type OutboxWriter,
 	type PersistenceModel,
 	type Repository,
 	type RepositoryTracking,
@@ -18,6 +17,7 @@ import {
 } from "@shirudo/ddd-kit";
 import { describe, expect, it } from "vite-plus/test";
 import { PgEventStore } from "../src/pg-event-store";
+import { PgOutbox } from "../src/pg-outbox";
 import type { PgQueryExecutor } from "../src/pg-query-executor";
 import { fromPg } from "../src/pg-query-executor";
 import { PgTransactionScope } from "../src/pg-transaction-scope";
@@ -118,19 +118,11 @@ class PgCustomerReadAdapter {
 }
 
 describe("the erasure of an event-sourced aggregate on PostgreSQL", () => {
-	it("deletes the stream, sends the erasure event to the outbox, and ends the source", async () => {
+	it("deletes the stream and, after the delivery of the erasure event, every outbox record of the aggregate", async () => {
 		const database = await openIsolatedSchema();
 		await database.applySql("event-stream.sql");
-		const added: string[] = [];
-		const ended: AggregateIdentity[] = [];
-		const outbox: OutboxWriter<CustomerEvent, PgQueryExecutor> = {
-			add: async (candidates) => {
-				added.push(...candidates.map(({ event }) => event.type));
-			},
-			endEventSources: async (sources) => {
-				ended.push(...sources);
-			},
-		};
+		await database.applySql("outbox.sql");
+		const outbox = new PgOutbox<CustomerEvent>({ pool: database.pool });
 		const unitOfWork = () =>
 			new UnitOfWork({
 				scope: new PgTransactionScope(database.pool),
@@ -169,12 +161,16 @@ describe("the erasure of an event-sourced aggregate on PostgreSQL", () => {
 		await unitOfWork().run(async ({ repositories }) => {
 			repositories.customers.add(Customer.register(id, "Ada"));
 		});
+		const registered = await outbox.getPending(10);
+		await outbox.markDispatched(registered.map((record) => record.dispatchId));
 
 		await unitOfWork().run(async ({ repositories }) => {
 			const customer = await repositories.customers.getById(id);
 			customer.recordErasure();
 			repositories.customers.remove(customer);
 		});
+		const erased = await outbox.getPending(10);
+		await outbox.markDispatched(erased.map((record) => record.dispatchId));
 
 		const client = await database.pool.connect();
 		const read = await new PgEventStore<CustomerEvent>(
@@ -182,12 +178,16 @@ describe("the erasure of an event-sourced aggregate on PostgreSQL", () => {
 		).readStream(customerStream(id), { limit: 10 });
 		client.release();
 		expect(read.exists).toBe(false);
-		expect(added).toEqual(["CustomerRegistered", "CustomerErased"]);
-		expect(ended).toEqual([customerStream(id)]);
+		expect(
+			[...registered, ...erased].map((record) => record.event.type),
+		).toEqual(["CustomerRegistered", "CustomerErased"]);
 		const stored = await database.pool.query(
-			"SELECT count(*)::int AS rows FROM ddd_kit_event_stream",
+			`SELECT
+				(SELECT count(*)::int FROM ddd_kit_event_stream) AS events,
+				(SELECT count(*)::int FROM ddd_kit_outbox) AS records,
+				(SELECT bool_and(ended) FROM ddd_kit_outbox_source_head) AS ended`,
 		);
-		expect(stored.rows[0].rows).toBe(0);
+		expect(stored.rows[0]).toEqual({ events: 0, records: 0, ended: true });
 		await database.teardown();
 	});
 });

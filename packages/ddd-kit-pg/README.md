@@ -105,8 +105,9 @@ store keeps every plain value. Run the contract suites against PostgreSQL.
 
 To erase the personal data of an aggregate, call `removeStream` from the flush
 of a repository definition with `physicalRemoval: true`. The history of the
-aggregate is then gone. Delete its snapshot first, and purge the other copies of
-the data: outbox records, projections, and idempotency outcomes.
+aggregate is then gone. Delete its snapshot first. `PgOutbox` deletes the records
+of the aggregate itself, as the outbox section describes. Purge the other copies
+of the data: projections and idempotency outcomes.
 
 A read rejects a gap in a stream with `PgEventStreamCorruptError`. A read cannot
 see missing events at the end of a stream, because the highest position is the
@@ -151,6 +152,15 @@ The table keeps delivered records and dead letters. Wire `deadLetters()` to your
 alerts, and delete old delivered records with your own job. Never delete a row of
 `ddd_kit_outbox_source_head` whose `ended` is true: the removed aggregate could
 then come back under its old id.
+
+A removed aggregate is the exception. In the commit of the removal,
+`endEventSources` deletes its delivered records. `markDispatched` then deletes
+each later record of it at its delivery, also a dead letter that an operator marks
+delivered. An acknowledgement waits for an open removal, so that no delivered
+record of the aggregate stays. Run the removal at READ COMMITTED. At a snapshot
+isolation level, a record that a dispatcher acknowledges during the removal can
+stay. The source head keeps the aggregate id for ever, so keep personal data out
+of aggregate ids.
 
 ## Peer dependencies
 
