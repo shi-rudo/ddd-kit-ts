@@ -23,8 +23,8 @@ describe("recordingOutbox", () => {
 		const outbox = recordingOutbox<OrderPlaced>();
 		const candidate = placed();
 
-		await outbox.add([candidate]);
-		await outbox.endEventSources([source]);
+		await outbox.add([candidate], undefined);
+		await outbox.endEventSources([source], undefined);
 
 		expect(outbox.added).toEqual([[candidate]]);
 		expect(outbox.ended).toEqual([[source]]);
@@ -39,7 +39,7 @@ describe("recordingOutbox", () => {
 			},
 		});
 
-		await expect(outbox.add([placed()])).rejects.toBe(failure);
+		await expect(outbox.add([placed()], undefined)).rejects.toBe(failure);
 		expect(outbox.added).toEqual([]);
 	});
 });

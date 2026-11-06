@@ -1651,10 +1651,13 @@ describe("outboxWriterAcceptingEventLoss", () => {
 	it("drops every event and retains nothing", async () => {
 		const writer = outboxWriterAcceptingEventLoss<OrderCreated>();
 		await expect(
-			writer.add([
-				candidate(createDomainEvent("OrderCreated", { orderId: "o-1" })),
-				candidate(createDomainEvent("OrderCreated", { orderId: "o-2" })),
-			]),
+			writer.add(
+				[
+					candidate(createDomainEvent("OrderCreated", { orderId: "o-1" })),
+					candidate(createDomainEvent("OrderCreated", { orderId: "o-2" })),
+				],
+				undefined,
+			),
 		).resolves.toBeUndefined();
 		// Nothing to poll, nothing retained: the writer has no read side at
 		// all; the type system already prevents getPending on it.

@@ -591,7 +591,7 @@ export interface UnitOfWorkDeps<
 	 * required-vs-optional-bus asymmetry and the explicit opt-out
 	 * (`outboxWriterAcceptingEventLoss`).
 	 */
-	outbox: OutboxWriter<Evt>;
+	outbox: OutboxWriter<Evt, TCtx>;
 	bus?: EventBus<Evt>;
 	/** See `withCommit`: observer for post-commit `bus.publish` failures. */
 	onPublishError?: (error: unknown, events: ReadonlyArray<Evt>) => void;

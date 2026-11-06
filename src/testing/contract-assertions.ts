@@ -13,6 +13,7 @@ import {
 import type { AggregateWriteIntent } from "../application/unit-of-work/persistence-contract";
 import { isStampedDomainEvent } from "../domain/event/domain-event";
 import { runBoundedExecution } from "../internal/async/execution";
+import { deepEqual } from "../internal/structural/deep-equal";
 
 /**
  * One entry of a contract test suite. Every suite (repository,
@@ -80,6 +81,47 @@ export function captureRejection(promise: Promise<unknown>): Promise<unknown> {
 	return promise.then(
 		() => undefined,
 		(error: unknown) => error,
+	);
+}
+
+/**
+ * Plain values that the kit allows and that `JSON.stringify` changes without an
+ * error, each in plain data of its own. A suite writes each value alone, so that
+ * the rejection of one value cannot hide the change of another. There is no
+ * `bigint`, because `JSON.stringify` throws for one, and a raw JSON adapter
+ * would then count as an adapter that rejects.
+ */
+export function plainValuesThatJsonDoesNotKeep(): ReadonlyArray<{
+	readonly name: string;
+	readonly data: unknown;
+}> {
+	return [
+		{ name: "a Date", data: { at: new Date("2026-01-05T10:20:30.456Z") } },
+		{ name: "a Set", data: { tags: new Set(["a"]) } },
+		{ name: "a Map", data: { counts: new Map([["a", 1]]) } },
+		{ name: "an undefined property", data: { nested: { absent: undefined } } },
+	];
+}
+
+/**
+ * The fidelity rule of a durable port: an adapter keeps a value exactly or
+ * rejects it, and it never changes a value without an error.
+ */
+export async function assertKeptOrRejected(fidelity: {
+	readonly subject: string;
+	readonly valueName: string;
+	readonly write: () => Promise<unknown>;
+	readonly read: () => Promise<unknown>;
+	readonly expected: unknown;
+}): Promise<void> {
+	const rejection = await captureRejection(fidelity.write());
+	if (rejection instanceof ContractViolation) throw rejection;
+	if (rejection !== undefined) return;
+	assert(
+		deepEqual(await fidelity.read(), fidelity.expected),
+		`${fidelity.subject} changed ${fidelity.valueName} without an error. ` +
+			"Keep the value exactly, or reject the write. An adapter that stores " +
+			"JSON can call assertJsonSafe before it writes.",
 	);
 }
 
@@ -352,9 +394,17 @@ export function sortedCommittedEventIds(
 	return committed.map(({ event }) => event.eventId).sort();
 }
 
+/**
+ * A rule of a contract that the adapter under test broke. The class tells it
+ * apart from a rejection of the adapter, for example in the fidelity check.
+ */
+export class ContractViolation extends Error {
+	override readonly name = "ContractViolation";
+}
+
 export function assert(condition: boolean, message: string): asserts condition {
 	if (!condition) {
-		throw new Error(`Contract violated: ${message}`);
+		throw new ContractViolation(`Contract violated: ${message}`);
 	}
 }
 
@@ -364,7 +414,7 @@ export function assertEqual(
 	message: string,
 ): void {
 	if (actual !== expected) {
-		throw new Error(
+		throw new ContractViolation(
 			`Contract violated: ${message} (expected ${String(expected)}, got ${String(actual)})`,
 		);
 	}
@@ -400,7 +450,7 @@ export function assertChainContainsKitError(
 	if (codes.some((code) => chainContainsErrorNamed(rejection, code))) {
 		return;
 	}
-	throw new Error(`Contract violated: ${message}`);
+	throw new ContractViolation(`Contract violated: ${message}`);
 }
 
 /**
@@ -422,7 +472,7 @@ export function assertChainConflictNamesIntent(
 			? "no CONCURRENCY_CONFLICT"
 			: (conflict as { intent?: unknown }).intent;
 	if (observed === intent) return;
-	throw new Error(
+	throw new ContractViolation(
 		`Contract violated: ${message}; got ${typeof observed === "string" ? observed : String(observed)}`,
 	);
 }

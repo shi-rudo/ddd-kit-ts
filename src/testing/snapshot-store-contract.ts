@@ -6,8 +6,10 @@ import type { SnapshotStore } from "../persistence/snapshot-store/snapshot-store
 import {
 	assert,
 	assertEqual,
+	assertKeptOrRejected,
 	bindContractEnvironment,
 	type ContractTest,
+	plainValuesThatJsonDoesNotKeep,
 } from "./contract-assertions";
 
 /** One contract test; bind with `(test.skipped ? it.skip : it)(test.name, test.run)`. */
@@ -247,5 +249,20 @@ export function createSnapshotStoreContractTests(
 				);
 			}),
 		},
+		...plainValuesThatJsonDoesNotKeep().map(({ name, data }) => ({
+			name: `fidelity: ${name} is stored exactly or rejected`,
+			run: inEnv(async (env) => {
+				const state = data as SnapshotStoreContractState;
+				await assertKeptOrRejected({
+					subject: "A snapshot store",
+					valueName: name,
+					write: () =>
+						env.store.save(identity("Order", "o-1"), snapshot(1, state)),
+					read: async () =>
+						(await env.store.load(identity("Order", "o-1")))?.state,
+					expected: state,
+				});
+			}),
+		})),
 	];
 }

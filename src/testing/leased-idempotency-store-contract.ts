@@ -8,10 +8,12 @@ import {
 	assert,
 	assertChainContainsKitError,
 	assertEqual,
+	assertKeptOrRejected,
 	bindContractEnvironment,
 	type ContractTest,
 	captureRejection,
 	chainContainsRetryable,
+	plainValuesThatJsonDoesNotKeep,
 } from "./contract-assertions";
 
 /** One contract test; bind with `(test.skipped ? it.skip : it)(test.name, test.run)`. */
@@ -378,5 +380,26 @@ export function createLeasedIdempotencyStoreContractTests<TCtx>(
 				);
 			}),
 		},
+		...plainValuesThatJsonDoesNotKeep().map(({ name, data: outcome }) => ({
+			name: `fidelity: ${name} is stored exactly or rejected`,
+			run: inEnv(async (env) => {
+				await assertKeptOrRejected({
+					subject: "A leased idempotency store",
+					valueName: name,
+					write: () => completeAndConfirm(env, "key-1", outcome),
+					read: async () => {
+						const replay = await env.run((ctx) =>
+							env.store.claim(ctx, "key-1", "fp-1"),
+						);
+						assert(
+							replay.status === "completed",
+							"a completed and confirmed key must replay as completed",
+						);
+						return replay.outcome;
+					},
+					expected: outcome,
+				});
+			}),
+		})),
 	];
 }

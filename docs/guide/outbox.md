@@ -58,7 +58,8 @@ its events.
    `stampOptions` from the dependencies.
 4. Still inside the transaction, the unit of work freezes and flushes the
    registered receipts. `withCommit` collects every registered aggregate
-   and calls `outbox.add(events)` with the exact batches.
+   and calls `outbox.add(events, tx)` with the exact batches and the
+   transaction of the scope.
 5. The transaction commits.
 6. After commit, `withCommit` acknowledges every saved aggregate through a
    non-exported capability and discards collected events for deleted rows.
@@ -182,14 +183,26 @@ use `UnitOfWork`.
 The write side depends only on `OutboxWriter`:
 
 ```ts
-interface OutboxWriter<Evt extends AnyDomainEvent> {
-  add(events: ReadonlyArray<EventCommitCandidate<Evt>>): Promise<void>;
-  endEventSources(sources: ReadonlyArray<AggregateIdentity>): Promise<void>;
+interface OutboxWriter<Evt extends AnyDomainEvent, TCtx = unknown> {
+  add(
+    events: ReadonlyArray<EventCommitCandidate<Evt>>,
+    tx: TCtx,
+  ): Promise<void>;
+  endEventSources(
+    sources: ReadonlyArray<AggregateIdentity>,
+    tx: TCtx,
+  ): Promise<void>;
 }
 ```
 
 `withCommit` calls `add()` inside the same transaction as the aggregate
-write. The candidate array is frozen, because the in-process bus publishes the
+write, and it hands over the transaction that the `TransactionScope` opened. So
+one writer instance can serve every request. Write with `tx`: a writer that
+ignores it still compiles, but its write does not roll back with the aggregate.
+The rollback tests of `createOutboxContractTests` catch this. An outbox without
+a transaction, such as `InMemoryOutbox`, leaves the parameter out.
+
+The candidate array is frozen, because the in-process bus publishes the
 events of the same candidates. An adapter cannot change it: a `sort`, `push`,
 or `splice` throws, and so does an assignment in strict-mode code. To reorder
 the candidates, copy the array first.
@@ -220,7 +233,8 @@ interface OutboxRecord<Evt extends AnyDomainEvent> {
   attempts?: number;
 }
 
-interface Outbox<Evt extends AnyDomainEvent> extends OutboxWriter<Evt> {
+interface Outbox<Evt extends AnyDomainEvent, TCtx = unknown>
+  extends OutboxWriter<Evt, TCtx> {
   getPending(
     limit?: number,
     context?: ExecutionContext,
@@ -232,9 +246,12 @@ interface Outbox<Evt extends AnyDomainEvent> extends OutboxWriter<Evt> {
 }
 ```
 
-`getPending` must return records in commit order. In SQL, that means a
-monotonic position column and an `ORDER BY`. A bare `SELECT` is not an
-ordering guarantee.
+`getPending` must return records in the order of their positions. Within one
+event source, that is the commit order, because the writers of a source run one
+after the other. Across sources, two concurrent transactions can commit in the
+other order than their positions, so the port promises no order between
+sources. In SQL, the position is a monotonic column with an `ORDER BY`. A bare
+`SELECT` is not an ordering guarantee.
 
 `markDispatched` must be idempotent. Re-acking a dispatched id or an unknown
 id should be a no-op. This lets the dispatcher recover from partial failures,
@@ -271,6 +288,11 @@ create table event_source_head (
   primary key (aggregate_type, aggregate_id)
 );
 ```
+
+The `payload` column holds JSON, and JSON does not keep a `Date`, a `Map`, a
+`Set`, a `bigint`, or `undefined`. Map such a value to JSON before the write, or
+call `assertJsonSafe` and reject it. Never let `JSON.stringify` change it. See
+[One rule for plain data](./design-decisions.md#one-rule-for-plain-data).
 
 That idempotency rule assumes the ID still identifies the same qualified source
 and candidate commit position. The same `eventId` arriving for another
@@ -448,7 +470,8 @@ The dispatcher has a narrow contract:
 
 - It is at-least-once. A crash after publish but before ack means the record
   will be delivered again.
-- It dispatches sequentially in commit order.
+- It dispatches sequentially in the order of `getPending`: the commit order
+  within each event source.
 - It stops the batch on the first delivery failure.
 - It aborts each sink through its `ExecutionContext` after `deliveryTimeoutMs`
   (30 seconds by default). A sink that ignores the signal cannot keep the
@@ -492,15 +515,18 @@ record behind it.
 Use `DispatchTrackingOutbox` when you run a poller:
 
 ```ts
-interface DispatchTrackingOutbox<Evt extends AnyDomainEvent>
-  extends Outbox<Evt> {
+interface DispatchTrackingOutbox<Evt extends AnyDomainEvent, TCtx = unknown>
+  extends Outbox<Evt, TCtx> {
   markFailed(
     dispatchId: string,
     error?: unknown,
     context?: ExecutionContext,
   ): Promise<DeadLetterRecord<Evt> | undefined>;
   deadLetters(): Promise<ReadonlyArray<DeadLetterRecord<Evt>>>;
-  requeueDeadLetters(dispatchIds: ReadonlyArray<string>): Promise<void>;
+  requeueDeadLetters(
+    dispatchIds: ReadonlyArray<string>,
+    context?: ExecutionContext,
+  ): Promise<void>;
 }
 ```
 
@@ -525,7 +551,8 @@ Recovery is explicit:
 
 - Fix the cause and call `requeueDeadLetters` with the `dispatchId` of each
   record. The record returns to its commit-order place in `getPending`, with a
-  fresh attempt budget. A repeated call does nothing.
+  fresh attempt budget. A repeated call does nothing. Call it outside the write
+  transaction.
 - Deliver the event manually and call `markDispatched` to clear it.
 
 A repeated `add` does not requeue. The call resolves without an error, and the
@@ -787,45 +814,43 @@ Debezium, a delivery library, or a platform outbox.
 ```ts
 import type { AnyDomainEvent, OutboxWriter } from "@shirudo/ddd-kit";
 
-function makeOutboxWriter(tx: YourTxHandle): OutboxWriter<AnyDomainEvent> {
-  return {
-    add: async (candidates) => {
-      for (const commit of groupByAggregateCommit(candidates)) {
-        // SELECT ... FOR UPDATE, keyed by aggregateType + aggregateId.
-        const head = await lockEventSourceHead(tx, commit.source);
-        // An ended source rejects new events; a stored event id is a retry.
-        await rejectNewEventsOfEndedSource(tx, head, commit);
+const outboxWriter: OutboxWriter<AnyDomainEvent, YourTxHandle> = {
+  add: async (candidates, tx) => {
+    for (const commit of groupByAggregateCommit(candidates)) {
+      // SELECT ... FOR UPDATE, keyed by aggregateType + aggregateId.
+      const head = await lockEventSourceHead(tx, commit.source);
+      // An ended source rejects new events; a stored event id is a retry.
+      await rejectNewEventsOfEndedSource(tx, head, commit);
 
-        for (const candidate of commit.events) {
-          await insertIntoDeliveryOutbox(tx, {
-            id: candidate.event.eventId,
-            aggregateId: candidate.source.aggregateId,
-            aggregateType: candidate.source.aggregateType,
-            aggregateVersion: candidate.position.aggregateVersion,
-            commitSequence: candidate.position.commitSequence,
-            commitSize: candidate.position.commitSize,
-            previousEventfulAggregateVersion:
-              head.lastEventfulAggregateVersion,
-            type: candidate.event.type,
-            payload: candidate.event,
-          });
-        }
+      for (const candidate of commit.events) {
+        await insertIntoDeliveryOutbox(tx, {
+          id: candidate.event.eventId,
+          aggregateId: candidate.source.aggregateId,
+          aggregateType: candidate.source.aggregateType,
+          aggregateVersion: candidate.position.aggregateVersion,
+          commitSequence: candidate.position.commitSequence,
+          commitSize: candidate.position.commitSize,
+          previousEventfulAggregateVersion:
+            head.lastEventfulAggregateVersion,
+          type: candidate.event.type,
+          payload: candidate.event,
+        });
+      }
 
-        await advanceEventSourceHead(
-          tx,
-          commit.source,
-          commit.aggregateVersion,
-        );
-      }
-    },
-    endEventSources: async (sources) => {
-      for (const source of sources) {
-        // UPDATE ... SET ended = true, keyed by aggregateType + aggregateId.
-        await endEventSourceHead(tx, source);
-      }
-    },
-  };
-}
+      await advanceEventSourceHead(
+        tx,
+        commit.source,
+        commit.aggregateVersion,
+      );
+    }
+  },
+  endEventSources: async (sources, tx) => {
+    for (const source of sources) {
+      // UPDATE ... SET ended = true, keyed by aggregateType + aggregateId.
+      await endEventSourceHead(tx, source);
+    }
+  },
+};
 ```
 
 The helper names above are application-specific pseudocode. The hard

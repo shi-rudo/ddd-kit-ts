@@ -40,6 +40,74 @@ class OutboxRequeuingOnAdd extends InMemoryOutbox<TestEvent> {
 	}
 }
 
+/** A port-legal outbox without the eventId dedupe: it rejects an exact retry of add. */
+class OutboxRejectingAnExactRetry extends InMemoryOutbox<TestEvent> {
+	private readonly addedIds = new Set<string>();
+
+	override async add(
+		events: ReadonlyArray<EventCommitCandidate<TestEvent>>,
+	): Promise<void> {
+		for (const { event } of events) {
+			if (this.addedIds.has(event.eventId)) {
+				throw new Error(`event ${event.eventId} is already in the outbox`);
+			}
+		}
+		await super.add(events);
+		for (const { event } of events) this.addedIds.add(event.eventId);
+	}
+}
+
+/** An outbox that requeues every dead letter: the requeue tests must reject it. */
+class OutboxRequeuingEveryDeadLetter extends InMemoryOutbox<TestEvent> {
+	override async requeueDeadLetters(): Promise<void> {
+		const deadLetters = await this.deadLetters();
+		await super.requeueDeadLetters(deadLetters.map((r) => r.dispatchId));
+	}
+}
+
+/** An outbox that finalizes a requeued record again: the requeue tests must reject it. */
+class OutboxRefinalizingARequeue extends InMemoryOutbox<TestEvent> {
+	private readonly requeuedIds = new Set<string>();
+
+	override async requeueDeadLetters(
+		dispatchIds: ReadonlyArray<string>,
+	): Promise<void> {
+		await super.requeueDeadLetters(dispatchIds);
+		for (const id of dispatchIds) this.requeuedIds.add(id);
+	}
+
+	override async getPending(
+		limit?: number,
+	): Promise<ReadonlyArray<OutboxRecord<TestEvent>>> {
+		const pending = await super.getPending(limit);
+		return pending.map((record) =>
+			this.requeuedIds.has(record.dispatchId)
+				? {
+						...record,
+						position: {
+							...record.position,
+							previousEventfulAggregateVersion:
+								record.position.aggregateVersion,
+						},
+					}
+				: record,
+		);
+	}
+}
+
+/** An outbox without the requeue method: the suite must name the gap. */
+class OutboxWithoutRequeue extends InMemoryOutbox<TestEvent> {
+	override requeueDeadLetters =
+		undefined as unknown as InMemoryOutbox<TestEvent>["requeueDeadLetters"];
+}
+
+/** A port-legal outbox that returns one record per poll. */
+class OutboxWithShortPages extends InMemoryOutbox<TestEvent> {
+	override async getPending(): Promise<ReadonlyArray<OutboxRecord<TestEvent>>> {
+		return super.getPending(1);
+	}
+}
+
 /** An outbox that returns a requeued record last: the requeue tests must reject it. */
 class OutboxRequeuingAtTheTail extends InMemoryOutbox<TestEvent> {
 	private readonly requeuedIds = new Set<string>();
@@ -198,9 +266,9 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 		const createEnvironment = mutant.createEnvironment;
 		mutant.createEnvironment = async () => {
 			const environment = await createEnvironment();
-			const realOutbox = environment.outbox;
+			const realOutbox = environment.outbox as Outbox<TestEvent>;
 			const outbox: Outbox<TestEvent> = {
-				add: (events) => realOutbox.add(events),
+				add: (events) => realOutbox.add(events, undefined),
 				getPending: async (limit) =>
 					(await realOutbox.getPending(limit)).map((record) => ({
 						...record,
@@ -210,7 +278,8 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 						},
 					})),
 				markDispatched: (ids) => realOutbox.markDispatched(ids),
-				endEventSources: (sources) => realOutbox.endEventSources(sources),
+				endEventSources: (sources) =>
+					realOutbox.endEventSources(sources, undefined),
 			};
 			return { ...environment, outbox };
 		};
@@ -238,6 +307,31 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 		);
 	});
 
+	it("the dead-letter retry test accepts a port-legal adapter that rejects an exact retry", async () => {
+		const withoutDedupe = createInMemoryHarness(
+			() =>
+				new OutboxRejectingAnExactRetry({ maxDeliveryAttempts: MAX_ATTEMPTS }),
+		);
+		withoutDedupe.dedupesOnEventId = undefined;
+		const retryTest = createOutboxContractTests(withoutDedupe).find(
+			(test) => test.name === "an exact retry of add leaves a dead letter dead",
+		);
+
+		await expect(retryTest?.run()).resolves.toBeUndefined();
+	});
+
+	it("the dead-letter retry test kills a dedupe adapter that rejects an exact retry", async () => {
+		const declaredDedupe = createInMemoryHarness(
+			() =>
+				new OutboxRejectingAnExactRetry({ maxDeliveryAttempts: MAX_ATTEMPTS }),
+		);
+		const retryTest = createOutboxContractTests(declaredDedupe).find(
+			(test) => test.name === "an exact retry of add leaves a dead letter dead",
+		);
+
+		await expect(retryTest?.run()).rejects.toThrow(/already in the outbox/);
+	});
+
 	it("the requeue tests kill an adapter that returns a requeued record last", async () => {
 		const mutant = createInMemoryHarness(
 			() => new OutboxRequeuingAtTheTail({ maxDeliveryAttempts: MAX_ATTEMPTS }),
@@ -252,12 +346,65 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 		);
 	});
 
+	it("the requeue tests kill an adapter that requeues every dead letter", async () => {
+		const mutant = createInMemoryHarness(
+			() =>
+				new OutboxRequeuingEveryDeadLetter({
+					maxDeliveryAttempts: MAX_ATTEMPTS,
+				}),
+		);
+		const namedIdsTest = createOutboxContractTests(mutant).find(
+			(test) =>
+				test.name === "requeueDeadLetters moves only the named dead letters",
+		);
+		expect(namedIdsTest).toBeDefined();
+		await expect(namedIdsTest?.run()).rejects.toThrow(
+			/must leave every other dead letter dead/,
+		);
+	});
+
+	it("the requeue tests kill an adapter that finalizes a requeued record again", async () => {
+		const mutant = createInMemoryHarness(
+			() =>
+				new OutboxRefinalizingARequeue({ maxDeliveryAttempts: MAX_ATTEMPTS }),
+		);
+		const budgetTest = createOutboxContractTests(mutant).find((test) =>
+			test.name.startsWith("requeueDeadLetters returns a dead letter"),
+		);
+		await expect(budgetTest?.run()).rejects.toThrow(
+			/must keep its commit position/,
+		);
+	});
+
+	it("names a tracking outbox without requeueDeadLetters", async () => {
+		const mutant = createInMemoryHarness(
+			() => new OutboxWithoutRequeue({ maxDeliveryAttempts: MAX_ATTEMPTS }),
+		);
+		const budgetTest = createOutboxContractTests(mutant).find((test) =>
+			test.name.startsWith("requeueDeadLetters returns a dead letter"),
+		);
+		await expect(budgetTest?.run()).rejects.toThrow(
+			/must implement requeueDeadLetters/,
+		);
+	});
+
+	it("the order test accepts a port-legal adapter with short pages", async () => {
+		const shortPages = createInMemoryHarness(
+			() => new OutboxWithShortPages({ maxDeliveryAttempts: MAX_ATTEMPTS }),
+		);
+		const orderTest = createOutboxContractTests(shortPages).find(
+			(test) =>
+				test.name === "a requeued record returns to its commit-order place",
+		);
+		await expect(orderTest?.run()).resolves.toBeUndefined();
+	});
+
 	it("a plain-outbox harness marks the tracking tests as skipped, with a loud run()", async () => {
 		const plain = createInMemoryHarness();
 		plain.failuresToDeadLetter = undefined;
 		const plainTests = createOutboxContractTests(plain);
 		const skipped = plainTests.filter((test) => test.skipped);
-		expect(skipped.length).toBe(9); // the nine tracking tests
+		expect(skipped.length).toBe(10); // the ten tracking tests
 		await expect(skipped[1]?.run()).rejects.toThrow("skipped");
 	});
 
@@ -296,7 +443,6 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 		const noDedupeTests = createOutboxContractTests(noDedupe);
 		const skipped = noDedupeTests.filter((test) => test.skipped);
 		expect(skipped.map((test) => test.skipped?.capability)).toEqual([
-			"dedupesOnEventId",
 			"dedupesOnEventId",
 			"dedupesOnEventId",
 		]);

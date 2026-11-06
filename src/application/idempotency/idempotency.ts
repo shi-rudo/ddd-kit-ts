@@ -101,9 +101,9 @@ export type LeasedIdempotencyClaim =
  * handler.
  *
  * The stored outcome must be PLAIN, serialisable data (the same
- * discipline as snapshots and event payloads): the record round-trips
- * through the adapter's storage, so class instances would silently lose
- * their prototype.
+ * discipline as snapshots and event payloads). The adapter replays it exactly
+ * or rejects it in `complete`. It never changes a value without an error. See
+ * "One rule for plain data" in the design decisions.
  *
  * A store whose record cannot join the transaction implements
  * {@link LeasedIdempotencyStore} instead.

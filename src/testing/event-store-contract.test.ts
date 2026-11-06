@@ -5,6 +5,11 @@ import {
 	type DomainEvent,
 } from "../domain/event/domain-event";
 import { InMemoryEventStore } from "../persistence/event-store/adapters/in-memory-event-store";
+import type {
+	EventStoreAppendOptions,
+	ReadStreamOptions,
+	StreamReadResult,
+} from "../persistence/event-store/event-store";
 import { createEventStoreContractTests } from "./index";
 
 type ContractStepRecorded = DomainEvent<
@@ -12,24 +17,89 @@ type ContractStepRecorded = DomainEvent<
 	{ sequence: number }
 >;
 
+/** A store whose read loses what JSON does not keep, without an error. */
+class StoreThatLosesValuesInJson extends InMemoryEventStore<ContractStepRecorded> {
+	override async readStream(
+		stream: AggregateIdentity,
+		options: ReadStreamOptions,
+	): Promise<StreamReadResult<ContractStepRecorded>> {
+		const read = await super.readStream(stream, options);
+		if (!read.exists) return read;
+		return {
+			...read,
+			events: read.events.map((event) => ({
+				...event,
+				payload: JSON.parse(JSON.stringify(event.payload)),
+			})),
+		};
+	}
+}
+
+/** A store that keeps payloads exactly but loses what JSON does not keep in metadata. */
+class StoreThatLosesMetadataInJson extends InMemoryEventStore<ContractStepRecorded> {
+	override async readStream(
+		stream: AggregateIdentity,
+		options: ReadStreamOptions,
+	): Promise<StreamReadResult<ContractStepRecorded>> {
+		const read = await super.readStream(stream, options);
+		if (!read.exists) return read;
+		return {
+			...read,
+			events: read.events.map((event) =>
+				event.metadata === undefined
+					? event
+					: { ...event, metadata: JSON.parse(JSON.stringify(event.metadata)) },
+			),
+		};
+	}
+}
+
+/**
+ * A store that rejects a Set, a Map, and undefined, but changes a Date. Its JSON
+ * replacer never sees the Date, because `toJSON` runs first.
+ */
+class StoreThatChangesOnlyADate extends StoreThatLosesValuesInJson {
+	override async append(
+		stream: AggregateIdentity,
+		events: ReadonlyArray<ContractStepRecorded>,
+		options: EventStoreAppendOptions,
+	): Promise<void> {
+		for (const event of events) {
+			JSON.stringify(event.payload, (_key, value: unknown) => {
+				if (
+					value instanceof Set ||
+					value instanceof Map ||
+					value === undefined
+				) {
+					throw new TypeError("the store keeps only JSON");
+				}
+				return value;
+			});
+		}
+		await super.append(stream, events, options);
+	}
+}
+
+const harness = {
+	createEnvironment: async () => ({
+		store: new InMemoryEventStore<ContractStepRecorded>(),
+	}),
+	createCollidingStreamKeys: (): readonly [
+		AggregateIdentity,
+		AggregateIdentity,
+	] => [
+		{ aggregateType: "ContractAlpha", aggregateId: "shared-1" },
+		{ aggregateType: "ContractBeta", aggregateId: "shared-1" },
+	],
+	createEvent: (
+		stream: AggregateIdentity,
+		sequence: number,
+	): ContractStepRecorded =>
+		createDomainEvent("ContractStepRecorded", { sequence }, stream),
+};
+
 describe("event-store adapter contract", () => {
-	const contractTests = createEventStoreContractTests({
-		createEnvironment: async () => ({
-			store: new InMemoryEventStore<ContractStepRecorded>(),
-		}),
-		createCollidingStreamKeys: (): readonly [
-			AggregateIdentity,
-			AggregateIdentity,
-		] => [
-			{ aggregateType: "ContractAlpha", aggregateId: "shared-1" },
-			{ aggregateType: "ContractBeta", aggregateId: "shared-1" },
-		],
-		createEvent: (
-			stream: AggregateIdentity,
-			sequence: number,
-		): ContractStepRecorded =>
-			createDomainEvent("ContractStepRecorded", { sequence }, stream),
-	});
+	const contractTests = createEventStoreContractTests(harness);
 
 	it("lists every contract test by name", () => {
 		expect(contractTests.map(({ name }) => name)).toEqual([
@@ -54,10 +124,65 @@ describe("event-store adapter contract", () => {
 			"OCC: duplicate create is rejected atomically with a sanctioned kit error",
 			"OCC: an expectedVersion ahead of an absent stream conflicts without creating it",
 			"read ownership: a mutation attempt cannot mutate the stream",
+			"fidelity: a Date in a payload is stored exactly or rejected",
+			"fidelity: a Set in a payload is stored exactly or rejected",
+			"fidelity: a Map in a payload is stored exactly or rejected",
+			"fidelity: an undefined property in a payload is stored exactly or rejected",
+			"fidelity: a Date in metadata is stored exactly or rejected",
+			"fidelity: a Set in metadata is stored exactly or rejected",
+			"fidelity: a Map in metadata is stored exactly or rejected",
+			"fidelity: an undefined property in metadata is stored exactly or rejected",
 		]);
 	});
 
 	for (const test of contractTests) {
 		it(test.name, test.run);
 	}
+
+	it("the fidelity test kills a store that changes a value through JSON", async () => {
+		const fidelityTest = createEventStoreContractTests({
+			...harness,
+			createEnvironment: async () => ({
+				store: new StoreThatLosesValuesInJson(),
+			}),
+		}).find((test) => test.name.startsWith("fidelity:"));
+
+		await expect(fidelityTest?.run()).rejects.toThrow(
+			/changed a Date in a payload without an error/,
+		);
+	});
+
+	it("the fidelity test of a Date kills a store that rejects only the other values", async () => {
+		const dateTest = createEventStoreContractTests({
+			...harness,
+			createEnvironment: async () => ({
+				store: new StoreThatChangesOnlyADate(),
+			}),
+		}).find(
+			(test) =>
+				test.name ===
+				"fidelity: a Date in a payload is stored exactly or rejected",
+		);
+
+		await expect(dateTest?.run()).rejects.toThrow(
+			/An event store changed a Date in a payload without an error/,
+		);
+	});
+
+	it("the fidelity test of metadata kills a store that changes metadata through JSON", async () => {
+		const metadataTest = createEventStoreContractTests({
+			...harness,
+			createEnvironment: async () => ({
+				store: new StoreThatLosesMetadataInJson(),
+			}),
+		}).find(
+			(test) =>
+				test.name ===
+				"fidelity: a Date in metadata is stored exactly or rejected",
+		);
+
+		await expect(metadataTest?.run()).rejects.toThrow(
+			/An event store changed a Date in metadata without an error/,
+		);
+	});
 });

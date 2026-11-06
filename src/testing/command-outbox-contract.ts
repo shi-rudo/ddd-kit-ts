@@ -11,24 +11,25 @@ import {
 	assertEqual,
 	bindContractEnvironment,
 	type ContractTest,
+	ContractViolation,
 	captureRejection,
 	describeError,
 	gatedContractTest,
 } from "./contract-assertions";
 
 export interface CommandOutboxContractEnvironment<C extends PublishedCommand> {
-	readonly outbox: CommandOutboxWriter<C>;
+	readonly outbox: CommandOutboxWriter<C, never>;
 	readonly addCommitted: (
 		commits: ReadonlyArray<CommandOutboxCommitCandidate<C>>,
 	) => Promise<void>;
 	readonly addRolledBack?: (
 		commits: ReadonlyArray<CommandOutboxCommitCandidate<C>>,
 	) => Promise<void>;
-	/** Runs `outbox.endEventSources(sources)` in a transaction that commits. */
+	/** Runs `outbox.endEventSources(sources, tx)` in a transaction that commits. */
 	readonly endEventSourcesCommitted: (
 		sources: ReadonlyArray<AggregateIdentity>,
 	) => Promise<void>;
-	/** Runs `outbox.endEventSources(sources)` in a transaction that rolls back. */
+	/** Runs `outbox.endEventSources(sources, tx)` in a transaction that rolls back. */
 	readonly endEventSourcesRolledBack?: (
 		sources: ReadonlyArray<AggregateIdentity>,
 	) => Promise<void>;
@@ -454,7 +455,7 @@ export function createCommandOutboxContractTests<C extends PublishedCommand>(
 				name: "a rolled-back add leaves no receipt or command behind",
 				run: inEnv(async (env) => {
 					if (!env.addRolledBack) {
-						throw new Error(
+						throw new ContractViolation(
 							"Contract violated: harness declared providesRolledBackAdds but the environment lacks addRolledBack",
 						);
 					}
@@ -476,7 +477,7 @@ export function createCommandOutboxContractTests<C extends PublishedCommand>(
 				name: "a rolled-back end leaves the source open",
 				run: inEnv(async (env) => {
 					if (!env.endEventSourcesRolledBack) {
-						throw new Error(
+						throw new ContractViolation(
 							"Contract violated: harness declared providesRolledBackEnds but the environment lacks endEventSourcesRolledBack",
 						);
 					}

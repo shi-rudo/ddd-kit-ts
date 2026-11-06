@@ -20,6 +20,23 @@ export function isJsonObject(value: unknown): value is JsonObject {
 type InvalidJsonValue = (path: string, reason: string) => never;
 
 /**
+ * Throws a `TypeError` that names the path when JSON does not keep `value`
+ * exactly. An adapter that stores plain data as JSON calls it before it
+ * writes, so that it rejects the value instead of changing it. See "One rule
+ * for plain data" in the design decisions.
+ *
+ * @param subject Names the value at the start of the message.
+ */
+export function assertJsonSafe(
+	value: unknown,
+	subject: string,
+): asserts value is JsonValue {
+	assertJsonValue(value, "$", (path, reason) => {
+		throw new TypeError(`${subject}: ${path} is not JSON-safe. ${reason}.`);
+	});
+}
+
+/**
  * Proves that JSON serialization preserves a value exactly, and that the
  * value is nested at most 100 levels deep.
  *

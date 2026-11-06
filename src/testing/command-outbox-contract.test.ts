@@ -100,12 +100,14 @@ function createInMemoryHarness(): CommandOutboxContractHarness<TestCommand> {
 			};
 			const environment: CommandOutboxContractEnvironment<TestCommand> = {
 				outbox,
-				addCommitted: (commits) => transact(() => outbox.add(commits), true),
-				addRolledBack: (commits) => transact(() => outbox.add(commits), false),
+				addCommitted: (commits) =>
+					transact(() => outbox.add(commits, undefined), true),
+				addRolledBack: (commits) =>
+					transact(() => outbox.add(commits, undefined), false),
 				endEventSourcesCommitted: (sources) =>
-					transact(() => outbox.endEventSources(sources), true),
+					transact(() => outbox.endEventSources(sources, undefined), true),
 				endEventSourcesRolledBack: (sources) =>
-					transact(() => outbox.endEventSources(sources), false),
+					transact(() => outbox.endEventSources(sources, undefined), false),
 				readAll: async () => [...committed.receipts.values()].map(clone),
 			};
 			return environment;
@@ -237,9 +239,9 @@ describe("command outbox contract suite", () => {
 					outbox,
 					addCommitted: (
 						commits: ReadonlyArray<CommandOutboxCommitCandidate<TestCommand>>,
-					) => outbox.add(commits),
+					) => outbox.add(commits, undefined),
 					endEventSourcesCommitted: (sources) =>
-						outbox.endEventSources(sources),
+						outbox.endEventSources(sources, undefined),
 					readAll: async () => rows.map(clone),
 				};
 			},
@@ -282,9 +284,9 @@ describe("command outbox contract suite", () => {
 				});
 				return {
 					outbox,
-					addCommitted: (commits) => outbox.add(commits),
+					addCommitted: (commits) => outbox.add(commits, undefined),
 					endEventSourcesCommitted: (sources) =>
-						outbox.endEventSources(sources),
+						outbox.endEventSources(sources, undefined),
 					readAll: async () => [...rows.values()].map(clone),
 				};
 			},
@@ -335,9 +337,9 @@ describe("command outbox contract suite", () => {
 				});
 				return {
 					outbox,
-					addCommitted: (commits) => outbox.add(commits),
+					addCommitted: (commits) => outbox.add(commits, undefined),
 					endEventSourcesCommitted: (sources) =>
-						outbox.endEventSources(sources),
+						outbox.endEventSources(sources, undefined),
 					readAll: async () => rows.map(clone),
 				};
 			},

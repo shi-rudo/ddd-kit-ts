@@ -1068,8 +1068,10 @@ implementation.
 #### The outbox stores committed events
 
 `OutboxWriter.add` takes `EventCommitCandidate` values from `withCommit`,
-not bare events. The array is frozen: an adapter reads it and does not
-change it. An `OutboxRecord` is a `CommittedDomainEvent` with a
+not bare events, and the transaction as its second argument. Write with that
+transaction. A durable writer that ignores it still compiles, but its write does
+not roll back with the aggregate. The array is frozen: an adapter reads it and
+does not change it. An `OutboxRecord` is a `CommittedDomainEvent` with a
 `dispatchId`: it carries `event`, the `source` identity, and the commit
 `position`. `DispatchTrackingOutbox.markFailed` returns the dead-letter record
 on the call that crosses the attempt ceiling, and `undefined` otherwise. The
@@ -1097,7 +1099,7 @@ missed call shows only in `deadLetters()`, because the record stays there.
 
 ```ts
 // before
-await outbox.add([event]);
+await outbox.add([candidate]);
 
 // after
 await outbox.requeueDeadLetters([deadLetter.dispatchId]);
@@ -1793,3 +1795,16 @@ The root entry no longer exports `capturePersistenceBaseline`,
   A repeated `add` no longer requeues a dead letter: the call resolves without
   an error, and the event stays undelivered. See
   [A dead letter returns through `requeueDeadLetters`](#a-dead-letter-returns-through-requeuedeadletters).
+- A durable adapter keeps a value exactly or rejects it. The contract suites of
+  the event store, the outbox, both idempotency stores, the deadline store, and
+  the snapshot store check this. A custom adapter that stores JSON now fails its
+  suite if `JSON.stringify` changes a `Date`, a `Map`, a `Set`, or `undefined`.
+  Call `assertJsonSafe` before the write, and map such a value at the adapter
+  boundary. See
+  [One rule for plain data](./design-decisions.md#one-rule-for-plain-data).
+- `OutboxWriter` and `CommandOutboxWriter` receive the transaction:
+  `add(candidates, tx)` and `endEventSources(sources, tx)`, with the type
+  `OutboxWriter<Evt, TCtx>`. A durable writer writes with `tx`. If yours found
+  the transaction through a closure or `AsyncLocalStorage`, remove that. A
+  direct call of a writer now passes the transaction as well. `InMemoryOutbox`
+  users need no change.

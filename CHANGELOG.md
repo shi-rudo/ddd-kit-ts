@@ -172,6 +172,15 @@ immutable. Run one kit version per process during a cutover.
 
 #### Event store
 
+- A durable adapter keeps a value exactly or rejects it, and it never changes a
+  value without an error. The contract suites of the event store, the outbox,
+  both idempotency stores, the deadline store, and the snapshot store check
+  this with a `Date`, a `Map`, a `Set`, and `undefined`, each in a write of its
+  own. The event store and outbox suites check metadata too. An adapter that passes these values through a raw `JSON.stringify` now
+  fails its suite, also when it rejects one value and changes another. A failed
+  check of the suite inside the write does not count as a rejection.
+  See
+  [One rule for plain data](docs/guide/design-decisions.md#one-rule-for-plain-data).
 - `EventStore.append` and `readStream` take an `AggregateIdentity` in place
   of the raw id. The same id under two aggregate types is two streams. A
   production schema keys a stream on `(aggregate_type, aggregate_id,
@@ -239,6 +248,10 @@ immutable. Run one kit version per process during a cutover.
   identity, and the commit `position`. `DispatchTrackingOutbox.markFailed`
   returns the dead-letter record on the call that crosses the attempt
   ceiling. The poll methods accept an optional `ExecutionContext`.
+- `OutboxWriter` and `CommandOutboxWriter` receive the transaction:
+  `add(candidates, tx)` and `endEventSources(sources, tx)`. Before, a writer had
+  no way to reach the transaction that `withCommit` opened. A writer that ignores
+  `tx` still compiles, and the rollback tests of its contract suite catch it.
 - `OutboxWriter` has a required `endEventSources(sources)`, and so does the
   new `CommandOutboxWriter`. A custom outbox marks the head of each removed
   aggregate's source as ended and rejects a new event of an ended source.
@@ -248,7 +261,13 @@ immutable. Run one kit version per process during a cutover.
   call resolves without an error, and the event stays undelivered. So a late
   retry of a use case cannot revive it, and `INSERT ... ON CONFLICT DO NOTHING`
   stays a correct `add`. Neither the compiler nor the runtime reports an old
-  `add` that was meant to requeue.
+  `add` that was meant to requeue. The outbox contract suite also accepts an
+  adapter without the `eventId` dedupe that rejects such a retry.
+- `Outbox.getPending` promises the commit order within each event source, and
+  the order of positions across sources. Two concurrent transactions can commit
+  in the other order than their auto-increment positions, so a polling adapter
+  never gave a commit order across sources. Subscribers that need an order
+  across aggregates model it explicitly, as the outbox guide describes.
 
 #### Command and query buses
 
@@ -321,6 +340,9 @@ immutable. Run one kit version per process during a cutover.
 
 #### Persistence
 
+- `assertJsonSafe(value, subject)` throws a `TypeError` that names the path when
+  JSON does not keep a value exactly. An adapter that stores plain data as JSON
+  calls it before it writes.
 - `versionedFlush` builds a flush from the store statements. It owns the
   branches of the flush contract: a unique violation on `add` becomes
   `DuplicateAggregateError`, and a compare-and-set that matches no row

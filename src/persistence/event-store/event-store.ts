@@ -208,8 +208,12 @@ export interface EventStore<Evt extends AnyDomainEvent>
 	 *     key, OCC predicate, and read predicate.
 	 *  4. **Order:** events are stored in the given array order, appended
 	 *     after the existing stream tail.
-	 *  5. **Append-only:** stored events are never edited or deleted;
-	 *     corrections are new (compensating) events.
+	 *  5. **Append-only:** stored events are never edited, and this port
+	 *     deletes nothing; corrections are new (compensating) events. A
+	 *     physical removal deletes a whole stream, for example to erase
+	 *     personal data. It runs in the adapter, through a repository
+	 *     definition with `physicalRemoval`. See "Domain deletion versus
+	 *     physical removal" in the repository guide.
 	 *  6. **Replay integrity:** reads order by the persisted stream position
 	 *     and reject duplicate or non-contiguous positions where the backing
 	 *     store exposes them. The portable contract suite proves observable
@@ -222,6 +226,9 @@ export interface EventStore<Evt extends AnyDomainEvent>
 	 *     a `TypeError`, before any write. A direct `withCommit` callback can
 	 *     append before its registration stamps the events; this check makes
 	 *     that mistake fail instead of storing ids that the outbox never sees.
+	 *  8. **Fidelity:** a read returns each payload and metadata value exactly
+	 *     as appended, or the append rejects. Never change a value without an
+	 *     error. See "One rule for plain data" in the design decisions.
 	 *
 	 * An empty `events` array is a no-op; implementations resolve without
 	 * touching the store (an ES repository skips `append` for aggregates

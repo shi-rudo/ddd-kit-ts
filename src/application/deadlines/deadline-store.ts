@@ -91,7 +91,8 @@ export interface DeadLetterDeadline<TPayload = unknown>
  *
  * @template TPayload - The payload shape carried from `schedule` to
  * delivery; plain, serializable data (the same discipline as event
- * payloads and snapshots)
+ * payloads and snapshots). The adapter delivers it exactly or rejects it in
+ * `schedule`.
  */
 export interface DeadlineStore<TPayload = unknown> {
 	/**

@@ -43,13 +43,21 @@ export interface DeadLetterRecord<Evt extends AnyDomainEvent>
  *
  * Implement ONLY this interface to plug in an external delivery
  * solution: `add()` writes into that solution's outbox storage inside
- * the ambient transaction, and its own listener (polling or
+ * the transaction it receives, and its own listener (polling or
  * WAL/CDC-based, such as a Debezium-style connector, a delivery
  * library, or a broker-native outbox) owns delivery entirely. The
  * kit-side poll surface ({@link Outbox}) is then never involved. See
  * the outbox guide, "External dispatchers".
+ *
+ * The caller hands over the transaction that the `TransactionScope` opened.
+ * Write with it: a writer that ignores `tx` still compiles, but its write
+ * does not roll back with the aggregate. The rollback tests of
+ * `createOutboxContractTests` catch this. An outbox that does not use a
+ * transaction, such as `InMemoryOutbox`, leaves the parameter out.
+ *
+ * @template TCtx - The transaction type of the `TransactionScope`.
  */
-export interface OutboxWriter<Evt extends AnyDomainEvent> {
+export interface OutboxWriter<Evt extends AnyDomainEvent, TCtx = unknown> {
 	/**
 	 * Finalizes and persists event commit candidates. Called from inside
 	 * `withCommit`'s transactional callback, atomically with the aggregate
@@ -79,8 +87,15 @@ export interface OutboxWriter<Evt extends AnyDomainEvent> {
 	 * sequence, and commit size. Reusing an `eventId` for another source or
 	 * position is a caller bug: adapters that retain the conflicting record
 	 * should reject it rather than replace or silently reinterpret it as a retry.
+	 *
+	 * **Fidelity:** a read returns each payload and metadata value exactly as
+	 * added, or `add` rejects. Never change a value without an error. See "One
+	 * rule for plain data" in the design decisions.
 	 */
-	add: (events: ReadonlyArray<EventCommitCandidate<Evt>>) => Promise<void>;
+	add: (
+		events: ReadonlyArray<EventCommitCandidate<Evt>>,
+		tx: TCtx,
+	) => Promise<void>;
 
 	/**
 	 * Ends the event sources of removed aggregates. Called from inside
@@ -97,7 +112,10 @@ export interface OutboxWriter<Evt extends AnyDomainEvent> {
 	 * stored event stays idempotent, and ending a source twice is not an
 	 * error.
 	 */
-	endEventSources: (sources: ReadonlyArray<AggregateIdentity>) => Promise<void>;
+	endEventSources: (
+		sources: ReadonlyArray<AggregateIdentity>,
+		tx: TCtx,
+	) => Promise<void>;
 }
 
 /**
@@ -132,16 +150,21 @@ export interface OutboxWriter<Evt extends AnyDomainEvent> {
  * late; a late failure update may count its original delivery attempt and must
  * still no-op after the record was dispatched.
  */
-export interface Outbox<Evt extends AnyDomainEvent> extends OutboxWriter<Evt> {
+export interface Outbox<Evt extends AnyDomainEvent, TCtx = unknown>
+	extends OutboxWriter<Evt, TCtx> {
 	/**
 	 * Returns up to `limit` outbox records that have not yet been
-	 * dispatched, **in the order `add()` persisted them** (commit order).
-	 * The ordering is part of the port contract: `withCommit` promises
-	 * subscribers per-aggregate causal order, and a sequential dispatcher
-	 * can only honor that promise when this read is ordered. SQL-backed
-	 * implementations need a monotonic position column (an auto-increment
-	 * primary key works) and an `ORDER BY` on it; a bare `SELECT` returns
-	 * rows in storage order, not insertion order. The dispatcher polls
+	 * dispatched, **in the order of their positions**. Within one event
+	 * source, that is the commit order: the adapter serializes the writers of
+	 * a source, so a later commit gets a later position. Across sources, two
+	 * concurrent transactions can commit in the other order than their
+	 * positions, so the port promises no order between sources. The ordering
+	 * is part of the port contract: `withCommit` promises subscribers
+	 * per-aggregate causal order, and a sequential dispatcher can only honor
+	 * that promise when this read is ordered. SQL-backed implementations need
+	 * a monotonic position column (an auto-increment primary key works) and an
+	 * `ORDER BY` on it; a bare `SELECT` returns rows in storage order, not
+	 * insertion order. The dispatcher polls
 	 * this on a schedule. When `limit` is omitted, the implementation
 	 * decides on a default page size. The bundled dispatcher always supplies
 	 * `context`; it is optional only so existing adapters remain assignable.
@@ -180,8 +203,10 @@ export interface Outbox<Evt extends AnyDomainEvent> extends OutboxWriter<Evt> {
  * See the outbox guide's dispatcher recipe for the retry-then-dead-letter
  * loop this port shape supports.
  */
-export interface DispatchTrackingOutbox<Evt extends AnyDomainEvent>
-	extends Outbox<Evt> {
+export interface DispatchTrackingOutbox<
+	Evt extends AnyDomainEvent,
+	TCtx = unknown,
+> extends Outbox<Evt, TCtx> {
 	/**
 	 * Records one failed delivery attempt for the given record:
 	 * increments its attempt count (surfaced as
@@ -213,33 +238,42 @@ export interface DispatchTrackingOutbox<Evt extends AnyDomainEvent>
 
 	/**
 	 * Moves the named dead-lettered records back to pending. Each record keeps
-	 * its `dispatchId`, event, source, and position, and gets a fresh attempt
-	 * budget. `getPending` returns it at its commit-order place again. A SQL
-	 * adapter gets this from the position column.
+	 * its `dispatchId`, event, source, and commit position, and gets a fresh
+	 * attempt budget. `getPending` returns it at its position again, so before
+	 * the records of its source that committed after it.
 	 *
 	 * A no-op for an id that is not dead-lettered: unknown, pending, or
 	 * dispatched. A repeated call therefore does not reset an attempt budget.
 	 * `add` does not requeue: an exact retry of `add` leaves a dead letter dead,
 	 * so a late retry of a use case cannot revive it.
+	 *
+	 * An operator calls this outside the write transaction, like the rest of
+	 * the poll side, so the port has no transaction parameter.
 	 */
-	requeueDeadLetters: (dispatchIds: ReadonlyArray<string>) => Promise<void>;
+	requeueDeadLetters: (
+		dispatchIds: ReadonlyArray<string>,
+		context?: ExecutionContext,
+	) => Promise<void>;
 }
 
 /**
  * Discriminates a {@link DispatchTrackingOutbox} from a plain
  * {@link Outbox} at runtime. The single source of truth for the check;
  * the dispatcher and the contract suite both use it, so what counts as
- * a tracking outbox cannot drift between them. The two methods that the
- * dispatcher calls must be present: a plain adapter that happens to expose
- * an unrelated `markFailed` helper must not be mistaken for one that
- * implements the tracking protocol and then be fed `(dispatchId, error)`
- * arguments it never asked for. Internal plumbing, not exported from the
+ * a tracking outbox cannot drift between them. `markFailed` and `deadLetters`
+ * must both be present: a plain adapter that happens to expose an unrelated
+ * `markFailed` helper must not be mistaken for one that implements the
+ * tracking protocol and then be fed `(dispatchId, error)` arguments it never
+ * asked for. The check leaves out `requeueDeadLetters`, which the dispatcher
+ * does not call: an adapter without it must not lose its bounded retries. The
+ * contract suite names that gap. Internal plumbing, not exported from the
  * package entries.
  */
-export function isDispatchTrackingOutbox<Evt extends AnyDomainEvent>(
-	outbox: Outbox<Evt> | DispatchTrackingOutbox<Evt>,
-): outbox is DispatchTrackingOutbox<Evt> {
-	const candidate = outbox as DispatchTrackingOutbox<Evt>;
+export function isDispatchTrackingOutbox<Evt extends AnyDomainEvent, TCtx>(
+	outbox: Outbox<Evt, TCtx> | DispatchTrackingOutbox<Evt, TCtx>,
+): outbox is Outbox<Evt, TCtx> &
+	Pick<DispatchTrackingOutbox<Evt, TCtx>, "markFailed" | "deadLetters"> {
+	const candidate = outbox as DispatchTrackingOutbox<Evt, TCtx>;
 	return (
 		typeof candidate.markFailed === "function" &&
 		typeof candidate.deadLetters === "function"
