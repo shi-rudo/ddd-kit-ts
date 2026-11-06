@@ -320,6 +320,18 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 		await expect(retryTest?.run()).resolves.toBeUndefined();
 	});
 
+	it("the dead-letter retry test kills a dedupe adapter that rejects an exact retry", async () => {
+		const declaredDedupe = createInMemoryHarness(
+			() =>
+				new OutboxRejectingAnExactRetry({ maxDeliveryAttempts: MAX_ATTEMPTS }),
+		);
+		const retryTest = createOutboxContractTests(declaredDedupe).find(
+			(test) => test.name === "an exact retry of add leaves a dead letter dead",
+		);
+
+		await expect(retryTest?.run()).rejects.toThrow(/already in the outbox/);
+	});
+
 	it("the requeue tests kill an adapter that returns a requeued record last", async () => {
 		const mutant = createInMemoryHarness(
 			() => new OutboxRequeuingAtTheTail({ maxDeliveryAttempts: MAX_ATTEMPTS }),

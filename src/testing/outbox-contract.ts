@@ -43,7 +43,7 @@ export interface OutboxContractEnvironment<Evt extends AnyDomainEvent> {
 	addCommitted(events: ReadonlyArray<EventCommitCandidate<Evt>>): Promise<void>;
 
 	/**
-	 * Optional capability: runs `outbox.add(candidates)` inside a
+	 * Optional capability: runs `outbox.add(candidates, tx)` inside a
 	 * transaction that ROLLS BACK. Enables the rollback-purity test: a
 	 * rolled-back add must leave nothing behind. Transactional adapters
 	 * should always provide this.
@@ -53,7 +53,7 @@ export interface OutboxContractEnvironment<Evt extends AnyDomainEvent> {
 	): Promise<void>;
 
 	/**
-	 * Runs `outbox.endEventSources(sources)` inside a transaction that
+	 * Runs `outbox.endEventSources(sources, tx)` inside a transaction that
 	 * COMMITS, the way `withCommit` calls it for a removal. For a
 	 * non-transactional store this is simply `outbox.endEventSources(sources)`.
 	 */
@@ -62,7 +62,7 @@ export interface OutboxContractEnvironment<Evt extends AnyDomainEvent> {
 	): Promise<void>;
 
 	/**
-	 * Optional capability: runs `outbox.endEventSources(sources)` inside a
+	 * Optional capability: runs `outbox.endEventSources(sources, tx)` inside a
 	 * transaction that ROLLS BACK. Enables the test that a rolled-back
 	 * removal leaves its event source open.
 	 */
@@ -1030,8 +1030,10 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 					await outbox.markFailed(record.dispatchId, new Error("poison"));
 				}
 
+				const retry = env.addCommitted(original);
 				// Without the recommended eventId dedupe, add may reject the retry.
-				await captureRejection(env.addCommitted(original));
+				if (harness.dedupesOnEventId === true) await retry;
+				else await captureRejection(retry);
 
 				assertEqual(
 					(await outbox.getPending(10)).length,
