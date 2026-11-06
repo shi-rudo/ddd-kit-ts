@@ -58,7 +58,8 @@ its events.
    `stampOptions` from the dependencies.
 4. Still inside the transaction, the unit of work freezes and flushes the
    registered receipts. `withCommit` collects every registered aggregate
-   and calls `outbox.add(events)` with the exact batches.
+   and calls `outbox.add(events, tx)` with the exact batches and the
+   transaction of the scope.
 5. The transaction commits.
 6. After commit, `withCommit` acknowledges every saved aggregate through a
    non-exported capability and discards collected events for deleted rows.
@@ -232,7 +233,8 @@ interface OutboxRecord<Evt extends AnyDomainEvent> {
   attempts?: number;
 }
 
-interface Outbox<Evt extends AnyDomainEvent> extends OutboxWriter<Evt> {
+interface Outbox<Evt extends AnyDomainEvent, TCtx = unknown>
+  extends OutboxWriter<Evt, TCtx> {
   getPending(
     limit?: number,
     context?: ExecutionContext,
@@ -509,8 +511,8 @@ record behind it.
 Use `DispatchTrackingOutbox` when you run a poller:
 
 ```ts
-interface DispatchTrackingOutbox<Evt extends AnyDomainEvent>
-  extends Outbox<Evt> {
+interface DispatchTrackingOutbox<Evt extends AnyDomainEvent, TCtx = unknown>
+  extends Outbox<Evt, TCtx> {
   markFailed(
     dispatchId: string,
     error?: unknown,
