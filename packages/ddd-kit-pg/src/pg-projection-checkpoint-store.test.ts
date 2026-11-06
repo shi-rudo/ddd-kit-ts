@@ -88,6 +88,38 @@ describe("PgProjectionCheckpointStore", () => {
 		contender.release();
 		await teardown();
 	});
+
+	it("locks every aggregate of a batch in one round trip", async () => {
+		const database = await openIsolatedSchema();
+		await database.applySql("projection-checkpoint.sql");
+		const client = await database.pool.connect();
+		await client.query("BEGIN");
+		const tx = fromPg(client);
+		const statements: string[] = [];
+		const countingTx: PgQueryExecutor = {
+			query: (text, values, context) => {
+				statements.push(text);
+				return tx.query(text, values, context);
+			},
+		};
+		const identities = ["note-1", "note-2", "note-3", "note-1"].map(
+			(aggregateId) => ({ aggregateType: "Note", aggregateId }),
+		);
+
+		await new PgProjectionCheckpointStore(
+			fromPgPool(database.pool),
+		).withCheckpointLocks(countingTx, "notes", identities, async () => {});
+		const { rows } = await client.query<{ locks: number }>(
+			`SELECT count(*)::int AS locks FROM pg_locks
+			WHERE locktype = 'advisory' AND pid = pg_backend_pid()`,
+		);
+
+		expect(statements).toHaveLength(1);
+		expect(rows[0]?.locks).toBe(3);
+		await client.query("ROLLBACK");
+		client.release();
+		await database.teardown();
+	});
 });
 
 type NoteWritten = DomainEvent<"NoteWritten", { text: string }>;

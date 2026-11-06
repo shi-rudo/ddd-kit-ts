@@ -25,10 +25,11 @@ export class PgProjectionCheckpointStore
 
 	/**
 	 * Holds an advisory lock per key until the transaction ends. A row lock would
-	 * not work, because the first event of an aggregate has no row to lock. The
-	 * sorted order prevents a deadlock. An advisory lock holds across a database,
-	 * so the key names the table by its OID: every search path that resolves the
-	 * table computes the same key. A hash collision only serializes more.
+	 * not work, because the first event of an aggregate has no row to lock. One
+	 * statement takes the locks in the order of their hashes, which prevents a
+	 * deadlock also when two keys have the same hash. An advisory lock holds
+	 * across a database, so the key names the table by its OID: every search
+	 * path that resolves the table computes the same key.
 	 */
 	async withCheckpointLocks<R>(
 		tx: PgQueryExecutor,
@@ -36,19 +37,21 @@ export class PgProjectionCheckpointStore
 		identities: ReadonlyArray<AggregateIdentity>,
 		work: () => Promise<R>,
 	): Promise<R> {
-		const keys = [
-			...new Set(
-				identities.map(({ aggregateType, aggregateId }) =>
-					JSON.stringify([projection, aggregateType, aggregateId]),
-				),
-			),
-		].sort();
-		for (const key of keys) {
+		if (identities.length > 0) {
 			await tx.query(
-				`SELECT pg_advisory_xact_lock(
-					hashtextextended('ddd_kit_projection_checkpoint'::regclass::oid::text || '/' || $1, 0)
-				)`,
-				[key],
+				`SELECT pg_advisory_xact_lock(lock_key)
+				FROM (
+					SELECT DISTINCT hashtextextended(
+						'ddd_kit_projection_checkpoint'::regclass::oid::text || '/' || key, 0
+					) AS lock_key
+					FROM unnest($1::text[]) AS key
+				) AS keys
+				ORDER BY lock_key`,
+				[
+					identities.map(({ aggregateType, aggregateId }) =>
+						JSON.stringify([projection, aggregateType, aggregateId]),
+					),
+				],
 			);
 		}
 		return work();
