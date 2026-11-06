@@ -27,7 +27,8 @@ interface IdempotencyRow {
  * index and block a connection for as long as the other transaction runs. The
  * advisory lock in `claim` gives the answer without that wait, and the
  * transaction end releases it. An advisory lock holds across a database, so its
- * key names the schema: one tenant per schema does not block another.
+ * key names the table by its OID. One tenant per schema does not block another,
+ * and two roles whose search paths resolve the same table share the key.
  *
  * The store keeps the outcome as JSON. `complete` rejects an outcome that JSON
  * does not keep exactly, for example one with a `Date`, because a replay would
@@ -43,7 +44,7 @@ export class PgIdempotencyStore implements IdempotencyStore<PgQueryExecutor> {
 	): Promise<IdempotencyClaim> {
 		const { rows: locks } = await executor.query<{ locked: boolean }>(
 			`SELECT pg_try_advisory_xact_lock(
-				hashtextextended(current_schema() || '/ddd_kit_idempotency/' || $1, 0)
+				hashtextextended('ddd_kit_idempotency'::regclass::oid::text || '/' || $1, 0)
 			) AS locked`,
 			[key],
 		);
