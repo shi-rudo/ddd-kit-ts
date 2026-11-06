@@ -1,6 +1,7 @@
 /** @module @shirudo/ddd-kit-pg */
 export {
 	PgCommitRolledBackError,
+	PgEventDecodeError,
 	PgEventStreamCorruptError,
 	PgRetryableTransactionFailureError,
 	PgRollbackFailedError,

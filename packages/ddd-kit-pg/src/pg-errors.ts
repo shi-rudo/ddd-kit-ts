@@ -102,6 +102,42 @@ export class PgEventStreamCorruptError extends InfrastructureError<"PG_EVENT_STR
 }
 
 /**
+ * The codec threw for a stored event. A read of its stream and a poll of the
+ * outbox stop at this event until a codec decodes it, for example after the
+ * deploy of a new event type reaches every process. The codec failure is the
+ * `cause`.
+ */
+export class PgEventDecodeError extends InfrastructureError<"PG_EVENT_DECODE_FAILED"> {
+	readonly eventId: string;
+	readonly eventType: string;
+	readonly schemaVersion: number;
+	readonly identity: AggregateIdentity;
+
+	constructor(options: {
+		readonly eventId: string;
+		readonly eventType: string;
+		readonly schemaVersion: number;
+		readonly identity: AggregateIdentity;
+		readonly cause: unknown;
+	}) {
+		super({
+			code: "PG_EVENT_DECODE_FAILED",
+			message:
+				`The codec could not decode the stored event ${options.eventId} ` +
+				`(${options.eventType}, schema version ${options.schemaVersion}) of ` +
+				`${options.identity.aggregateType}/${options.identity.aggregateId}. ` +
+				"Deploy a codec that decodes it. A read of the stream and a poll of " +
+				"the outbox stop at this event until then.",
+			cause: options.cause,
+		});
+		this.eventId = options.eventId;
+		this.eventType = options.eventType;
+		this.schemaVersion = options.schemaVersion;
+		this.identity = options.identity;
+	}
+}
+
+/**
  * `PgEventStore.removeStream` ran at an isolation level with one snapshot for the
  * whole transaction. A retry does not help: begin the transaction at READ
  * COMMITTED.

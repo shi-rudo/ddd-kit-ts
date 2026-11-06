@@ -7,7 +7,10 @@ import {
 	openIsolatedSchema,
 	openTablesBehindPrivateSchemas,
 } from "../test/isolated-schema";
-import { PgUnsupportedIsolationLevelError } from "./pg-errors";
+import {
+	PgEventDecodeError,
+	PgUnsupportedIsolationLevelError,
+} from "./pg-errors";
 import type { PgEventCodec } from "./pg-event-codec";
 import { PgEventStore } from "./pg-event-store";
 import { fromPg, type PgQueryExecutor } from "./pg-query-executor";
@@ -215,6 +218,31 @@ describe("PgEventStore", () => {
 			expect(failure).toBeInstanceOf(TypeError);
 			expect((failure as Error).message).toMatch(/codec changed the eventId/);
 			expect((await store.readStream(stream, { limit: 1 })).exists).toBe(false);
+			await teardown();
+		});
+
+		it("names the stored event that the codec cannot decode", async () => {
+			const { store, teardown } = await openStore({
+				encode: (event) => event,
+				decode: () => {
+					throw new Error("unknown schema version");
+				},
+			});
+			await store.append(stream, [noteWritten({}, { eventId: "event-1" })], {
+				expectedVersion: 0,
+			});
+
+			const failure = await store
+				.readStream(stream, { limit: 1 })
+				.catch((error: unknown) => error);
+
+			expect(failure).toBeInstanceOf(PgEventDecodeError);
+			expect(failure).toMatchObject({
+				eventId: "event-1",
+				eventType: "NoteWritten",
+				identity: stream,
+				cause: { message: "unknown schema version" },
+			});
 			await teardown();
 		});
 

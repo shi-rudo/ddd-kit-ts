@@ -3,6 +3,7 @@ import {
 	type AnyDomainEvent,
 	assertJsonSafe,
 } from "@shirudo/ddd-kit";
+import { PgEventDecodeError } from "./pg-errors";
 import type { PgEventCodec } from "./pg-event-codec";
 
 /** The columns of an event that both the stream table and the outbox table keep. */
@@ -72,5 +73,16 @@ export function decodeStoredEvent<Evt extends AnyDomainEvent>(
 		schemaVersion: row.schema_version,
 		...(row.metadata === null ? {} : { metadata: JSON.parse(row.metadata) }),
 	};
-	return codec?.decode(stored) ?? (stored as Evt);
+	if (codec === undefined) return stored as Evt;
+	try {
+		return codec.decode(stored);
+	} catch (cause) {
+		throw new PgEventDecodeError({
+			eventId: row.event_id,
+			eventType: row.event_type,
+			schemaVersion: row.schema_version,
+			identity: source,
+			cause,
+		});
+	}
 }
