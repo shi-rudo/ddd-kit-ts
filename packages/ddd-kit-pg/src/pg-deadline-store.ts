@@ -143,8 +143,11 @@ export class PgDeadlineStore<TPayload = unknown>
 		context?: ExecutionContext,
 	): Promise<DeadLetterDeadline<TPayload> | undefined> {
 		context?.signal.throwIfAborted();
-		const lastError =
-			error instanceof Error ? error.message : String(error ?? "unknown");
+		// PostgreSQL text cannot hold a NUL byte, and the UPDATE would then fail on
+		// every attempt.
+		const lastError = (
+			error instanceof Error ? error.message : String(error ?? "unknown")
+		).replaceAll("\u0000", "\uFFFD");
 		const { rows } = await this.executor.query<
 			DeadlineRow & { readonly status: string }
 		>(

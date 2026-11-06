@@ -43,4 +43,5 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   caller aborted before the `COMMIT` rolls back.
 - `PgDeadlineStore`, `PgProjectionCheckpointStore`, and `PgSnapshotStore`, with
   their tables in `sql/`, and `fromPgPool` for the statements that need no
-  transaction.
+  transaction. The checkpoint locks name their table, like the other locks, and
+  a deadline failure whose message holds a NUL byte still counts as an attempt.

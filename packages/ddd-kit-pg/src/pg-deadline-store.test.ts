@@ -112,6 +112,25 @@ describe("PgDeadlineStore", () => {
 		await database.teardown();
 	});
 
+	it("counts a failure whose message holds a NUL byte", async () => {
+		const { database, store } = await openStore();
+		await store.schedule({
+			processName: "saga",
+			key: "order-1",
+			dueAt: at,
+			payload: null,
+		});
+		const [due] = await store.due(at, 1);
+
+		await store.markFailed(
+			due?.deliveryId ?? "",
+			new Error("the broker said \u0000"),
+		);
+
+		expect(await store.due(at, 1)).toMatchObject([{ attempts: 1 }]);
+		await database.teardown();
+	});
+
 	it("rejects a payload that JSON does not keep and schedules nothing", async () => {
 		const { database, store } = await openStore();
 
