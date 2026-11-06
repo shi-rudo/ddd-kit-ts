@@ -176,7 +176,7 @@ immutable. Run one kit version per process during a cutover.
   value without an error. The contract suites of the event store, the outbox,
   both idempotency stores, the deadline store, and the snapshot store check
   this with a `Date`, a `Map`, a `Set`, and `undefined`, each in a write of its
-  own. An adapter that passes these values through a raw `JSON.stringify` now
+  own. The event store and outbox suites check metadata too. An adapter that passes these values through a raw `JSON.stringify` now
   fails its suite, also when it rejects one value and changes another. A failed
   check of the suite inside the write does not count as a rejection.
   See

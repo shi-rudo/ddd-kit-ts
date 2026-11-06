@@ -742,23 +742,31 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 				);
 			}),
 		},
-		...plainValuesThatJsonDoesNotKeep().map(({ name, data }) => ({
-			name: `fidelity: ${name} is stored exactly or rejected`,
-			run: inEnv(async ({ store }) => {
-				const [firstKey] = harness.createCollidingStreamKeys();
-				const event = {
-					...harness.createEvent(firstKey, 70),
-					payload: data,
-				} as Evt;
-				await assertKeptOrRejected({
-					subject: "An event store",
-					valueName: name,
-					write: () => store.append(firstKey, [event], { expectedVersion: 0 }),
-					read: async () =>
-						(await store.readStream(firstKey, fixtureRead)).events[0]?.payload,
-					expected: data,
-				});
+		...(["payload", "metadata"] as const).flatMap((field) =>
+			plainValuesThatJsonDoesNotKeep().map(({ name, data }) => {
+				const valueName = `${name} in ${field === "payload" ? "a payload" : "metadata"}`;
+				return {
+					name: `fidelity: ${valueName} is stored exactly or rejected`,
+					run: inEnv(async ({ store }) => {
+						const [firstKey] = harness.createCollidingStreamKeys();
+						const event = {
+							...harness.createEvent(firstKey, 70),
+							[field]: data,
+						} as Evt;
+						await assertKeptOrRejected({
+							subject: "An event store",
+							valueName,
+							write: () =>
+								store.append(firstKey, [event], { expectedVersion: 0 }),
+							read: async () =>
+								(await store.readStream(firstKey, fixtureRead)).events[0]?.[
+									field
+								],
+							expected: data,
+						});
+					}),
+				};
 			}),
-		})),
+		),
 	];
 }

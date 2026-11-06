@@ -35,6 +35,25 @@ class StoreThatLosesValuesInJson extends InMemoryEventStore<ContractStepRecorded
 	}
 }
 
+/** A store that keeps payloads exactly but loses what JSON does not keep in metadata. */
+class StoreThatLosesMetadataInJson extends InMemoryEventStore<ContractStepRecorded> {
+	override async readStream(
+		stream: AggregateIdentity,
+		options: ReadStreamOptions,
+	): Promise<StreamReadResult<ContractStepRecorded>> {
+		const read = await super.readStream(stream, options);
+		if (!read.exists) return read;
+		return {
+			...read,
+			events: read.events.map((event) =>
+				event.metadata === undefined
+					? event
+					: { ...event, metadata: JSON.parse(JSON.stringify(event.metadata)) },
+			),
+		};
+	}
+}
+
 /**
  * A store that rejects a Set, a Map, and undefined, but changes a Date. Its JSON
  * replacer never sees the Date, because `toJSON` runs first.
@@ -105,10 +124,14 @@ describe("event-store adapter contract", () => {
 			"OCC: duplicate create is rejected atomically with a sanctioned kit error",
 			"OCC: an expectedVersion ahead of an absent stream conflicts without creating it",
 			"read ownership: a mutation attempt cannot mutate the stream",
-			"fidelity: a Date is stored exactly or rejected",
-			"fidelity: a Set is stored exactly or rejected",
-			"fidelity: a Map is stored exactly or rejected",
-			"fidelity: an undefined property is stored exactly or rejected",
+			"fidelity: a Date in a payload is stored exactly or rejected",
+			"fidelity: a Set in a payload is stored exactly or rejected",
+			"fidelity: a Map in a payload is stored exactly or rejected",
+			"fidelity: an undefined property in a payload is stored exactly or rejected",
+			"fidelity: a Date in metadata is stored exactly or rejected",
+			"fidelity: a Set in metadata is stored exactly or rejected",
+			"fidelity: a Map in metadata is stored exactly or rejected",
+			"fidelity: an undefined property in metadata is stored exactly or rejected",
 		]);
 	});
 
@@ -125,7 +148,7 @@ describe("event-store adapter contract", () => {
 		}).find((test) => test.name.startsWith("fidelity:"));
 
 		await expect(fidelityTest?.run()).rejects.toThrow(
-			/changed a Date without an error/,
+			/changed a Date in a payload without an error/,
 		);
 	});
 
@@ -136,11 +159,30 @@ describe("event-store adapter contract", () => {
 				store: new StoreThatChangesOnlyADate(),
 			}),
 		}).find(
-			(test) => test.name === "fidelity: a Date is stored exactly or rejected",
+			(test) =>
+				test.name ===
+				"fidelity: a Date in a payload is stored exactly or rejected",
 		);
 
 		await expect(dateTest?.run()).rejects.toThrow(
-			/An event store changed a Date without an error/,
+			/An event store changed a Date in a payload without an error/,
+		);
+	});
+
+	it("the fidelity test of metadata kills a store that changes metadata through JSON", async () => {
+		const metadataTest = createEventStoreContractTests({
+			...harness,
+			createEnvironment: async () => ({
+				store: new StoreThatLosesMetadataInJson(),
+			}),
+		}).find(
+			(test) =>
+				test.name ===
+				"fidelity: a Date in metadata is stored exactly or rejected",
+		);
+
+		await expect(metadataTest?.run()).rejects.toThrow(
+			/An event store changed a Date in metadata without an error/,
 		);
 	});
 });

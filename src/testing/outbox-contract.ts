@@ -215,21 +215,29 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 	};
 
 	const tests: OutboxContractTest[] = [
-		...plainValuesThatJsonDoesNotKeep().map(
-			({ name, data }): OutboxContractTest => ({
-				name: `fidelity: ${name} is stored exactly or rejected`,
-				run: inEnv(async (env) => {
-					const event = { ...harness.createEvent(70), payload: data } as Evt;
-					await assertKeptOrRejected({
-						subject: "An outbox",
-						valueName: name,
-						write: () => env.addCommitted(commit([event])),
-						read: async () =>
-							(await env.outbox.getPending(1))[0]?.event.payload,
-						expected: data,
-					});
-				}),
-			}),
+		...(["payload", "metadata"] as const).flatMap((field) =>
+			plainValuesThatJsonDoesNotKeep().map(
+				({ name, data }): OutboxContractTest => {
+					const valueName = `${name} in ${field === "payload" ? "a payload" : "metadata"}`;
+					return {
+						name: `fidelity: ${valueName} is stored exactly or rejected`,
+						run: inEnv(async (env) => {
+							const event = {
+								...harness.createEvent(70),
+								[field]: data,
+							} as Evt;
+							await assertKeptOrRejected({
+								subject: "An outbox",
+								valueName,
+								write: () => env.addCommitted(commit([event])),
+								read: async () =>
+									(await env.outbox.getPending(1))[0]?.event[field],
+								expected: data,
+							});
+						}),
+					};
+				},
+			),
 		),
 		{
 			name: "finalizes complete commit receipts and links the next eventful commit",
