@@ -180,15 +180,19 @@ export class PgOutbox<Evt extends AnyDomainEvent>
 		const claim = async (tx: PgQueryExecutor) => {
 			await tx.query(
 				`SELECT pg_advisory_xact_lock(
-					hashtextextended(current_schema() || '/ddd_kit_outbox', 0)
+					hashtextextended('ddd_kit_outbox'::regclass::oid::text, 0)
 				)`,
 			);
 			if (context !== undefined) await setStatementDeadline(tx, context);
 			// clock_timestamp and not now: now is the start of the transaction, before
 			// the wait for the lock, and that wait would shorten the lease.
+			// SKIP LOCKED passes over a row that another statement holds, for example
+			// a late markFailed after its lease. A later event of that source must
+			// then wait too, so chosen keeps an event only after every earlier
+			// pending event of its source in the same claim.
 			return tx.query<OutboxRow>(
-				`WITH chosen AS (
-					SELECT candidate.position
+				`WITH locked AS (
+					SELECT candidate.position, candidate.aggregate_type, candidate.aggregate_id
 					FROM ddd_kit_outbox AS candidate
 					WHERE candidate.status = 'pending'
 						AND (
@@ -207,6 +211,19 @@ export class PgOutbox<Evt extends AnyDomainEvent>
 					ORDER BY candidate.position
 					LIMIT $1
 					FOR UPDATE OF candidate SKIP LOCKED
+				),
+				chosen AS (
+					SELECT locked.position
+					FROM locked
+					WHERE NOT EXISTS (
+						SELECT 1
+						FROM ddd_kit_outbox AS earlier
+						WHERE earlier.aggregate_type = locked.aggregate_type
+							AND earlier.aggregate_id = locked.aggregate_id
+							AND earlier.position < locked.position
+							AND earlier.status = 'pending'
+							AND earlier.position NOT IN (SELECT position FROM locked)
+					)
 				),
 				claimed AS (
 					UPDATE ddd_kit_outbox AS target

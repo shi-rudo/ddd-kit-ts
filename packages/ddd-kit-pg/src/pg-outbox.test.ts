@@ -410,7 +410,7 @@ describe("PgOutbox", () => {
 			const holder = await database.pool.connect();
 			await holder.query("BEGIN");
 			const { rows: keys } = await holder.query(
-				"SELECT hashtextextended(current_schema() || '/ddd_kit_outbox', 0) AS key",
+				"SELECT hashtextextended('ddd_kit_outbox'::regclass::oid::text, 0) AS key",
 			);
 			await holder.query("SELECT pg_advisory_xact_lock($1::bigint)", [
 				keys[0].key,
@@ -504,6 +504,28 @@ describe("PgOutbox", () => {
 			await expect
 				.poll(() => outbox.getPending(10), { timeout: 3_000 })
 				.toMatchObject([{ dispatchId: "event-1", attempts: 1 }]);
+			await teardown();
+		});
+
+		it("holds back a later event while another statement locks the earlier one after its lease", async () => {
+			const { add, database, outbox, teardown } = await openOutbox({
+				claim: { leaseMs: 1 },
+			});
+			await add([candidate(eventNamed("event-1"), 1)]);
+			await add([candidate(eventNamed("event-2"), 2)]);
+			await outbox.getPending(1);
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			const lateAcknowledgement = await database.pool.connect();
+			await lateAcknowledgement.query("BEGIN");
+			await lateAcknowledgement.query(
+				"SELECT 1 FROM ddd_kit_outbox WHERE event_id = 'event-1' FOR UPDATE",
+			);
+
+			const claimed = await outbox.getPending(10);
+
+			expect(claimed).toEqual([]);
+			await lateAcknowledgement.query("ROLLBACK");
+			lateAcknowledgement.release();
 			await teardown();
 		});
 
