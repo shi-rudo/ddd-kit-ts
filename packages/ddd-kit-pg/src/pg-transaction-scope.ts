@@ -1,13 +1,12 @@
 import { findInCauseChain } from "@shirudo/base-error";
 import { KitWiringError, type TransactionScope } from "@shirudo/ddd-kit";
-import type { PoolClient } from "pg";
+import type { PoolClient, QueryResult } from "pg";
 import {
 	classifyTransactionFailure,
 	PgCommitRolledBackError,
 	PgRollbackFailedError,
 } from "./pg-errors";
-import { fromPg, type PgQueryExecutor } from "./pg-query-executor";
-import { queryInTurn } from "./query-in-turn";
+import type { PgQueryExecutor } from "./pg-query-executor";
 
 /** The part of a `pg` `Pool` that the scope uses. */
 export interface PgClientPool {
@@ -48,6 +47,10 @@ export interface PgTransactionScopeOptions {
  * The scope destroys the connection after a failed `BEGIN` or `ROLLBACK`, and
  * after a `COMMIT` that PostgreSQL did not answer, because its state is then
  * unknown. An answered `COMMIT` ends the transaction, also with an error.
+ *
+ * The executor runs statements that start together, for example from
+ * `Promise.all`, one after another, in call order. `COMMIT` and `ROLLBACK` wait
+ * for the statements that the callback started.
  */
 export class PgTransactionScope implements TransactionScope<PgQueryExecutor> {
 	private readonly beginStatement: string;
@@ -81,20 +84,20 @@ export class PgTransactionScope implements TransactionScope<PgQueryExecutor> {
 		const session = openSession(client);
 		let transactionEnded = false;
 		try {
-			await queryInTurn(client, this.beginStatement);
+			await session.queryInTurn(this.beginStatement);
 			let result: T;
 			try {
 				result = await fn(session.executor);
 			} catch (workFailure) {
 				// A statement after this point would run outside the transaction.
 				session.close();
-				await rollback(client, workFailure);
+				await rollback(session, workFailure);
 				transactionEnded = true;
 				throw classifyTransactionFailure(workFailure);
 			}
 			session.close();
 			try {
-				await commit(client);
+				await commit(session);
 			} catch (commitFailure) {
 				transactionEnded = answeredByServer(commitFailure);
 				throw commitFailure;
@@ -110,20 +113,20 @@ export class PgTransactionScope implements TransactionScope<PgQueryExecutor> {
 }
 
 async function rollback(
-	client: PoolClient,
+	session: TransactionSession,
 	workFailure: unknown,
 ): Promise<void> {
 	try {
-		await queryInTurn(client, "ROLLBACK");
+		await session.queryInTurn("ROLLBACK");
 	} catch (rollbackFailure) {
 		throw new PgRollbackFailedError({ cause: rollbackFailure, workFailure });
 	}
 }
 
-async function commit(client: PoolClient): Promise<void> {
+async function commit(session: TransactionSession): Promise<void> {
 	let command: string;
 	try {
-		({ command } = await queryInTurn(client, "COMMIT"));
+		({ command } = await session.queryInTurn("COMMIT"));
 	} catch (commitFailure) {
 		throw classifyTransactionFailure(commitFailure);
 	}
@@ -151,16 +154,35 @@ function isErrorResponse(
 	);
 }
 
-/**
- * An executor that stops when its transaction ends. The pool can hand the
- * connection to another transaction, and a late statement would then join it.
- */
-function openSession(client: PoolClient): {
+/** The statements of one transaction on its connection. */
+interface TransactionSession {
+	/** Stops when the transaction ends. */
 	readonly executor: PgQueryExecutor;
+	/** Runs a statement after the statements before it, also after `close`. */
+	queryInTurn(text: string): Promise<QueryResult>;
 	close(): void;
-} {
-	const connection = fromPg(client);
+}
+
+/**
+ * Opens the statements of one transaction. The executor stops when the
+ * transaction ends, because the pool can hand the connection to another
+ * transaction, and a late statement would then join it.
+ *
+ * A client runs one statement at a time, and pg 9 rejects a statement that
+ * starts while another one runs. So each statement waits for the statement
+ * before it. Only the scope has the client, so no other statement can go first.
+ */
+function openSession(client: PoolClient): TransactionSession {
 	let open = true;
+	let lastStatement: Promise<unknown> = Promise.resolve();
+	const queryInTurn = (text: string, values?: ReadonlyArray<unknown>) => {
+		const statement = lastStatement.then(() =>
+			client.query(text, values && [...values]),
+		);
+		// The next statement also waits for a statement that fails.
+		lastStatement = statement.catch(() => undefined);
+		return statement;
+	};
 	return {
 		executor: {
 			query: async (text, values) => {
@@ -174,9 +196,11 @@ function openSession(client: PoolClient): {
 						details: { operation: "PgQueryExecutor.query" },
 					});
 				}
-				return connection.query(text, values);
+				const { rows } = await queryInTurn(text, values);
+				return { rows };
 			},
 		},
+		queryInTurn: (text) => queryInTurn(text),
 		close: () => {
 			open = false;
 		},

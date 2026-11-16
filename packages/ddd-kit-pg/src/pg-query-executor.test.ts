@@ -1,4 +1,4 @@
-import { Pool, type PoolClient } from "pg";
+import { Client, Pool, type PoolClient } from "pg";
 import {
 	afterAll,
 	afterEach,
@@ -57,40 +57,24 @@ describe("fromPg", () => {
 		expect(result.rows).toEqual([]);
 	});
 
-	it("runs statements that start together one after another, in call order", async () => {
-		const [, result] = await Promise.all([
-			executor.query("INSERT INTO note (text) VALUES ($1)", ["first"]),
-			executor.query<{ text: string }>("SELECT text FROM note"),
-		]);
+	it("keeps a ROLLBACK on the client after the statements that started before it", async () => {
+		const plain = new Client({ connectionString: inject("postgresUri") });
+		await plain.connect();
+		await plain.query("CREATE TEMP TABLE note (text text NOT NULL)");
+		const plainExecutor = fromPg(plain);
+		await plain.query("BEGIN");
 
-		expect(result.rows).toEqual([{ text: "first" }]);
-	});
+		await Promise.all([
+			plainExecutor.query("SELECT text FROM missing_table"),
+			plainExecutor.query("SELECT pg_sleep(0.05)"),
+			plainExecutor.query("INSERT INTO note (text) VALUES ($1)", [
+				"rolled back",
+			]),
+		]).catch(() => plain.query("ROLLBACK"));
+		const { rows } = await plain.query("SELECT text FROM note");
 
-	it("runs the statements of two executors over one client one after another", async () => {
-		const second = fromPg(client);
-
-		const [, result] = await Promise.all([
-			executor.query("INSERT INTO note (text) VALUES ($1)", ["first"]),
-			second.query<{ text: string }>("SELECT text FROM note"),
-		]);
-
-		expect(result.rows).toEqual([{ text: "first" }]);
-	});
-
-	it("runs a statement after a failed statement that started together with it", async () => {
-		const [failed, result] = await Promise.allSettled([
-			executor.query("SELECT text FROM missing_table"),
-			executor.query<{ one: number }>("SELECT 1 AS one"),
-		]);
-
-		expect(failed).toMatchObject({
-			status: "rejected",
-			reason: { code: "42P01" },
-		});
-		expect(result).toEqual({
-			status: "fulfilled",
-			value: { rows: [{ one: 1 }] },
-		});
+		expect(rows).toEqual([]);
+		await plain.end();
 	});
 
 	it("rejects with the original driver error, so an adapter can read the SQLSTATE", async () => {

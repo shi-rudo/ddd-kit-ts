@@ -90,13 +90,18 @@ describe("PgTransactionScope", () => {
 		expect(await counterValue(1)).toBe(0);
 	});
 
-	it("commits the statements that the callback starts together", async () => {
-		await scope.transactional((executor) =>
-			Promise.all([increment(executor, 1), increment(executor, 2)]),
+	it("runs the statements that the callback starts together in call order", async () => {
+		const [, read] = await scope.transactional((executor) =>
+			Promise.all([
+				increment(executor, 1),
+				executor.query<{ value: number }>(
+					"SELECT value FROM counter WHERE id = 1",
+				),
+			]),
 		);
 
+		expect(read.rows).toEqual([{ value: 1 }]);
 		expect(await counterValue(1)).toBe(1);
-		expect(await counterValue(2)).toBe(1);
 	});
 
 	it("rolls back after the statements that the callback started together, when one of them fails", async () => {

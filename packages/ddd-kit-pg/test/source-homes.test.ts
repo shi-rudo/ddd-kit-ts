@@ -25,10 +25,4 @@ describe("the package source", () => {
 	it("replaces NUL bytes only in nul-byte.ts", async () => {
 		expect(await sourcesContaining('"\\u0000"')).toEqual(["nul-byte.ts"]);
 	});
-
-	it("calls client.query only in query-in-turn.ts", async () => {
-		expect(await sourcesContaining("client.query(")).toEqual([
-			"query-in-turn.ts",
-		]);
-	});
 });

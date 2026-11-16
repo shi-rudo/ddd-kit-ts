@@ -2,7 +2,7 @@ import { Client } from "pg";
 
 /**
  * A `pg` client that rejects a statement while another statement of it runs.
- * pg 8 queues such a statement and warns that pg 9 removes the queue. The client
+ * pg 8 queues such a statement with a warning, and pg 9 rejects it. The client
  * frees itself when pg reports the result, which for an error is before the
  * connection is ready again.
  */
