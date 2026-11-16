@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import { InMemoryDeadlineStore } from "../application/deadlines/adapters/in-memory-deadline-store";
+import type { DueDeadline } from "../application/deadlines/deadline-store";
 import { InMemoryTransactionScope } from "../persistence/repository/adapters/in-memory-transaction-scope";
 import type { InMemoryTransaction } from "../persistence/repository/in-memory-transaction";
 import {
@@ -28,6 +29,30 @@ class DeadlineStoreLeavingRollbackOpen extends InMemoryDeadlineStore<DeadlineSto
 	override beginTransaction(): InMemoryTransaction {
 		const transaction = super.beginTransaction();
 		return { commit: () => transaction.commit(), rollback: () => {} };
+	}
+}
+
+/**
+ * A claiming reference: `due` hides each deadline that it returned until
+ * `expireClaims` runs, as a lease hides it until the lease ends.
+ */
+class ClaimingInMemoryDeadlineStore extends InMemoryDeadlineStore<DeadlineStoreContractPayload> {
+	private readonly claimed = new Set<string>();
+
+	override async due(
+		now: Date,
+		limit: number,
+	): Promise<ReadonlyArray<DueDeadline<DeadlineStoreContractPayload>>> {
+		const unclaimed = (await super.due(now, Number.MAX_SAFE_INTEGER)).filter(
+			(deadline) => !this.claimed.has(deadline.deliveryId),
+		);
+		const page = unclaimed.slice(0, limit);
+		for (const deadline of page) this.claimed.add(deadline.deliveryId);
+		return page;
+	}
+
+	expireClaims(): void {
+		this.claimed.clear();
 	}
 }
 
@@ -60,6 +85,26 @@ function createInMemoryHarness(
 		},
 		failuresToDeadLetter: CEILING,
 		providesRolledBackRuns: true,
+	};
+}
+
+/** The claiming reference, with the hook that ends its claims. */
+function createClaimingInMemoryHarness(): DeadlineStoreContractHarness {
+	const harness = createInMemoryHarness(
+		() => new ClaimingInMemoryDeadlineStore({ maxDeliveryAttempts: CEILING }),
+	);
+	return {
+		...harness,
+		createEnvironment: async () => {
+			const environment = await harness.createEnvironment();
+			const store = environment.store as ClaimingInMemoryDeadlineStore;
+			return {
+				...environment,
+				expireClaims: async () => store.expireClaims(),
+			};
+		},
+		claimsOnDue: true,
+		providesClaimExpiry: true,
 	};
 }
 
@@ -173,16 +218,24 @@ describe("deadline-store contract suite against the in-memory reference", () => 
 		}
 	});
 
-	it("a claiming-due harness skips every un-acked re-poll test", () => {
+	it("a claiming harness without claim expiry skips every un-acked re-poll test", () => {
 		const claiming = createInMemoryHarness();
 		claiming.claimsOnDue = true;
 		const claimingTests = createDeadlineStoreContractTests(claiming);
 		const skipped = claimingTests.filter((test) => test.skipped);
 		// Reschedule-race successor visibility and attempts/neighbor flow.
 		expect(skipped.map((test) => test.skipped?.capability)).toEqual([
-			"non-claiming due",
-			"non-claiming due",
+			"providesClaimExpiry",
+			"providesClaimExpiry",
 		]);
+	});
+
+	it("a claiming harness with claim expiry runs every un-acked re-poll test", () => {
+		const claimingTests = createDeadlineStoreContractTests(
+			createClaimingInMemoryHarness(),
+		);
+
+		expect(claimingTests.filter((test) => test.skipped)).toEqual([]);
 	});
 
 	it("a ceiling below 2 is rejected at suite construction", () => {
@@ -192,4 +245,12 @@ describe("deadline-store contract suite against the in-memory reference", () => 
 			/failuresToDeadLetter must be an integer >= 2/,
 		);
 	});
+});
+
+describe("deadline-store contract suite against a claiming store", () => {
+	for (const test of createDeadlineStoreContractTests(
+		createClaimingInMemoryHarness(),
+	)) {
+		(test.skipped ? it.skip : it)(test.name, test.run);
+	}
 });

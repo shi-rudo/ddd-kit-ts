@@ -71,6 +71,13 @@ export interface OutboxContractEnvironment<Evt extends AnyDomainEvent> {
 		sources: ReadonlyArray<AggregateIdentity>,
 	): Promise<void>;
 
+	/**
+	 * Optional capability for a claiming adapter: ends every claim that
+	 * `getPending` holds, as if each lease ran out. Enables the tests that
+	 * re-poll records that an earlier poll returned without resolving them.
+	 */
+	expireClaims?(): Promise<void>;
+
 	/** Release connections, drop schemas, etc. Called in a finally. */
 	teardown?(): Promise<void>;
 }
@@ -132,10 +139,19 @@ export interface OutboxContractHarness<Evt extends AnyDomainEvent> {
 	 * `FOR UPDATE SKIP LOCKED`), as the port sanctions. Every test that
 	 * re-polls records a previous poll returned without resolving them
 	 * (head stability, re-ack non-disturbance, attempts surfacing, a requeue
-	 * of a pending record) assumes a non-claiming read and is marked skipped for claiming
-	 * adapters; prove your claim/expiry semantics in your own suite.
+	 * of a pending record) ends the claims with
+	 * {@link OutboxContractEnvironment.expireClaims} before the re-poll.
+	 * Without {@link providesClaimExpiry}, those tests are marked skipped.
 	 */
 	claimsOnGetPending?: boolean;
+
+	/**
+	 * Declare `true` when environments provide {@link
+	 * OutboxContractEnvironment.expireClaims}. A claiming adapter without it
+	 * gets the re-poll tests marked skipped: they apply, but the suite
+	 * cannot see the records that the claims hold back.
+	 */
+	providesClaimExpiry?: boolean;
 
 	/**
 	 * Declare `true` when `add()` dedupes on `eventId` (the unique-key
@@ -218,6 +234,21 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 	};
 
 	const trackingEnabled = harness.failuresToDeadLetter !== undefined;
+	const claimExpiryGate = {
+		capability: "providesClaimExpiry",
+		satisfiedBy:
+			!harness.claimsOnGetPending || harness.providesClaimExpiry === true,
+	};
+	// A non-claiming adapter returns un-acked records anyway.
+	const expireClaims = async (env: Env): Promise<void> => {
+		if (!harness.claimsOnGetPending) return;
+		if (!env.expireClaims) {
+			throw new ContractViolation(
+				"Contract violated: harness declared providesClaimExpiry but the environment lacks expireClaims",
+			);
+		}
+		await env.expireClaims();
+	};
 
 	const tests: OutboxContractTest[] = [
 		{
@@ -499,41 +530,36 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 				);
 			}),
 		},
-		// Head stability assumes a non-claiming read; the port sanctions
-		// claiming reads (lease, visibility timeout, FOR UPDATE SKIP
-		// LOCKED) for competing dispatchers, and for those an un-acked
-		// head legitimately stays invisible until the claim expires.
-		gatedContractTest(
-			{
-				capability: "non-claiming getPending",
-				satisfiedBy: !harness.claimsOnGetPending,
-			},
-			{
-				name: "an un-acked head comes back on the next poll (no silent skipping)",
-				run: inEnv(async (env) => {
-					await env.addCommitted(
-						commit([1, 2, 3, 4].map((s) => harness.createEvent(s))),
-					);
-					const firstPage = await env.outbox.getPending(2);
-					const again = await env.outbox.getPending(2);
-					// Short pages are port-legal ("up to limit"), so compare
-					// the overlapping prefix: what head stability forbids is
-					// silently SKIPPING an un-acked record, not short pages.
-					const overlap = Math.min(firstPage.length, again.length);
-					assert(
-						overlap >= 1,
-						"a non-empty backlog must surface at least one record on every poll",
-					);
-					assert(
-						deepEqual(
-							again.slice(0, overlap).map((r) => r.dispatchId),
-							firstPage.slice(0, overlap).map((r) => r.dispatchId),
-						),
-						"an un-acked head must come back on the next poll (no silent skipping)",
-					);
-				}),
-			},
-		),
+		// Head stability: an un-acked head comes back. The port sanctions
+		// claiming reads (lease, visibility timeout, FOR UPDATE SKIP LOCKED)
+		// for competing dispatchers, and those hold an un-acked head back
+		// until the claim expires, so the test ends the claims first.
+		gatedContractTest(claimExpiryGate, {
+			name: "an un-acked head comes back on the next poll (no silent skipping)",
+			run: inEnv(async (env) => {
+				await env.addCommitted(
+					commit([1, 2, 3, 4].map((s) => harness.createEvent(s))),
+				);
+				const firstPage = await env.outbox.getPending(2);
+				await expireClaims(env);
+				const again = await env.outbox.getPending(2);
+				// Short pages are port-legal ("up to limit"), so compare
+				// the overlapping prefix: what head stability forbids is
+				// silently SKIPPING an un-acked record, not short pages.
+				const overlap = Math.min(firstPage.length, again.length);
+				assert(
+					overlap >= 1,
+					"a non-empty backlog must surface at least one record on every poll",
+				);
+				assert(
+					deepEqual(
+						again.slice(0, overlap).map((r) => r.dispatchId),
+						firstPage.slice(0, overlap).map((r) => r.dispatchId),
+					),
+					"an un-acked head must come back on the next poll (no silent skipping)",
+				);
+			}),
+		}),
 		{
 			name: "markDispatched removes records; re-acks and unknown acks are accepted",
 			run: inEnv(async (env) => {
@@ -557,32 +583,28 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 			}),
 		},
 		// Observing that OTHER records survive a re-ack needs a re-poll of
-		// records an earlier poll already returned un-acked; claiming
-		// adapters legitimately hold those back until the claim expires.
-		gatedContractTest(
-			{
-				capability: "non-claiming getPending",
-				satisfiedBy: !harness.claimsOnGetPending,
-			},
-			{
-				name: "idempotent re-acks do not disturb other pending records",
-				run: inEnv(async (env) => {
-					await env.addCommitted(
-						commit([harness.createEvent(1), harness.createEvent(2)]),
-					);
-					const [first] = await env.outbox.getPending(1);
-					assert(first !== undefined, "expected a pending record");
-					await env.outbox.markDispatched([first.dispatchId]);
-					await env.outbox.markDispatched([first.dispatchId]);
-					await env.outbox.markDispatched(["no-such-dispatch-id"]);
-					assertEqual(
-						(await env.outbox.getPending(10)).length,
-						1,
-						"idempotent re-acks must not disturb other records",
-					);
-				}),
-			},
-		),
+		// records an earlier poll already returned un-acked. A claiming
+		// adapter holds those back until the claim expires, so the test ends
+		// the claims first.
+		gatedContractTest(claimExpiryGate, {
+			name: "idempotent re-acks do not disturb other pending records",
+			run: inEnv(async (env) => {
+				await env.addCommitted(
+					commit([harness.createEvent(1), harness.createEvent(2)]),
+				);
+				const [first] = await env.outbox.getPending(1);
+				assert(first !== undefined, "expected a pending record");
+				await env.outbox.markDispatched([first.dispatchId]);
+				await env.outbox.markDispatched([first.dispatchId]);
+				await env.outbox.markDispatched(["no-such-dispatch-id"]);
+				await expireClaims(env);
+				assertEqual(
+					(await env.outbox.getPending(10)).length,
+					1,
+					"idempotent re-acks must not disturb other records",
+				);
+			}),
+		}),
 		// Dedupe on eventId is the port's RECOMMENDATION, not a normative
 		// requirement; only adapters that declare the unique-key constraint
 		// are held to it.
@@ -731,15 +753,12 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 	tests.push(
 		...whenTracking(
 			// Observing attempts needs the record back on a re-poll after an
-			// un-acked poll (a claiming adapter may hold it until the claim
-			// expires) AND a record that survives one failure (with a
+			// un-acked poll (the test ends the claims of a claiming adapter)
+			// AND a record that survives one failure (with a
 			// ceiling of 1, the single markFailed dead-letters it before
 			// the re-poll, exactly as the port requires).
 			gatedContractTest(
-				{
-					capability: "non-claiming getPending",
-					satisfiedBy: !harness.claimsOnGetPending,
-				},
+				claimExpiryGate,
 				gatedContractTest(
 					{
 						capability: "failuresToDeadLetter >= 2",
@@ -754,6 +773,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 							const [record] = await outbox.getPending(1);
 							assert(record !== undefined, "expected a pending record");
 							await outbox.markFailed(record.dispatchId, new Error("boom"));
+							await expireClaims(env);
 							const [after] = await outbox.getPending(1);
 							assertEqual(
 								after?.attempts,
@@ -1004,10 +1024,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 		}),
 		...whenTracking(
 			gatedContractTest(
-				{
-					capability: "non-claiming getPending",
-					satisfiedBy: !harness.claimsOnGetPending,
-				},
+				claimExpiryGate,
 				gatedContractTest(
 					{
 						capability: "failuresToDeadLetter >= 2",
@@ -1024,6 +1041,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 							await outbox.markFailed(record.dispatchId, new Error("boom"));
 
 							await outbox.requeueDeadLetters([record.dispatchId]);
+							await expireClaims(env);
 
 							const [after] = await outbox.getPending(1);
 							assertEqual(

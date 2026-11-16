@@ -101,6 +101,38 @@ class OutboxWithoutRequeue extends InMemoryOutbox<TestEvent> {
 		undefined as unknown as InMemoryOutbox<TestEvent>["requeueDeadLetters"];
 }
 
+/**
+ * A claiming reference: `getPending` hides each record that it returned until
+ * `expireClaims` runs, as a lease hides it until the lease ends.
+ */
+class ClaimingInMemoryOutbox extends InMemoryOutbox<TestEvent> {
+	private readonly claimed = new Set<string>();
+
+	override async getPending(
+		limit?: number,
+	): Promise<ReadonlyArray<OutboxRecord<TestEvent>>> {
+		const unclaimed = (await super.getPending()).filter(
+			(record) => !this.claimed.has(record.dispatchId),
+		);
+		const page =
+			limit === undefined ? unclaimed : unclaimed.slice(0, Math.max(0, limit));
+		for (const record of page) this.claimed.add(record.dispatchId);
+		return page;
+	}
+
+	/** A requeue returns the record to pending, so it ends the old claim. */
+	override async requeueDeadLetters(
+		dispatchIds: ReadonlyArray<string>,
+	): Promise<void> {
+		await super.requeueDeadLetters(dispatchIds);
+		for (const id of dispatchIds) this.claimed.delete(id);
+	}
+
+	expireClaims(): void {
+		this.claimed.clear();
+	}
+}
+
 /** A port-legal outbox that returns one record per poll. */
 class OutboxWithShortPages extends InMemoryOutbox<TestEvent> {
 	override async getPending(): Promise<ReadonlyArray<OutboxRecord<TestEvent>>> {
@@ -191,6 +223,26 @@ function createPlainOutboxHarness(): OutboxContractHarness<TestEvent> {
 			return { ...environment, outbox: plainOutbox };
 		},
 		failuresToDeadLetter: undefined,
+	};
+}
+
+/** The claiming reference, with the hook that ends its claims. */
+function createClaimingInMemoryHarness(): OutboxContractHarness<TestEvent> {
+	const harness = createInMemoryHarness(
+		() => new ClaimingInMemoryOutbox({ maxDeliveryAttempts: MAX_ATTEMPTS }),
+	);
+	return {
+		...harness,
+		createEnvironment: async () => {
+			const environment = await harness.createEnvironment();
+			const outbox = environment.outbox as ClaimingInMemoryOutbox;
+			return {
+				...environment,
+				expireClaims: async () => outbox.expireClaims(),
+			};
+		},
+		claimsOnGetPending: true,
+		providesClaimExpiry: true,
 	};
 }
 
@@ -427,7 +479,7 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 		expect(plainTests.filter((test) => test.skipped)).toEqual([]);
 	});
 
-	it("a claiming-getPending harness skips every un-acked re-poll test", () => {
+	it("a claiming harness without claim expiry skips every un-acked re-poll test", () => {
 		const claiming = createInMemoryHarness();
 		claiming.claimsOnGetPending = true;
 		const claimingTests = createOutboxContractTests(claiming);
@@ -436,11 +488,19 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 		// requeue of a pending record all re-poll records an earlier poll
 		// returned without resolving them.
 		expect(skipped.map((test) => test.skipped?.capability)).toEqual([
-			"non-claiming getPending",
-			"non-claiming getPending",
-			"non-claiming getPending",
-			"non-claiming getPending",
+			"providesClaimExpiry",
+			"providesClaimExpiry",
+			"providesClaimExpiry",
+			"providesClaimExpiry",
 		]);
+	});
+
+	it("a claiming harness with claim expiry runs every un-acked re-poll test", () => {
+		const claimingTests = createOutboxContractTests(
+			createClaimingInMemoryHarness(),
+		);
+
+		expect(claimingTests.filter((test) => test.skipped)).toEqual([]);
 	});
 
 	it("a ceiling-of-one harness skips the tests that observe the attempts of a pending record", () => {
@@ -470,6 +530,14 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 
 describe("outbox contract suite against a plain outbox", () => {
 	for (const test of createOutboxContractTests(createPlainOutboxHarness())) {
+		(test.skipped ? it.skip : it)(test.name, test.run);
+	}
+});
+
+describe("outbox contract suite against a claiming outbox", () => {
+	for (const test of createOutboxContractTests(
+		createClaimingInMemoryHarness(),
+	)) {
 		(test.skipped ? it.skip : it)(test.name, test.run);
 	}
 });

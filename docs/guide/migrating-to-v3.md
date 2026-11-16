@@ -1840,3 +1840,8 @@ The root entry no longer exports `capturePersistenceBaseline`,
   for a repository without. If the outbox suite fails on
   `failuresToDeadLetter`, declare the attempt ceiling of your
   `DispatchTrackingOutbox`, or remove it for a plain `Outbox`.
+- The skipped re-poll tests of a claiming outbox or deadline store name the
+  capability `providesClaimExpiry`, where they named `non-claiming getPending`
+  or `non-claiming due`. To run them, give the environment an `expireClaims`
+  that ends every claim, and declare `providesClaimExpiry: true` on the
+  harness. For a SQL adapter with a lease column, clear that column.
