@@ -5,6 +5,7 @@ import {
 	type DueDeadline,
 	type ExecutionContext,
 } from "@shirudo/ddd-kit";
+import { replaceNulBytes } from "./nul-byte";
 import type { PgQueryExecutor } from "./pg-query-executor";
 
 const DEFAULT_MAX_DELIVERY_ATTEMPTS = 5;
@@ -143,10 +144,8 @@ export class PgDeadlineStore<TPayload = unknown>
 		context?: ExecutionContext,
 	): Promise<DeadLetterDeadline<TPayload> | undefined> {
 		context?.signal.throwIfAborted();
-		// PostgreSQL text cannot hold a NUL byte, and the UPDATE would then fail on
-		// every attempt.
 		const lastError =
-			error === undefined ? null : String(error).replaceAll("\u0000", "\uFFFD");
+			error === undefined ? null : replaceNulBytes(String(error));
 		const { rows } = await this.executor.query<
 			DeadlineRow & { readonly status: string }
 		>(

@@ -7,6 +7,7 @@ import {
 	type IdempotencyStore,
 	KitWiringError,
 } from "@shirudo/ddd-kit";
+import { advisoryLockKey } from "./advisory-lock-key";
 import type { PgQueryExecutor } from "./pg-query-executor";
 
 interface IdempotencyRow {
@@ -43,9 +44,7 @@ export class PgIdempotencyStore implements IdempotencyStore<PgQueryExecutor> {
 		fingerprint: string,
 	): Promise<IdempotencyClaim> {
 		const { rows: locks } = await executor.query<{ locked: boolean }>(
-			`SELECT pg_try_advisory_xact_lock(
-				hashtextextended('ddd_kit_idempotency'::regclass::oid::text || '/' || $1, 0)
-			) AS locked`,
+			`SELECT pg_try_advisory_xact_lock(${advisoryLockKey("ddd_kit_idempotency", "$1")}) AS locked`,
 			[key],
 		);
 		if (locks[0]?.locked !== true) throw new IdempotencyInFlightError({ key });
