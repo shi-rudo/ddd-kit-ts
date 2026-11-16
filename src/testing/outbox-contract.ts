@@ -10,6 +10,7 @@ import type {
 } from "../messaging/outbox/ports";
 import { isDispatchTrackingOutbox } from "../messaging/outbox/ports";
 import {
+	applicableContractTests,
 	assert,
 	assertEqual,
 	assertKeptOrRejected,
@@ -101,7 +102,9 @@ export interface OutboxContractHarness<Evt extends AnyDomainEvent> {
 	 * For a `DispatchTrackingOutbox` adapter: how many `markFailed`
 	 * reports move a record to the dead-letter set (the adapter's
 	 * configured attempt ceiling). Omit for plain `Outbox` adapters;
-	 * the dispatch-tracking tests are then marked skipped. With a
+	 * the suite then leaves out the dispatch-tracking tests, because they do
+	 * not apply. The suite fails when the value is present for a plain
+	 * `Outbox` or absent for a `DispatchTrackingOutbox`. With a
 	 * ceiling of 1 the tests that observe the attempts of a pending record
 	 * (attempts surfacing, a requeue of a pending record) are marked skipped
 	 * too: they need a record that survives one failure.
@@ -214,7 +217,22 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 		return records;
 	};
 
+	const trackingEnabled = harness.failuresToDeadLetter !== undefined;
+
 	const tests: OutboxContractTest[] = [
+		{
+			name: "the harness declares failuresToDeadLetter exactly when the outbox tracks dispatches",
+			run: inEnv(async (env) => {
+				// The suite leaves out the tracking tests when the harness
+				// declares no ceiling. A wrong declaration would drop them
+				// silently, so it fails here.
+				assertEqual(
+					isDispatchTrackingOutbox(env.outbox),
+					trackingEnabled,
+					"failuresToDeadLetter must be declared exactly when the outbox is a DispatchTrackingOutbox",
+				);
+			}),
+		},
 		...(["payload", "metadata"] as const).flatMap((field) =>
 			plainValuesThatJsonDoesNotKeep().map(
 				({ name, data }): OutboxContractTest => {
@@ -704,21 +722,14 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 		),
 	);
 
-	// Dispatch tracking: gated on the harness declaring the ceiling.
-	// `attemptCeiling` is only ever read inside enabled tests, where the
-	// gate guarantees the harness declared it.
-	const trackingEnabled = harness.failuresToDeadLetter !== undefined;
+	// Dispatch tracking exists only on a DispatchTrackingOutbox, and the
+	// declaration check ties it to the declared ceiling. `attemptCeiling` is
+	// only read inside the tracking tests, which exist only with a ceiling.
 	const attemptCeiling = harness.failuresToDeadLetter ?? 0;
-	const trackingGate = (test: ContractTest): ContractTest =>
-		gatedContractTest(
-			{
-				capability: "failuresToDeadLetter (DispatchTrackingOutbox)",
-				satisfiedBy: trackingEnabled,
-			},
-			test,
-		);
+	const whenTracking = (test: ContractTest): ContractTest[] =>
+		applicableContractTests(trackingEnabled, test);
 	tests.push(
-		trackingGate(
+		...whenTracking(
 			// Observing attempts needs the record back on a re-poll after an
 			// un-acked poll (a claiming adapter may hold it until the claim
 			// expires) AND a record that survives one failure (with a
@@ -754,7 +765,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 				),
 			),
 		),
-		trackingGate({
+		...whenTracking({
 			name: "reaching the attempt ceiling dead-letters the record and unblocks getPending",
 			run: inEnv(async (env) => {
 				const outbox = env.outbox;
@@ -813,7 +824,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 				);
 			}),
 		}),
-		trackingGate({
+		...whenTracking({
 			name: "markFailed on unknown or dispatched ids never resurrects a record",
 			run: inEnv(async (env) => {
 				const outbox = env.outbox;
@@ -836,7 +847,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 				);
 			}),
 		}),
-		trackingGate({
+		...whenTracking({
 			name: "markDispatched clears a dead-lettered record (manual redelivery then ack)",
 			run: inEnv(async (env) => {
 				const outbox = env.outbox;
@@ -855,7 +866,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 				);
 			}),
 		}),
-		trackingGate({
+		...whenTracking({
 			name: "requeueDeadLetters returns a dead letter to pending with a fresh attempt budget",
 			run: inEnv(async (env) => {
 				const outbox = env.outbox;
@@ -912,7 +923,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 				);
 			}),
 		}),
-		trackingGate({
+		...whenTracking({
 			name: "a requeued record returns to its commit-order place",
 			run: inEnv(async (env) => {
 				const outbox = env.outbox;
@@ -937,7 +948,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 				);
 			}),
 		}),
-		trackingGate({
+		...whenTracking({
 			name: "requeueDeadLetters moves only the named dead letters",
 			run: inEnv(async (env) => {
 				const outbox = env.outbox;
@@ -972,7 +983,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 				);
 			}),
 		}),
-		trackingGate({
+		...whenTracking({
 			name: "requeueDeadLetters ignores unknown and dispatched ids",
 			run: inEnv(async (env) => {
 				const outbox = env.outbox;
@@ -991,7 +1002,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 				);
 			}),
 		}),
-		trackingGate(
+		...whenTracking(
 			gatedContractTest(
 				{
 					capability: "non-claiming getPending",
@@ -1025,7 +1036,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 				),
 			),
 		),
-		trackingGate({
+		...whenTracking({
 			name: "an exact retry of add leaves a dead letter dead",
 			run: inEnv(async (env) => {
 				const outbox = env.outbox;

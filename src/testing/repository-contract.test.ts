@@ -508,26 +508,24 @@ describe("repository contract test suite (in-memory reference adapter)", () => {
 		(test.skipped ? it.skip : it)(test.name, test.run);
 	}
 
-	it("marks capability-gated tests as skipped when the harness lacks the capability - and a naive run() fails loud", async () => {
+	it("marks a test skipped when the harness does not prove a rule that applies - and a naive run() fails loud", async () => {
 		const minimal = createInMemoryHarness();
 		minimal.mutateVersionOnly = undefined;
 		minimal.mutateChildCollection = undefined;
 		minimal.createAggregateWithId = undefined;
 		minimal.snapshotState = undefined;
-		minimal.removesAreSupported = false;
 		minimal.removesAreVersionChecked = false;
 
 		const minimalTests = createRepositoryContractTests(minimal);
 
-		// Same test COUNT as the full suite - capability gaps shrink
-		// nothing silently; they surface as skipped entries.
+		// A rule that applies to the repository stays in the suite: an
+		// unproven guarantee surfaces as a skipped entry, never as a gap.
 		expect(minimalTests).toHaveLength(tests.length);
 		const skipped = minimalTests.filter((t) => t.skipped);
 		expect(skipped.map((t) => t.skipped?.capability).sort()).toEqual([
 			"createAggregateWithId",
 			"mutateChildCollection",
 			"mutateVersionOnly",
-			"removesAreSupported",
 			"removesAreVersionChecked",
 		]);
 		// snapshotState widens the MANDATORY test, it does not gate one.
@@ -678,38 +676,21 @@ describe("repository contract test suite (in-memory reference adapter)", () => {
 			createAppendOnlyInMemoryHarness(),
 		);
 
-		it("keeps the test count and skips exactly the update proofs and the remove proof", () => {
-			expect(appendOnlyTests).toHaveLength(tests.length);
+		it("leaves out exactly the update proofs and the remove proofs, and skips nothing", () => {
+			const appendOnlyNames = new Set(appendOnlyTests.map((t) => t.name));
+
 			expect(
-				appendOnlyTests
-					.filter((t) => t.skipped)
-					.map((t) => [t.name, t.skipped?.capability]),
+				tests.map((t) => t.name).filter((name) => !appendOnlyNames.has(name)),
 			).toEqual([
-				[
-					"MANDATORY stale update: writer B conflicts after writer A commits and persists nothing",
-					"updatesAreSupported",
-				],
-				[
-					"an unchanged explicit update is safe and emits no event",
-					"updatesAreSupported",
-				],
-				[
-					"version-only change still persists (skip-save must not desync the OCC baseline)",
-					"updatesAreSupported",
-				],
-				[
-					"nested collection changes survive the adapter change-set projection",
-					"updatesAreSupported",
-				],
-				[
-					"remove tombstones the identity and physically removes at commit",
-					"removesAreSupported",
-				],
-				[
-					"stale remove conflicts and cannot delete a concurrent update",
-					"updatesAreSupported",
-				],
+				"MANDATORY stale update: writer B conflicts after writer A commits and persists nothing",
+				"an unchanged explicit update is safe and emits no event",
+				"version-only change still persists (skip-save must not desync the OCC baseline)",
+				"nested collection changes survive the adapter change-set projection",
+				"remove tombstones the identity and physically removes at commit",
+				"stale remove conflicts and cannot delete a concurrent update",
 			]);
+			expect(appendOnlyTests).toHaveLength(tests.length - 6);
+			expect(appendOnlyTests.filter((t) => t.skipped)).toEqual([]);
 		});
 
 		it("keeps the duplicate-add proof, the concurrency proof of an append-only port", () => {
@@ -737,5 +718,58 @@ describe("repository contract test suite (in-memory reference adapter)", () => {
 		for (const test of appendOnlyTests) {
 			(test.skipped ? it.skip : it)(test.name, test.run);
 		}
+	});
+});
+
+describe("the declaration check of a repository contract harness", () => {
+	const DECLARATION_CHECK =
+		"the harness declares the update and remove that the repository has";
+	const declarationCheck = (
+		harness: RepositoryContractHarness<ContractOrder, OrderEvent>,
+	) =>
+		createRepositoryContractTests(harness).find(
+			(t) => t.name === DECLARATION_CHECK,
+		);
+
+	it("runs as the second test, right after the environment preflight", () => {
+		const tests = createRepositoryContractTests(createInMemoryHarness());
+
+		expect(tests[1]?.name).toBe(DECLARATION_CHECK);
+	});
+
+	it("fails when the harness declares no update for a repository with update", async () => {
+		const harness = createInMemoryHarness();
+		harness.updatesAreSupported = false;
+
+		await expect(declarationCheck(harness)?.run()).rejects.toThrow(
+			/updatesAreSupported/,
+		);
+	});
+
+	it("fails when the harness declares update for a repository without update", async () => {
+		const harness = createAppendOnlyInMemoryHarness();
+		harness.updatesAreSupported = true;
+
+		await expect(declarationCheck(harness)?.run()).rejects.toThrow(
+			/updatesAreSupported/,
+		);
+	});
+
+	it("fails when the harness declares no remove for a repository with remove", async () => {
+		const harness = createInMemoryHarness();
+		harness.removesAreSupported = false;
+
+		await expect(declarationCheck(harness)?.run()).rejects.toThrow(
+			/removesAreSupported/,
+		);
+	});
+
+	it("fails when the harness declares remove for a repository without remove", async () => {
+		const harness = createAppendOnlyInMemoryHarness();
+		harness.removesAreSupported = true;
+
+		await expect(declarationCheck(harness)?.run()).rejects.toThrow(
+			/removesAreSupported/,
+		);
 	});
 });

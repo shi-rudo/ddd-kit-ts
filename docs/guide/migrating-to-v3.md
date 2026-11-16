@@ -1829,3 +1829,14 @@ The root entry no longer exports `capturePersistenceBaseline`,
   `module: node20`. A policy on a single error no longer removes the masking
   of a catalog policy. See [Entry points and
   platform](#entry-points-and-platform).
+- A contract suite leaves out a test that does not apply to the adapter,
+  where it marked the test skipped before. This covers the update proofs of
+  an append-only repository, the remove proofs of a repository without
+  `remove`, and the dispatch-tracking tests of a plain `Outbox`. A test that
+  pins the skip list or the test count of your suite sees fewer tests and no
+  skip for them. The suites now check the declaration of the harness. If the
+  repository suite fails on `removesAreSupported`, set
+  `removesAreSupported: true` for a repository with `remove`, or remove it
+  for a repository without. If the outbox suite fails on
+  `failuresToDeadLetter`, declare the attempt ceiling of your
+  `DispatchTrackingOutbox`, or remove it for a plain `Outbox`.
