@@ -554,5 +554,13 @@ distributed transactions, implicit dirty-object scanning, or an attach API for
 detached aggregates. One `run()` is one consistency transaction. Repository
 writes are explicit, and the compiler makes a forgotten migration site loud.
 
+A run calls the `flush` of a repository definition once for each registered
+aggregate, one after another. It does not batch the writes of several
+aggregates. So a run that writes many aggregates, for example a bulk import,
+costs at least one store round trip per aggregate. The outbox receives the
+events of the whole run in one `add` call. A large run also holds the locks of
+its transaction for a long time. Split a bulk write into many runs, or give it
+an adapter operation of its own.
+
 For the v2.2 and release-candidate cutover, see
 [Migrating to v3](/guide/migrating-to-v3).
