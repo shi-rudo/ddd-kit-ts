@@ -8,6 +8,8 @@ import {
 	KitWiringError,
 	type OutboxRecord,
 } from "@shirudo/ddd-kit";
+import { advisoryLockKey } from "./advisory-lock-key";
+import { replaceNulBytes } from "./nul-byte";
 import type { PgEventCodec } from "./pg-event-codec";
 import {
 	fromPgPool,
@@ -26,8 +28,7 @@ import {
 
 const DEFAULT_MAX_DELIVERY_ATTEMPTS = 5;
 /** Serializes the end of a source with the acknowledgements of its records. */
-const SOURCE_END_LOCK_KEY =
-	"hashtextextended('ddd_kit_outbox_source_head'::regclass::oid::text, 0)";
+const SOURCE_END_LOCK_KEY = advisoryLockKey("ddd_kit_outbox_source_head");
 const DEFAULT_PAGE_SIZE = 100;
 
 export interface PgOutboxOptions<Evt extends AnyDomainEvent> {
@@ -202,9 +203,7 @@ export class PgOutbox<Evt extends AnyDomainEvent>
 	) {
 		const claim = async (tx: PgQueryExecutor) => {
 			await tx.query(
-				`SELECT pg_advisory_xact_lock(
-					hashtextextended('ddd_kit_outbox'::regclass::oid::text, 0)
-				)`,
+				`SELECT pg_advisory_xact_lock(${advisoryLockKey("ddd_kit_outbox")})`,
 			);
 			if (context !== undefined) await setStatementDeadline(tx, context);
 			// clock_timestamp and not now: now is the start of the transaction, before
@@ -313,11 +312,9 @@ export class PgOutbox<Evt extends AnyDomainEvent>
 		error?: unknown,
 		context?: ExecutionContext,
 	): Promise<DeadLetterRecord<Evt> | undefined> {
-		// PostgreSQL text cannot hold a NUL byte, and the UPDATE would then fail on
-		// every attempt.
-		const lastError = (
-			error instanceof Error ? error.message : String(error ?? "unknown")
-		).replaceAll("\u0000", "\uFFFD");
+		const lastError = replaceNulBytes(
+			error instanceof Error ? error.message : String(error ?? "unknown"),
+		);
 		const { rows } = await this.poll.query<
 			OutboxRow & { readonly status: string }
 		>(

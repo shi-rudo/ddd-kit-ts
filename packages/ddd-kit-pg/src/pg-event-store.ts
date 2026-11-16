@@ -9,6 +9,7 @@ import {
 	type ReadStreamOptions,
 	type StreamReadResult,
 } from "@shirudo/ddd-kit";
+import { advisoryLockKey } from "./advisory-lock-key";
 import {
 	PgEventStreamCorruptError,
 	PgUnsupportedIsolationLevelError,
@@ -184,8 +185,7 @@ export class PgEventStore<Evt extends AnyDomainEvent>
 	 * does not see a position that an open append inserted, and that event would
 	 * survive the removal. These are two statements, because READ COMMITTED gives
 	 * each statement a new snapshot. In one statement, the snapshot would come
-	 * before the wait. The lock key names the table by its OID, so that every
-	 * search path that resolves the table computes the same key.
+	 * before the wait.
 	 *
 	 * The head read locks the last event with FOR KEY SHARE. At REPEATABLE READ or
 	 * SERIALIZABLE, the snapshot can still show a stream that a removal deleted
@@ -196,9 +196,7 @@ export class PgEventStore<Evt extends AnyDomainEvent>
 		stream: AggregateIdentity,
 	): Promise<number> {
 		await this.executor.query(
-			`SELECT pg_advisory_xact_lock(
-				hashtextextended('ddd_kit_event_stream'::regclass::oid::text || '/' || $1, 0)
-			)`,
+			`SELECT pg_advisory_xact_lock(${advisoryLockKey("ddd_kit_event_stream", "$1")})`,
 			[JSON.stringify([stream.aggregateType, stream.aggregateId])],
 		);
 		const { rows } = await this.executor.query<{ head: string }>(

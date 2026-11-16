@@ -4,6 +4,7 @@ import type {
 	ProjectionCheckpointStore,
 	ProjectionPosition,
 } from "@shirudo/ddd-kit";
+import { advisoryLockKey } from "./advisory-lock-key";
 import type { PgQueryExecutor } from "./pg-query-executor";
 
 /**
@@ -41,9 +42,7 @@ export class PgProjectionCheckpointStore
 			await tx.query(
 				`SELECT pg_advisory_xact_lock(lock_key)
 				FROM (
-					SELECT DISTINCT hashtextextended(
-						'ddd_kit_projection_checkpoint'::regclass::oid::text || '/' || key, 0
-					) AS lock_key
+					SELECT DISTINCT ${advisoryLockKey("ddd_kit_projection_checkpoint", "key")} AS lock_key
 					FROM unnest($1::text[]) AS key
 				) AS keys
 				ORDER BY lock_key`,
