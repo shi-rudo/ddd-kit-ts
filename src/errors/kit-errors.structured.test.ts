@@ -1,4 +1,8 @@
-import { BaseError, isStructuredError, matchError } from "@shirudo/base-error";
+import {
+	BaseError,
+	isStructuredError,
+	matchErrorCode,
+} from "@shirudo/base-error";
 import { describe, expect, it } from "vite-plus/test";
 import {
 	invalidFlushStatementError,
@@ -69,8 +73,8 @@ import {
 
 // The structured-error contract for every kit error (decided 2026-07-05):
 // kit errors ARE StructuredErrors. `code` is THE identifier (SCREAMING_SNAKE,
-// matchError, catalogs, wire) and `name === code` by base-error's design, so
-// there is exactly one identifier and no name/code drift. `category` follows
+// matchErrorCode, catalogs, wire) and `name === code` by base-error's design,
+// so there is exactly one identifier and no name/code drift. `category` follows
 // the class hierarchy mechanically (DOMAIN / INFRASTRUCTURE / WIRING);
 // `retryable` is the structured field the retry classifier reads.
 
@@ -399,8 +403,8 @@ describe("kit errors are StructuredErrors (code = name = the one identifier)", (
 		},
 	);
 
-	it("typed matchError dispatches exhaustively over kit codes", () => {
-		const status = matchError(
+	it("typed matchErrorCode dispatches exhaustively over kit codes", () => {
+		const status = matchErrorCode(
 			new ConcurrencyConflictError({
 				reason: "stale_version",
 				identity: { aggregateType: "Order", aggregateId: "o-1" },
@@ -489,7 +493,7 @@ describe("consumer-facing abstract bases stay ergonomic", () => {
 describe("the no-base-error consumer path is first-class", () => {
 	// Deliberately NO import from @shirudo/base-error in this block: a
 	// consumer that never adopts base-error branches on plain fields and
-	// kit-exported bases only. base-error's toolbox (matchError, catalogs,
+	// kit-exported bases only. base-error's toolbox (matchErrorCode, catalogs,
 	// toProblem) is an on-top benefit, never a prerequisite.
 	it("branches with a plain switch on error.code and plain property reads", () => {
 		const error: unknown = new ConcurrencyConflictError({

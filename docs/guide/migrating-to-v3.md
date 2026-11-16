@@ -426,9 +426,9 @@ if (error.code === "CONCURRENCY_CONFLICT") retry();
 ```
 
 `instanceof DomainError`, `instanceof InfrastructureError`, `retryable`, and
-`cause` work as before. The toolbox of `@shirudo/base-error` (`matchError`,
-`isStructuredError`, the public-error pipeline) works on every kit error, but
-the kit does not require it.
+`cause` work as before. The toolbox of `@shirudo/base-error`
+(`matchErrorCode`, `isStructuredError`, the public-error pipeline) works on
+every kit error, but the kit does not require it.
 
 The wiring errors of 2.x, one class per programming or configuration bug, are
 one class, `KitWiringError`. Its `code` names the bug, and its `details` hold
@@ -1162,7 +1162,7 @@ default `Record<string, unknown>` map.
 | `import { InMemoryOutbox } from "@shirudo/ddd-kit"`, also the other in-memory adapters and `InMemoryTransactionScope` | `import { InMemoryOutbox } from "@shirudo/ddd-kit/testing"` |
 | `computeBackoffDelay` | not exported; the retry behavior is unchanged |
 | `engines.node` `>=20` | `>=24` |
-| peer `@shirudo/base-error` `^7.1.1` | `^9.0.0` |
+| peer `@shirudo/base-error` `^7.1.1` | `^10.0.0` |
 | `import { DomainStateMachine } from "@shirudo/ddd-kit"` | `import { DomainStateMachine } from "@shirudo/ddd-kit/state-machine"` |
 | `deepEqualExcept` | not exported; use `valueObjectEqualsExcept` |
 | `freezeShallow` | not exported |
@@ -1170,7 +1170,7 @@ default `Record<string, unknown>` map.
 
 The `utils` entry point duplicated the root, so only the import path
 changes. `@shirudo/ddd-kit/money` is a new entry point. The Node floor
-follows the peer `@shirudo/base-error` 9, which requires Node.js 24. Edge
+follows the peer `@shirudo/base-error` 10, which requires Node.js 24. Edge
 runtimes are not affected.
 
 `@shirudo/base-error` 9 removes `buildLogObject()`. A kit error puts each
@@ -1197,8 +1197,14 @@ those keys from own log fields. A kit error stores its time only in
 `timestamp`. It has no `timestampIso` property; the log object still writes
 `timestampIso`. A `null` cause now ends every cause-chain walk, so
 `getRootCause` and `someChainRetryable` treat `cause: null` like a missing
-cause. Follow the migration notes of `@shirudo/base-error` 8 and 9 where you
-use its API directly.
+cause.
+
+`@shirudo/base-error` 10 renames `matchError` to `matchErrorCode`, without an
+alias. It ships only an ES module build. If a TypeScript project compiles to
+CommonJS with `module: node16`, change it to `module: nodenext` or
+`module: node20`. A redaction policy of a catalog is a floor: a policy on a
+single error can add masking, but it cannot remove it. Follow the migration
+notes of `@shirudo/base-error` 8, 9, and 10 where you use its API directly.
 
 ### Names
 
@@ -1817,3 +1823,9 @@ The root entry no longer exports `capturePersistenceBaseline`,
 - The deadline contract suite checks that a failure report without an error
   keeps the reason of an earlier report. A custom deadline store that writes a
   placeholder such as `unknown` over the recorded reason now fails the suite.
+- The peer `@shirudo/base-error` is `^10.0.0`. Rename `matchError` to
+  `matchErrorCode` where you call it. If a TypeScript project compiles to
+  CommonJS with `module: node16`, change it to `module: nodenext` or
+  `module: node20`. A policy on a single error no longer removes the masking
+  of a catalog policy. See [Entry points and
+  platform](#entry-points-and-platform).

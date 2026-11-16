@@ -13,7 +13,7 @@ import { StructuredError } from "@shirudo/base-error";
  * `switch (error.code)`, catch via `instanceof DomainError` /
  * `instanceof InfrastructureError` (exported from this kit), and read
  * `retryable` / `cause` as ordinary properties. base-error's toolbox
- * (`matchError` exhaustive dispatch, `isStructuredError`, the
+ * (`matchErrorCode` exhaustive dispatch, `isStructuredError`, the
  * public-error catalog and `toProblem`) works on every kit error as an
  * OPT-IN benefit on top, never as a prerequisite.
  */
@@ -2177,7 +2177,7 @@ export function idempotencyCompletionWithoutClaimError(
  * The closed union of every error code the kit itself can produce
  * (consumer subclasses of {@link DomainError} / {@link InfrastructureError}
  * add their own on top). Useful for building `switch` tables or
- * base-error `matchError` cases that cover kit and consumer codes
+ * base-error `matchErrorCode` cases that cover kit and consumer codes
  * together, without importing anything from base-error.
  */
 export type KitErrorCode =

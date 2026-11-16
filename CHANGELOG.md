@@ -299,9 +299,9 @@ immutable. Run one kit version per process during a cutover.
   `InMemoryIdempotencyStore`, `InMemoryLeasedIdempotencyStore`,
   `InMemoryTransactionScope`, and the `InMemoryTransactionParticipant` and
   `InMemoryTransaction` types. The root entry no longer exports them.
-- `engines.node` is `>=24`, because the peer `@shirudo/base-error` 9
+- `engines.node` is `>=24`, because the peer `@shirudo/base-error` 10
   requires Node.js 24. Node 20 reached its end of life on 2026-04-30.
-- The peer `@shirudo/base-error` is `^9.0.0`. base-error 9 removes
+- The peer `@shirudo/base-error` is `^10.0.0`. base-error 9 removes
   `buildLogObject()`: the kit errors contribute their declared fields
   through `buildOwnLogFields()`, at every depth of a cause chain. A subclass
   of `DomainError` or `InfrastructureError` deletes a `buildLogObject`
@@ -312,6 +312,9 @@ immutable. Run one kit version per process during a cutover.
   the log with a cycle marker, where the kit left the whole field out. A
   field that holds a `BaseError`, for example `secondaryCause`, carries the
   log object of that error, so the redaction policy of that error holds.
+  base-error 10 renames `matchError` to `matchErrorCode`, ships only an ES
+  module build, and makes the redaction policy of a catalog a floor. See the
+  migration notes of `@shirudo/base-error` 10.
 - The repository contract suites are the v3 suites under the same names.
   Their failure messages start with "Contract violated:" and "Contract test
   skipped:".
