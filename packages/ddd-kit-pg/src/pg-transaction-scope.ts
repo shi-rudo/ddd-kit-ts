@@ -168,9 +168,9 @@ interface TransactionSession {
  * transaction ends, because the pool can hand the connection to another
  * transaction, and a late statement would then join it.
  *
- * A client runs one statement at a time, and pg 9 rejects a statement that
- * starts while another one runs. So each statement waits for the statement
- * before it. Only the scope has the client, so no other statement can go first.
+ * A client runs one statement at a time, and pg deprecates starting a statement
+ * while another one runs. So each statement waits for the statement before it.
+ * Only the scope has the client, so no other statement can go first.
  */
 function openSession(client: PoolClient): TransactionSession {
 	let open = true;
@@ -179,8 +179,11 @@ function openSession(client: PoolClient): TransactionSession {
 		const statement = lastStatement.then(() =>
 			client.query(text, values && [...values]),
 		);
-		// The next statement also waits for a statement that fails.
-		lastStatement = statement.catch(() => undefined);
+		// The next statement also waits for a failed statement. It keeps no rows.
+		lastStatement = statement.then(
+			() => undefined,
+			() => undefined,
+		);
 		return statement;
 	};
 	return {

@@ -57,26 +57,6 @@ describe("fromPg", () => {
 		expect(result.rows).toEqual([]);
 	});
 
-	it("keeps a ROLLBACK on the client after the statements that started before it", async () => {
-		const plain = new Client({ connectionString: inject("postgresUri") });
-		await plain.connect();
-		await plain.query("CREATE TEMP TABLE note (text text NOT NULL)");
-		const plainExecutor = fromPg(plain);
-		await plain.query("BEGIN");
-
-		await Promise.all([
-			plainExecutor.query("SELECT text FROM missing_table"),
-			plainExecutor.query("SELECT pg_sleep(0.05)"),
-			plainExecutor.query("INSERT INTO note (text) VALUES ($1)", [
-				"rolled back",
-			]),
-		]).catch(() => plain.query("ROLLBACK"));
-		const { rows } = await plain.query("SELECT text FROM note");
-
-		expect(rows).toEqual([]);
-		await plain.end();
-	});
-
 	it("rejects with the original driver error, so an adapter can read the SQLSTATE", async () => {
 		await expect(
 			executor.query("SELECT text FROM missing_table"),
@@ -88,5 +68,34 @@ describe("fromPg", () => {
 		const bridgeOverPool = () => fromPg(pool);
 
 		expect(bridgeOverPool).toBeTypeOf("function");
+	});
+});
+
+describe("fromPg over a client in pipeline mode", () => {
+	let client: Client;
+
+	beforeEach(async () => {
+		client = new Client({
+			connectionString: inject("postgresUri"),
+			pipeline: true,
+		});
+		await client.connect();
+		await client.query("CREATE TEMP TABLE note (text text NOT NULL)");
+	});
+
+	afterEach(() => client.end());
+
+	it("keeps a ROLLBACK on the client after the statements that started before it", async () => {
+		const executor = fromPg(client);
+		await client.query("BEGIN");
+
+		await Promise.all([
+			executor.query("SELECT text FROM missing_table"),
+			executor.query("SELECT pg_sleep(0.05)"),
+			executor.query("INSERT INTO note (text) VALUES ($1)", ["rolled back"]),
+		]).catch(() => client.query("ROLLBACK"));
+		const { rows } = await client.query("SELECT text FROM note");
+
+		expect(rows).toEqual([]);
 	});
 });

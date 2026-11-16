@@ -36,4 +36,13 @@ describe("ClientRejectingConcurrentStatements", () => {
 
 		expect(result.rows).toEqual([{ one: 1 }]);
 	});
+
+	it("rejects a submittable before it sends it", async () => {
+		const submittable = { submit: () => {} };
+
+		expect(() => client.query(submittable as never)).toThrow(TypeError);
+		const result = await client.query("SELECT 1 AS one");
+
+		expect(result.rows).toEqual([{ one: 1 }]);
+	});
 });

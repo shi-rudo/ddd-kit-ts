@@ -9,8 +9,8 @@ This package is not published yet.
 
 An adapter owns no connection. It runs its statements on a `PgQueryExecutor`, so
 the statements join your transaction. `fromPg` passes each statement to the
-client at once. A `pg` client runs one statement at a time, and pg 9 rejects a
-statement that starts while another one runs. So await each statement on a
+client at once. A `pg` client runs one statement at a time, and `pg` deprecates
+starting a statement while another one runs. So await each statement on a
 `fromPg` executor. To start statements together, for example with `Promise.all`,
 use the executor of `PgTransactionScope`.
 

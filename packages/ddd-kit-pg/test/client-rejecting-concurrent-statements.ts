@@ -2,15 +2,24 @@ import { Client } from "pg";
 
 /**
  * A `pg` client that rejects a statement while another statement of it runs.
- * pg 8 queues such a statement with a warning, and pg 9 rejects it. The client
- * frees itself when pg reports the result, which for an error is before the
- * connection is ready again.
+ * pg 8 queues such a statement and deprecates that. The client frees itself
+ * when pg reports the result, which for an error is before the connection is
+ * ready again. It supports the promise form and the callback form of `query`.
  */
 export class ClientRejectingConcurrentStatements extends Client {
 	#statementRunning = false;
 
 	// biome-ignore lint/suspicious/noExplicitAny: the override covers every overload of query.
 	override query(...args: any[]): any {
+		const [config] = args;
+		if (
+			typeof config?.submit === "function" ||
+			typeof config?.callback === "function"
+		) {
+			throw new TypeError(
+				"ClientRejectingConcurrentStatements: use the promise form or the callback form of query",
+			);
+		}
 		const callback = args.at(-1);
 		if (this.#statementRunning) {
 			const failure = new Error(
