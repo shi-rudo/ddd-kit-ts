@@ -47,6 +47,7 @@
 		"build": "vp pack",
 		"test": "vp test",
 		"test:coverage": "vp test --coverage --coverage.include='src/**'",
+		"test:bun": "KIT_TEST_RUNTIME=bun bun --bun vitest run",
 		"test:edge-runtime": "pnpm build && node scripts/run-edge-runtime-smoke.mjs",
 		"test:pg": "pnpm --filter @shirudo/ddd-kit-pg test",
 		"audit:prod": "pnpm audit --prod",

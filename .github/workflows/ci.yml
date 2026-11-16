@@ -99,6 +99,50 @@ jobs:
       - name: Built package in edge runtimes
         run: pnpm test:edge-runtime
 
+  bun:
+    # The kit promises Bun. The job runs the whole suite in Bun, and a Bun
+    # consumer imports every entry point of the packed package. pnpm still
+    # needs Node to install.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.13.1
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.x
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Test in Bun
+        run: pnpm test:bun
+
+      - name: Build
+        run: pnpm build
+
+      - name: Package smoke in Bun (pack + import from the tarball)
+        run: |
+          base_error_version=$(node -p "require('./node_modules/@shirudo/base-error/package.json').version")
+          result_version=$(node -p "require('./node_modules/@shirudo/result/package.json').version")
+          rm -rf /tmp/pack-smoke /tmp/pack-consumer
+          mkdir -p /tmp/pack-smoke /tmp/pack-consumer
+          pnpm pack --pack-destination /tmp/pack-smoke
+          tarball=$(printf '%s\n' /tmp/pack-smoke/shirudo-ddd-kit-*.tgz)
+          cd /tmp/pack-consumer
+          echo '{"name":"bun-pack-consumer","private":true}' > package.json
+          bun add "$tarball" "@shirudo/base-error@$base_error_version" "@shirudo/result@$result_version"
+          cp -f "$GITHUB_WORKSPACE/scripts/package-smoke/consumer.mts" .
+          bun consumer.mts
+
   postgres-adapters:
     runs-on: ubuntu-latest
     steps:
@@ -136,7 +180,7 @@ jobs:
     # missing from needs. always() keeps this job from being skipped after a
     # failed job, because GitHub counts a skipped required check as passed.
     if: always()
-    needs: [verify, docs, edge-runtime-smoke, postgres-adapters]
+    needs: [verify, docs, edge-runtime-smoke, bun, postgres-adapters]
     runs-on: ubuntu-latest
     steps:
       - name: Every needed job succeeded
