@@ -42,8 +42,10 @@ immutable. Run one kit version per process during a cutover.
   `defineRepository<Port>()({ aggregate, persistence, create, flush, mapError })`.
   The port type argument is explicit, and the Unit of Work installs `add`,
   `update`, and `remove` on the facade, and an adapter that defines them
-  itself fails with `INVALID_REPOSITORY_ADAPTER`. A member of the adapter
-  that returns the adapter itself returns the facade. A read adapter returns the result of
+  itself fails with `INVALID_REPOSITORY_ADAPTER`. A run calls `create` when
+  the work first reads the repository, one time per run, so a run pays only
+  for the repositories that it uses. A member of the adapter that returns
+  the adapter itself returns the facade. A read adapter returns the result of
   `tracking.trackLoaded`: when two loads of one id overlap, the first tracked
   instance wins. `UnitOfWorkSession`,
   `RepositoryFactories`, and the `rawTransaction` and `session` fields of the

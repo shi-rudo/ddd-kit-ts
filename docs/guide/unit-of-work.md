@@ -14,9 +14,11 @@ database baseline.
 One successful `run()` follows this order:
 
 1. Open `TransactionScope.transactional(...)`.
-2. Build the transaction-bound read adapters and a fresh identity map.
-3. Run the use case. Each `add`, `update`, or `remove` stamps the pending
-   events of its aggregate and registers the write.
+2. Check every repository definition and build a fresh identity map.
+3. Run the use case. The first read of `repositories.<name>` builds the
+   transaction-bound read adapter of that repository. Each `add`, `update`,
+   or `remove` stamps the pending events of its aggregate and registers the
+   write.
 4. Make sure that every tracked aggregate is valid. Freeze each write receipt.
 5. Call each repository definition's `flush` in registration order.
 6. Write the exact registered event batches to the outbox in the same
@@ -52,7 +54,9 @@ A repository definition has six parts:
 - The adapter owns a `PersistenceModel`. It reads the aggregate through its
   plain state, `order.plainState`; see
   [Aggregates -> Reading State from Outside](./aggregates.md#reading-state-from-outside).
-- `create` builds the transaction-bound read adapter.
+- `create` builds the transaction-bound read adapter. A run calls it one
+  time, when the use case first reads the repository. A run that does not
+  read the repository does not call it.
 - `flush` performs the registered write.
 - `mapError` translates a failed flush into an application-facing
   `InfrastructureError`.

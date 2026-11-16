@@ -112,7 +112,8 @@ export interface RepositoryDefinitionOptions<
 	/**
 	 * Creates the transaction-bound adapter for the port's non-lifecycle
 	 * methods. The Unit of Work supplies `add`, `update` unless the definition
-	 * is append-only, and `remove` with `physicalRemoval`.
+	 * is append-only, and `remove` with `physicalRemoval`. A run calls
+	 * `create` one time, when the work first reads the repository.
 	 */
 	readonly create: (
 		transaction: TCtx,
@@ -769,7 +770,7 @@ export class UnitOfWork<
 					attempt = current;
 
 					try {
-						const repositories = this.buildRepositories(tx, s);
+						const repositories = this.repositoriesBuiltOnFirstRead(tx, s);
 						const context = makeContext(repositories, s, options?.signal);
 						const result = await work(context);
 						// Validate tracking before sealing: a loaded aggregate that
@@ -827,7 +828,12 @@ export class UnitOfWork<
 		}
 	}
 
-	private buildRepositories(
+	/**
+	 * Checks every definition before the work starts. Builds a repository
+	 * when the work first reads it, so a run pays only for the repositories
+	 * that it uses.
+	 */
+	private repositoriesBuiltOnFirstRead(
 		tx: TCtx,
 		session: Session<Evt>,
 	): RepositoriesOf<TDefinitions> {
@@ -844,13 +850,30 @@ export class UnitOfWork<
 				throw invalidRepositoryDefinitionError(String(key));
 			}
 			const definition = candidate as RuntimeRepositoryDefinition<Evt, TCtx>;
-			const adapter = definition.create(tx, session.trackingFor(definition));
-			repositories[key] = bindRepositoryWrites(
-				adapter,
-				session,
-				definition,
-				String(key),
-			) as RepositoriesOf<TDefinitions>[typeof key];
+			let facade: RepositoriesOf<TDefinitions>[typeof key] | undefined;
+			Object.defineProperty(repositories, key, {
+				enumerable: true,
+				get: (): RepositoriesOf<TDefinitions>[typeof key] => {
+					if (facade === undefined) {
+						// A late registration must reach its facade: the facade
+						// rejects the write and fails the attempt.
+						session.assertOpenForRegistration(
+							`context.repositories.${String(key)}`,
+						);
+						const adapter = definition.create(
+							tx,
+							session.trackingFor(definition),
+						);
+						facade = bindRepositoryWrites(
+							adapter,
+							session,
+							definition,
+							String(key),
+						) as RepositoriesOf<TDefinitions>[typeof key];
+					}
+					return facade;
+				},
+			});
 		}
 		return repositories;
 	}

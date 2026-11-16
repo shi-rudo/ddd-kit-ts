@@ -559,7 +559,10 @@ describe("UnitOfWork", () => {
 				});
 
 				const rejection = await uow
-					.run(async () => undefined)
+					.run(async ({ repositories }) => {
+						void repositories.orders;
+						return undefined;
+					})
 					.then(
 						() => "ran",
 						(error: unknown) => error,
@@ -594,7 +597,12 @@ describe("UnitOfWork", () => {
 				},
 			});
 
-			await expect(uow.run(async () => undefined)).rejects.toMatchObject({
+			await expect(
+				uow.run(async ({ repositories }) => {
+					void repositories.orders;
+					return undefined;
+				}),
+			).rejects.toMatchObject({
 				details: { reason: "defines_lifecycle_operation", operation: "update" },
 			});
 		});
@@ -1433,7 +1441,12 @@ describe("UnitOfWork", () => {
 					},
 				});
 
-				await expect(uow.run(async () => undefined)).rejects.toMatchObject({
+				await expect(
+					uow.run(async ({ repositories }) => {
+						void repositories.orders;
+						return undefined;
+					}),
+				).rejects.toMatchObject({
 					code: "INVALID_REPOSITORY_ADAPTER",
 					category: "WIRING",
 					details: { repository: "orders", receivedType },
@@ -1500,10 +1513,133 @@ describe("UnitOfWork", () => {
 				},
 			});
 
-			await uow.run(async () => undefined);
-			await uow.run(async () => undefined);
+			await uow.run(async ({ repositories }) => {
+				void repositories.orders;
+				return undefined;
+			});
+			await uow.run(async ({ repositories }) => {
+				void repositories.orders;
+				return undefined;
+			});
 
 			expect(constructed).toBe(2);
+		});
+
+		it("builds only the repository that the work reads", async () => {
+			const built: string[] = [];
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: recordingOutbox<TestEvent>(),
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						flush: async () => {},
+						create: () => {
+							built.push("orders");
+							return {};
+						},
+					}),
+					invoices: defineTestRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						flush: async () => {},
+						create: () => {
+							built.push("invoices");
+							return {};
+						},
+					}),
+				},
+			});
+
+			await uow.run(async ({ repositories }) => {
+				void repositories.orders;
+				return undefined;
+			});
+
+			expect(built).toEqual(["orders"]);
+		});
+
+		it("builds a repository once per run and returns the same facade for each read", async () => {
+			let constructed = 0;
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: recordingOutbox<TestEvent>(),
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						flush: async () => {},
+						create: () => {
+							constructed += 1;
+							return {};
+						},
+					}),
+				},
+			});
+
+			const sameFacade = await uow.run(async (context) => {
+				const { orders } = context.repositories;
+				return orders === context.repositories.orders;
+			});
+
+			expect(sameFacade).toBe(true);
+			expect(constructed).toBe(1);
+		});
+
+		it("lists every repository name before the work reads a repository", async () => {
+			const built: string[] = [];
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: recordingOutbox<TestEvent>(),
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						flush: async () => {},
+						create: () => {
+							built.push("orders");
+							return {};
+						},
+					}),
+				},
+			});
+
+			const names = await uow.run(async ({ repositories }) =>
+				Object.keys(repositories),
+			);
+
+			expect(names).toEqual(["orders"]);
+			expect(built).toEqual([]);
+		});
+
+		it("does not build a repository that leaked work reads for the first time after the run", async () => {
+			let constructed = 0;
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: recordingOutbox<TestEvent>(),
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						flush: async () => {},
+						create: () => {
+							constructed += 1;
+							return {};
+						},
+					}),
+				},
+			});
+			let leaked!: { readonly orders: object };
+			await uow.run(async ({ repositories }) => {
+				leaked = repositories;
+				return undefined;
+			});
+
+			expect(() => leaked.orders).toThrow(
+				expect.objectContaining({ code: "TRANSACTION_CLOSED" }),
+			);
+			expect(constructed).toBe(0);
 		});
 
 		function createReflectiveUow() {
@@ -2136,7 +2272,10 @@ describe("UnitOfWork", () => {
 				},
 			});
 
-			await uow.run(async () => undefined);
+			await uow.run(async ({ repositories }) => {
+				void repositories.orders;
+				return undefined;
+			});
 
 			expect(lateRegisterError).toMatchObject({ code: "TRANSACTION_CLOSED" });
 		});
@@ -2315,7 +2454,8 @@ describe("UnitOfWork", () => {
 			});
 
 			await expect(
-				uow.run(async () => {
+				uow.run(async ({ repositories }) => {
+					void repositories.orders;
 					throw new Error("rolled back");
 				}),
 			).rejects.toThrow("rolled back");
@@ -3122,7 +3262,10 @@ describe("UnitOfWork", () => {
 			});
 
 			const rejection = await uow
-				.run(async () => "unreachable")
+				.run(async ({ repositories }) => {
+					void repositories.orders;
+					return "unreachable";
+				})
 				.then(
 					() => "committed",
 					(error: unknown) => error,
@@ -4069,6 +4212,62 @@ describe("UnitOfWork", () => {
 				expect(rejection).toBe(lateCall);
 			},
 		);
+
+		it("fails the run when leaked work reads a repository for the first time and adds to it while the outbox write runs", async () => {
+			const late = createMockAggregate("late-1", [testEvent("late-1")]);
+			let lateCall: unknown = "not attempted";
+			let registerLate: () => void = () => {};
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: recordingOutbox<TestEvent>({
+					add: async () => {
+						registerLate();
+						await new Promise((resolve) => setTimeout(resolve, 0));
+					},
+				}),
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						flush: async () => {},
+						create: () => ({}),
+					}),
+					archivedOrders: defineTestRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						flush: async () => {},
+						create: () => ({}),
+					}),
+				},
+			});
+
+			const rejection = await uow
+				.run(async ({ repositories }) => {
+					repositories.orders.add(
+						createMockAggregate("first-1", [testEvent("first-1")]),
+					);
+					registerLate = () =>
+						queueMicrotask(() => {
+							try {
+								repositories.archivedOrders.add(late);
+								lateCall = "accepted";
+							} catch (error) {
+								lateCall = error;
+							}
+						});
+					return undefined;
+				})
+				.then(
+					() => "committed",
+					(error: unknown) => error,
+				);
+
+			expect(lateCall).toMatchObject({
+				code: "AGGREGATE_TRACKING",
+				details: { reason: "registered_during_flush", operation: "add" },
+			});
+			expect(rejection).toBe(lateCall);
+		});
 
 		it("passes the publish chain of the run to the post-commit publication", async () => {
 			const bus = createMockBus();

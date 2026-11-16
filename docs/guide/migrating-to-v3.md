@@ -266,9 +266,11 @@ methods are not the durable write path.
 The Unit of Work installs `add` and `update`, and `remove` with
 `physicalRemoval: true`, on the facade. An adapter that still defines one of
 them does not compile against `defineRepository`. At runtime, it fails with
-`INVALID_REPOSITORY_ADAPTER` when the run builds it. A member of the
-adapter that returns the adapter itself, for example a fluent finder,
-returns the facade, so a chained call keeps the writes of the Unit of Work.
+`INVALID_REPOSITORY_ADAPTER` when the use case first reads the repository.
+A run calls `create` for a repository that the use case reads, and for no
+other. A member of the adapter that returns the adapter itself, for example
+a fluent finder, returns the facade, so a chained call keeps the writes of
+the Unit of Work.
 
 ### 5. Define the adapter's baseline and change set
 
@@ -1840,6 +1842,14 @@ The root entry no longer exports `capturePersistenceBaseline`,
   for a repository without. If the outbox suite fails on
   `failuresToDeadLetter`, declare the attempt ceiling of your
   `DispatchTrackingOutbox`, or remove it for a plain `Outbox`.
+- A run calls `create` of a repository definition when the work first reads
+  `repositories.<name>`, one time per run. In rc.16 every run called every
+  `create` before the work started. An error from `create` and
+  `INVALID_REPOSITORY_ADAPTER` now come from that first read, inside the
+  work. A wrong definition still fails the run before the work starts. If a
+  test expects such an error from a run whose work reads no repository, read
+  the repository in the work. Do not use `create` for an effect that every
+  run needs.
 - The skipped re-poll tests of a claiming outbox or deadline store name the
   capability `providesClaimExpiry`, where they named `non-claiming getPending`
   or `non-claiming due`. To run them, give the environment an `expireClaims`
