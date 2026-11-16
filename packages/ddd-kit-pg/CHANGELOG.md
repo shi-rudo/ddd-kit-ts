@@ -7,7 +7,9 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - `PgQueryExecutor`, the seam that lets an adapter join the transaction of the
-  caller, and the `fromPg` bridge for a `pg` client.
+  caller, and the `fromPg` bridge for a `pg` client. A `pg` client runs one
+  statement at a time, so `fromPg` and `PgTransactionScope` run statements that
+  start together, for example from `Promise.all`, one after another.
 - `PgTransactionScope`, a `TransactionScope` over a `pg` pool. It reports a
   serialization failure or a deadlock as a retryable
   `PgRetryableTransactionFailureError`, a `COMMIT` that rolled back as a

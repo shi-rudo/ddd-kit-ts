@@ -8,10 +8,14 @@ import {
 	inject,
 	it,
 } from "vite-plus/test";
+import { ClientRejectingConcurrentStatements } from "../test/client-rejecting-concurrent-statements";
 import { fromPg, type PgQueryExecutor } from "./pg-query-executor";
 
 describe("fromPg", () => {
-	const pool = new Pool({ connectionString: inject("postgresUri") });
+	const pool = new Pool({
+		Client: ClientRejectingConcurrentStatements,
+		connectionString: inject("postgresUri"),
+	});
 	let client: PoolClient;
 	let executor: PgQueryExecutor;
 
@@ -51,6 +55,42 @@ describe("fromPg", () => {
 		const result = await executor.query("SELECT text FROM note");
 
 		expect(result.rows).toEqual([]);
+	});
+
+	it("runs statements that start together one after another, in call order", async () => {
+		const [, result] = await Promise.all([
+			executor.query("INSERT INTO note (text) VALUES ($1)", ["first"]),
+			executor.query<{ text: string }>("SELECT text FROM note"),
+		]);
+
+		expect(result.rows).toEqual([{ text: "first" }]);
+	});
+
+	it("runs the statements of two executors over one client one after another", async () => {
+		const second = fromPg(client);
+
+		const [, result] = await Promise.all([
+			executor.query("INSERT INTO note (text) VALUES ($1)", ["first"]),
+			second.query<{ text: string }>("SELECT text FROM note"),
+		]);
+
+		expect(result.rows).toEqual([{ text: "first" }]);
+	});
+
+	it("runs a statement after a failed statement that started together with it", async () => {
+		const [failed, result] = await Promise.allSettled([
+			executor.query("SELECT text FROM missing_table"),
+			executor.query<{ one: number }>("SELECT 1 AS one"),
+		]);
+
+		expect(failed).toMatchObject({
+			status: "rejected",
+			reason: { code: "42P01" },
+		});
+		expect(result).toEqual({
+			status: "fulfilled",
+			value: { rows: [{ one: 1 }] },
+		});
 	});
 
 	it("rejects with the original driver error, so an adapter can read the SQLSTATE", async () => {

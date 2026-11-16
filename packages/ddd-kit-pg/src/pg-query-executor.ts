@@ -1,5 +1,6 @@
 import type { ExecutionContext } from "@shirudo/ddd-kit";
 import type { ClientBase } from "pg";
+import { queryInTurn } from "./query-in-turn";
 
 /** The result of one statement. Use `RETURNING` to count the changed rows. */
 export interface PgQueryResult<Row> {
@@ -13,7 +14,9 @@ export interface PgQueryResult<Row> {
  *
  * If a port requires a transactional write, the caller must pass an executor of
  * an open transaction. An executor must reject with the original driver error,
- * because an adapter reads the SQLSTATE of that error.
+ * because an adapter reads the SQLSTATE of that error. An executor must accept a
+ * statement that starts while another statement runs, for example from
+ * `Promise.all`.
  *
  * `context` bounds a statement of the poll side. `fromPgPool` cancels the
  * statement in the database at the deadline. `fromPg` ignores `context`, because
@@ -30,11 +33,14 @@ export interface PgQueryExecutor {
 /**
  * Makes a `pg` client an executor. The parameter excludes a `Pool`, because a
  * pool runs each statement on any free connection and cannot hold a transaction.
+ *
+ * Statements that start together run one after another, in call order. This
+ * also holds for two executors over one client.
  */
 export function fromPg(client: ClientBase): PgQueryExecutor {
 	return {
 		query: async (text, values) => {
-			const { rows } = await client.query(text, values && [...values]);
+			const { rows } = await queryInTurn(client, text, values);
 			return { rows };
 		},
 	};

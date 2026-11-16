@@ -7,6 +7,7 @@ import {
 	PgRollbackFailedError,
 } from "./pg-errors";
 import { fromPg, type PgQueryExecutor } from "./pg-query-executor";
+import { queryInTurn } from "./query-in-turn";
 
 /** The part of a `pg` `Pool` that the scope uses. */
 export interface PgClientPool {
@@ -80,7 +81,7 @@ export class PgTransactionScope implements TransactionScope<PgQueryExecutor> {
 		const session = openSession(client);
 		let transactionEnded = false;
 		try {
-			await client.query(this.beginStatement);
+			await queryInTurn(client, this.beginStatement);
 			let result: T;
 			try {
 				result = await fn(session.executor);
@@ -113,7 +114,7 @@ async function rollback(
 	workFailure: unknown,
 ): Promise<void> {
 	try {
-		await client.query("ROLLBACK");
+		await queryInTurn(client, "ROLLBACK");
 	} catch (rollbackFailure) {
 		throw new PgRollbackFailedError({ cause: rollbackFailure, workFailure });
 	}
@@ -122,7 +123,7 @@ async function rollback(
 async function commit(client: PoolClient): Promise<void> {
 	let command: string;
 	try {
-		({ command } = await client.query("COMMIT"));
+		({ command } = await queryInTurn(client, "COMMIT"));
 	} catch (commitFailure) {
 		throw classifyTransactionFailure(commitFailure);
 	}

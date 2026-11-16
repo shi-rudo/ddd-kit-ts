@@ -8,7 +8,9 @@ This package is not published yet.
 ## The executor
 
 An adapter owns no connection. It runs its statements on a `PgQueryExecutor`, so
-the statements join your transaction.
+the statements join your transaction. A `pg` client runs one statement at a time.
+If statements start together, for example from `Promise.all`, the executor runs
+them one after another.
 
 ```ts
 import { fromPg } from "@shirudo/ddd-kit-pg";
