@@ -83,8 +83,9 @@ this policy moves it to the stable API.
   but only to a TypeScript version that was released at least 6 months
   before.
 - Edge runtimes: Cloudflare Workers, Vercel Edge, Deno, and Bun. CI runs the
-  package in Cloudflare `workerd` and in the Vercel Edge Runtime. A failure in
-  a supported runtime is a bug.
+  package in Cloudflare `workerd` and in the Vercel Edge Runtime. In Bun, CI
+  runs the whole test suite and imports the packed package. A failure in a
+  supported runtime is a bug.
 
 ## How the policy is checked
 

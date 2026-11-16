@@ -660,6 +660,10 @@ money arithmetic. It also runs without Node's `process` or `Buffer` globals.
 This is a compatibility tripwire for the package runtime, not certification of
 a consumer's database, broker, or framework adapters.
 
+In Bun, the CI runs the whole test suite, and a Bun consumer imports every
+entry point of the packed package. Bun exposes `process` and `Buffer` on
+purpose, so the edge smoke with its guards does not run there.
+
 In-memory adapters are useful for tests, but they are still memory-only.
 `@shirudo/ddd-kit/testing` exports them:
 

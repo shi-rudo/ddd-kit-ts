@@ -565,6 +565,7 @@ immutable. Run one kit version per process during a cutover.
   experimental: a minor release can change them in a breaking way.
 - New guides: command idempotency, deadlines, money, sagas, and the v3
   migration guide.
+- CI runs the whole test suite in Bun and imports the packed package there.
 - CI runs the package in Cloudflare `workerd` and in the Vercel Edge Runtime,
   and it builds the documentation.
 - Mutation testing for the aggregate, the event store, and the money module,
