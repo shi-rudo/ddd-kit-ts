@@ -41,3 +41,10 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   an attempt. A partial index supports the order check of the claim. A
   dispatcher deadline cancels a poll in the database, and a claim that its
   caller aborted before the `COMMIT` rolls back.
+- `PgDeadlineStore`, `PgProjectionCheckpointStore`, and `PgSnapshotStore`, with
+  their tables in `sql/`, and `fromPgPool` for the statements that need no
+  transaction. The checkpoint locks name their table, like the other locks. One
+  statement takes the checkpoint locks of a batch, in an order that cannot
+  deadlock. A deadline failure whose message holds a NUL byte still counts as
+  an attempt. A deadline failure report without an error keeps the reason of an
+  earlier report.
