@@ -77,7 +77,7 @@ this policy moves it to the stable API.
 ## Runtimes
 
 - Node.js: `>=24` at 3.0.0, the Node.js floor of the peer
-  `@shirudo/base-error` 9. Only a major version raises the floor or drops a
+  `@shirudo/base-error` 10. Only a major version raises the floor or drops a
   Node.js LTS line.
 - TypeScript: 5.9 or later at 3.0.0. A minor release can raise the minimum,
   but only to a TypeScript version that was released at least 6 months
