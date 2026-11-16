@@ -52,6 +52,9 @@ schemas with tables of their own do not.
 | `PgIdempotencyStore` | `sql/idempotency.sql` |
 | `PgEventStore` | `sql/event-stream.sql` |
 | `PgOutbox` | `sql/outbox.sql` |
+| `PgDeadlineStore` | `sql/deadline.sql` |
+| `PgProjectionCheckpointStore` | `sql/projection-checkpoint.sql` |
+| `PgSnapshotStore` | `sql/snapshot.sql` |
 
 ## Idempotency
 
@@ -161,6 +164,41 @@ record of the aggregate stays. Run the removal at READ COMMITTED. At a snapshot
 isolation level, a record that a dispatcher acknowledges during the removal can
 stay. The source head keeps the aggregate id for ever, so keep personal data out
 of aggregate ids.
+
+## Deadlines
+
+`PgDeadlineStore` runs every statement on its executor. Build one on the
+transaction inside the callback of the scope for `schedule` and `cancel`, and one
+with `fromPgPool` for the poll loop.
+
+```ts
+import { fromPgPool, PgDeadlineStore } from "@shirudo/ddd-kit-pg";
+
+await withCommit({ scope, outbox }, async (tx, registration) => {
+  await new PgDeadlineStore<TimeoutPayload>(tx).schedule(deadline);
+});
+
+const pollStore = new PgDeadlineStore<TimeoutPayload>(fromPgPool(pool));
+```
+
+`due` does not claim its records, so run one poll loop per store. The table keeps
+JSON, and `schedule` rejects a payload that JSON does not keep exactly.
+
+## Projections
+
+Run `PgProjectionCheckpointStore` in the database of your read models, so that a
+read-model update and its checkpoint commit together. Pass the same
+`PgTransactionScope` to the `Projector`. No test can prove this wiring for you.
+
+Run the projector at READ COMMITTED, the default of PostgreSQL. A load after a
+lock wait must see the checkpoint of the previous lock holder, and a
+transaction-wide snapshot would keep the state from before the wait.
+
+## Snapshots
+
+`PgSnapshotStore` needs no transaction, so give it `fromPgPool(pool)`. The table
+keeps JSON, and `save` rejects a state that JSON does not keep exactly. Map such a
+value in your `SnapshotModel`.
 
 ## Peer dependencies
 
