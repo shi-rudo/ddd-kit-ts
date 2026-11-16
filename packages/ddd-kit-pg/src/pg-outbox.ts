@@ -25,6 +25,9 @@ import {
 } from "./stored-event";
 
 const DEFAULT_MAX_DELIVERY_ATTEMPTS = 5;
+/** Serializes the end of a source with the acknowledgements of its records. */
+const SOURCE_END_LOCK_KEY =
+	"hashtextextended('ddd_kit_outbox_source_head'::regclass::oid::text, 0)";
 const DEFAULT_PAGE_SIZE = 100;
 
 export interface PgOutboxOptions<Evt extends AnyDomainEvent> {
@@ -84,7 +87,9 @@ const OUTBOX_COLUMNS = `
  * transaction.
  *
  * The table keeps a delivered record, so that a retry of its commit stays a
- * retry. Delete old records with your own job. Never delete a row of
+ * retry. Delete old records with your own job. A removed aggregate is the
+ * exception: `endEventSources` deletes its delivered records, and
+ * `markDispatched` deletes each later record of it. Never delete a row of
  * `ddd_kit_outbox_source_head` whose `ended` is true.
  */
 export class PgOutbox<Evt extends AnyDomainEvent>
@@ -128,10 +133,17 @@ export class PgOutbox<Evt extends AnyDomainEvent>
 		}
 	}
 
+	/**
+	 * Ends each source and deletes its delivered records, so that the outbox
+	 * keeps no copy of a removed aggregate. Its pending records and dead letters
+	 * stay until their delivery, and `markDispatched` then deletes them.
+	 */
 	async endEventSources(
 		sources: ReadonlyArray<AggregateIdentity>,
 		tx: PgQueryExecutor,
 	): Promise<void> {
+		if (sources.length === 0) return;
+		await tx.query(`SELECT pg_advisory_xact_lock(${SOURCE_END_LOCK_KEY})`);
 		for (const source of sources) {
 			// A source without a head has no events, so it stays open.
 			await tx.query(
@@ -140,6 +152,13 @@ export class PgOutbox<Evt extends AnyDomainEvent>
 				WHERE aggregate_type = $1
 					AND aggregate_id = $2
 					AND last_eventful_aggregate_version IS NOT NULL`,
+				[source.aggregateType, source.aggregateId],
+			);
+			await tx.query(
+				`DELETE FROM ddd_kit_outbox
+				WHERE aggregate_type = $1
+					AND aggregate_id = $2
+					AND status = 'dispatched'`,
 				[source.aggregateType, source.aggregateId],
 			);
 		}
@@ -247,17 +266,46 @@ export class PgOutbox<Evt extends AnyDomainEvent>
 			: inBoundedTransaction(this.claimScope, context, claim);
 	}
 
+	/** Deletes the record of an ended source in place of marking it. */
 	async markDispatched(
 		dispatchIds: ReadonlyArray<string>,
 		context?: ExecutionContext,
 	): Promise<void> {
-		await this.poll.query(
-			`UPDATE ddd_kit_outbox
-			SET status = 'dispatched', dispatched_at = now(), claimed_until = NULL
-			WHERE event_id = ANY($1::text[]) AND status IN ('pending', 'dead')`,
-			[dispatchIds],
-			context,
-		);
+		const acknowledge = async (tx: PgQueryExecutor) => {
+			// Shared, so acknowledgements do not wait for each other. They wait for
+			// an open removal, and the next statement then sees its end mark.
+			await tx.query(
+				`SELECT pg_advisory_xact_lock_shared(${SOURCE_END_LOCK_KEY})`,
+			);
+			if (context !== undefined) await setStatementDeadline(tx, context);
+			await tx.query(
+				`WITH acknowledged AS (
+					SELECT outbox.position, coalesce(head.ended, false) AS ended
+					FROM ddd_kit_outbox AS outbox
+					LEFT JOIN ddd_kit_outbox_source_head AS head
+						USING (aggregate_type, aggregate_id)
+					WHERE outbox.event_id = ANY($1::text[])
+						AND outbox.status IN ('pending', 'dead')
+				),
+				removed AS (
+					DELETE FROM ddd_kit_outbox AS outbox
+					USING acknowledged
+					WHERE outbox.position = acknowledged.position
+						AND acknowledged.ended
+						AND outbox.status IN ('pending', 'dead')
+				)
+				UPDATE ddd_kit_outbox AS outbox
+				SET status = 'dispatched', dispatched_at = now(), claimed_until = NULL
+				FROM acknowledged
+				WHERE outbox.position = acknowledged.position
+					AND NOT acknowledged.ended
+					AND outbox.status IN ('pending', 'dead')`,
+				[dispatchIds],
+			);
+		};
+		await (context === undefined
+			? this.claimScope.transactional(acknowledge)
+			: inBoundedTransaction(this.claimScope, context, acknowledge));
 	}
 
 	async markFailed(

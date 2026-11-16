@@ -8,11 +8,14 @@ import {
 import { createOutboxContractTests } from "@shirudo/ddd-kit/testing";
 import type { Pool } from "pg";
 import { describe, expect, it } from "vite-plus/test";
-import { openIsolatedSchema } from "../test/isolated-schema";
+import {
+	type IsolatedSchema,
+	openIsolatedSchema,
+} from "../test/isolated-schema";
 import { PgEventDecodeError } from "./pg-errors";
 import type { PgEventCodec } from "./pg-event-codec";
 import { PgOutbox } from "./pg-outbox";
-import type { PgQueryExecutor } from "./pg-query-executor";
+import { fromPg, type PgQueryExecutor } from "./pg-query-executor";
 import { PgTransactionScope } from "./pg-transaction-scope";
 
 type ThingHappened = DomainEvent<"ThingHappened", unknown>;
@@ -302,6 +305,87 @@ describe("PgOutbox", () => {
 					...options,
 				}),
 		).toThrow(new RegExp(`${field} must be a positive integer`));
+	});
+
+	describe("the records of a removed aggregate", () => {
+		const removed = { aggregateType: "Thing", aggregateId: "a-1" };
+		const recordsOf = async (database: IsolatedSchema, aggregateId: string) => {
+			const { rows } = await database.pool.query(
+				"SELECT event_id FROM ddd_kit_outbox WHERE aggregate_id = $1 ORDER BY position",
+				[aggregateId],
+			);
+			return rows.map((row) => row.event_id);
+		};
+
+		it("deletes the delivered records of a source when the source ends", async () => {
+			const { add, database, outbox, scope, teardown } = await openOutbox();
+			await add([candidate(eventNamed("event-1"), 1)]);
+			await add([candidate(eventNamed("other-1"), 1, "a-2")]);
+			await outbox.markDispatched(["event-1", "other-1"]);
+
+			await scope.transactional((tx) => outbox.endEventSources([removed], tx));
+
+			expect(await recordsOf(database, "a-1")).toEqual([]);
+			expect(await recordsOf(database, "a-2")).toEqual(["other-1"]);
+			await teardown();
+		});
+
+		it("delivers a pending record of an ended source and then deletes it", async () => {
+			const { add, database, outbox, scope, teardown } = await openOutbox();
+			await add([candidate(eventNamed("event-1"), 1)]);
+			await scope.transactional((tx) => outbox.endEventSources([removed], tx));
+
+			const pending = await outbox.getPending(10);
+			await outbox.markDispatched(pending.map((record) => record.dispatchId));
+
+			expect(pending.map((record) => record.dispatchId)).toEqual(["event-1"]);
+			expect(await recordsOf(database, "a-1")).toEqual([]);
+			await teardown();
+		});
+
+		it("deletes a dead letter of an ended source when an operator marks it delivered", async () => {
+			const { add, database, outbox, scope, teardown } = await openOutbox();
+			await add([candidate(eventNamed("event-1"), 1)]);
+			for (let attempt = 0; attempt < ATTEMPT_CEILING; attempt++) {
+				await outbox.markFailed("event-1", new Error("poison"));
+			}
+			await scope.transactional((tx) => outbox.endEventSources([removed], tx));
+
+			await outbox.markDispatched(["event-1"]);
+
+			expect(await recordsOf(database, "a-1")).toEqual([]);
+			await teardown();
+		});
+
+		it("makes an acknowledgement wait for an open removal, so no delivered record of the source stays", async () => {
+			const { add, database, outbox, teardown } = await openOutbox();
+			await add([candidate(eventNamed("event-1"), 1)]);
+			const remover = await database.pool.connect();
+			await remover.query("BEGIN");
+			await outbox.endEventSources([removed], fromPg(remover));
+			let settled = false;
+			const acknowledgement = outbox
+				.markDispatched(["event-1"], {
+					signal: new AbortController().signal,
+					deadlineAt: Date.now() + 5_000,
+				})
+				.finally(() => {
+					settled = true;
+				});
+			for (;;) {
+				const { rows } = await database.pool.query(
+					"SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND datname = current_database()",
+				);
+				if (settled || rows[0].waiting > 0) break;
+			}
+
+			await remover.query("COMMIT");
+			remover.release();
+			await acknowledgement;
+
+			expect(await recordsOf(database, "a-1")).toEqual([]);
+			await teardown();
+		});
 	});
 
 	it("serializes two transactions of one source, so both link to their predecessor", async () => {
