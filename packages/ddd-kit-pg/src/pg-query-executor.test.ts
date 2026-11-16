@@ -1,4 +1,4 @@
-import { Pool, type PoolClient } from "pg";
+import { Client, Pool, type PoolClient } from "pg";
 import {
 	afterAll,
 	afterEach,
@@ -8,10 +8,14 @@ import {
 	inject,
 	it,
 } from "vite-plus/test";
+import { ClientRejectingConcurrentStatements } from "../test/client-rejecting-concurrent-statements";
 import { fromPg, type PgQueryExecutor } from "./pg-query-executor";
 
 describe("fromPg", () => {
-	const pool = new Pool({ connectionString: inject("postgresUri") });
+	const pool = new Pool({
+		Client: ClientRejectingConcurrentStatements,
+		connectionString: inject("postgresUri"),
+	});
 	let client: PoolClient;
 	let executor: PgQueryExecutor;
 
@@ -64,5 +68,34 @@ describe("fromPg", () => {
 		const bridgeOverPool = () => fromPg(pool);
 
 		expect(bridgeOverPool).toBeTypeOf("function");
+	});
+});
+
+describe("fromPg over a client in pipeline mode", () => {
+	let client: Client;
+
+	beforeEach(async () => {
+		client = new Client({
+			connectionString: inject("postgresUri"),
+			pipeline: true,
+		});
+		await client.connect();
+		await client.query("CREATE TEMP TABLE note (text text NOT NULL)");
+	});
+
+	afterEach(() => client.end());
+
+	it("keeps a ROLLBACK on the client after the statements that started before it", async () => {
+		const executor = fromPg(client);
+		await client.query("BEGIN");
+
+		await Promise.all([
+			executor.query("SELECT text FROM missing_table"),
+			executor.query("SELECT pg_sleep(0.05)"),
+			executor.query("INSERT INTO note (text) VALUES ($1)", ["rolled back"]),
+		]).catch(() => client.query("ROLLBACK"));
+		const { rows } = await client.query("SELECT text FROM note");
+
+		expect(rows).toEqual([]);
 	});
 });

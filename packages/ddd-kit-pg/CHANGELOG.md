@@ -7,13 +7,16 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - `PgQueryExecutor`, the seam that lets an adapter join the transaction of the
-  caller, and the `fromPg` bridge for a `pg` client.
+  caller, and the `fromPg` bridge for a `pg` client. `fromPg` passes each
+  statement to the client at once.
 - `PgTransactionScope`, a `TransactionScope` over a `pg` pool. It reports a
   serialization failure or a deadlock as a retryable
   `PgRetryableTransactionFailureError`, a `COMMIT` that rolled back as a
   `PgCommitRolledBackError`, and a failed `ROLLBACK` as a
   `PgRollbackFailedError` that keeps both failures. It survives a lost connection, and it closes its
-  executor when the transaction ends. The option `isolationLevel` begins each
+  executor when the transaction ends. Its executor runs statements that start
+  together, for example from `Promise.all`, one after another, and `COMMIT` and
+  `ROLLBACK` wait for them. The option `isolationLevel` begins each
   transaction at that level. After a `COMMIT` that PostgreSQL answered with an
   error, the connection returns to the pool.
 - `PgIdempotencyStore`, the transactional `IdempotencyStore`, with its table in

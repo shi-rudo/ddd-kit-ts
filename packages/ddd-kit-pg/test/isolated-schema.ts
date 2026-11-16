@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { Pool, type PoolConfig } from "pg";
 import { inject } from "vite-plus/test";
+import { ClientRejectingConcurrentStatements } from "./client-rejecting-concurrent-statements";
 
 export interface IsolatedSchema {
 	/** A pool whose connections resolve unqualified names in this schema. */
@@ -33,6 +34,7 @@ export async function openIsolatedSchema({
 			: ` -c default_transaction_isolation=${defaultTransactionIsolation.replaceAll(" ", "\\ ")}`;
 	const pool = new Pool({
 		...poolOptions,
+		Client: ClientRejectingConcurrentStatements,
 		connectionString,
 		options: `-c search_path=${schema}${isolationOption}`,
 	});
@@ -80,6 +82,7 @@ export async function openTablesBehindPrivateSchemas(
 	);
 	const poolFor = (privateSchema: string | undefined) =>
 		new Pool({
+			Client: ClientRejectingConcurrentStatements,
 			connectionString,
 			options: `-c search_path=${privateSchema},${shared}`,
 		});

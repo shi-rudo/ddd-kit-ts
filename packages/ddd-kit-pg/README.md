@@ -8,7 +8,11 @@ This package is not published yet.
 ## The executor
 
 An adapter owns no connection. It runs its statements on a `PgQueryExecutor`, so
-the statements join your transaction.
+the statements join your transaction. `fromPg` passes each statement to the
+client at once. A `pg` client runs one statement at a time, and `pg` deprecates
+starting a statement while another one runs. So await each statement on a
+`fromPg` executor. To start statements together, for example with `Promise.all`,
+use the executor of `PgTransactionScope`.
 
 ```ts
 import { fromPg } from "@shirudo/ddd-kit-pg";
@@ -29,6 +33,10 @@ import { PgTransactionScope } from "@shirudo/ddd-kit-pg";
 
 const scope = new RetryingTransactionScope(new PgTransactionScope(pool));
 ```
+
+The executor runs statements that start together one after another, in call
+order. `COMMIT` and `ROLLBACK` wait for the statements that your callback
+started.
 
 Each transaction runs at the default isolation level of the database. To set a
 level, pass `isolationLevel`, for example

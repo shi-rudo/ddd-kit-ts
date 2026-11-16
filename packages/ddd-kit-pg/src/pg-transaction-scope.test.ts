@@ -90,6 +90,33 @@ describe("PgTransactionScope", () => {
 		expect(await counterValue(1)).toBe(0);
 	});
 
+	it("runs the statements that the callback starts together in call order", async () => {
+		const [, read] = await scope.transactional((executor) =>
+			Promise.all([
+				increment(executor, 1),
+				executor.query<{ value: number }>(
+					"SELECT value FROM counter WHERE id = 1",
+				),
+			]),
+		);
+
+		expect(read.rows).toEqual([{ value: 1 }]);
+		expect(await counterValue(1)).toBe(1);
+	});
+
+	it("rolls back after the statements that the callback started together, when one of them fails", async () => {
+		await expect(
+			scope.transactional((executor) =>
+				Promise.all([
+					executor.query("SELECT value FROM missing_table"),
+					increment(executor, 1),
+				]),
+			),
+		).rejects.toMatchObject({ code: "42P01" });
+
+		expect(await counterValue(1)).toBe(0);
+	});
+
 	it("returns the connection to the pool after a commit and after a rollback", async () => {
 		const single = await openIsolatedSchema({ max: 1 });
 		const singleScope = new PgTransactionScope(single.pool);

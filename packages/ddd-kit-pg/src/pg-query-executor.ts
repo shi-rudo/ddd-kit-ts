@@ -30,6 +30,13 @@ export interface PgQueryExecutor {
 /**
  * Makes a `pg` client an executor. The parameter excludes a `Pool`, because a
  * pool runs each statement on any free connection and cannot hold a transaction.
+ *
+ * The executor passes each statement to the client at once, so the client keeps
+ * it in order with the statements that you run on the client directly. A client
+ * runs one statement at a time, and pg deprecates starting a statement while
+ * another one runs. Await each statement, or use the executor of
+ * `PgTransactionScope`, which runs statements that start together one after
+ * another.
  */
 export function fromPg(client: ClientBase): PgQueryExecutor {
 	return {
