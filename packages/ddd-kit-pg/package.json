@@ -39,7 +39,7 @@
 	"devDependencies": {
 		"@shirudo/base-error": "^9.0.0",
 		"@shirudo/ddd-kit": "workspace:*",
-		"@shirudo/result": "^1.1.1",
+		"@shirudo/result": "^1.2.0",
 		"@testcontainers/postgresql": "12.2.1",
 		"@types/node": "^24.19.2",
 		"@types/pg": "^8.23.1",
