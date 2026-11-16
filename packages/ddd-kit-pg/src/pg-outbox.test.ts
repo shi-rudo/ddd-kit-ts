@@ -71,7 +71,9 @@ describe.each([
 ])("PgOutbox contract suite %s", (_name, claim) => {
 	const tests = createOutboxContractTests<ThingHappened>({
 		createEnvironment: async () => {
-			const { scope, outbox, teardown } = await openOutbox({ claim });
+			const { database, scope, outbox, teardown } = await openOutbox({
+				claim,
+			});
 			const rolledBack = (write: (tx: PgQueryExecutor) => Promise<void>) =>
 				scope
 					.transactional(async (tx) => {
@@ -90,6 +92,11 @@ describe.each([
 					scope.transactional((tx) => outbox.endEventSources(sources, tx)),
 				endEventSourcesRolledBack: (sources) =>
 					rolledBack((tx) => outbox.endEventSources(sources, tx)),
+				expireClaims: async () => {
+					await database.pool.query(
+						"UPDATE ddd_kit_outbox SET claimed_until = NULL",
+					);
+				},
 				teardown,
 			};
 		},
@@ -99,18 +106,15 @@ describe.each([
 		providesRolledBackAdds: true,
 		providesRolledBackEnds: true,
 		claimsOnGetPending: claim !== undefined,
+		providesClaimExpiry: true,
 	});
 
 	for (const test of tests) {
 		(test.skipped ? it.skip : it)(test.name, test.run);
 	}
 
-	it("skips only the tests that a claiming adapter cannot run", () => {
-		expect(
-			tests.flatMap((test) => (test.skipped ? [test.skipped.capability] : [])),
-		).toEqual(
-			claim === undefined ? [] : Array(4).fill("non-claiming getPending"),
-		);
+	it("runs with zero skips", () => {
+		expect(tests.filter((test) => test.skipped)).toEqual([]);
 	});
 });
 

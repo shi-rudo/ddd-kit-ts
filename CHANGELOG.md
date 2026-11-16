@@ -327,6 +327,15 @@ immutable. Run one kit version per process during a cutover.
   the repository has `update` and `remove`, and `failuresToDeadLetter` must
   be present exactly for a `DispatchTrackingOutbox`. A harness with a wrong
   declaration now fails, where the suite skipped tests before.
+- The outbox and deadline-store contract suites prove their re-poll rules for
+  a claiming adapter. The environment provides `expireClaims`, which ends
+  every claim as if each lease ran out, and the harness declares
+  `providesClaimExpiry: true`. The suite ends the claims before each re-poll,
+  so a claiming adapter runs the tests for head stability, re-ack
+  non-disturbance, attempts surfacing, the requeue of a pending record, and
+  the reschedule race. Without the hook, those tests stay skipped, and the
+  capability they name is `providesClaimExpiry`, where it was
+  `non-claiming getPending` or `non-claiming due`.
 - The domain state machine has its own entry point,
   `@shirudo/ddd-kit/state-machine`: `DomainStateMachine`,
   `transitionDomainState`, `canTransitionDomainState`, its errors, and its

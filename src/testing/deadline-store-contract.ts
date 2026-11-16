@@ -47,6 +47,13 @@ export interface DeadlineStoreContractEnvironment {
 	 */
 	runRolledBack?<R>(work: () => Promise<R>): Promise<R>;
 
+	/**
+	 * Optional capability for a claiming adapter: ends every claim that `due`
+	 * holds, as if each lease ran out. Enables the tests that re-poll
+	 * deadlines that an earlier poll returned without resolving them.
+	 */
+	expireClaims?(): Promise<void>;
+
 	/** Release connections, drop schemas, etc. Called in a finally. */
 	teardown?(): Promise<void>;
 }
@@ -82,11 +89,19 @@ export interface DeadlineStoreContractHarness {
 	 * port sanctions. Tests that re-poll records an earlier poll
 	 * returned without resolving them (attempts surfacing, neighbor
 	 * flow after a dead-letter, successor visibility during a
-	 * reschedule race) assume a non-claiming read and are marked
-	 * skipped for claiming adapters; prove your claim/expiry semantics
-	 * in your own suite.
+	 * reschedule race) end the claims with {@link
+	 * DeadlineStoreContractEnvironment.expireClaims} before the re-poll.
+	 * Without {@link providesClaimExpiry}, those tests are marked skipped.
 	 */
 	claimsOnDue?: boolean;
+
+	/**
+	 * Declare `true` when environments provide {@link
+	 * DeadlineStoreContractEnvironment.expireClaims}. A claiming adapter
+	 * without it gets the re-poll tests marked skipped: they apply, but the
+	 * suite cannot see the deadlines that the claims hold back.
+	 */
+	providesClaimExpiry?: boolean;
 }
 
 const at = (iso: string): Date => new Date(iso);
@@ -113,6 +128,22 @@ export function createDeadlineStoreContractTests(
 			"Contract violated: failuresToDeadLetter must be an integer >= 2; observing attempts on a pending deadline needs one that survives a failure",
 		);
 	}
+	const claimExpiryGate = {
+		capability: "providesClaimExpiry",
+		satisfiedBy: !harness.claimsOnDue || harness.providesClaimExpiry === true,
+	};
+	// A non-claiming adapter returns un-acked deadlines anyway.
+	const expireClaims = async (
+		env: DeadlineStoreContractEnvironment,
+	): Promise<void> => {
+		if (!harness.claimsOnDue) return;
+		if (!env.expireClaims) {
+			throw new ContractViolation(
+				"Contract violated: harness declared providesClaimExpiry but the environment lacks expireClaims",
+			);
+		}
+		await env.expireClaims();
+	};
 
 	return [
 		...plainValuesThatJsonDoesNotKeep().map(({ name, data }) => ({
@@ -292,55 +323,54 @@ export function createDeadlineStoreContractTests(
 			}),
 		},
 		// The successor-visibility half of the race needs a re-poll while the
-		// replaced incarnation is un-acked; an adapter claiming at address
-		// granularity legitimately holds the address until the claim resolves.
-		gatedContractTest(
-			{ capability: "non-claiming due", satisfiedBy: !harness.claimsOnDue },
-			{
-				name: "schedule on an occupied address replaces it, and a stale ack cannot consume the successor",
-				run: inEnv(async (env) => {
-					await env.run(() =>
-						env.store.schedule({
-							processName: "s",
-							key: "k",
-							dueAt: at(T0),
-							payload: { kind: "first", step: 1 },
-						}),
-					);
-					const [first] = await env.store.due(at(T1), 10);
-					assert(first !== undefined, "expected the first incarnation");
+		// replaced incarnation is un-acked. An adapter claiming at address
+		// granularity holds the address until the claim resolves, so the test
+		// ends the claims first.
+		gatedContractTest(claimExpiryGate, {
+			name: "schedule on an occupied address replaces it, and a stale ack cannot consume the successor",
+			run: inEnv(async (env) => {
+				await env.run(() =>
+					env.store.schedule({
+						processName: "s",
+						key: "k",
+						dueAt: at(T0),
+						payload: { kind: "first", step: 1 },
+					}),
+				);
+				const [first] = await env.store.due(at(T1), 10);
+				assert(first !== undefined, "expected the first incarnation");
 
-					// Reschedule while the first incarnation is in flight.
-					await env.run(() =>
-						env.store.schedule({
-							processName: "s",
-							key: "k",
-							dueAt: at(T1),
-							payload: { kind: "second", step: 2 },
-						}),
-					);
-					// The late ack of the replaced incarnation must be a no-op.
-					await env.store.markDelivered([first.deliveryId]);
+				// Reschedule while the first incarnation is in flight.
+				await env.run(() =>
+					env.store.schedule({
+						processName: "s",
+						key: "k",
+						dueAt: at(T1),
+						payload: { kind: "second", step: 2 },
+					}),
+				);
+				// The late ack of the replaced incarnation must be a no-op.
+				await env.store.markDelivered([first.deliveryId]);
+				await expireClaims(env);
 
-					const due = await env.store.due(at(T2), 10);
-					assertEqual(
-						due.length,
-						1,
-						"exactly one pending deadline exists per address",
-					);
-					const successor = due[0];
-					assert(successor !== undefined, "expected the successor");
-					assert(
-						deepEqual(successor.payload, { kind: "second", step: 2 }),
-						"the successor carries the rescheduled payload",
-					);
-					assert(
-						successor.deliveryId !== first.deliveryId,
-						"a reschedule is a fresh incarnation with a fresh deliveryId",
-					);
-				}),
-			},
-		),
+				const due = await env.store.due(at(T2), 10);
+				assertEqual(
+					due.length,
+					1,
+					"exactly one pending deadline exists per address",
+				);
+				const successor = due[0];
+				assert(successor !== undefined, "expected the successor");
+				assert(
+					deepEqual(successor.payload, { kind: "second", step: 2 }),
+					"the successor carries the rescheduled payload",
+				);
+				assert(
+					successor.deliveryId !== first.deliveryId,
+					"a reschedule is a fresh incarnation with a fresh deliveryId",
+				);
+			}),
+		}),
 		{
 			name: "after delivery the address is free again for a fresh schedule",
 			run: inEnv(async (env) => {
@@ -456,46 +486,45 @@ export function createDeadlineStoreContractTests(
 		},
 		// Observing attempts on a pending record, and a neighbor's continued
 		// flow, both need re-polls of records an earlier poll returned
-		// without resolving them; claiming adapters legitimately hold those
-		// back until the claim expires.
-		gatedContractTest(
-			{ capability: "non-claiming due", satisfiedBy: !harness.claimsOnDue },
-			{
-				name: "attempts surface on redelivery, and a poison deadline does not block its neighbors",
-				run: inEnv(async (env) => {
-					await env.run(async () => {
-						await env.store.schedule({
-							processName: "s",
-							key: "poison",
-							dueAt: at(T0),
-							payload: { kind: "poison" },
-						});
-						await env.store.schedule({
-							processName: "s",
-							key: "healthy",
-							dueAt: at(T0),
-							payload: { kind: "healthy" },
-						});
+		// without resolving them. A claiming adapter holds those back until
+		// the claim expires, so the test ends the claims before each re-poll.
+		gatedContractTest(claimExpiryGate, {
+			name: "attempts surface on redelivery, and a poison deadline does not block its neighbors",
+			run: inEnv(async (env) => {
+				await env.run(async () => {
+					await env.store.schedule({
+						processName: "s",
+						key: "poison",
+						dueAt: at(T0),
+						payload: { kind: "poison" },
 					});
-					const [poison] = await env.store.due(at(T1), 1);
-					assert(poison !== undefined, "expected the earliest due deadline");
+					await env.store.schedule({
+						processName: "s",
+						key: "healthy",
+						dueAt: at(T0),
+						payload: { kind: "healthy" },
+					});
+				});
+				const [poison] = await env.store.due(at(T1), 1);
+				assert(poison !== undefined, "expected the earliest due deadline");
+				await env.store.markFailed(poison.deliveryId, new Error("boom"));
+				await expireClaims(env);
+				const afterOne = await env.store.due(at(T1), 10);
+				assertEqual(
+					afterOne.find((d) => d.deliveryId === poison.deliveryId)?.attempts,
+					1,
+					"attempts must be surfaced on the record after markFailed",
+				);
+				for (let i = 1; i < ceiling; i++) {
 					await env.store.markFailed(poison.deliveryId, new Error("boom"));
-					const afterOne = await env.store.due(at(T1), 10);
-					assertEqual(
-						afterOne.find((d) => d.deliveryId === poison.deliveryId)?.attempts,
-						1,
-						"attempts must be surfaced on the record after markFailed",
-					);
-					for (let i = 1; i < ceiling; i++) {
-						await env.store.markFailed(poison.deliveryId, new Error("boom"));
-					}
-					assert(
-						(await env.store.due(at(T1), 10)).some((d) => d.key === "healthy"),
-						"deadlines carry no cross-address ordering; a dead-lettered neighbor must not block delivery",
-					);
-				}),
-			},
-		),
+				}
+				await expireClaims(env);
+				assert(
+					(await env.store.due(at(T1), 10)).some((d) => d.key === "healthy"),
+					"deadlines carry no cross-address ordering; a dead-lettered neighbor must not block delivery",
+				);
+			}),
+		}),
 		{
 			name: "two dead-lettered incarnations of one address are both kept and individually clearable",
 			run: inEnv(async (env) => {
