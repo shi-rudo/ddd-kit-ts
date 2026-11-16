@@ -35,7 +35,8 @@ export interface PgQueryExecutor {
  * pool runs each statement on any free connection and cannot hold a transaction.
  *
  * Statements that start together run one after another, in call order. This
- * also holds for two executors over one client.
+ * also holds for two executors over one client. A statement that you run on the
+ * client directly does not wait for them.
  */
 export function fromPg(client: ClientBase): PgQueryExecutor {
 	return {

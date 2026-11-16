@@ -26,7 +26,7 @@ describe("the package source", () => {
 		expect(await sourcesContaining('"\\u0000"')).toEqual(["nul-byte.ts"]);
 	});
 
-	it("sends every statement of a client in query-in-turn.ts", async () => {
+	it("calls client.query only in query-in-turn.ts", async () => {
 		expect(await sourcesContaining("client.query(")).toEqual([
 			"query-in-turn.ts",
 		]);

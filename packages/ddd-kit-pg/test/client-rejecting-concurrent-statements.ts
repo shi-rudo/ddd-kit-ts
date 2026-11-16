@@ -2,8 +2,9 @@ import { Client } from "pg";
 
 /**
  * A `pg` client that rejects a statement while another statement of it runs.
- * pg 8 queues such a statement and warns that pg 9 removes the queue. With this
- * client, a test fails on pg 8 where it would fail on pg 9.
+ * pg 8 queues such a statement and warns that pg 9 removes the queue. The client
+ * frees itself when pg reports the result, which for an error is before the
+ * connection is ready again.
  */
 export class ClientRejectingConcurrentStatements extends Client {
 	#statementRunning = false;
@@ -25,9 +26,16 @@ export class ClientRejectingConcurrentStatements extends Client {
 				this.#statementRunning = false;
 				callback(...results);
 			};
-			return Reflect.apply(super.query, this, args);
 		}
-		return Reflect.apply(super.query, this, args).finally(() => {
+		let result: unknown;
+		try {
+			result = Reflect.apply(super.query, this, args);
+		} catch (failure) {
+			this.#statementRunning = false;
+			throw failure;
+		}
+		if (typeof callback === "function") return result;
+		return (result as Promise<unknown>).finally(() => {
 			this.#statementRunning = false;
 		});
 	}
