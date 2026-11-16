@@ -1,26 +1,26 @@
-import { describe, expect, it } from "vite-plus/test";
-import { InProcessEventBus } from "../../src";
-import type { DomainEvent } from "../../src/domain/event/domain-event";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import type { DomainEvent } from "../../domain/event/domain-event";
+import { InProcessEventBus } from "./event-bus";
 
 type OrderCreated = DomainEvent<"OrderCreated", { orderId: string }>;
 
-/**
- * Active timer handles. Reading them needs Node, which is why this test lives
- * here and not beside the implementation.
- */
-function countTimers(): number {
-	// @ts-expect-error Node's process exists in the test runtime; the package stays Node-type-free.
-	const resources: readonly string[] = process.getActiveResourcesInfo();
-	return resources.filter((resource) => resource === "Timeout").length;
-}
-
 describe("event bus close releases what it holds", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
 	it("clears the timer of a waiter it settles", async () => {
+		// Only Node lists active timers, so the test watches the timer calls.
+		const armTimer = vi.spyOn(globalThis, "setTimeout");
+		const clearTimer = vi.spyOn(globalThis, "clearTimeout");
 		const bus = new InProcessEventBus<OrderCreated>();
-		const before = countTimers();
 		const waiting = bus.once("OrderCreated", { timeoutMs: 60_000 });
 
-		expect(countTimers()).toBe(before + 1);
+		expect(armTimer).toHaveBeenCalledExactlyOnceWith(
+			expect.any(Function),
+			60_000,
+		);
+		const timer = armTimer.mock.results[0]?.value;
 		bus.close();
 		await expect(waiting).rejects.toThrow(
 			expect.objectContaining({ code: "EVENT_BUS_CLOSED" }),
@@ -28,7 +28,8 @@ describe("event bus close releases what it holds", () => {
 
 		// A timer left armed holds the event loop open for a waiter that
 		// already settled, which is the leak close() exists to end.
-		expect(countTimers()).toBe(before);
+		expect(clearTimer).toHaveBeenCalledWith(timer);
+		expect(armTimer).toHaveBeenCalledOnce();
 	});
 
 	it("removes the abort listener of a waiter it settles", async () => {
@@ -38,7 +39,7 @@ describe("event bus close releases what it holds", () => {
 		// nothing observable, so asserting on behaviour proves nothing.
 		let attached = 0;
 		const signal = new Proxy(controller.signal, {
-			get(target, property, receiver) {
+			get(target, property) {
 				if (property === "addEventListener") {
 					return (...args: Parameters<AbortSignal["addEventListener"]>) => {
 						attached++;
@@ -51,7 +52,8 @@ describe("event bus close releases what it holds", () => {
 						target.removeEventListener(...args);
 					};
 				}
-				const value = Reflect.get(target, property, receiver);
+				// The signal is the receiver: Bun's getters reject the proxy.
+				const value = Reflect.get(target, property);
 				return typeof value === "function" ? value.bind(target) : value;
 			},
 		});
