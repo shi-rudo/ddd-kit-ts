@@ -173,6 +173,27 @@ function createInMemoryHarness(
 	};
 }
 
+/** The in-memory reference behind the plain `Outbox` port, without dispatch tracking. */
+function createPlainOutboxHarness(): OutboxContractHarness<TestEvent> {
+	const harness = createInMemoryHarness();
+	return {
+		...harness,
+		createEnvironment: async () => {
+			const environment = await harness.createEnvironment();
+			const outbox = environment.outbox;
+			const plainOutbox: Outbox<TestEvent, never> = {
+				add: (events, tx) => outbox.add(events, tx),
+				endEventSources: (sources, tx) => outbox.endEventSources(sources, tx),
+				getPending: (limit, context) => outbox.getPending(limit, context),
+				markDispatched: (dispatchIds, context) =>
+					outbox.markDispatched(dispatchIds, context),
+			};
+			return { ...environment, outbox: plainOutbox };
+		},
+		failuresToDeadLetter: undefined,
+	};
+}
+
 describe("outbox contract suite against InMemoryOutbox", () => {
 	const tests = createOutboxContractTests(createInMemoryHarness());
 
@@ -399,13 +420,11 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 		await expect(orderTest?.run()).resolves.toBeUndefined();
 	});
 
-	it("a plain-outbox harness marks the tracking tests as skipped, with a loud run()", async () => {
-		const plain = createInMemoryHarness();
-		plain.failuresToDeadLetter = undefined;
-		const plainTests = createOutboxContractTests(plain);
-		const skipped = plainTests.filter((test) => test.skipped);
-		expect(skipped.length).toBe(10); // the ten tracking tests
-		await expect(skipped[1]?.run()).rejects.toThrow("skipped");
+	it("a plain-outbox harness leaves out the ten tracking tests and skips nothing", () => {
+		const plainTests = createOutboxContractTests(createPlainOutboxHarness());
+
+		expect(plainTests).toHaveLength(tests.length - 10);
+		expect(plainTests.filter((test) => test.skipped)).toEqual([]);
 	});
 
 	it("a claiming-getPending harness skips every un-acked re-poll test", () => {
@@ -446,5 +465,44 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 			"dedupesOnEventId",
 			"dedupesOnEventId",
 		]);
+	});
+});
+
+describe("outbox contract suite against a plain outbox", () => {
+	for (const test of createOutboxContractTests(createPlainOutboxHarness())) {
+		(test.skipped ? it.skip : it)(test.name, test.run);
+	}
+});
+
+describe("the declaration check of an outbox contract harness", () => {
+	const DECLARATION_CHECK =
+		"the harness declares failuresToDeadLetter exactly when the outbox tracks dispatches";
+	const declarationCheck = (harness: OutboxContractHarness<TestEvent>) =>
+		createOutboxContractTests(harness).find(
+			(test) => test.name === DECLARATION_CHECK,
+		);
+
+	it("runs as the first test", () => {
+		const tests = createOutboxContractTests(createInMemoryHarness());
+
+		expect(tests[0]?.name).toBe(DECLARATION_CHECK);
+	});
+
+	it("fails when the harness declares no failuresToDeadLetter for a tracking outbox", async () => {
+		const harness = createInMemoryHarness();
+		harness.failuresToDeadLetter = undefined;
+
+		await expect(declarationCheck(harness)?.run()).rejects.toThrow(
+			/failuresToDeadLetter/,
+		);
+	});
+
+	it("fails when the harness declares failuresToDeadLetter for a plain outbox", async () => {
+		const harness = createPlainOutboxHarness();
+		harness.failuresToDeadLetter = MAX_ATTEMPTS;
+
+		await expect(declarationCheck(harness)?.run()).rejects.toThrow(
+			/failuresToDeadLetter/,
+		);
 	});
 });

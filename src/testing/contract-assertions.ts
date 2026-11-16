@@ -24,7 +24,11 @@ import { deepEqual } from "../internal/structural/deep-equal";
 export interface ContractTest {
 	name: string;
 	run: () => Promise<void>;
-	/** Present when the harness lacks the capability this test needs. */
+	/**
+	 * Present when the test applies to the adapter, but the harness or the
+	 * adapter does not prove its rule. A test of an operation that the adapter
+	 * does not have is not in the suite at all.
+	 */
 	skipped?: { capability: string };
 }
 
@@ -361,6 +365,20 @@ export function gatedContractTest(
 	return gate.satisfiedBy
 		? test
 		: skippedContractTest(test.name, gate.capability);
+}
+
+/**
+ * The tests of an operation or a port variant, or none when the adapter does
+ * not have it. Such a test does not apply, so the suite leaves it out instead
+ * of reporting an unproven guarantee. Every suite that leaves tests out also
+ * checks that the harness declares what the adapter really has, so a wrong
+ * declaration fails loud.
+ */
+export function applicableContractTests(
+	applies: boolean,
+	...tests: ContractTest[]
+): ContractTest[] {
+	return applies ? tests : [];
 }
 
 /**

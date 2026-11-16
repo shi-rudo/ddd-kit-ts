@@ -848,15 +848,18 @@ for (const contract of createRepositoryContractTests(harness)) {
 }
 ```
 
-Keep capability skips visible. They record a guarantee the adapter does not
-yet prove.
+Keep capability skips visible. A skipped test names a rule that applies to
+the adapter, but that the adapter or the harness does not yet prove.
 
+A test of an operation that the repository does not have is not in the suite.
 An append-only port has no `update`. Set `updatesAreSupported: false` on the
-harness, and the suite skips every update proof. The duplicate-add proof is
-the concurrency proof that remains, so it is mandatory there. Provide
-`createAggregateWithId` and keep `insertsAreDuplicateChecked`, or the proof
-fails instead of skipping. Keep the default for every port with `update`: the
-skipped proofs are the OCC proofs.
+harness, and the suite leaves out every update proof. A port without `remove`
+keeps the default `removesAreSupported`, and the suite leaves out the remove
+proofs. The suite checks both values against the repository and fails when
+one does not match, so a wrong value cannot drop the OCC proofs. The
+duplicate-add proof is the concurrency proof that remains for an append-only
+port, so it is mandatory there. Provide `createAggregateWithId` and keep
+`insertsAreDuplicateChecked`, or the proof fails instead of skipping.
 
 The suite is the only proof of the OCC predicate. A missing or wrong predicate
 raises no error: the stale write succeeds, and the newer state is lost. The

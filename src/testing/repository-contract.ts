@@ -7,6 +7,7 @@ import type { Id } from "../domain/identity/id";
 import { deepEqual } from "../internal/structural/deep-equal";
 import type { CommittedDomainEvent } from "../messaging/committed-event";
 import {
+	applicableContractTests,
 	assert,
 	assertChainConflictNamesIntent,
 	assertChainContainsKitError,
@@ -85,13 +86,20 @@ export interface RepositoryContractHarness<
 	insertsAreDuplicateChecked?: boolean;
 	/**
 	 * Opt out only for an append-only port, one that the definition marks
-	 * with `appendOnly: true`. The suite then skips every update proof. The
-	 * duplicate-add proof is the concurrency proof that remains, so it is
-	 * mandatory. Provide `createAggregateWithId` and keep
-	 * `insertsAreDuplicateChecked`, or the proof fails instead of skipping.
+	 * with `appendOnly: true`. The suite then leaves out every update proof,
+	 * because they do not apply. The duplicate-add proof is the concurrency
+	 * proof that remains, so it is mandatory. Provide `createAggregateWithId`
+	 * and keep `insertsAreDuplicateChecked`, or the proof fails instead of
+	 * skipping. The suite fails when this value does not say whether the
+	 * repository has `update`.
 	 */
 	updatesAreSupported?: boolean;
-	/** Enables physical-remove behavior and stale-remove OCC tests. */
+	/**
+	 * Declare `true` when the repository has `remove`, that is, when the
+	 * definition sets `physicalRemoval: true`. Without it, the suite leaves
+	 * out the remove proofs. The suite fails when this value does not say
+	 * whether the repository has `remove`.
+	 */
 	removesAreSupported?: boolean;
 	/** The remove flush predicates on the version captured at load. */
 	removesAreVersionChecked?: boolean;
@@ -163,10 +171,6 @@ export function createRepositoryContractTests<
 		);
 		repository.update(aggregate);
 	};
-	const updateGate = {
-		capability: "updatesAreSupported",
-		satisfiedBy: updatesAreSupported,
-	};
 
 	async function seed(environment: Environment): Promise<TAggregate> {
 		const aggregate = harness.createAggregate();
@@ -199,6 +203,26 @@ export function createRepositoryContractTests<
 			() => harness.createAggregate().id,
 			overlappingCallsBoundMs,
 		),
+		{
+			name: "the harness declares the update and remove that the repository has",
+			run: inEnvironment(async (environment) => {
+				await environment.run(async ({ repository }) => {
+					// The suite leaves out the proofs of an operation that the
+					// harness declares absent. A wrong declaration would drop
+					// them silently, so it fails here.
+					assertEqual(
+						typeof repository.update === "function",
+						updatesAreSupported,
+						"updatesAreSupported must say whether the repository has update",
+					);
+					assertEqual(
+						typeof repository.remove === "function",
+						removesAreSupported,
+						"removesAreSupported must say whether the repository has remove",
+					);
+				});
+			}),
+		},
 		{
 			name: "add flushes a new aggregate and its exact event batch atomically",
 			run: inEnvironment(async (environment) => {
@@ -282,7 +306,7 @@ export function createRepositoryContractTests<
 				});
 			}),
 		},
-		gatedContractTest(updateGate, {
+		...applicableContractTests(updatesAreSupported, {
 			name: "MANDATORY stale update: writer B conflicts after writer A commits and persists nothing",
 			run: inEnvironment(async (environment) => {
 				const seeded = await seed(environment);
@@ -418,7 +442,7 @@ export function createRepositoryContractTests<
 				});
 			}),
 		},
-		gatedContractTest(updateGate, {
+		...applicableContractTests(updatesAreSupported, {
 			name: "an unchanged explicit update is safe and emits no event",
 			run: inEnvironment(async (environment) => {
 				const seeded = await seed(environment);
@@ -511,8 +535,8 @@ export function createRepositoryContractTests<
 	);
 
 	tests.push(
-		gatedContractTest(
-			updateGate,
+		...applicableContractTests(
+			updatesAreSupported,
 			gatedContractTest(
 				{
 					capability: "mutateVersionOnly",
@@ -555,8 +579,8 @@ export function createRepositoryContractTests<
 	);
 
 	tests.push(
-		gatedContractTest(
-			updateGate,
+		...applicableContractTests(
+			updatesAreSupported,
 			gatedContractTest(
 				{
 					capability: "mutateChildCollection",
@@ -585,38 +609,32 @@ export function createRepositoryContractTests<
 	);
 
 	tests.push(
-		gatedContractTest(
-			{
-				capability: "removesAreSupported",
-				satisfiedBy: removesAreSupported,
-			},
-			{
-				name: "remove tombstones the identity and physically removes at commit",
-				run: inEnvironment(async (environment) => {
-					const seeded = await seed(environment);
-					await environment.run(async ({ repository }) => {
-						assert(repository.remove !== undefined, "remove capability gate");
-						const aggregate = await load(repository, seeded.id);
-						repository.remove(aggregate);
-						assert(
-							(await repository.findById(seeded.id)) === undefined,
-							"a removed aggregate is immediately absent from the Unit of Work",
-						);
-					});
+		...applicableContractTests(removesAreSupported, {
+			name: "remove tombstones the identity and physically removes at commit",
+			run: inEnvironment(async (environment) => {
+				const seeded = await seed(environment);
+				await environment.run(async ({ repository }) => {
+					assert(repository.remove !== undefined, "remove capability gate");
+					const aggregate = await load(repository, seeded.id);
+					repository.remove(aggregate);
 					assert(
-						(await environment.run(({ repository }) =>
-							repository.findById(seeded.id),
-						)) === undefined,
-						"remove must physically remove the aggregate after commit",
+						(await repository.findById(seeded.id)) === undefined,
+						"a removed aggregate is immediately absent from the Unit of Work",
 					);
-				}),
-			},
-		),
+				});
+				assert(
+					(await environment.run(({ repository }) =>
+						repository.findById(seeded.id),
+					)) === undefined,
+					"remove must physically remove the aggregate after commit",
+				);
+			}),
+		}),
 	);
 
 	tests.push(
-		gatedContractTest(
-			updateGate,
+		...applicableContractTests(
+			updatesAreSupported && removesAreSupported,
 			gatedContractTest(
 				{
 					capability: "removesAreVersionChecked",

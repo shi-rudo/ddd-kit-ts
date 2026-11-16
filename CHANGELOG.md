@@ -318,6 +318,15 @@ immutable. Run one kit version per process during a cutover.
 - The repository contract suites are the v3 suites under the same names.
   Their failure messages start with "Contract violated:" and "Contract test
   skipped:".
+- A contract suite leaves out a test that does not apply to the adapter: the
+  update proofs for an append-only repository, the remove proofs for a
+  repository without `remove`, and the dispatch-tracking tests for a plain
+  `Outbox`. `skipped` marks only a rule that applies, but that the adapter or
+  the harness does not prove. Each suite checks the declaration against the
+  adapter: `updatesAreSupported` and `removesAreSupported` must say whether
+  the repository has `update` and `remove`, and `failuresToDeadLetter` must
+  be present exactly for a `DispatchTrackingOutbox`. A harness with a wrong
+  declaration now fails, where the suite skipped tests before.
 - The domain state machine has its own entry point,
   `@shirudo/ddd-kit/state-machine`: `DomainStateMachine`,
   `transitionDomainState`, `canTransitionDomainState`, its errors, and its

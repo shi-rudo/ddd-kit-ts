@@ -538,9 +538,12 @@ and removal, identity mapping, no-op behavior, nested state, exact outbox
 collection, and rollback. The event-sourced suite checks exact append batches,
 replay, OCC, identity mapping, and atomic stream-plus-outbox rollback.
 
-Optional capabilities produce visible skipped tests. A skip is an unproven
-guarantee, not a pass. Run SQL or ORM adapters against a real database. An
-in-memory fake cannot prove the actual `WHERE version = ...` clause.
+A rule that applies, but that the harness does not prove, produces a visible
+skipped test. A skip is an unproven guarantee, not a pass. A test of an
+operation that the repository does not have, such as `update` on an
+append-only port, is not in the suite. Run SQL or ORM adapters against a real
+database. An in-memory fake cannot prove the actual `WHERE version = ...`
+clause.
 The database must permit overlapping `run` calls: the stale-writer proofs hold
 one transaction open while a second one commits. A single-connection embedded
 database cannot host the suites. See
