@@ -257,6 +257,17 @@ move when the aggregate moves. A change set that aliases it can change after
 registration. Do not add setters, baseline fields, or dirty flags to the
 aggregate for the adapter's convenience.
 
+One aggregate state needs no copy: the state of an aggregate with
+`deepFreezeState: true`. The whole state graph is frozen, and each state
+change replaces the state object, so a captured state never moves. `capture`
+and `changes` can return that state as it is. For an unchanged aggregate,
+`deepEqual` then finds the same object on both sides and does not walk it.
+Under the default shallow freeze, a nested object of the state stays open. A
+domain method that writes into it changes the baseline too. The change set
+then misses the write. The commit check that reports `UNREGISTERED_CHANGES`
+misses it too. Copy such a state; see
+[Aggregates -> Reading State from Outside](./aggregates.md#reading-state-from-outside).
+
 A column that the store owns never enters the aggregate or the capture.
 Examples are an `updatedAt` that the adapter or the database stamps, and a row
 version that the database manages. `capture` projects domain state only.

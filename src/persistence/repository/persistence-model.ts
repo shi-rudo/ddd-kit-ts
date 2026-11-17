@@ -17,6 +17,12 @@ export interface PersistenceModel<TAggregate, TBaseline, TChangeSet> {
 	 * Return a copied value or an immutable value object: the Unit of Work
 	 * retains it as a baseline and cannot make an arbitrary adapter type safe.
 	 *
+	 * The state of an aggregate with `deepFreezeState: true` is such an
+	 * immutable value, so `capture` can return it without a copy. Under the
+	 * default shallow freeze, copy the state. A nested object stays open
+	 * there, and a write into it changes the baseline too. The change set
+	 * then misses that write.
+	 *
 	 * Capture must be deterministic for an unchanged aggregate: the Unit of
 	 * Work compares successive captures to detect mutation after write
 	 * registration. A capture that embeds ambient values (clock reads,

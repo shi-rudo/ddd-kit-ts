@@ -328,6 +328,33 @@ when it registers the write, and at commit. The snapshot model copies the
 captured DTO once more, so a snapshot capture copies twice. Application code
 reads domain queries and never the DTO in a loop.
 
+An aggregate with `deepFreezeState: true` can leave out the copy. Its whole
+state graph is frozen, and each state change replaces the state object. The
+state is then an immutable value already, and the getter returns it as it is:
+
+```ts
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
+  constructor(id: OrderId, state: OrderState) {
+    super(id, state, { deepFreezeState: true });
+  }
+
+  get plainState(): Readonly<OrderState> {
+    return this.state;
+  }
+}
+```
+
+Keep the copy under the default shallow freeze. A nested object of the state
+stays open there, so a value that the getter returned can change later. A
+persistence baseline that changes with the aggregate hides the write from the
+change set.
+
+A state that holds only primitives has no nested object. The shallow freeze
+does not guard that property: a later nested field opens the state again. Set
+`deepFreezeState` before the getter returns such a state. `deepFreezeState`
+is for a plain-data state only; see
+[Entities -> State encapsulation, freezing, and ownership](./entities.md#state-encapsulation-freezing-and-ownership).
+
 `copyPlainData` copies under the plain-data rule of the kit (see "One rule
 for plain data" in the design decisions). A plain copy of a class instance
 would keep its data properties and lose the methods on its prototype, so the
