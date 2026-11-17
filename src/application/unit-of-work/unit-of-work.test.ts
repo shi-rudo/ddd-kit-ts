@@ -1661,6 +1661,64 @@ describe("UnitOfWork", () => {
 			});
 		});
 
+		it("lists the enumerable own properties of the adapter as own keys of the facade", async () => {
+			await createReflectiveUow().run(async ({ repositories }) => {
+				expect(Object.keys(repositories.orders)).toEqual([
+					"label",
+					"read",
+					"fixed",
+				]);
+			});
+		});
+
+		it("reports an own property of the adapter as an own property of the facade", async () => {
+			await createReflectiveUow().run(async ({ repositories }) => {
+				expect(Object.hasOwn(repositories.orders, "label")).toBe(true);
+			});
+		});
+
+		it("keeps the own properties of the adapter after the facade stops to accept new properties", async () => {
+			await createReflectiveUow().run(async ({ repositories }) => {
+				Object.preventExtensions(repositories.orders);
+
+				expect(Object.keys(repositories.orders)).toEqual([
+					"label",
+					"read",
+					"fixed",
+				]);
+				expect(repositories.orders.label).toBe("orders");
+			});
+		});
+
+		it("keeps a property that the application defined on the facade when the own keys are read", async () => {
+			await createReflectiveUow().run(async ({ repositories }) => {
+				Object.defineProperty(repositories.orders, "label", {
+					value: "facade label",
+					enumerable: true,
+					configurable: true,
+				});
+
+				expect(Object.keys(repositories.orders)).toEqual([
+					"label",
+					"read",
+					"fixed",
+				]);
+				expect(repositories.orders.label).toBe("facade label");
+			});
+		});
+
+		it("lists the own keys in the order of the adapter after an assignment through the facade", async () => {
+			await createReflectiveUow().run(async ({ repositories }) => {
+				repositories.orders.read = () => "replacement";
+
+				expect(Object.keys(repositories.orders)).toEqual([
+					"label",
+					"read",
+					"fixed",
+				]);
+			});
+		});
+
 		it("uses a replacement method after a forwarded method was cached", async () => {
 			await createReflectiveUow().run(async ({ repositories }) => {
 				const cachedRead = repositories.orders.read;
