@@ -257,6 +257,10 @@ function createUow(overrides?: {
 	scope?: TransactionScope<undefined>;
 	outbox?: Outbox<TestEvent>;
 	bus?: EventBus<TestEvent>;
+	flush?: (
+		transaction: undefined,
+		write: AggregatePersistenceWrite<MockAggregate, Version | undefined>,
+	) => Promise<void>;
 	onTracking?: (tracking: RepositoryTracking<MockAggregate>) => void;
 }) {
 	const outbox = overrides?.outbox ?? recordingOutbox<TestEvent>();
@@ -271,7 +275,9 @@ function createUow(overrides?: {
 				aggregate: MockAggregate,
 				persistence: versionPersistenceModel<MockAggregate>(),
 				physicalRemoval: true,
-				flush: async () => {},
+				flush: async (tx: undefined, write) => {
+					await overrides?.flush?.(tx, write);
+				},
 				create: (tx: undefined, tracking) => {
 					overrides?.onTracking?.(tracking);
 					return new FakeOrderRepository(tx, tracking);
@@ -485,19 +491,35 @@ describe("UnitOfWork", () => {
 			const registered = createMockAggregate("registered");
 			const forgotten = createMockAggregate("forgotten");
 			const flushed: string[] = [];
-			const uow = new UnitOfWork({
-				scope: createMockScope(),
-				outbox: recordingOutbox<TestEvent>(),
-				repositories: {
-					orders: defineTestRepository({
-						aggregate: MockAggregate,
-						persistence: versionPersistenceModel<MockAggregate>(),
-						create: (_tx: undefined, tracking) =>
-							new FakeOrderRepository(undefined, tracking),
-						flush: async (_tx: undefined, write) => {
-							flushed.push(write.aggregateIdentity.aggregateId);
-						},
-					}),
+			const { uow } = createUow({
+				flush: async (_tx, write) => {
+					flushed.push(write.aggregateIdentity.aggregateId);
+				},
+			});
+
+			const rejection = await uow
+				.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(registered);
+					repositories.orders.trackLoaded(forgotten);
+					registered.change();
+					repositories.orders.update(registered);
+					forgotten.change();
+				})
+				.catch((error: unknown) => error);
+
+			expect(rejection).toMatchObject({
+				code: "UNREGISTERED_CHANGES",
+				details: { identity: forgotten.aggregateIdentity },
+			});
+			expect(flushed).toEqual([]);
+		});
+
+		it("reports the unregistered change, not the failure of a flush", async () => {
+			const registered = createMockAggregate("registered");
+			const forgotten = createMockAggregate("forgotten");
+			const { uow } = createUow({
+				flush: async () => {
+					throw new Error("the flush failed");
 				},
 			});
 
@@ -512,34 +534,27 @@ describe("UnitOfWork", () => {
 				.catch((error: unknown) => error);
 
 			expect(rejection).toMatchObject({ code: "UNREGISTERED_CHANGES" });
-			expect(flushed).toEqual([]);
 		});
 
-		it("flushes no write when an aggregate changed after its registration", async () => {
-			const aggregate = createMockAggregate("order-1");
+		it("flushes no write of any aggregate when one changed after its registration", async () => {
+			const unchanged = createMockAggregate("unchanged");
+			const changedLate = createMockAggregate("changed-late");
 			const flushed: string[] = [];
-			const uow = new UnitOfWork({
-				scope: createMockScope(),
-				outbox: recordingOutbox<TestEvent>(),
-				repositories: {
-					orders: defineTestRepository({
-						aggregate: MockAggregate,
-						persistence: versionPersistenceModel<MockAggregate>(),
-						create: (_tx: undefined, tracking) =>
-							new FakeOrderRepository(undefined, tracking),
-						flush: async (_tx: undefined, write) => {
-							flushed.push(write.aggregateIdentity.aggregateId);
-						},
-					}),
+			const { uow } = createUow({
+				flush: async (_tx, write) => {
+					flushed.push(write.aggregateIdentity.aggregateId);
 				},
 			});
 
 			await expectTrackingFailure(
 				uow.run(async ({ repositories }) => {
-					repositories.orders.trackLoaded(aggregate);
-					aggregate.change();
-					repositories.orders.update(aggregate);
-					aggregate.change();
+					repositories.orders.trackLoaded(unchanged);
+					repositories.orders.trackLoaded(changedLate);
+					unchanged.change();
+					repositories.orders.update(unchanged);
+					changedLate.change();
+					repositories.orders.update(changedLate);
+					changedLate.change();
 				}),
 				"mutated_after_registration",
 			);
@@ -3834,6 +3849,52 @@ describe("UnitOfWork", () => {
 
 			expect(agg.version).toBe(1);
 			expect(rejection).toMatchObject({ code: "UNREGISTERED_CHANGES" });
+		});
+
+		it("flushes no write when a decision is added after load without a version change", async () => {
+			const registered = createMockAggregate("registered");
+			const forgotten = loadable("forgotten");
+			type Loadable = ReturnType<typeof loadable>;
+			const flushed: string[] = [];
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: recordingOutbox<TestEvent>(),
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						create: (_tx: undefined, tracking) =>
+							new FakeOrderRepository(undefined, tracking),
+						flush: async (_tx: undefined, write) => {
+							flushed.push(write.aggregateIdentity.aggregateId);
+						},
+					}),
+					loadables: defineTestRepository({
+						aggregate: forgotten.constructor as AggregateClass<Loadable>,
+						persistence: versionPersistenceModel<Loadable>(),
+						flush: async () => {},
+						create: (_tx: undefined, tracking) => ({
+							trackLoaded: (loaded: Loadable) => tracking.trackLoaded(loaded),
+						}),
+					}),
+				},
+			});
+
+			const rejection = await uow
+				.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(registered);
+					repositories.loadables.trackLoaded(forgotten);
+					registered.change();
+					repositories.orders.update(registered);
+					forgotten.note(testEvent("forgotten"));
+				})
+				.catch((error: unknown) => error);
+
+			expect(rejection).toMatchObject({
+				code: "UNREGISTERED_CHANGES",
+				details: { identity: forgotten.aggregateIdentity },
+			});
+			expect(flushed).toEqual([]);
 		});
 
 		it("does not throw when the mutated aggregate was registered", async () => {
