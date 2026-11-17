@@ -89,7 +89,7 @@ decision first and then register its lifecycle explicitly:
 await uow.run(async ({ repositories }) => {
   const order = await repositories.orders.getById(orderId);
   order.confirm();
-  repositories.orders.update(order);
+  repositories.orders.update(order, { expectedVersion: versionAtLoad });
 });
 ```
 
@@ -231,7 +231,7 @@ Use the explicit lifecycle methods instead:
 
 ```ts
 repositories.orders.add(newOrder);
-repositories.orders.update(loadedOrder);
+repositories.orders.update(loadedOrder, { expectedVersion: versionAtLoad });
 ```
 
 The unit of work captures the expected version when the read adapter calls
@@ -294,7 +294,7 @@ const orderB = await repositories.orders.findById(orderId);
 
 orderA.confirm();
 orderB.ship("tracking-123");
-repositories.orders.update(orderA);
+repositories.orders.update(orderA, { expectedVersion: versionAtLoad });
 ```
 
 If `orderA` and `orderB` are different objects with the same id, both can carry pending events and both can be registered. Object-identity dedupe cannot help, because these are genuinely two JavaScript objects. Depending on flush order, you can get duplicate events, stale state, or a concurrency conflict that looks random.

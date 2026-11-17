@@ -33,7 +33,7 @@ interface AggregatePersistence<TAggregate, TId> {
   findById(id: TId): Promise<TAggregate | undefined>;
   getById(id: TId): Promise<TAggregate>;
   add(aggregate: TAggregate): void;
-  update(aggregate: TAggregate): void;
+  update(aggregate: TAggregate, expectation: WriteExpectation): void;
 }
 ```
 
@@ -44,7 +44,8 @@ interface TemporaryOrderRepository
   extends Repository<Order, OrderId> {}
 ```
 
-`Repository` adds `remove(aggregate)`. It is the full collection contract.
+`Repository` adds `remove(aggregate, expectation)`. It is the full collection
+contract.
 `AggregatePersistence` is the smaller contract for retained records and event
 streams, where physical removal is not part of normal operation.
 
@@ -73,7 +74,7 @@ await new UnitOfWork(deps).run(async ({ repositories }) => {
   const order = await repositories.orders.getById(orderId);
   order.confirm();
 
-  repositories.orders.update(order);
+  repositories.orders.update(order, { expectedVersion: versionAtLoad });
 });
 ```
 
@@ -85,6 +86,23 @@ separate failure from optimistic concurrency.
 The application-facing methods only register intent. Durable I/O happens
 after the callback resolves, inside the active transaction. Make every domain
 decision first and call `add`, `update`, or `remove` last.
+
+### An update states its expected version
+
+`update` and `remove` take `{ expectedVersion }` as the second argument. It is
+the version of the aggregate that the decision of this write used. The
+argument has no default.
+
+| The decision used | Pass |
+| --- | --- |
+| only the state that this run loaded | `versionAtLoad` |
+| a read that a person or another system made before this run | the version of that read |
+
+The Unit of Work compares the value with the version that it loaded. If they
+differ, the call throws `ExpectedVersionMismatchError` and registers no
+write. A call without the argument throws `AGGREGATE_TRACKING` with the
+reason `expected_version_missing`. See
+[Concurrency -> The version that the caller saw](./concurrency.md#the-version-that-the-caller-saw).
 
 ## Loading is reconstitution
 
@@ -749,7 +767,7 @@ await new UnitOfWork(deps).run(async ({ repositories }) => {
   const order = await repositories.orders.getById(orderId);
 
   order.archive(reason, clock());
-  repositories.orders.update(order);
+  repositories.orders.update(order, { expectedVersion: versionAtLoad });
 });
 ```
 
@@ -760,7 +778,7 @@ await new UnitOfWork(deps).run(async ({ repositories }) => {
   const order = await repositories.orders.getById(orderId);
 
   order.recordErasure(erasedAt);
-  repositories.orders.remove(order);
+  repositories.orders.remove(order, { expectedVersion: versionAtLoad });
 });
 ```
 

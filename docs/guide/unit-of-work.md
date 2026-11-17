@@ -183,13 +183,19 @@ await new UnitOfWork(deps).run(async ({ repositories }) => {
 
   order.confirm();
 
-  repositories.orders.update(order);
+  repositories.orders.update(order, { expectedVersion: versionAtLoad });
 });
 ```
 
 `add` means that the aggregate is new in this operation. `update` means that
 this operation loaded the exact instance. The call site shows this distinction.
 The adapter and aggregate do not infer it from `version`.
+
+`update` and `remove` also state the version that the decision used.
+`versionAtLoad` is the value for a use case that decides only on the state
+that it loaded. A use case that carries the decision of a person passes the
+version that the person saw. See
+[Concurrency -> The version that the caller saw](./concurrency.md#the-version-that-the-caller-saw).
 
 Call the registration method last. After a successful `add`, `update`, or
 `remove`, the aggregate is sealed for that run. A later version change, event
@@ -235,7 +241,7 @@ await uow.run(
   async ({ repositories }) => {
     const order = await repositories.orders.getById(orderId);
     order.confirm();
-    repositories.orders.update(order);
+    repositories.orders.update(order, { expectedVersion: versionAtLoad });
   },
   { stampOptions: { metadata: { correlationId: request.correlationId } } },
 );
@@ -367,7 +373,7 @@ await new UnitOfWork(deps).run(async ({ repositories }) => {
   const booking = await repositories.bookings.getById(bookingId);
 
   booking.requestPayment(paymentId);
-  repositories.bookings.update(booking);
+  repositories.bookings.update(booking, { expectedVersion: versionAtLoad });
 });
 ```
 
@@ -387,7 +393,7 @@ await new UnitOfWork(deps).run(
     order.confirm();
 
     if (signal?.aborted) throw signal.reason;
-    repositories.orders.update(order);
+    repositories.orders.update(order, { expectedVersion: versionAtLoad });
   },
   { signal: AbortSignal.timeout(5_000) },
 );
@@ -409,6 +415,7 @@ code of a `KitWiringError`:
 | `AGGREGATE_TRACKING` | invalid add/update/remove lifecycle or mutation after registration |
 | `UNREGISTERED_CHANGES` | a loaded aggregate changed but the use case never called `update` |
 | `ConcurrencyConflictError` | the adapter's expected-version predicate lost a race |
+| `ExpectedVersionMismatchError` | the caller expects another version than the one that this unit of work loaded |
 | `DuplicateAggregateError` | an `add` collided with an existing identity |
 | `INVALID_REPOSITORY_ADAPTER` | a repository factory returned no adapter object, or an adapter that defines `add`, `update`, or `remove` |
 | `CommitError` | work completed, but a step after it (such as the outbox write) failed and the rollback succeeded, or the transaction commit failed |

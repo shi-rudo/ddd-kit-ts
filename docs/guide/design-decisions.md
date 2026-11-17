@@ -259,7 +259,7 @@ await uow.run(
   async ({ repositories }) => {
     const order = await repositories.orders.getById(command.orderId);
     order.confirm();
-    repositories.orders.update(order);
+    repositories.orders.update(order, { expectedVersion: versionAtLoad });
   },
   { stampOptions: { metadata: { correlationId: command.correlationId } } },
 );

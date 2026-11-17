@@ -20,7 +20,7 @@ The kit gives you five pieces:
 The main path looks like this:
 
 ```ts
-import { UnitOfWork } from "@shirudo/ddd-kit";
+import { UnitOfWork, versionAtLoad } from "@shirudo/ddd-kit";
 import { InMemoryOutbox } from "@shirudo/ddd-kit/testing";
 
 const outbox = new InMemoryOutbox<OrderEvent>();
@@ -33,13 +33,13 @@ const orderId = await new UnitOfWork({
   const order = await repositories.orders.getById(id);
 
   order.confirm();
-  repositories.orders.update(order);
+  repositories.orders.update(order, { expectedVersion: versionAtLoad });
   return order.id;
 });
 ```
 
-The important line is `repositories.orders.update(order)`. It registers the
-persistence intent after the domain decision and event recording. The unit of
+The important line is the call of `repositories.orders.update`. It registers
+the persistence intent after the domain decision and event recording. The unit of
 work freezes the change set and exact event batch. It flushes both values in
 the transaction. `withCommit` owns the outbox and post-commit acknowledgement.
 
@@ -153,7 +153,7 @@ await uow.run(async ({ repositories }) => {
   const order = await repositories.orders.getById(orderId);
 
   order.confirm();
-  repositories.orders.update(order);
+  repositories.orders.update(order, { expectedVersion: versionAtLoad });
   return order.id;
 });
 ```

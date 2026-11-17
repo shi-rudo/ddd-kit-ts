@@ -261,7 +261,11 @@ Create a factory for one application composition, request, tenant, or test when
 the immutable default is not the right policy:
 
 ```ts
-import { createDomainEventFactory, UnitOfWork } from "@shirudo/ddd-kit";
+import {
+  createDomainEventFactory,
+  UnitOfWork,
+  versionAtLoad,
+} from "@shirudo/ddd-kit";
 import { ulid } from "ulid";
 
 const domainEvents = createDomainEventFactory({
@@ -274,7 +278,7 @@ await uow.run(
   async ({ repositories }) => {
     const order = await repositories.orders.getById(orderId);
     order.confirm(confirmedAt);
-    repositories.orders.update(order);
+    repositories.orders.update(order, { expectedVersion: versionAtLoad });
   },
   {
     stampOptions: {

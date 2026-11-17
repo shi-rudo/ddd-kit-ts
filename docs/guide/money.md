@@ -614,7 +614,7 @@ app.post("/invoices/:id/lines", async (req, res) => {
     );
 
     invoice.addLine(String(req.body.sku), amount);
-    repositories.invoices.update(invoice);
+    repositories.invoices.update(invoice, { expectedVersion: versionAtLoad });
     return invoice.total;
   });
 

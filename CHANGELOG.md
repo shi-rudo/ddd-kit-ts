@@ -79,6 +79,16 @@ immutable. Run one kit version per process during a cutover.
   [`IQueryableRepository` is gone](docs/guide/migrating-to-v3.md#iqueryablerepository-is-gone).
 - `IdentityMap.set(type, aggregate)` reads the id from the aggregate
   identity; the separate id argument is gone.
+- `update` and `remove` take `{ expectedVersion }` as a required second
+  argument. It is the version that the decision of the write used: the
+  version that the caller saw, or `versionAtLoad` for a use case that decides
+  only on the state that it loaded. The Unit of Work compares it with the
+  loaded version when the call registers the write. The flush guards only the
+  time from the load to the write, so a write that a person decided on an
+  earlier read replaced newer state without an error. A port that declares
+  `update` or `remove` without the `WriteExpectation` parameter does not
+  compile against `defineRepository`. See
+  [The version that the caller saw](docs/guide/concurrency.md#the-version-that-the-caller-saw).
 
 #### Aggregates, entities, and events
 
@@ -367,6 +377,13 @@ immutable. Run one kit version per process during a cutover.
 
 #### Persistence
 
+- `ExpectedVersionMismatchError` (code `EXPECTED_VERSION_MISMATCH`) reports
+  an `update` or a `remove` whose `expectedVersion` differs from the version
+  that the Unit of Work loaded. It carries `identity`, `intent`,
+  `expectedVersion`, and `loadedVersion`, and it is not retryable.
+  `versionAtLoad` and the `WriteExpectation` type are new exports. A call
+  without an expected version throws `AGGREGATE_TRACKING` with the reason
+  `expected_version_missing`.
 - `assertJsonSafe(value, subject)` throws a `TypeError` that names the path when
   JSON does not keep a value exactly. An adapter that stores plain data as JSON
   calls it before it writes.
@@ -565,9 +582,14 @@ immutable. Run one kit version per process during a cutover.
   `onCatalogError` observer before it falls back to the generic view.
 - `issueMessages` of `createKitPublicErrors` and `toProblemDetails` adds the
   message of each validation issue to `details.issues`.
+- `createKitPublicErrors()` maps `EXPECTED_VERSION_MISMATCH` to status 409
+  without a retry hint.
 
 #### Documentation and tooling
 
+- `examples/conflict-handling` shows the two kinds of write. A rename states
+  the version that the editor saw, and a stock reservation states
+  `versionAtLoad` and retries. The concurrency guide renders both handlers.
 - `SECURITY.md` maps the security boundaries of the kit: what reaches a
   client, what reaches a log, the checks for untrusted input, and the known
   gaps. It names GitHub private vulnerability reporting as the channel.

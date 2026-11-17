@@ -145,7 +145,7 @@ eventBus.subscribe("PaymentReceived", async (event, context) => {
     async ({ repositories }) => {
       const saga = await repositories.sagas.getById(event.payload.orderId);
       saga.advanceToShipping();
-      repositories.sagas.update(saga);
+      repositories.sagas.update(saga, { expectedVersion: versionAtLoad });
     },
     { signal: context.signal, publishChain: context.publishChain },
   );
