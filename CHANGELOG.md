@@ -43,7 +43,10 @@ immutable. Run one kit version per process during a cutover.
   The port type argument is explicit, and the Unit of Work installs `add`,
   `update`, and `remove` on the facade, and an adapter that defines them
   itself fails with `INVALID_REPOSITORY_ADAPTER`. A member of the adapter
-  that returns the adapter itself returns the facade. A read adapter returns the result of
+  that returns the adapter itself returns the facade. The facade has the own
+  properties of the adapter as its own. It takes them from the adapter when
+  code first reads its own keys or a property descriptor, or changes a
+  property of the facade. A read adapter returns the result of
   `tracking.trackLoaded`: when two loads of one id overlap, the first tracked
   instance wins. `UnitOfWorkSession`,
   `RepositoryFactories`, and the `rawTransaction` and `session` fields of the
