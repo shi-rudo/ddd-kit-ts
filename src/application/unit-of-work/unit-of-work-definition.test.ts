@@ -8,6 +8,7 @@ import {
 	type KitWiringError,
 } from "../../errors/kit-errors";
 import type { PersistenceModel } from "../../persistence/repository/persistence-model";
+import type { WriteExpectation } from "../../persistence/repository/repository";
 import type { TransactionScope } from "../../persistence/repository/scope";
 import { recordingOutbox } from "../../testing/recording-outbox";
 import type { RepositoryTracking } from "./persistence-contract";
@@ -51,7 +52,7 @@ class Payment extends StateStoredAggregate<
 interface ForStoringOrders {
 	findById(id: OrderId): Promise<Order | null>;
 	add(order: Order): void;
-	update(order: Order): void;
+	update(order: Order, expectation: WriteExpectation): void;
 }
 
 class SqlOrderAdapter {
@@ -215,7 +216,7 @@ describe("UnitOfWork repository definition", () => {
 
 	it("rejects callable ports and incomplete repository wiring", () => {
 		interface ForRemovingOrders extends ForStoringOrders {
-			remove(order: Order): void;
+			remove(order: Order, expectation: WriteExpectation): void;
 		}
 		const invalidDefinitionsMustFailToCompile = (): void => {
 			const buildCallableRepository =
@@ -275,7 +276,7 @@ describe("UnitOfWork repository definition", () => {
 		interface ForStoringPayments {
 			findById(id: OrderId): Promise<Payment | null>;
 			add(payment: Payment): void;
-			update(payment: Payment): void;
+			update(payment: Payment, expectation: WriteExpectation): void;
 		}
 		const paymentPersistence: PersistenceModel<
 			Payment,

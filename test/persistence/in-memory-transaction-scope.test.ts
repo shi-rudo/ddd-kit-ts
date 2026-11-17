@@ -14,6 +14,10 @@ import {
 	type Version,
 } from "../../src";
 import {
+	versionAtLoad,
+	type WriteExpectation,
+} from "../../src/persistence/repository/repository";
+import {
 	InMemoryOutbox,
 	type InMemoryTransactionParticipant,
 	InMemoryTransactionScope,
@@ -101,8 +105,8 @@ class OrderStoreUnavailableError extends InfrastructureError<"ORDER_STORE_UNAVAI
 interface ForStoringOrders {
 	getById(id: OrderId): Promise<Order>;
 	add(order: Order): void;
-	update(order: Order): void;
-	remove(order: Order): void;
+	update(order: Order, expectation: WriteExpectation): void;
+	remove(order: Order, expectation: WriteExpectation): void;
 }
 
 const persistence: PersistenceModel<Order, OrderRow, OrderRow | undefined> = {
@@ -193,11 +197,11 @@ describe("InMemoryTransactionScope with a unit of work", () => {
 			attempt += 1;
 			const order = await repositories.orders.getById(id);
 			if (attempt === 1) {
-				repositories.orders.remove(order);
+				repositories.orders.remove(order, { expectedVersion: versionAtLoad });
 				return "removed";
 			}
 			order.rename("kept");
-			repositories.orders.update(order);
+			repositories.orders.update(order, { expectedVersion: versionAtLoad });
 			return "renamed";
 		});
 

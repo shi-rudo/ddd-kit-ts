@@ -24,6 +24,7 @@ import type { Id } from "../../domain/identity/id";
 import { InfrastructureError } from "../../errors/kit-errors";
 import type { Outbox } from "../../messaging/outbox/ports";
 import type { PersistenceModel } from "../../persistence/repository/persistence-model";
+import type { WriteExpectation } from "../../persistence/repository/repository";
 import type { TransactionScope } from "../../persistence/repository/scope";
 import type { RepositoryTracking } from "./persistence-contract";
 import { defineRepository, UnitOfWork } from "./unit-of-work";
@@ -85,11 +86,11 @@ class OtherOrderReader {
 interface ForStoringOrders {
 	findById(id: OrderId): Promise<Order | null>;
 	add(order: Order): void;
-	update(order: Order): void;
+	update(order: Order, expectation: WriteExpectation): void;
 }
 
 interface ForRemovingOrders extends ForStoringOrders {
-	remove(order: Order): void;
+	remove(order: Order, expectation: WriteExpectation): void;
 }
 
 interface ForAppendingOrders {
@@ -98,7 +99,7 @@ interface ForAppendingOrders {
 }
 
 interface ForAppendingAndRemovingOrders extends ForAppendingOrders {
-	remove(order: Order): void;
+	remove(order: Order, expectation: WriteExpectation): void;
 }
 
 interface ForReadingOrders {
@@ -106,27 +107,49 @@ interface ForReadingOrders {
 }
 
 interface ForStoringOrdersWithOptionalUpdate extends ForAppendingOrders {
-	update?(order: Order): void;
+	update?(order: Order, expectation: WriteExpectation): void;
 }
 
 interface ForRemovingOrdersWithOptionalRemove extends ForStoringOrders {
-	remove?(order: Order): void;
+	remove?(order: Order, expectation: WriteExpectation): void;
 }
 
 interface ForRemovingOrdersById extends ForStoringOrders {
-	remove(id: OrderId): void;
+	remove(id: OrderId, expectation: WriteExpectation): void;
+}
+
+interface ForStoringOrdersWithoutExpectedVersion {
+	findById(id: OrderId): Promise<Order | null>;
+	add(order: Order): void;
+	update(order: Order): void;
+}
+
+interface ForStoringOrdersWithOptionalExpectedVersion {
+	findById(id: OrderId): Promise<Order | null>;
+	add(order: Order): void;
+	update(order: Order, expectation?: WriteExpectation): void;
+}
+
+interface ForStoringOrdersWithBareExpectedVersion {
+	findById(id: OrderId): Promise<Order | null>;
+	add(order: Order): void;
+	update(order: Order, expectedVersion: Version): void;
+}
+
+interface ForRemovingOrdersWithoutExpectedVersion extends ForStoringOrders {
+	remove(order: Order): void;
 }
 
 interface ForStoringOrdersAsynchronously {
 	findById(id: OrderId): Promise<Order | null>;
 	add(order: Order): Promise<void>;
-	update(order: Order): void;
+	update(order: Order, expectation: WriteExpectation): void;
 }
 
 interface ForStoringOrdersFluently {
 	findById(id: OrderId): Promise<Order | null>;
 	add(order: Order): void;
-	update(order: Order): this;
+	update(order: Order, expectation: WriteExpectation): this;
 }
 
 interface ForStoringOrdersWithIndex extends ForStoringOrders {
@@ -136,11 +159,11 @@ interface ForStoringOrdersWithIndex extends ForStoringOrders {
 interface ForStoringOrdersUntyped {
 	findById(id: OrderId): Promise<Order | null>;
 	add(order: Order): any;
-	update(order: Order): void;
+	update(order: Order, expectation: WriteExpectation): void;
 }
 
 interface ForRemovingOrdersAsynchronously extends ForStoringOrders {
-	remove(order: Order): Promise<void>;
+	remove(order: Order, expectation: WriteExpectation): Promise<void>;
 }
 
 type PaymentEvent = DomainEvent<"PaymentCaptured", { readonly paymentId: string }>;
@@ -159,7 +182,7 @@ class Payment extends StateStoredAggregate<
 interface ForStoringPayments {
 	findById(id: OrderId): Promise<Order | null>;
 	add(payment: Payment): void;
-	update(payment: Payment): void;
+	update(payment: Payment, expectation: WriteExpectation): void;
 }
 
 declare const removalFlag: boolean;
@@ -292,6 +315,11 @@ defineOrdersWith((_transaction, tracking) => new SqlOrderAdapter(tracking));`,
 	"async-remove": `defineRepository<ForRemovingOrdersAsynchronously>()({
 	physicalRemoval: true,${adapterWiring}});`,
 	"remove-by-id": `defineRepository<ForRemovingOrdersById>()({
+	physicalRemoval: true,${adapterWiring}});`,
+	"update-without-expected-version": `defineRepository<ForStoringOrdersWithoutExpectedVersion>()({${adapterWiring}});`,
+	"update-with-optional-expected-version": `defineRepository<ForStoringOrdersWithOptionalExpectedVersion>()({${adapterWiring}});`,
+	"update-with-bare-expected-version": `defineRepository<ForStoringOrdersWithBareExpectedVersion>()({${adapterWiring}});`,
+	"remove-without-expected-version": `defineRepository<ForRemovingOrdersWithoutExpectedVersion>()({
 	physicalRemoval: true,${adapterWiring}});`,
 	"union-port": `defineRepository<ForStoringOrders | ForRemovingOrders>()({${adapterWiring}});`,
 	"callable-port": `defineRepository<(required: string) => void>()({${adapterWiring}});`,
@@ -474,7 +502,7 @@ describe("defineRepository compile-time diagnostics", () => {
 		],
 		[
 			"removal-without-remove",
-			"physicalRemoval is true, so the port must declare remove(aggregate): void",
+			"physicalRemoval is true, so the port must declare remove(aggregate, expectation): void",
 		],
 		[
 			"remove-without-removal",
@@ -487,6 +515,22 @@ describe("defineRepository compile-time diagnostics", () => {
 		[
 			"remove-by-id",
 			"the port's remove must accept the definition's aggregate",
+		],
+		[
+			"update-without-expected-version",
+			"the port's update must take the expected version: update(aggregate, expectation: WriteExpectation): void",
+		],
+		[
+			"update-with-optional-expected-version",
+			"the port's update must take the expected version: update(aggregate, expectation: WriteExpectation): void",
+		],
+		[
+			"update-with-bare-expected-version",
+			"the port's update must take the expected version: update(aggregate, expectation: WriteExpectation): void",
+		],
+		[
+			"remove-without-expected-version",
+			"the port's remove must take the expected version: remove(aggregate, expectation: WriteExpectation): void",
 		],
 		["async-add", "the port's add must return void"],
 		["untyped-add", "the port's add must return void"],

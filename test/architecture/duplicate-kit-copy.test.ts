@@ -10,6 +10,7 @@ import {
 	StateStoredAggregate,
 	ValueObject,
 } from "../../src/index";
+import type { WriteExpectation } from "../../src/persistence/repository/repository";
 import { recordingOutbox } from "../../src/testing/recording-outbox";
 
 // A duplicate npm dependency or an adapter package that bundles the kit
@@ -118,7 +119,7 @@ describe("a second loaded copy of the kit", () => {
 	it("rejects a repository definition of the first copy", async () => {
 		const definition = defineRepository<{
 			add(note: Note): void;
-			update(note: Note): void;
+			update(note: Note, expectation: WriteExpectation): void;
 		}>()({
 			aggregate: Note,
 			persistence: {

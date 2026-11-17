@@ -223,7 +223,7 @@ export class IdentityMap {
 	 * Removes the entry for type+id and records a tombstone: subsequent
 	 * {@link get} / {@link has} report absence, and a subsequent
 	 * {@link set} of the same type+id throws `AGGREGATE_DELETED`.
-	 * The Unit of Work calls this as part of `repository.remove(aggregate)`;
+	 * The Unit of Work calls this as part of `repository.remove`;
 	 * repository adapters receive only the read-only
 	 * identity-map view.
 	 */

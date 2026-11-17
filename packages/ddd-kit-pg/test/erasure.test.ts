@@ -15,6 +15,7 @@ import {
 	reconstituteAggregateFromStreamPages,
 	UnitOfWork,
 	type UnstampedDomainEventOf,
+	versionAtLoad,
 } from "@shirudo/ddd-kit";
 import { InMemoryProjectionCheckpointStore } from "@shirudo/ddd-kit/testing";
 import { describe, expect, it } from "vite-plus/test";
@@ -184,7 +185,9 @@ describe("the erasure of an event-sourced aggregate on PostgreSQL", () => {
 		await unitOfWork().run(async ({ repositories }) => {
 			const customer = await repositories.customers.getById(id);
 			customer.recordErasure();
-			repositories.customers.remove(customer);
+			repositories.customers.remove(customer, {
+				expectedVersion: versionAtLoad,
+			});
 		});
 		const erased = await outbox.getPending(10);
 		await projector.project(erased);

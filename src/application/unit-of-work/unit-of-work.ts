@@ -13,6 +13,7 @@ import type { EventBus, PublishChain } from "../../messaging/event-bus/ports";
 import type { OutboxWriter } from "../../messaging/outbox/ports";
 import type { AggregateClass } from "../../persistence/repository/identity-map";
 import type { PersistenceModel } from "../../persistence/repository/persistence-model";
+import type { WriteExpectation } from "../../persistence/repository/repository";
 import type { TransactionScope } from "../../persistence/repository/scope";
 import { withCheckedCommit } from "../cqrs/handler";
 import {
@@ -233,12 +234,13 @@ type InstalledRegistration<
 	PhysicalRemovalRegistration<TAggregate>;
 
 /**
- * Checks a lifecycle member that the port declares: it is required, it
- * accepts the definition's aggregate, and it returns what the installed
- * registration returns. An optional member is the trap of a port that
- * extends a type with `update?` or `remove?`, so it gets its own message.
- * The return check exists because TypeScript lets a member that returns a
- * promise or `this` stand in for one that returns void.
+ * Checks a lifecycle member that the port declares: it is required, it takes
+ * the expected version if it is `update` or `remove`, it accepts the
+ * definition's aggregate, and it returns what the installed registration
+ * returns. An optional member is the trap of a port that extends a type with
+ * `update?` or `remove?`, so it gets its own message. The return check
+ * exists because TypeScript lets a member that returns a promise or `this`
+ * stand in for one that returns void.
  * @inline
  */
 type MemberAcceptsAggregate<
@@ -247,19 +249,41 @@ type MemberAcceptsAggregate<
 	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 > = undefined extends TRepositoryPort[TMember & keyof TRepositoryPort]
 	? RepositoryPortViolation<`the port's ${TMember} must not be optional`>
-	: [TRepositoryPort] extends [Pick<InstalledRegistration<TAggregate>, TMember>]
-		? ReturnsWhatTheRegistrationReturns<
-				ReturnType<
-					Extract<
-						TRepositoryPort[TMember & keyof TRepositoryPort],
-						CallableValue
-					>
-				>,
-				ReturnType<InstalledRegistration<TAggregate>[TMember]>
+	: TakesTheExpectedVersion<
+				TMember,
+				Extract<TRepositoryPort[TMember & keyof TRepositoryPort], CallableValue>
 			> extends true
-			? unknown
-			: RepositoryPortViolation<`the port's ${TMember} must return void`>
-		: RepositoryPortViolation<`the port's ${TMember} must accept the definition's aggregate`>;
+		? [TRepositoryPort] extends [
+				Pick<InstalledRegistration<TAggregate>, TMember>,
+			]
+			? ReturnsWhatTheRegistrationReturns<
+					ReturnType<
+						Extract<
+							TRepositoryPort[TMember & keyof TRepositoryPort],
+							CallableValue
+						>
+					>,
+					ReturnType<InstalledRegistration<TAggregate>[TMember]>
+				> extends true
+				? unknown
+				: RepositoryPortViolation<`the port's ${TMember} must return void`>
+			: RepositoryPortViolation<`the port's ${TMember} must accept the definition's aggregate`>
+		: RepositoryPortViolation<`the port's ${TMember} must take the expected version: ${TMember}(aggregate, expectation: WriteExpectation): void`>;
+
+/**
+ * TypeScript lets a member with one parameter stand in for the installed
+ * member with two. Such a port would hide the expected version from every
+ * caller, and each call would then fail when it runs.
+ * @inline
+ */
+type TakesTheExpectedVersion<
+	TMember extends "add" | "update" | "remove",
+	TDeclared extends CallableValue,
+> = TMember extends "add"
+	? true
+	: Parameters<TDeclared> extends [unknown, WriteExpectation]
+		? true
+		: false;
 
 /**
  * An `any` result would let a caller use a value that the installed
@@ -338,7 +362,7 @@ type RemovalConstraint<
 			? MemberAcceptsAggregate<TRepositoryPort, "remove", TAggregate>
 			: RepositoryPortViolation<"the port declares remove, so the definition must set physicalRemoval: true">
 		: [TRemoval] extends [true]
-			? RepositoryPortViolation<"physicalRemoval is true, so the port must declare remove(aggregate): void">
+			? RepositoryPortViolation<"physicalRemoval is true, so the port must declare remove(aggregate, expectation): void">
 			: unknown;
 
 /**
@@ -569,14 +593,14 @@ export interface AppendOnlyWriteRegistration<
 export interface AggregateWriteRegistration<
 	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 > extends AppendOnlyWriteRegistration<TAggregate> {
-	update(aggregate: TAggregate): void;
+	update(aggregate: TAggregate, expectation: WriteExpectation): void;
 }
 
 /** Optional physical removal added only by an explicit repository definition. */
 export interface PhysicalRemovalRegistration<
 	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 > {
-	remove(aggregate: TAggregate): void;
+	remove(aggregate: TAggregate, expectation: WriteExpectation): void;
 }
 
 /** Dependencies for {@link UnitOfWork}; the app-level singleton part. */
@@ -687,7 +711,9 @@ export interface UnitOfWorkDeps<
  * const result = await uow.run(async ({ repositories }) => {
  *   const restaurant = await repositories.restaurants.getById(id);
  *   restaurant.changeOpeningHours(openingHours);
- *   repositories.restaurants.update(restaurant);
+ *   repositories.restaurants.update(restaurant, {
+ *     expectedVersion: versionAtLoad,
+ *   });
  *   return restaurant.id;
  * });
  * ```

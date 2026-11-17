@@ -7,6 +7,10 @@ import type { Id } from "../domain/identity/id";
 import { deepEqual } from "../internal/structural/deep-equal";
 import type { CommittedDomainEvent } from "../messaging/committed-event";
 import {
+	versionAtLoad,
+	type WriteExpectation,
+} from "../persistence/repository/repository";
+import {
 	applicableContractTests,
 	assert,
 	assertChainConflictNamesIntent,
@@ -33,9 +37,9 @@ export interface ContractRepository<
 	findById(id: TAggregate["id"]): Promise<TAggregate | undefined>;
 	add(aggregate: TAggregate): void;
 	/** An append-only port declares no update. */
-	update?(aggregate: TAggregate): void;
+	update?(aggregate: TAggregate, expectation: WriteExpectation): void;
 	/** Physical removal is an optional persistence capability. */
-	remove?(aggregate: TAggregate): void;
+	remove?(aggregate: TAggregate, expectation: WriteExpectation): void;
 }
 
 /** One isolated real-adapter environment. `run` must permit overlapping calls. */
@@ -169,7 +173,7 @@ export function createRepositoryContractTests<
 			repository.update !== undefined,
 			"the harness keeps updatesAreSupported, but the repository has no update",
 		);
-		repository.update(aggregate);
+		repository.update(aggregate, { expectedVersion: versionAtLoad });
 	};
 
 	async function seed(environment: Environment): Promise<TAggregate> {
@@ -616,7 +620,7 @@ export function createRepositoryContractTests<
 				await environment.run(async ({ repository }) => {
 					assert(repository.remove !== undefined, "remove capability gate");
 					const aggregate = await load(repository, seeded.id);
-					repository.remove(aggregate);
+					repository.remove(aggregate, { expectedVersion: versionAtLoad });
 					assert(
 						(await repository.findById(seeded.id)) === undefined,
 						"a removed aggregate is immediately absent from the Unit of Work",
@@ -652,7 +656,7 @@ export function createRepositoryContractTests<
 								);
 								const stale = await load(repository, seeded.id);
 								await hold();
-								repository.remove(stale);
+								repository.remove(stale, { expectedVersion: versionAtLoad });
 							}),
 						);
 						await awaitOverlappingCall(

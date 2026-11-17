@@ -12,6 +12,7 @@ import {
 import type { Id } from "../../domain/identity/id";
 import {
 	ConcurrencyConflictError,
+	ExpectedVersionMismatchError,
 	InfrastructureError,
 	type KitWiringError,
 } from "../../errors/kit-errors";
@@ -25,6 +26,7 @@ import { InMemoryOutbox } from "../../messaging/outbox/outbox";
 import type { Outbox } from "../../messaging/outbox/ports";
 import type { AggregateClass } from "../../persistence/repository/identity-map";
 import type { PersistenceModel } from "../../persistence/repository/persistence-model";
+import { versionAtLoad } from "../../persistence/repository/repository";
 import { RetryingTransactionScope } from "../../persistence/repository/retrying-scope";
 import type { TransactionScope } from "../../persistence/repository/scope";
 import { recordingOutbox } from "../../testing/recording-outbox";
@@ -413,11 +415,15 @@ describe("UnitOfWork", () => {
 			await uow.run(async ({ repositories }) => {
 				repositories.projected.load(stateOnly);
 				stateOnly.changeValue(2);
-				repositories.projected.update(stateOnly);
+				repositories.projected.update(stateOnly, {
+					expectedVersion: versionAtLoad,
+				});
 
 				repositories.projected.load(eventOnly);
 				eventOnly.announce(event);
-				repositories.projected.update(eventOnly);
+				repositories.projected.update(eventOnly, {
+					expectedVersion: versionAtLoad,
+				});
 			});
 
 			expect(derived).toContain(2);
@@ -479,9 +485,13 @@ describe("UnitOfWork", () => {
 				repositories.orders.trackLoaded(firstLoaded);
 				repositories.orders.trackLoaded(secondLoaded);
 				secondLoaded.change();
-				repositories.orders.update(secondLoaded);
+				repositories.orders.update(secondLoaded, {
+					expectedVersion: versionAtLoad,
+				});
 				firstLoaded.change();
-				repositories.orders.update(firstLoaded);
+				repositories.orders.update(firstLoaded, {
+					expectedVersion: versionAtLoad,
+				});
 			});
 
 			expect(flushed).toEqual(["second-loaded", "first-loaded"]);
@@ -502,7 +512,9 @@ describe("UnitOfWork", () => {
 					repositories.orders.trackLoaded(registered);
 					repositories.orders.trackLoaded(forgotten);
 					registered.change();
-					repositories.orders.update(registered);
+					repositories.orders.update(registered, {
+						expectedVersion: versionAtLoad,
+					});
 					forgotten.change();
 				})
 				.catch((error: unknown) => error);
@@ -528,7 +540,9 @@ describe("UnitOfWork", () => {
 					repositories.orders.trackLoaded(registered);
 					repositories.orders.trackLoaded(forgotten);
 					registered.change();
-					repositories.orders.update(registered);
+					repositories.orders.update(registered, {
+						expectedVersion: versionAtLoad,
+					});
 					forgotten.change();
 				})
 				.catch((error: unknown) => error);
@@ -551,9 +565,13 @@ describe("UnitOfWork", () => {
 					repositories.orders.trackLoaded(unchanged);
 					repositories.orders.trackLoaded(changedLate);
 					unchanged.change();
-					repositories.orders.update(unchanged);
+					repositories.orders.update(unchanged, {
+						expectedVersion: versionAtLoad,
+					});
 					changedLate.change();
-					repositories.orders.update(changedLate);
+					repositories.orders.update(changedLate, {
+						expectedVersion: versionAtLoad,
+					});
 					changedLate.change();
 				}),
 				"mutated_after_registration",
@@ -613,7 +631,9 @@ describe("UnitOfWork", () => {
 					repositories.orders.add(fresh);
 					repositories.orders.trackLoaded(loaded);
 					loaded.change();
-					repositories.orders.update(loaded);
+					repositories.orders.update(loaded, {
+						expectedVersion: versionAtLoad,
+					});
 					return "registered";
 				}),
 			).resolves.toBe("registered");
@@ -845,7 +865,9 @@ describe("UnitOfWork", () => {
 
 			await expectTrackingFailure(
 				uow.run(async ({ repositories }) => {
-					repositories.orders.update(createMockAggregate("o-1"));
+					repositories.orders.update(createMockAggregate("o-1"), {
+						expectedVersion: versionAtLoad,
+					});
 					return undefined;
 				}),
 				"not_loaded",
@@ -1030,9 +1052,11 @@ describe("UnitOfWork", () => {
 				} as unknown as MockAggregate;
 
 				await uow.run(async ({ repositories }) => {
-					expect(() => repositories.orders[operation](impostor)).toThrow(
-						expect.objectContaining({ code: "UNMANAGED_INSTANCE" }),
-					);
+					expect(() =>
+						repositories.orders[operation](impostor, {
+							expectedVersion: versionAtLoad,
+						}),
+					).toThrow(expect.objectContaining({ code: "UNMANAGED_INSTANCE" }));
 					expect(
 						tracking.identityMap.get(MockAggregate, "o-1" as TestId),
 					).toBeUndefined();
@@ -1089,7 +1113,9 @@ describe("UnitOfWork", () => {
 				.run(async ({ repositories }) => {
 					repositories.primary.trackLoaded(aggregate);
 					aggregate.change(testEvent("o-1"));
-					repositories.secondary.update(aggregate);
+					repositories.secondary.update(aggregate, {
+						expectedVersion: versionAtLoad,
+					});
 					return undefined;
 				})
 				.then(
@@ -1110,7 +1136,9 @@ describe("UnitOfWork", () => {
 			const rejection = await uow
 				.run(async ({ repositories }) => {
 					repositories.orders.add(aggregate);
-					repositories.orders.update(aggregate);
+					repositories.orders.update(aggregate, {
+						expectedVersion: versionAtLoad,
+					});
 					return undefined;
 				})
 				.then(
@@ -1139,8 +1167,12 @@ describe("UnitOfWork", () => {
 				uow.run(async ({ repositories }) => {
 					repositories.orders.trackLoaded(aggregate);
 					aggregate.change();
-					repositories.orders.update(aggregate);
-					repositories.orders.remove(aggregate);
+					repositories.orders.update(aggregate, {
+						expectedVersion: versionAtLoad,
+					});
+					repositories.orders.remove(aggregate, {
+						expectedVersion: versionAtLoad,
+					});
 					return undefined;
 				}),
 				"conflicting_intent",
@@ -1176,7 +1208,9 @@ describe("UnitOfWork", () => {
 			await uow.run(async ({ repositories }) => {
 				repositories.orders.trackLoaded(aggregate);
 				aggregate.changeWithUnstampedEvent("o-1");
-				repositories.orders.update(aggregate);
+				repositories.orders.update(aggregate, {
+					expectedVersion: versionAtLoad,
+				});
 				return undefined;
 			});
 
@@ -1191,7 +1225,9 @@ describe("UnitOfWork", () => {
 			await uow.run(async ({ repositories }) => {
 				repositories.orders.trackLoaded(aggregate);
 				aggregate.changeWithUnstampedEvent("o-1");
-				repositories.orders.update(aggregate);
+				repositories.orders.update(aggregate, {
+					expectedVersion: versionAtLoad,
+				});
 				return undefined;
 			});
 
@@ -1209,7 +1245,9 @@ describe("UnitOfWork", () => {
 				async ({ repositories }) => {
 					repositories.orders.trackLoaded(aggregate);
 					aggregate.changeWithUnstampedEvent("o-1");
-					repositories.orders.update(aggregate);
+					repositories.orders.update(aggregate, {
+						expectedVersion: versionAtLoad,
+					});
 					return undefined;
 				},
 				{ stampOptions: { metadata: { correlationId: "corr-1" } } },
@@ -1305,7 +1343,9 @@ describe("UnitOfWork", () => {
 				uow.run(async ({ repositories }) => {
 					repositories.orders.trackLoaded(aggregate);
 					aggregate.change();
-					repositories.orders.update(aggregate);
+					repositories.orders.update(aggregate, {
+						expectedVersion: versionAtLoad,
+					});
 					aggregate.change(testEvent("o-1"));
 					return undefined;
 				}),
@@ -1340,10 +1380,14 @@ describe("UnitOfWork", () => {
 						if (operation !== "add") {
 							repositories.orders.trackLoaded(aggregate);
 						}
-						repositories.orders[operation](aggregate);
+						repositories.orders[operation](aggregate, {
+							expectedVersion: versionAtLoad,
+						});
 						aggregate.change();
 						try {
-							repositories.orders[operation](aggregate);
+							repositories.orders[operation](aggregate, {
+								expectedVersion: versionAtLoad,
+							});
 						} catch (error) {
 							repeatedCall = error;
 							throw error;
@@ -2076,7 +2120,7 @@ describe("UnitOfWork", () => {
 			await uow.run(async ({ repositories }) => {
 				repositories.orders.trackLoaded(agg);
 				agg.change(deletionEvent);
-				repositories.orders.remove(agg);
+				repositories.orders.remove(agg, { expectedVersion: versionAtLoad });
 				return undefined;
 			});
 
@@ -2116,8 +2160,12 @@ describe("UnitOfWork", () => {
 			// not conflicting.
 			const result = await uow.run(async ({ repositories }) => {
 				repositories.orders.trackLoaded(aggregate);
-				repositories.orders.remove(aggregate);
-				repositories.orders.remove(aggregate);
+				repositories.orders.remove(aggregate, {
+					expectedVersion: versionAtLoad,
+				});
+				repositories.orders.remove(aggregate, {
+					expectedVersion: versionAtLoad,
+				});
 				return "removed";
 			});
 
@@ -2133,7 +2181,7 @@ describe("UnitOfWork", () => {
 			const deleted = await uow
 				.run(async ({ repositories }) => {
 					repositories.orders.trackLoaded(first);
-					repositories.orders.remove(first);
+					repositories.orders.remove(first, { expectedVersion: versionAtLoad });
 					repositories.orders.trackLoaded(second);
 					return undefined;
 				})
@@ -2151,8 +2199,8 @@ describe("UnitOfWork", () => {
 			await expect(
 				uow.run(async ({ repositories }) => {
 					repositories.orders.trackLoaded(agg);
-					repositories.orders.remove(agg);
-					repositories.orders.update(agg);
+					repositories.orders.remove(agg, { expectedVersion: versionAtLoad });
+					repositories.orders.update(agg, { expectedVersion: versionAtLoad });
 					return undefined;
 				}),
 			).rejects.toMatchObject({ code: "AGGREGATE_DELETED" });
@@ -2584,8 +2632,12 @@ describe("UnitOfWork", () => {
 				expect(b).toBe(a);
 
 				(a as OrderAggregate).change(event);
-				repositories.orders.update(a as OrderAggregate);
-				repositories.orders.update(b as OrderAggregate);
+				repositories.orders.update(a as OrderAggregate, {
+					expectedVersion: versionAtLoad,
+				});
+				repositories.orders.update(b as OrderAggregate, {
+					expectedVersion: versionAtLoad,
+				});
 				return undefined;
 			});
 
@@ -2609,7 +2661,9 @@ describe("UnitOfWork", () => {
 				expect(b).toBe(a);
 
 				(a as OrderAggregate).change(event);
-				repositories.orders.update(a as OrderAggregate);
+				repositories.orders.update(a as OrderAggregate, {
+					expectedVersion: versionAtLoad,
+				});
 				return undefined;
 			});
 
@@ -2694,7 +2748,7 @@ describe("UnitOfWork", () => {
 					"o-1" as TestId,
 				)) as OrderAggregate;
 				order.change(event);
-				repositories.orders.update(order);
+				repositories.orders.update(order, { expectedVersion: versionAtLoad });
 				return undefined;
 			});
 
@@ -2767,7 +2821,7 @@ describe("UnitOfWork", () => {
 				)) as OrderAggregate;
 				leakedMap = repositories.orders.trackedIdentities;
 				order.change(event);
-				repositories.orders.update(order);
+				repositories.orders.update(order, { expectedVersion: versionAtLoad });
 				return undefined;
 			});
 
@@ -2783,7 +2837,9 @@ describe("UnitOfWork", () => {
 
 			const probe = await uow.run(async ({ repositories }) => {
 				const order = await repositories.orders.findById("o-1" as TestId);
-				repositories.orders.remove(order as OrderAggregate);
+				repositories.orders.remove(order as OrderAggregate, {
+					expectedVersion: versionAtLoad,
+				});
 
 				// Row still visible in the tx; the isDeleted check makes a
 				// read-only probe behave like not-found instead of crashing
@@ -2801,14 +2857,18 @@ describe("UnitOfWork", () => {
 			await expect(
 				uow.run(async ({ repositories }) => {
 					const order = await repositories.orders.findById("o-1" as TestId);
-					repositories.orders.remove(order as OrderAggregate);
+					repositories.orders.remove(order as OrderAggregate, {
+						expectedVersion: versionAtLoad,
+					});
 
 					// A DIFFERENT instance with the same logical identity, e.g.
 					// re-created via a static factory after the delete. The
 					// instance-keyed gate cannot see it; the class+id tombstone
 					// (recorded automatically by registerRemoved) must.
 					const resurrected = new OrderAggregate("o-1" as TestId);
-					repositories.orders.update(resurrected);
+					repositories.orders.update(resurrected, {
+						expectedVersion: versionAtLoad,
+					});
 					return undefined;
 				}),
 			).rejects.toMatchObject({ code: "AGGREGATE_DELETED" });
@@ -2825,7 +2885,9 @@ describe("UnitOfWork", () => {
 					"o-1" as TestId,
 				)) as OrderAggregate;
 				deletedOrder.change(event);
-				repositories.orders.remove(deletedOrder);
+				repositories.orders.remove(deletedOrder, {
+					expectedVersion: versionAtLoad,
+				});
 				return undefined;
 			});
 
@@ -3885,7 +3947,9 @@ describe("UnitOfWork", () => {
 					repositories.orders.trackLoaded(registered);
 					repositories.loadables.trackLoaded(forgotten);
 					registered.change();
-					repositories.orders.update(registered);
+					repositories.orders.update(registered, {
+						expectedVersion: versionAtLoad,
+					});
 					forgotten.note(testEvent("forgotten"));
 				})
 				.catch((error: unknown) => error);
@@ -3904,7 +3968,7 @@ describe("UnitOfWork", () => {
 			const result = await uow.run(async ({ repositories }) => {
 				repositories.orders.trackLoaded(agg);
 				agg.record(testEvent("o-1"));
-				repositories.orders.update(agg);
+				repositories.orders.update(agg, { expectedVersion: versionAtLoad });
 				return "ok";
 			});
 
@@ -3944,7 +4008,7 @@ describe("UnitOfWork", () => {
 			const result = await uow.run(async ({ repositories }) => {
 				repositories.orders.trackLoaded(agg);
 				agg.record(testEvent("o-1"));
-				repositories.orders.remove(agg);
+				repositories.orders.remove(agg, { expectedVersion: versionAtLoad });
 				return "deleted";
 			});
 
@@ -4042,7 +4106,7 @@ describe("UnitOfWork", () => {
 			await uow.run(async ({ repositories }) => {
 				const removed = createMockAggregate("o-1");
 				repositories.orders.trackLoaded(removed);
-				repositories.orders.remove(removed);
+				repositories.orders.remove(removed, { expectedVersion: versionAtLoad });
 			});
 			const recreated = createMockAggregate("o-1", [testEvent("o-1")]);
 			recreated.change(testEvent("o-1"));
@@ -4114,7 +4178,7 @@ describe("UnitOfWork", () => {
 						orders.add(createMockAggregate("first-1", [testEvent("first-1")]));
 						void flushEntered.then(() => {
 							try {
-								orders[operation](late);
+								orders[operation](late, { expectedVersion: versionAtLoad });
 								lateCall = "accepted";
 							} catch (error) {
 								lateCall = error;
@@ -4175,7 +4239,7 @@ describe("UnitOfWork", () => {
 						registerLate = () =>
 							queueMicrotask(() => {
 								try {
-									orders[operation](late);
+									orders[operation](late, { expectedVersion: versionAtLoad });
 									lateCall = "accepted";
 								} catch (error) {
 									lateCall = error;
@@ -4284,10 +4348,10 @@ describe("UnitOfWork", () => {
 				await uow.run(async ({ repositories }) => {
 					const orders = repositories.orders;
 					if (operation !== "add") orders.trackLoaded(order);
-					orders[operation](order);
+					orders[operation](order, { expectedVersion: versionAtLoad });
 					void flushEntered.then(() => {
 						try {
-							orders[operation](order);
+							orders[operation](order, { expectedVersion: versionAtLoad });
 							repeatedCall = "accepted";
 						} catch (error) {
 							repeatedCall = error;
@@ -4367,7 +4431,7 @@ describe("UnitOfWork", () => {
 				.run(async ({ repositories }) => {
 					repositories.orders.trackLoaded(order);
 					order.note("first", testEvent("o-1"));
-					repositories.orders.update(order);
+					repositories.orders.update(order, { expectedVersion: versionAtLoad });
 					return undefined;
 				})
 				.then(
@@ -4392,7 +4456,7 @@ describe("UnitOfWork", () => {
 				.run(async ({ repositories }) => {
 					repositories.orders.trackLoaded(order);
 					order.note("first", testEvent("o-1"));
-					repositories.orders.update(order);
+					repositories.orders.update(order, { expectedVersion: versionAtLoad });
 					return undefined;
 				})
 				.then(
@@ -4430,7 +4494,9 @@ describe("UnitOfWork", () => {
 						repositories.orders.trackLoaded(order);
 						repositories.orders.trackLoaded(other);
 						order.note("first", testEvent("o-1"));
-						repositories.orders.update(order);
+						repositories.orders.update(order, {
+							expectedVersion: versionAtLoad,
+						});
 						return undefined;
 					})
 					.then(
@@ -4502,7 +4568,9 @@ describe("UnitOfWork", () => {
 				const rejection = await rejectionOf(
 					uow.run(async ({ repositories }) => {
 						repositories.orders.trackLoaded(aggregate);
-						repositories.orders[intent](aggregate);
+						repositories.orders[intent](aggregate, {
+							expectedVersion: versionAtLoad,
+						});
 						return undefined;
 					}),
 				);
@@ -4545,7 +4613,9 @@ describe("UnitOfWork", () => {
 				uow.run(async ({ repositories }) => {
 					repositories.orders.trackLoaded(aggregate);
 					aggregate.change();
-					repositories.orders.update(aggregate);
+					repositories.orders.update(aggregate, {
+						expectedVersion: versionAtLoad,
+					});
 					return undefined;
 				}),
 			);
@@ -4589,7 +4659,9 @@ describe("UnitOfWork", () => {
 			const rejection = await rejectionOf(
 				uow.run(async ({ repositories }) => {
 					repositories.orders.trackLoaded(aggregate);
-					repositories.orders.update(aggregate);
+					repositories.orders.update(aggregate, {
+						expectedVersion: versionAtLoad,
+					});
 					return undefined;
 				}),
 			);
@@ -4610,7 +4682,9 @@ describe("UnitOfWork", () => {
 			await rejectionOf(
 				uow.run(async ({ repositories }) => {
 					repositories.orders.trackLoaded(aggregate);
-					repositories.orders.update(aggregate);
+					repositories.orders.update(aggregate, {
+						expectedVersion: versionAtLoad,
+					});
 					return undefined;
 				}),
 			);
@@ -4632,7 +4706,9 @@ describe("UnitOfWork", () => {
 			await rejectionOf(
 				uow.run(async ({ repositories }) => {
 					repositories.orders.trackLoaded(aggregate);
-					repositories.orders.update(aggregate);
+					repositories.orders.update(aggregate, {
+						expectedVersion: versionAtLoad,
+					});
 					return undefined;
 				}),
 			);
@@ -4657,7 +4733,9 @@ describe("UnitOfWork", () => {
 			const rejection = await rejectionOf(
 				uow.run(async ({ repositories }) => {
 					repositories.orders.trackLoaded(aggregate);
-					repositories.orders.update(aggregate);
+					repositories.orders.update(aggregate, {
+						expectedVersion: versionAtLoad,
+					});
 					return undefined;
 				}),
 			);
@@ -4685,7 +4763,9 @@ describe("UnitOfWork", () => {
 			const rejection = await rejectionOf(
 				uow.run(async ({ repositories }) => {
 					repositories.orders.trackLoaded(aggregate);
-					repositories.orders.update(aggregate);
+					repositories.orders.update(aggregate, {
+						expectedVersion: versionAtLoad,
+					});
 					return undefined;
 				}),
 			);
@@ -4706,7 +4786,9 @@ describe("UnitOfWork", () => {
 			const rejection = await rejectionOf(
 				uow.run(async ({ repositories }) => {
 					repositories.orders.trackLoaded(aggregate);
-					repositories.orders.update(aggregate);
+					repositories.orders.update(aggregate, {
+						expectedVersion: versionAtLoad,
+					});
 					return undefined;
 				}),
 			);
@@ -4733,7 +4815,9 @@ describe("UnitOfWork", () => {
 			const rejection = await rejectionOf(
 				uow.run(async ({ repositories }) => {
 					repositories.orders.trackLoaded(aggregate);
-					repositories.orders.update(aggregate);
+					repositories.orders.update(aggregate, {
+						expectedVersion: versionAtLoad,
+					});
 					return undefined;
 				}),
 			);
@@ -4750,6 +4834,228 @@ describe("UnitOfWork", () => {
 			});
 			expect((rejection as Error).cause).toBe(readFailure);
 		});
+	});
+
+	describe("expected version of an update and a removal", () => {
+		type RecordedWrite = AggregatePersistenceWrite<
+			MockAggregate,
+			Version | undefined
+		>;
+
+		function uowThatRecordsWrites(scope?: TransactionScope<undefined>) {
+			const writes: RecordedWrite[] = [];
+			const { uow } = createUow({
+				scope,
+				flush: async (_tx, write) => {
+					writes.push(write);
+				},
+			});
+			return { uow, writes };
+		}
+
+		async function rejectionOf(run: Promise<unknown>): Promise<unknown> {
+			return run.then(
+				() => undefined,
+				(error: unknown) => error,
+			);
+		}
+
+		it.each(["update", "remove"] as const)(
+			"registers the %s that expects the version that the unit of work loaded",
+			async (intent) => {
+				const { uow, writes } = uowThatRecordsWrites();
+				const aggregate = createMockAggregate("o-1");
+
+				await uow.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(aggregate);
+					aggregate.change();
+					repositories.orders[intent](aggregate, {
+						expectedVersion: 1 as Version,
+					});
+				});
+
+				expect(writes).toHaveLength(1);
+				expect(writes[0]).toMatchObject({ intent, expectedVersion: 1 });
+			},
+		);
+
+		it.each(["update", "remove"] as const)(
+			"rejects the %s that expects another version than the unit of work loaded",
+			async (intent) => {
+				const { uow, writes } = uowThatRecordsWrites();
+				const aggregate = createMockAggregate("o-1");
+
+				const rejection = await rejectionOf(
+					uow.run(async ({ repositories }) => {
+						repositories.orders.trackLoaded(aggregate);
+						aggregate.change();
+						repositories.orders[intent](aggregate, {
+							expectedVersion: 3 as Version,
+						});
+					}),
+				);
+
+				expect(rejection).toBeInstanceOf(ExpectedVersionMismatchError);
+				expect(rejection).toMatchObject({
+					code: "EXPECTED_VERSION_MISMATCH",
+					category: "INFRASTRUCTURE",
+					retryable: false,
+					intent,
+					identity: { aggregateType: "MockOrder", aggregateId: "o-1" },
+					expectedVersion: 3,
+					loadedVersion: 1,
+				});
+				expect(writes).toEqual([]);
+			},
+		);
+
+		it("names both versions and the aggregate in the message of the mismatch", async () => {
+			const { uow } = uowThatRecordsWrites();
+			const aggregate = createMockAggregate("o-1");
+
+			const rejection = await rejectionOf(
+				uow.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(aggregate);
+					aggregate.change();
+					repositories.orders.update(aggregate, {
+						expectedVersion: 3 as Version,
+					});
+				}),
+			);
+
+			expect((rejection as Error).message).toBe(
+				"Cannot register the update of MockOrder(o-1): the caller expects " +
+					"version 3, the unit of work loaded version 1. The caller must " +
+					"read the aggregate again and decide again.",
+			);
+		});
+
+		it("runs one attempt in a retrying scope when the expected version differs", async () => {
+			let attempts = 0;
+			const countingScope: TransactionScope<undefined> = {
+				transactional: (fn) => {
+					attempts += 1;
+					return fn(undefined);
+				},
+			};
+			const { uow } = uowThatRecordsWrites(
+				new RetryingTransactionScope(countingScope, {
+					maxAttempts: 3,
+					sleep: async () => {},
+				}),
+			);
+
+			const rejection = await rejectionOf(
+				uow.run(async ({ repositories }) => {
+					const aggregate = repositories.orders.trackLoaded(
+						createMockAggregate("o-1"),
+					);
+					aggregate.change();
+					repositories.orders.update(aggregate, {
+						expectedVersion: 3 as Version,
+					});
+				}),
+			);
+
+			expect(rejection).toBeInstanceOf(ExpectedVersionMismatchError);
+			expect(attempts).toBe(1);
+		});
+
+		it("rejects a repeated update that expects another version than the first", async () => {
+			const { uow, writes } = uowThatRecordsWrites();
+			const aggregate = createMockAggregate("o-1");
+
+			const rejection = await rejectionOf(
+				uow.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(aggregate);
+					aggregate.change();
+					repositories.orders.update(aggregate, {
+						expectedVersion: versionAtLoad,
+					});
+					repositories.orders.update(aggregate, {
+						expectedVersion: 3 as Version,
+					});
+				}),
+			);
+
+			expect(rejection).toBeInstanceOf(ExpectedVersionMismatchError);
+			expect(writes).toEqual([]);
+		});
+
+		it("rejects a repeated remove that expects another version than the first", async () => {
+			const { uow, writes } = uowThatRecordsWrites();
+			const aggregate = createMockAggregate("o-1");
+
+			const rejection = await rejectionOf(
+				uow.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(aggregate);
+					repositories.orders.remove(aggregate, {
+						expectedVersion: versionAtLoad,
+					});
+					repositories.orders.remove(aggregate, {
+						expectedVersion: 3 as Version,
+					});
+				}),
+			);
+
+			expect(rejection).toBeInstanceOf(ExpectedVersionMismatchError);
+			expect(writes).toEqual([]);
+		});
+
+		it.each([
+			["no second argument", undefined],
+			["an expectation without an expected version", {}],
+			["an expected version that is undefined", { expectedVersion: undefined }],
+			["an expected version that is null", { expectedVersion: null }],
+		])("rejects an update with %s", async (_name, expectation) => {
+			const { uow, writes } = uowThatRecordsWrites();
+			const aggregate = createMockAggregate("o-1");
+
+			await expectTrackingFailure(
+				uow.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(aggregate);
+					aggregate.change();
+					const update = repositories.orders.update as (
+						aggregate: MockAggregate,
+						expectation: unknown,
+					) => void;
+					update(aggregate, expectation);
+				}),
+				"expected_version_missing",
+			);
+			expect(writes).toEqual([]);
+		});
+
+		it.each([
+			["a numeric string", "1"],
+			["a fraction", 1.5],
+			["a negative number", -1],
+			["a symbol of another origin", Symbol("versionAtLoad")],
+		])(
+			"rejects an expected version that is %s",
+			async (_name, expectedVersion) => {
+				const { uow, writes } = uowThatRecordsWrites();
+				const aggregate = createMockAggregate("o-1");
+
+				const rejection = await rejectionOf(
+					uow.run(async ({ repositories }) => {
+						repositories.orders.trackLoaded(aggregate);
+						aggregate.change();
+						const update = repositories.orders.update as (
+							aggregate: MockAggregate,
+							expectation: unknown,
+						) => void;
+						update(aggregate, { expectedVersion });
+					}),
+				);
+
+				expect(rejection).toMatchObject({
+					code: "INVALID_VERSION",
+					category: "WIRING",
+				});
+				expect(writes).toEqual([]);
+			},
+		);
 	});
 
 	describe("cross-copy cooperation", () => {
@@ -4787,7 +5093,9 @@ describe("UnitOfWork", () => {
 				.run(async ({ repositories }) => {
 					repositories.orders.trackLoaded(aggregate);
 					aggregate.change(testEvent("o-1"));
-					repositories.orders.update(aggregate);
+					repositories.orders.update(aggregate, {
+						expectedVersion: versionAtLoad,
+					});
 					return undefined;
 				})
 				.then(
@@ -4836,7 +5144,9 @@ describe("UnitOfWork", () => {
 				.run(async ({ repositories }) => {
 					repositories.orders.trackLoaded(aggregate);
 					aggregate.change(testEvent("o-1"));
-					repositories.orders.update(aggregate);
+					repositories.orders.update(aggregate, {
+						expectedVersion: versionAtLoad,
+					});
 					return undefined;
 				})
 				.then(
@@ -4881,7 +5191,9 @@ describe("UnitOfWork", () => {
 				.run(async ({ repositories }) => {
 					repositories.orders.trackLoaded(aggregate);
 					aggregate.change(testEvent("o-1"));
-					repositories.orders.update(aggregate);
+					repositories.orders.update(aggregate, {
+						expectedVersion: versionAtLoad,
+					});
 					return undefined;
 				})
 				.then(
@@ -4926,7 +5238,9 @@ describe("UnitOfWork", () => {
 				.run(async ({ repositories }) => {
 					repositories.orders.trackLoaded(aggregate);
 					aggregate.change(testEvent("o-1"));
-					repositories.orders.update(aggregate);
+					repositories.orders.update(aggregate, {
+						expectedVersion: versionAtLoad,
+					});
 					return undefined;
 				})
 				.then(
@@ -5014,7 +5328,9 @@ describe("UnitOfWork", () => {
 			const result = await uow.run(async ({ repositories }) => {
 				repositories.orders.trackLoaded(aggregate);
 				aggregate.change(testEvent("o-1"));
-				repositories.orders.update(aggregate);
+				repositories.orders.update(aggregate, {
+					expectedVersion: versionAtLoad,
+				});
 				return "ok";
 			});
 
@@ -5044,7 +5360,9 @@ describe("UnitOfWork", () => {
 				uow.run(async ({ repositories }) => {
 					repositories.orders.trackLoaded(aggregate);
 					aggregate.change(testEvent("o-1"));
-					repositories.orders.update(aggregate);
+					repositories.orders.update(aggregate, {
+						expectedVersion: versionAtLoad,
+					});
 					aggregate.change(testEvent("o-1"));
 					return undefined;
 				}),

@@ -1,5 +1,9 @@
 import { findInCauseChain } from "@shirudo/base-error";
-import type { Aggregate, Version } from "../../domain/aggregate/aggregate";
+import {
+	type Aggregate,
+	toVersion,
+	type Version,
+} from "../../domain/aggregate/aggregate";
 import { requirePendingEventLifecycleReadView } from "../../domain/aggregate/pending-event-lifecycle";
 import type {
 	AnyDomainEvent,
@@ -10,6 +14,7 @@ import {
 	aggregateDeletedError,
 	attributeConflictIntent,
 	ConcurrencyConflictError,
+	ExpectedVersionMismatchError,
 	type InfrastructureError,
 	isInfrastructureErrorLike,
 	isWiringError,
@@ -29,6 +34,10 @@ import {
 	persistenceCaptureDrifted,
 	recapturePersistenceBaseline,
 } from "../../persistence/repository/persistence-model";
+import {
+	versionAtLoad,
+	type WriteExpectation,
+} from "../../persistence/repository/repository";
 import type { CommitRegistration, StampAtRegistration } from "../cqrs/handler";
 import {
 	aggregateTrackingError,
@@ -70,6 +79,11 @@ interface TrackedAggregate<Evt extends AnyDomainEvent> {
 	readonly baseline: PersistenceBaseline<Aggregate<Id<string>, Evt>, unknown>;
 	registration?: WriteRegistration<Evt>;
 }
+
+/** A tracked aggregate that came from a load, so its version there is known. */
+type LoadedAggregate<Evt extends AnyDomainEvent> = TrackedAggregate<Evt> & {
+	readonly expectedVersion: Version;
+};
 
 /**
  * Tracks the aggregates of one `run()`: identity map, write intent and
@@ -287,15 +301,18 @@ export class Session<Evt extends AnyDomainEvent> {
 	public update(
 		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
+		expectation: WriteExpectation,
 	): void {
 		if (this.isRepeatAdmitted(aggregate, definition, "update")) return;
 		const entry = this.loadedEntryFor(aggregate, "update", definition);
+		this.assertExpectedVersionLoaded(entry, "update", expectation);
 		this.registerWrite(entry, "update", definition);
 	}
 
 	public remove(
 		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
+		expectation: WriteExpectation,
 	): void {
 		if (this.isRepeatAdmitted(aggregate, definition, "remove")) return;
 		// Idempotent by reference, like add and update: a repeated remove of
@@ -307,11 +324,51 @@ export class Session<Evt extends AnyDomainEvent> {
 		// reject.
 		const entry = this._trackingByAggregate.get(aggregate);
 		if (this.isRemovedInstance(aggregate) && entry?.definition === definition) {
+			// Only a loaded aggregate reaches a removal, so the entry has the
+			// version of its load.
+			this.assertExpectedVersionLoaded(
+				entry as LoadedAggregate<Evt>,
+				"remove",
+				expectation,
+			);
 			this.assertUnchangedAfterRegistration(entry, "remove");
 			return;
 		}
 		const loaded = this.loadedEntryFor(aggregate, "remove", definition);
+		this.assertExpectedVersionLoaded(loaded, "remove", expectation);
 		this.registerWrite(loaded, "remove", definition);
+	}
+
+	/**
+	 * The flush guards the time from the load to the write. This check guards
+	 * the time before the load, which only the caller knows.
+	 */
+	private assertExpectedVersionLoaded(
+		entry: LoadedAggregate<Evt>,
+		intent: "update" | "remove",
+		expectation: WriteExpectation,
+	): void {
+		// The static type does not hold for a JavaScript caller, or for a
+		// version that arrived in a request without validation.
+		const stated: unknown = (expectation as WriteExpectation | undefined)
+			?.expectedVersion;
+		if (stated === undefined || stated === null) {
+			throw aggregateTrackingError({
+				identity: entry.aggregate.aggregateIdentity,
+				operation: intent,
+				reason: "expected_version_missing",
+				registeredIntent: entry.registration?.intent,
+			});
+		}
+		if (stated === versionAtLoad) return;
+		const expectedVersion = toVersion(stated as number);
+		if (expectedVersion === entry.expectedVersion) return;
+		throw new ExpectedVersionMismatchError({
+			identity: entry.aggregate.aggregateIdentity,
+			intent,
+			expectedVersion,
+			loadedVersion: entry.expectedVersion,
+		});
 	}
 
 	/** Registers persistence intent and commit registration as one operation. */
@@ -350,7 +407,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		aggregate: Aggregate<Id<string>, Evt>,
 		operation: "update" | "remove",
 		definition: RuntimePersistenceDefinition<Evt>,
-	): TrackedAggregate<Evt> {
+	): LoadedAggregate<Evt> {
 		this.assertNotRemoved(aggregate, definition);
 		const entry = this._trackingByAggregate.get(aggregate);
 		// Repository-ownership violations report as such on every operation:
@@ -385,7 +442,7 @@ export class Session<Evt extends AnyDomainEvent> {
 				registeredIntent: entry?.registration?.intent,
 			});
 		}
-		return entry;
+		return entry as LoadedAggregate<Evt>;
 	}
 
 	private assertNotRemoved(

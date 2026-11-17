@@ -1,6 +1,28 @@
-import type { Aggregate } from "../../domain/aggregate/aggregate";
+import type { Aggregate, Version } from "../../domain/aggregate/aggregate";
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
+
+/**
+ * The version that the Unit of Work captured when it loaded the aggregate.
+ *
+ * Use it as the `expectedVersion` of a write whose decision used only the
+ * state that this run loaded. It is the wrong value when a person or another
+ * system made the decision on an earlier read. Such a write expects the
+ * version of that read.
+ */
+export const versionAtLoad: unique symbol = Symbol("versionAtLoad");
+
+/** What an update or a removal expects of the stored aggregate. */
+export interface WriteExpectation {
+	/**
+	 * The version that the store must hold when the write lands: the
+	 * {@link Version} that the caller saw, or {@link versionAtLoad}.
+	 *
+	 * The Unit of Work compares a `Version` with the version that it loaded.
+	 * If they differ, the registration throws `ExpectedVersionMismatchError`.
+	 */
+	readonly expectedVersion: Version | typeof versionAtLoad;
+}
 
 /**
  * The persistence operations shared by every aggregate repository.
@@ -54,12 +76,12 @@ export interface AggregatePersistence<
 	/**
 	 * Registers a loaded aggregate for an optimistic-concurrency update.
 	 *
-	 * The Unit of Work uses the version captured when the aggregate was loaded as
-	 * the expected version. Passing an aggregate that is not tracked as loaded is
-	 * a lifecycle error. The method returns after registration; durable I/O
-	 * happens during flush.
+	 * The caller states the expected version. The flush writes only if the
+	 * store holds that version. Passing an aggregate that is not tracked as
+	 * loaded is a lifecycle error. The method returns after registration;
+	 * durable I/O happens during flush.
 	 */
-	update(aggregate: TAggregate): void;
+	update(aggregate: TAggregate, expectation: WriteExpectation): void;
 }
 
 /**
@@ -84,8 +106,10 @@ export interface Repository<
 	/**
 	 * Registers a tracked aggregate for physical removal at commit.
 	 *
-	 * The Unit of Work retains optimistic-concurrency and pending-event
-	 * information until removal and its event/outbox batch commit atomically.
+	 * The caller states the expected version, as for
+	 * {@link AggregatePersistence.update}. The Unit of Work retains
+	 * optimistic-concurrency and pending-event information until removal and
+	 * its event/outbox batch commit atomically.
 	 */
-	remove(aggregate: TAggregate): void;
+	remove(aggregate: TAggregate, expectation: WriteExpectation): void;
 }

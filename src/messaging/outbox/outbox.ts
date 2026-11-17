@@ -190,7 +190,7 @@ type DispatchedEventReceipt = {
  * await uow.run(async ({ repositories }) => {
  *   const order = await repositories.orders.getById(id);
  *   order.confirm();
- *   repositories.orders.update(order);
+ *   repositories.orders.update(order, { expectedVersion: versionAtLoad });
  *   return order.id;
  * });
  * ```
