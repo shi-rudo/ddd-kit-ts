@@ -68,7 +68,6 @@ export function bindRepositoryWrites<TRepository, Evt extends AnyDomainEvent>(
 		definition,
 	);
 	installRepositoryLifecycleOperations(state);
-	forwardAdapterOwnProperties(state);
 	state.facade = new Proxy(state.target, createRepositoryFacadeHandler(state));
 	return state.facade as TRepository;
 }
@@ -93,6 +92,7 @@ interface RepositoryFacadeState<Evt extends AnyDomainEvent> {
 	readonly methodCache: Map<PropertyKey, GuardedMethodCacheEntry>;
 	readonly forwardedOwnProperties: Set<PropertyKey>;
 	readonly writes: Set<PropertyKey>;
+	ownPropertiesForwarded: boolean;
 }
 
 function createRepositoryFacadeState<Evt extends AnyDomainEvent>(
@@ -109,6 +109,7 @@ function createRepositoryFacadeState<Evt extends AnyDomainEvent>(
 		methodCache: new Map(),
 		forwardedOwnProperties: new Set(),
 		writes: new Set(),
+		ownPropertiesForwarded: false,
 	};
 }
 
@@ -257,9 +258,17 @@ function installRepositoryLifecycleOperations<Evt extends AnyDomainEvent>(
 	}
 }
 
+/**
+ * Defines the own properties of the adapter on the target, one time. A read
+ * and an `in` probe reach the adapter without them, so the facade build does
+ * not pay for them. Every other trap calls this first, and its rules then see
+ * the complete target.
+ */
 function forwardAdapterOwnProperties<Evt extends AnyDomainEvent>(
 	state: RepositoryFacadeState<Evt>,
 ): void {
+	if (state.ownPropertiesForwarded) return;
+	state.ownPropertiesForwarded = true;
 	for (const property of Reflect.ownKeys(state.source)) {
 		if (isRepositoryLifecycleOperation(property)) continue;
 		const descriptor = Reflect.getOwnPropertyDescriptor(state.source, property);
@@ -318,6 +327,19 @@ function createRepositoryFacadeHandler<Evt extends AnyDomainEvent>(
 		},
 		defineProperty: (target, property, descriptor) =>
 			defineRepositoryFacadeProperty(state, target, property, descriptor),
+		ownKeys: (target) => {
+			forwardAdapterOwnProperties(state);
+			return Reflect.ownKeys(target);
+		},
+		getOwnPropertyDescriptor: (target, property) => {
+			forwardAdapterOwnProperties(state);
+			return Reflect.getOwnPropertyDescriptor(target, property);
+		},
+		// A target that accepts no new property cannot take them later.
+		preventExtensions: (target) => {
+			forwardAdapterOwnProperties(state);
+			return Reflect.preventExtensions(target);
+		},
 		deleteProperty: (target, property) =>
 			deleteRepositoryFacadeProperty(state, target, property),
 	};
@@ -331,6 +353,7 @@ function setRepositoryFacadeProperty<Evt extends AnyDomainEvent>(
 	receiver: unknown,
 ): boolean {
 	state.session.assertOpen(repositoryOperationName(property));
+	forwardAdapterOwnProperties(state);
 	if (isRepositoryLifecycleOperation(property)) return false;
 	if (Reflect.getOwnPropertyDescriptor(target, property)) {
 		const set = Reflect.set(target, property, value, receiver);
@@ -358,6 +381,7 @@ function defineRepositoryFacadeProperty<Evt extends AnyDomainEvent>(
 	descriptor: PropertyDescriptor,
 ): boolean {
 	state.session.assertOpen(repositoryOperationName(property));
+	forwardAdapterOwnProperties(state);
 	if (
 		isRepositoryLifecycleOperation(property) &&
 		!Reflect.getOwnPropertyDescriptor(target, property)
@@ -382,6 +406,7 @@ function deleteRepositoryFacadeProperty<Evt extends AnyDomainEvent>(
 	property: PropertyKey,
 ): boolean {
 	state.session.assertOpen(repositoryOperationName(property));
+	forwardAdapterOwnProperties(state);
 	if (isRepositoryLifecycleOperation(property)) return false;
 	const targetDescriptor = Reflect.getOwnPropertyDescriptor(target, property);
 	if (targetDescriptor && !state.forwardedOwnProperties.has(property)) {

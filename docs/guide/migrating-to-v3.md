@@ -1845,3 +1845,12 @@ The root entry no longer exports `capturePersistenceBaseline`,
   or `non-claiming due`. To run them, give the environment an `expireClaims`
   that ends every claim, and declare `providesClaimExpiry: true` on the
   harness. For a SQL adapter with a lease column, clear that column.
+- A repository facade takes the own properties of its adapter when code
+  first reads its own keys or a property descriptor, or changes a property of
+  the facade. In rc.16 the facade took them when the run started. A read of a
+  property and an `in` probe give the same result as before. Two results
+  change, and only for an adapter that adds or deletes its own fields during
+  the run. `Object.keys` of the facade lists the fields that the adapter has
+  at that first access. After the run closed, a read of a field that the
+  adapter deleted returns `undefined`, where it failed with
+  `TRANSACTION_CLOSED` before.
