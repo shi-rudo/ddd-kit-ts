@@ -481,6 +481,71 @@ describe("UnitOfWork", () => {
 			expect(flushed).toEqual(["second-loaded", "first-loaded"]);
 		});
 
+		it("flushes no write when a loaded aggregate changed without a write intent", async () => {
+			const registered = createMockAggregate("registered");
+			const forgotten = createMockAggregate("forgotten");
+			const flushed: string[] = [];
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: recordingOutbox<TestEvent>(),
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						create: (_tx: undefined, tracking) =>
+							new FakeOrderRepository(undefined, tracking),
+						flush: async (_tx: undefined, write) => {
+							flushed.push(write.aggregateIdentity.aggregateId);
+						},
+					}),
+				},
+			});
+
+			const rejection = await uow
+				.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(registered);
+					repositories.orders.trackLoaded(forgotten);
+					registered.change();
+					repositories.orders.update(registered);
+					forgotten.change();
+				})
+				.catch((error: unknown) => error);
+
+			expect(rejection).toMatchObject({ code: "UNREGISTERED_CHANGES" });
+			expect(flushed).toEqual([]);
+		});
+
+		it("flushes no write when an aggregate changed after its registration", async () => {
+			const aggregate = createMockAggregate("order-1");
+			const flushed: string[] = [];
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: recordingOutbox<TestEvent>(),
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						create: (_tx: undefined, tracking) =>
+							new FakeOrderRepository(undefined, tracking),
+						flush: async (_tx: undefined, write) => {
+							flushed.push(write.aggregateIdentity.aggregateId);
+						},
+					}),
+				},
+			});
+
+			await expectTrackingFailure(
+				uow.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(aggregate);
+					aggregate.change();
+					repositories.orders.update(aggregate);
+					aggregate.change();
+				}),
+				"mutated_after_registration",
+			);
+			expect(flushed).toEqual([]);
+		});
+
 		it("rolls back when an aggregate changes while its flush is in flight", async () => {
 			const aggregate = createMockAggregate("order-1");
 			const outbox = recordingOutbox<TestEvent>();
