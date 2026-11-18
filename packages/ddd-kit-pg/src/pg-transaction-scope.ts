@@ -57,8 +57,8 @@ export interface PgTransactionScopeOptions {
  * confirm, after a failed `ROLLBACK`, and after a `COMMIT` that PostgreSQL did
  * not answer, because its state is then unknown. An answered `COMMIT` ends the
  * transaction, also with an error. After a `BEGIN` without confirmation, each
- * statement of the callback rejects with the failure of the `BEGIN`. The scope
- * rejects with that failure too, also when the callback caught it.
+ * statement of the callback rejects with the failure of the `BEGIN`. A callback
+ * that caught that failure and resolves makes the scope reject with it.
  *
  * The executor runs statements that start together, for example from
  * `Promise.all`, one after another, in call order. `COMMIT` and `ROLLBACK` wait
@@ -103,14 +103,16 @@ export class PgTransactionScope implements TransactionScope<PgQueryExecutor> {
 			} catch (workFailure) {
 				// A statement after this point would run outside the transaction.
 				session.close();
-				if (await session.transactionBegan()) {
-					await rollback(session, workFailure);
-				}
-				connectionClean = true;
+				const begin = await session.settledBegin();
+				if (begin.status === "confirmed") await rollback(session, workFailure);
+				connectionClean = begin.status !== "not confirmed";
 				throw classifyTransactionFailure(workFailure);
 			}
 			session.close();
-			if (await session.transactionBegan()) {
+			const begin = await session.settledBegin();
+			// The callback caught the failure of the BEGIN, and nothing can commit.
+			if (begin.status === "not confirmed") throw begin.failure;
+			if (begin.status === "confirmed") {
 				try {
 					await commit(session);
 				} catch (commitFailure) {
@@ -175,11 +177,10 @@ interface TransactionSession {
 	/** Stops when the transaction ends. */
 	readonly executor: PgQueryExecutor;
 	/**
-	 * Waits for the statements that the callback started. Resolves to `false`
-	 * when the callback started none, because no `BEGIN` went to PostgreSQL then.
-	 * Rejects with the failure of a `BEGIN` that PostgreSQL did not confirm.
+	 * Waits for the statements that the callback started, then tells what became
+	 * of the `BEGIN`. No `BEGIN` goes to PostgreSQL without a statement.
 	 */
-	transactionBegan(): Promise<boolean>;
+	settledBegin(): Promise<Begin>;
 	/** Runs a statement after the statements before it, also after `close`. */
 	queryInTurn(text: string): Promise<QueryResult>;
 	close(): void;
@@ -272,10 +273,9 @@ function openSession(
 				return { rows };
 			},
 		},
-		transactionBegan: async () => {
+		settledBegin: async () => {
 			await lastStatement;
-			if (begin.status === "not confirmed") throw begin.failure;
-			return begin.status === "confirmed";
+			return begin;
 		},
 		queryInTurn: (text) => inTurn(() => client.query(text)),
 		close: () => {

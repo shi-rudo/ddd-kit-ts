@@ -51,8 +51,10 @@ the scope sends no statement to PostgreSQL. It still takes a connection from the
 pool.
 
 If PostgreSQL does not confirm the `BEGIN`, each statement of your callback
-rejects with that failure. The scope rejects with it too, also when your
-callback caught it, and destroys the connection.
+rejects with that failure, and the scope destroys the connection. If your
+callback rejects, the scope rejects with the failure of your callback. If your
+callback caught the failure of the `BEGIN` and resolves, the scope rejects with
+the failure of the `BEGIN`.
 
 A statement that carries the `BEGIN` can fail before the answer of PostgreSQL
 arrives, for example with a read timeout of the client (`query_timeout`), or

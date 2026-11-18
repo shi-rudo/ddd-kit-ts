@@ -153,6 +153,28 @@ describe("PgTransactionScope", () => {
 		await single.teardown();
 	});
 
+	const backendPid = (executor: PgQueryExecutor) =>
+		executor
+			.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")
+			.then(({ rows }) => rows[0]?.pid);
+
+	it("keeps the connection open after a rollback", async () => {
+		const single = await openIsolatedSchema({ max: 1 });
+		const singleScope = new PgTransactionScope(single.pool);
+		let pidOfRollback: number | undefined;
+
+		await singleScope
+			.transactional(async (executor) => {
+				pidOfRollback = await backendPid(executor);
+				throw new Error("the work failed");
+			})
+			.catch(() => {});
+		const pidAfter = await singleScope.transactional(backendPid);
+
+		expect(pidAfter).toBe(pidOfRollback);
+		await single.teardown();
+	});
+
 	describe("the BEGIN of the transaction", () => {
 		it("goes to PostgreSQL in one round trip with a first statement that has values", async () => {
 			const counted = countingRoundTrips(database.pool);
@@ -288,18 +310,43 @@ describe("PgTransactionScope", () => {
 			expect(client.release).toHaveBeenCalledWith(true);
 		});
 
-		it("rejects with the failure of the BEGIN when the callback rejects with another error", async () => {
+		it("rejects with the failure of the callback when the callback rejects", async () => {
 			const { client, pool } = poolRejecting("BEGIN", beginFailure);
+			const workFailure = new Error("the work failed", { cause: beginFailure });
 
 			await expect(
 				new PgTransactionScope(pool).transactional(async (executor) => {
 					await increment(executor, 1).catch(() => {});
-					throw new Error("the work failed");
+					throw workFailure;
 				}),
-			).rejects.toBe(beginFailure);
+			).rejects.toBe(workFailure);
 
 			expect(statementsOf(client)).toEqual(["BEGIN"]);
 			expect(client.release).toHaveBeenCalledWith(true);
+		});
+
+		it("reaches UnitOfWork as the failure of the work, and not as a RollbackError", async () => {
+			const { pool } = poolRejecting("BEGIN", beginFailure);
+			const scope = new PgTransactionScope(pool);
+			const workFailure = new Error("the work failed", { cause: beginFailure });
+			const scopeWithFailedStatement: TransactionScope<PgQueryExecutor> = {
+				transactional: (work) =>
+					scope.transactional(async (executor) => {
+						await executor.query("SELECT 1").catch(() => {});
+						return work(executor);
+					}),
+			};
+			const unitOfWork = new UnitOfWork({
+				scope: scopeWithFailedStatement,
+				outbox: outboxWriterAcceptingEventLoss(),
+				repositories: {},
+			});
+
+			await expect(
+				unitOfWork.run(async () => {
+					throw workFailure;
+				}),
+			).rejects.toBe(workFailure);
 		});
 
 		it("rejects each statement of the callback and sends none of them", async () => {
@@ -386,11 +433,6 @@ describe("PgTransactionScope", () => {
 	});
 
 	describe("a COMMIT that PostgreSQL answered with a failure", () => {
-		const backendPid = (executor: PgQueryExecutor) =>
-			executor
-				.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")
-				.then(({ rows }) => rows[0]?.pid);
-
 		it("returns the connection to the pool after a constraint fails at the COMMIT", async () => {
 			const single = await openIsolatedSchema({ max: 1 });
 			await single.pool.query(
