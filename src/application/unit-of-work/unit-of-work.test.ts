@@ -1785,6 +1785,19 @@ describe("UnitOfWork", () => {
 			);
 		});
 
+		it("fails an in probe after the run for a field that the adapter deleted during the run", async () => {
+			const repository = await createSelfChangingUow().run(
+				async ({ repositories }) => {
+					repositories.orders.forgetLabel();
+					return repositories.orders;
+				},
+			);
+
+			expect(() => "label" in repository).toThrow(
+				expect.objectContaining({ code: "TRANSACTION_CLOSED" }),
+			);
+		});
+
 		it("does not list a field that the adapter gave itself during the run", async () => {
 			await createSelfChangingUow().run(async ({ repositories }) => {
 				repositories.orders.rememberCache();
@@ -1870,6 +1883,18 @@ describe("UnitOfWork", () => {
 			);
 		});
 
+		it("answers an in probe after the run for an own constructor field of the adapter", async () => {
+			const uow = createUowWithAdapter(() => ({
+				constructor: "order adapter",
+			}));
+
+			const repository = await uow.run(
+				async ({ repositories }) => repositories.orders,
+			);
+
+			expect("constructor" in repository).toBe(true);
+		});
+
 		it("answers an in probe for an own constructor field of an adapter without a prototype", async () => {
 			const uow = createUowWithAdapter(() =>
 				Object.assign(Object.create(null) as object, {
@@ -1879,6 +1904,14 @@ describe("UnitOfWork", () => {
 
 			await uow.run(async ({ repositories }) => {
 				expect("constructor" in repositories.orders).toBe(true);
+			});
+		});
+
+		it("rejects an assignment to a field that the adapter declares read-only", async () => {
+			await createReflectiveUow().run(async ({ repositories }) => {
+				expect(Reflect.set(repositories.orders, "fixed", "changed")).toBe(
+					false,
+				);
 			});
 		});
 
