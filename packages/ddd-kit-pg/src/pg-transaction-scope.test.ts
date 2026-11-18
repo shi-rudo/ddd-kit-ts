@@ -2,6 +2,7 @@ import { someChainRetryable } from "@shirudo/base-error";
 import {
 	outboxWriterAcceptingEventLoss,
 	RetryingTransactionScope,
+	type TransactionScope,
 	UnitOfWork,
 } from "@shirudo/ddd-kit";
 import type { PoolClient } from "pg";
@@ -17,13 +18,14 @@ import {
 	type IsolatedSchema,
 	openIsolatedSchema,
 } from "../test/isolated-schema";
+import { countRoundTrips } from "../test/round-trips";
 import {
 	PgCommitRolledBackError,
 	PgRetryableTransactionFailureError,
 	PgRollbackFailedError,
 } from "./pg-errors";
 import type { PgQueryExecutor } from "./pg-query-executor";
-import { PgTransactionScope } from "./pg-transaction-scope";
+import { type PgClientPool, PgTransactionScope } from "./pg-transaction-scope";
 
 /** A pool with a client that rejects one statement, for failures a test cannot provoke. */
 function poolRejecting(statement: string, failure: Error) {
@@ -39,6 +41,21 @@ function poolRejecting(statement: string, failure: Error) {
 	return {
 		client,
 		pool: { connect: async () => client as unknown as PoolClient },
+	};
+}
+
+/** Counts the round trips of the one connection that `pool` gives. */
+function countingRoundTrips(pool: PgClientPool) {
+	let roundTrips = () => 0;
+	return {
+		pool: {
+			connect: async () => {
+				const client = await pool.connect();
+				roundTrips = countRoundTrips(client);
+				return client;
+			},
+		},
+		roundTrips: () => roundTrips(),
 	};
 }
 
@@ -121,16 +138,254 @@ describe("PgTransactionScope", () => {
 		const single = await openIsolatedSchema({ max: 1 });
 		const singleScope = new PgTransactionScope(single.pool);
 
-		await singleScope.transactional(async () => {});
+		await singleScope.transactional((executor) => executor.query("SELECT 1"));
 		await expect(
-			singleScope.transactional(async () => {
+			singleScope.transactional(async (executor) => {
+				await executor.query("SELECT 1");
 				throw new Error("the work failed");
 			}),
 		).rejects.toThrow("the work failed");
-		const result = await singleScope.transactional(async () => "still open");
+		const { rows } = await singleScope.transactional((executor) =>
+			executor.query("SELECT 'still open' AS state"),
+		);
 
-		expect(result).toBe("still open");
+		expect(rows).toEqual([{ state: "still open" }]);
 		await single.teardown();
+	});
+
+	const backendPid = (executor: PgQueryExecutor) =>
+		executor
+			.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")
+			.then(({ rows }) => rows[0]?.pid);
+
+	it("keeps the connection open after a rollback", async () => {
+		const single = await openIsolatedSchema({ max: 1 });
+		const singleScope = new PgTransactionScope(single.pool);
+		let pidOfRollback: number | undefined;
+
+		await singleScope
+			.transactional(async (executor) => {
+				pidOfRollback = await backendPid(executor);
+				throw new Error("the work failed");
+			})
+			.catch(() => {});
+		const pidAfter = await singleScope.transactional(backendPid);
+
+		expect(pidAfter).toBe(pidOfRollback);
+		await single.teardown();
+	});
+
+	describe("the BEGIN of the transaction", () => {
+		it("goes to PostgreSQL in one round trip with a first statement that has values", async () => {
+			const counted = countingRoundTrips(database.pool);
+
+			await new PgTransactionScope(counted.pool).transactional((executor) =>
+				increment(executor, 1),
+			);
+
+			expect(counted.roundTrips()).toBe(2);
+			expect(await counterValue(1)).toBe(1);
+		});
+
+		it("goes to PostgreSQL once when the callback starts statements together", async () => {
+			const counted = countingRoundTrips(database.pool);
+
+			await new PgTransactionScope(counted.pool).transactional((executor) =>
+				Promise.all([increment(executor, 1), increment(executor, 2)]),
+			);
+
+			expect(counted.roundTrips()).toBe(3);
+			expect(await counterValue(1)).toBe(1);
+			expect(await counterValue(2)).toBe(1);
+		});
+
+		it("opens the transaction for a first statement that the callback does not await", async () => {
+			await scope.transactional(async (executor) => {
+				void increment(executor, 1);
+			});
+
+			expect(await counterValue(1)).toBe(1);
+		});
+
+		it("opens the transaction for a first statement with values that fails", async () => {
+			const single = await openIsolatedSchema({ max: 1 });
+			const singleScope = new PgTransactionScope(single.pool);
+
+			await expect(
+				singleScope.transactional((executor) =>
+					executor.query("SELECT 1 / $1::int", [0]),
+				),
+			).rejects.toMatchObject({ code: "22012" });
+			const { rows } = await singleScope.transactional((executor) =>
+				executor.query("SELECT 'rolled back' AS state"),
+			);
+
+			expect(rows).toEqual([{ state: "rolled back" }]);
+			await single.teardown();
+		});
+
+		it("goes to PostgreSQL alone before a first statement without values", async () => {
+			const counted = countingRoundTrips(database.pool);
+
+			await new PgTransactionScope(counted.pool).transactional((executor) =>
+				executor.query("UPDATE counter SET value = value + 1 WHERE id = 1"),
+			);
+
+			expect(counted.roundTrips()).toBe(3);
+			expect(await counterValue(1)).toBe(1);
+		});
+
+		it("goes to PostgreSQL alone on a client that is not the JavaScript client of pg", async () => {
+			const { client, pool } = poolRejecting(
+				"a statement that this test does not send",
+				new Error(),
+			);
+
+			await new PgTransactionScope(pool).transactional((executor) =>
+				increment(executor, 1),
+			);
+
+			expect(client.query.mock.calls.map(([text]) => text)).toEqual([
+				"BEGIN",
+				"UPDATE counter SET value = value + 1 WHERE id = $1",
+				"COMMIT",
+			]);
+		});
+
+		it("does not go to PostgreSQL when the callback resolves without a statement", async () => {
+			const counted = countingRoundTrips(database.pool);
+
+			const result = await new PgTransactionScope(counted.pool).transactional(
+				async () => "done",
+			);
+
+			expect(result).toBe("done");
+			expect(counted.roundTrips()).toBe(0);
+		});
+
+		it("does not go to PostgreSQL when the callback rejects without a statement", async () => {
+			const counted = countingRoundTrips(database.pool);
+			const failure = new Error("the work failed");
+
+			await expect(
+				new PgTransactionScope(counted.pool).transactional(async () => {
+					throw failure;
+				}),
+			).rejects.toBe(failure);
+
+			expect(counted.roundTrips()).toBe(0);
+		});
+	});
+
+	describe("a BEGIN that PostgreSQL did not confirm", () => {
+		const beginFailure = new Error("the BEGIN failed");
+		const statementsOf = (client: {
+			query: { mock: { calls: unknown[][] } };
+		}) => client.query.mock.calls.map(([text]) => text);
+
+		it("rejects with the failure of the BEGIN and destroys the connection", async () => {
+			const { client, pool } = poolRejecting("BEGIN", beginFailure);
+
+			await expect(
+				new PgTransactionScope(pool).transactional((executor) =>
+					increment(executor, 1),
+				),
+			).rejects.toBe(beginFailure);
+
+			expect(statementsOf(client)).toEqual(["BEGIN"]);
+			expect(client.release).toHaveBeenCalledWith(true);
+		});
+
+		it("rejects with the failure of the BEGIN when the callback caught it", async () => {
+			const { client, pool } = poolRejecting("BEGIN", beginFailure);
+
+			await expect(
+				new PgTransactionScope(pool).transactional(async (executor) => {
+					await increment(executor, 1).catch(() => {});
+					return "done";
+				}),
+			).rejects.toBe(beginFailure);
+
+			expect(statementsOf(client)).toEqual(["BEGIN"]);
+			expect(client.release).toHaveBeenCalledWith(true);
+		});
+
+		it("rejects with the failure of the callback when the callback rejects", async () => {
+			const { client, pool } = poolRejecting("BEGIN", beginFailure);
+			const workFailure = new Error("the work failed", { cause: beginFailure });
+
+			await expect(
+				new PgTransactionScope(pool).transactional(async (executor) => {
+					await increment(executor, 1).catch(() => {});
+					throw workFailure;
+				}),
+			).rejects.toBe(workFailure);
+
+			expect(statementsOf(client)).toEqual(["BEGIN"]);
+			expect(client.release).toHaveBeenCalledWith(true);
+		});
+
+		it("reaches UnitOfWork as the failure of the work, and not as a RollbackError", async () => {
+			const { pool } = poolRejecting("BEGIN", beginFailure);
+			const scope = new PgTransactionScope(pool);
+			const workFailure = new Error("the work failed", { cause: beginFailure });
+			const scopeWithFailedStatement: TransactionScope<PgQueryExecutor> = {
+				transactional: (work) =>
+					scope.transactional(async (executor) => {
+						await executor.query("SELECT 1").catch(() => {});
+						return work(executor);
+					}),
+			};
+			const unitOfWork = new UnitOfWork({
+				scope: scopeWithFailedStatement,
+				outbox: outboxWriterAcceptingEventLoss(),
+				repositories: {},
+			});
+
+			await expect(
+				unitOfWork.run(async () => {
+					throw workFailure;
+				}),
+			).rejects.toBe(workFailure);
+		});
+
+		it("rejects each statement of the callback and sends none of them", async () => {
+			const { client, pool } = poolRejecting("BEGIN", beginFailure);
+			let statements: PromiseSettledResult<unknown>[] = [];
+
+			await new PgTransactionScope(pool)
+				.transactional(async (executor) => {
+					statements = await Promise.allSettled([
+						increment(executor, 1),
+						increment(executor, 2),
+					]);
+					statements.push(
+						...(await Promise.allSettled([increment(executor, 1)])),
+					);
+				})
+				.catch(() => {});
+
+			expect(statements).toEqual([
+				{ status: "rejected", reason: beginFailure },
+				{ status: "rejected", reason: beginFailure },
+				{ status: "rejected", reason: beginFailure },
+			]);
+			expect(statementsOf(client)).toEqual(["BEGIN"]);
+		});
+
+		it("destroys the connection when the first statement fails before the answer to the BEGIN", async () => {
+			const single = await openIsolatedSchema({ max: 1, query_timeout: 50 });
+
+			const failure = await new PgTransactionScope(single.pool)
+				.transactional((executor) =>
+					executor.query("SELECT pg_sleep($1)", [0.3]),
+				)
+				.catch((error: unknown) => error);
+
+			expect(failure).toMatchObject({ message: "Query read timeout" });
+			expect(single.pool.totalCount).toBe(0);
+			await single.teardown();
+		});
 	});
 
 	describe("the isolation level", () => {
@@ -178,11 +433,6 @@ describe("PgTransactionScope", () => {
 	});
 
 	describe("a COMMIT that PostgreSQL answered with a failure", () => {
-		const backendPid = (executor: PgQueryExecutor) =>
-			executor
-				.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")
-				.then(({ rows }) => rows[0]?.pid);
-
 		it("returns the connection to the pool after a constraint fails at the COMMIT", async () => {
 			const single = await openIsolatedSchema({ max: 1 });
 			await single.pool.query(
@@ -309,7 +559,9 @@ describe("PgTransactionScope", () => {
 			const { pool } = poolRejecting("COMMIT", failure);
 
 			await expect(
-				new PgTransactionScope(pool).transactional(async () => {}),
+				new PgTransactionScope(pool).transactional((executor) =>
+					executor.query("SELECT 1"),
+				),
 			).rejects.toMatchObject({ sqlState: "40001", cause: failure });
 		});
 	});
@@ -348,6 +600,7 @@ describe("PgTransactionScope", () => {
 
 			await scope
 				.transactional(async (executor) => {
+					await increment(executor, 1);
 					late = new Promise((resolve) => setImmediate(resolve))
 						.then(() => increment(executor, 2))
 						.catch((error: unknown) => error);
@@ -360,20 +613,32 @@ describe("PgTransactionScope", () => {
 		},
 	);
 
-	it("survives a lost connection and rejects without ending the process", async () => {
-		const single = await openIsolatedSchema({ max: 1 });
-		const singleScope = new PgTransactionScope(single.pool);
+	it.each([
+		["a later statement", "SELECT pg_terminate_backend(pg_backend_pid())", []],
+		[
+			"the statement that carries the BEGIN",
+			"SELECT pg_terminate_backend(pg_backend_pid()), $1::int",
+			[1],
+		],
+	])(
+		"survives a connection that %s loses, and rejects without ending the process",
+		async (_statement, terminate, values) => {
+			const single = await openIsolatedSchema({ max: 1 });
+			const singleScope = new PgTransactionScope(single.pool);
 
-		await expect(
-			singleScope.transactional(async (executor) => {
-				await executor.query("SELECT pg_terminate_backend(pg_backend_pid())");
-			}),
-		).rejects.toBeDefined();
-		const result = await singleScope.transactional(async () => "reconnected");
+			await expect(
+				singleScope.transactional((executor) =>
+					executor.query(terminate, values),
+				),
+			).rejects.toBeDefined();
+			const { rows } = await singleScope.transactional((executor) =>
+				executor.query("SELECT 'reconnected' AS state"),
+			);
 
-		expect(result).toBe("reconnected");
-		await single.teardown();
-	});
+			expect(rows).toEqual([{ state: "reconnected" }]);
+			await single.teardown();
+		},
+	);
 
 	describe("a failed ROLLBACK", () => {
 		const rollbackFailure = new Error("the ROLLBACK failed");
@@ -383,7 +648,8 @@ describe("PgTransactionScope", () => {
 			const { client, pool } = poolRejecting("ROLLBACK", rollbackFailure);
 
 			const failure = await new PgTransactionScope(pool)
-				.transactional(async () => {
+				.transactional(async (executor) => {
+					await executor.query("SELECT 1");
 					throw workFailure;
 				})
 				.catch((error: unknown) => error);
@@ -399,8 +665,16 @@ describe("PgTransactionScope", () => {
 
 		it("still reaches UnitOfWork as a RollbackError that names the work failure", async () => {
 			const { pool } = poolRejecting("ROLLBACK", rollbackFailure);
+			const scope = new PgTransactionScope(pool);
+			const scopeWithOpenTransaction: TransactionScope<PgQueryExecutor> = {
+				transactional: (work) =>
+					scope.transactional(async (executor) => {
+						await executor.query("SELECT 1");
+						return work(executor);
+					}),
+			};
 			const unitOfWork = new UnitOfWork({
-				scope: new PgTransactionScope(pool),
+				scope: scopeWithOpenTransaction,
 				outbox: outboxWriterAcceptingEventLoss(),
 				repositories: {},
 			});

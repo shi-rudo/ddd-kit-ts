@@ -10,6 +10,7 @@ export {
 	PgEventStreamCorruptError,
 	PgRetryableTransactionFailureError,
 	PgRollbackFailedError,
+	PgTransactionNotOpenError,
 	PgUnsupportedIsolationLevelError,
 } from "./pg-errors";
 export type { PgEventCodec } from "./pg-event-codec";

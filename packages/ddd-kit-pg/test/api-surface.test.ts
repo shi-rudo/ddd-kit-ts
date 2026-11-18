@@ -15,6 +15,7 @@ describe("the public API of the package", () => {
 			"PgRetryableTransactionFailureError",
 			"PgRollbackFailedError",
 			"PgSnapshotStore",
+			"PgTransactionNotOpenError",
 			"PgTransactionScope",
 			"PgUnsupportedIsolationLevelError",
 			"fromPg",

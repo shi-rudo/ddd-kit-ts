@@ -138,6 +138,28 @@ export class PgEventDecodeError extends InfrastructureError<"PG_EVENT_DECODE_FAI
 }
 
 /**
+ * A statement succeeded behind the `BEGIN` of its transaction, and the client
+ * then reported no open transaction. The statement possibly ran outside of a
+ * transaction. `PgTransactionScope` fails the run and destroys the connection.
+ */
+export class PgTransactionNotOpenError extends InfrastructureError<"PG_TRANSACTION_NOT_OPEN"> {
+	/** The transaction status that the client reported. `"T"` is an open transaction. */
+	readonly transactionStatus: string | null;
+
+	constructor(options: { readonly transactionStatus: string | null }) {
+		super({
+			code: "PG_TRANSACTION_NOT_OPEN",
+			message:
+				"PgTransactionScope sent a BEGIN in front of a statement, and the statement succeeded. " +
+				`The client then reported the transaction status ${JSON.stringify(options.transactionStatus)}, and "T" was expected. ` +
+				"The statement possibly ran outside of a transaction. " +
+				"The installed version of pg is possibly not compatible with @shirudo/ddd-kit-pg.",
+		});
+		this.transactionStatus = options.transactionStatus;
+	}
+}
+
+/**
  * `PgEventStore.removeStream` ran at an isolation level with one snapshot for the
  * whole transaction. A retry does not help: begin the transaction at READ
  * COMMITTED.
