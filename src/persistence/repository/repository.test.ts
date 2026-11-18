@@ -13,7 +13,12 @@ import {
 	DomainError,
 	InfrastructureError,
 } from "../../errors/kit-errors";
-import type { AggregatePersistence, Repository } from "./repository";
+import {
+	type AggregatePersistence,
+	type Repository,
+	versionAtLoad,
+	type WriteExpectation,
+} from "./repository";
 
 // @ts-expect-error IRepository was removed in favour of the explicit
 // AggregatePersistence and Repository contracts.
@@ -105,7 +110,7 @@ describe("Repository contract", () => {
 					this.added.push(aggregate);
 				}
 
-				update(aggregate: Order): void {
+				update(aggregate: Order, _expectation: WriteExpectation): void {
 					this.updated.push(aggregate);
 				}
 			}
@@ -124,7 +129,9 @@ describe("Repository contract", () => {
 			};
 
 			const addResult = persistence.add(order);
-			const updateResult = persistence.update(order);
+			const updateResult = persistence.update(order, {
+				expectedVersion: versionAtLoad,
+			});
 
 			expect(addResult).toBeUndefined();
 			expect(updateResult).toBeUndefined();
@@ -183,7 +190,7 @@ describe("Repository contract", () => {
 				add(): void {}
 				update(): void {}
 
-				remove(aggregate: Order): void {
+				remove(aggregate: Order, _expectation: WriteExpectation): void {
 					this.removed.push(aggregate);
 				}
 			}
@@ -201,7 +208,9 @@ describe("Repository contract", () => {
 				pendingEvents: [],
 			};
 
-			const removeResult = repository.remove(order);
+			const removeResult = repository.remove(order, {
+				expectedVersion: versionAtLoad,
+			});
 
 			expect(removeResult).toBeUndefined();
 			expect(repository.removed).toEqual([order]);
