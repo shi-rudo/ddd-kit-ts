@@ -4649,6 +4649,65 @@ describe("UnitOfWork", () => {
 				expect(outbox.added).toHaveLength(1);
 			},
 		);
+
+		it.each(["update", "remove"] as const)(
+			"rejects a repeated %s that expects another version while the flush runs",
+			async (operation) => {
+				const { uow, flushEntered, releaseFlush } = uowWithGatedFlush();
+				const order = createMockAggregate("order-1", [testEvent("order-1")]);
+				let repeatedCall: unknown = "not attempted";
+
+				await uow.run(async ({ repositories }) => {
+					const orders = repositories.orders;
+					orders.trackLoaded(order);
+					orders[operation](order, { expectedVersion: versionAtLoad });
+					void flushEntered.then(() => {
+						try {
+							orders[operation](order, { expectedVersion: 3 as Version });
+							repeatedCall = "accepted";
+						} catch (error) {
+							repeatedCall = error;
+						}
+						releaseFlush();
+					});
+				});
+
+				expect(repeatedCall).toMatchObject({
+					code: "EXPECTED_VERSION_MISMATCH",
+					expectedVersion: 3,
+					loadedVersion: 1,
+				});
+			},
+		);
+
+		it.each(["update", "remove"] as const)(
+			"rejects a repeated %s without an expected version while the flush runs",
+			async (operation) => {
+				const { uow, flushEntered, releaseFlush } = uowWithGatedFlush();
+				const order = createMockAggregate("order-1", [testEvent("order-1")]);
+				let repeatedCall: unknown = "not attempted";
+
+				await uow.run(async ({ repositories }) => {
+					const orders = repositories.orders;
+					orders.trackLoaded(order);
+					orders[operation](order, { expectedVersion: versionAtLoad });
+					void flushEntered.then(() => {
+						try {
+							(orders[operation] as (aggregate: MockAggregate) => void)(order);
+							repeatedCall = "accepted";
+						} catch (error) {
+							repeatedCall = error;
+						}
+						releaseFlush();
+					});
+				});
+
+				expect(repeatedCall).toMatchObject({
+					code: "AGGREGATE_TRACKING",
+					details: { reason: "expected_version_missing" },
+				});
+			},
+		);
 	});
 
 	describe("changes during the outbox write", () => {

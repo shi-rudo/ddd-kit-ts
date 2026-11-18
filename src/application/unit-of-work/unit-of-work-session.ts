@@ -303,7 +303,10 @@ export class Session<Evt extends AnyDomainEvent> {
 		definition: RuntimePersistenceDefinition<Evt>,
 		expectation: WriteExpectation,
 	): void {
-		if (this.isRepeatAdmitted(aggregate, definition, "update")) return;
+		if (this.isRepeatAdmitted(aggregate, definition, "update")) {
+			this.assertRepeatExpectsVersionLoaded(aggregate, "update", expectation);
+			return;
+		}
 		const entry = this.loadedEntryFor(aggregate, "update", definition);
 		this.assertExpectedVersionLoaded(entry, "update", expectation);
 		this.registerWrite(entry, "update", definition);
@@ -314,7 +317,10 @@ export class Session<Evt extends AnyDomainEvent> {
 		definition: RuntimePersistenceDefinition<Evt>,
 		expectation: WriteExpectation,
 	): void {
-		if (this.isRepeatAdmitted(aggregate, definition, "remove")) return;
+		if (this.isRepeatAdmitted(aggregate, definition, "remove")) {
+			this.assertRepeatExpectsVersionLoaded(aggregate, "remove", expectation);
+			return;
+		}
 		// Idempotent by reference, like add and update: a repeated remove of
 		// the SAME instance re-declares the same final lifecycle outcome
 		// (collection semantics; the registration layer already returns the
@@ -337,6 +343,22 @@ export class Session<Evt extends AnyDomainEvent> {
 		const loaded = this.loadedEntryFor(aggregate, "remove", definition);
 		this.assertExpectedVersionLoaded(loaded, "remove", expectation);
 		this.registerWrite(loaded, "remove", definition);
+	}
+
+	/**
+	 * A repeat during the flush registers nothing. It states an expectation
+	 * like the first call, so the same check applies.
+	 */
+	private assertRepeatExpectsVersionLoaded(
+		aggregate: Aggregate<Id<string>, Evt>,
+		intent: "update" | "remove",
+		expectation: WriteExpectation,
+	): void {
+		// Only a loaded aggregate has a registered update or removal.
+		const entry = this._trackingByAggregate.get(
+			aggregate,
+		) as LoadedAggregate<Evt>;
+		this.assertExpectedVersionLoaded(entry, intent, expectation);
 	}
 
 	/**
