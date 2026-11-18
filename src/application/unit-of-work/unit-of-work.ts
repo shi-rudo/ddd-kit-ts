@@ -273,7 +273,9 @@ type MemberAcceptsAggregate<
 /**
  * TypeScript lets a member with one parameter stand in for the installed
  * member with two. Such a port would hide the expected version from every
- * caller, and each call would then fail when it runs.
+ * caller, and each call would then fail when it runs. An `any` expectation
+ * hides it the same way, because a caller can then pass a value that is not
+ * an expectation.
  * @inline
  */
 type TakesTheExpectedVersion<
@@ -281,8 +283,12 @@ type TakesTheExpectedVersion<
 	TDeclared extends CallableValue,
 > = TMember extends "add"
 	? true
-	: Parameters<TDeclared> extends [unknown, WriteExpectation]
-		? true
+	: Parameters<TDeclared> extends [unknown, infer TExpectation]
+		? 0 extends 1 & TExpectation
+			? false
+			: [TExpectation] extends [WriteExpectation]
+				? true
+				: false
 		: false;
 
 /**

@@ -136,6 +136,12 @@ interface ForStoringOrdersWithBareExpectedVersion {
 	update(order: Order, expectedVersion: Version): void;
 }
 
+interface ForStoringOrdersWithUntypedExpectedVersion {
+	findById(id: OrderId): Promise<Order | null>;
+	add(order: Order): void;
+	update(order: Order, expectation: any): void;
+}
+
 interface ForRemovingOrdersWithoutExpectedVersion extends ForStoringOrders {
 	remove(order: Order): void;
 }
@@ -319,6 +325,7 @@ defineOrdersWith((_transaction, tracking) => new SqlOrderAdapter(tracking));`,
 	"update-without-expected-version": `defineRepository<ForStoringOrdersWithoutExpectedVersion>()({${adapterWiring}});`,
 	"update-with-optional-expected-version": `defineRepository<ForStoringOrdersWithOptionalExpectedVersion>()({${adapterWiring}});`,
 	"update-with-bare-expected-version": `defineRepository<ForStoringOrdersWithBareExpectedVersion>()({${adapterWiring}});`,
+	"update-with-untyped-expected-version": `defineRepository<ForStoringOrdersWithUntypedExpectedVersion>()({${adapterWiring}});`,
 	"remove-without-expected-version": `defineRepository<ForRemovingOrdersWithoutExpectedVersion>()({
 	physicalRemoval: true,${adapterWiring}});`,
 	"union-port": `defineRepository<ForStoringOrders | ForRemovingOrders>()({${adapterWiring}});`,
@@ -526,6 +533,10 @@ describe("defineRepository compile-time diagnostics", () => {
 		],
 		[
 			"update-with-bare-expected-version",
+			"the port's update must take the expected version: update(aggregate, expectation: WriteExpectation): void",
+		],
+		[
+			"update-with-untyped-expected-version",
 			"the port's update must take the expected version: update(aggregate, expectation: WriteExpectation): void",
 		],
 		[
