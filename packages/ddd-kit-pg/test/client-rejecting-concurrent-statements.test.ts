@@ -1,3 +1,4 @@
+import { Query } from "pg";
 import {
 	afterEach,
 	beforeEach,
@@ -35,6 +36,31 @@ describe("ClientRejectingConcurrentStatements", () => {
 		const result = await client.query("SELECT 1 AS one");
 
 		expect(result.rows).toEqual([{ one: 1 }]);
+	});
+
+	it("accepts a Query object with a callback and frees itself when the callback fires", async () => {
+		const rows = await new Promise((resolve, reject) => {
+			client.query(
+				new Query("SELECT 1 AS one", (failure, result) =>
+					failure ? reject(failure) : resolve(result.rows),
+				),
+			);
+		});
+		const next = await client.query("SELECT 2 AS two");
+
+		expect(rows).toEqual([{ one: 1 }]);
+		expect(next.rows).toEqual([{ two: 2 }]);
+	});
+
+	it("rejects a statement that starts while a Query object runs", async () => {
+		const running = new Promise((resolve) => {
+			client.query(new Query("SELECT pg_sleep(0.05)", resolve));
+		});
+
+		await expect(client.query("SELECT 1")).rejects.toThrow(
+			"a statement started while another statement of the client ran",
+		);
+		await running;
 	});
 
 	it("rejects a submittable before it sends it", async () => {
