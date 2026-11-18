@@ -88,7 +88,10 @@ immutable. Run one kit version per process during a cutover.
   only on the state that it loaded. The Unit of Work compares it with the
   loaded version when the call registers the write. The flush guards only the
   time from the load to the write, so a write that a person decided on an
-  earlier read replaced newer state without an error. A port that declares
+  earlier read replaced newer state without an error. Work that the callback
+  did not await can repeat the call during the flush. That repeat gets the
+  same check, and a failed check also fails the run before it commits. A port
+  that declares
   `update` or `remove` without the `WriteExpectation` parameter does not
   compile against `defineRepository`. See
   [The version that the caller saw](docs/guide/concurrency.md#the-version-that-the-caller-saw).

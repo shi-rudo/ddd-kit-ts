@@ -4651,61 +4651,110 @@ describe("UnitOfWork", () => {
 		);
 
 		it.each(["update", "remove"] as const)(
-			"rejects a repeated %s that expects another version while the flush runs",
+			"rejects a repeated %s that expects another version while the flush runs, and fails the run before it commits",
 			async (operation) => {
-				const { uow, flushEntered, releaseFlush } = uowWithGatedFlush();
+				const { uow, outbox, flushEntered, releaseFlush } = uowWithGatedFlush();
 				const order = createMockAggregate("order-1", [testEvent("order-1")]);
 				let repeatedCall: unknown = "not attempted";
 
-				await uow.run(async ({ repositories }) => {
-					const orders = repositories.orders;
-					orders.trackLoaded(order);
-					orders[operation](order, { expectedVersion: versionAtLoad });
-					void flushEntered.then(() => {
-						try {
-							orders[operation](order, { expectedVersion: 3 as Version });
-							repeatedCall = "accepted";
-						} catch (error) {
-							repeatedCall = error;
-						}
-						releaseFlush();
-					});
-				});
+				const rejection = await uow
+					.run(async ({ repositories }) => {
+						const orders = repositories.orders;
+						orders.trackLoaded(order);
+						orders[operation](order, { expectedVersion: versionAtLoad });
+						void flushEntered.then(() => {
+							try {
+								orders[operation](order, { expectedVersion: 3 as Version });
+								repeatedCall = "accepted";
+							} catch (error) {
+								repeatedCall = error;
+							}
+							releaseFlush();
+						});
+					})
+					.then(
+						() => "committed",
+						(error: unknown) => error,
+					);
 
 				expect(repeatedCall).toMatchObject({
 					code: "EXPECTED_VERSION_MISMATCH",
 					expectedVersion: 3,
 					loadedVersion: 1,
 				});
+				expect(rejection).toBe(repeatedCall);
+				expect(outbox.added).toEqual([]);
 			},
 		);
 
 		it.each(["update", "remove"] as const)(
-			"rejects a repeated %s without an expected version while the flush runs",
+			"rejects a repeated %s without an expected version while the flush runs, and fails the run before it commits",
 			async (operation) => {
-				const { uow, flushEntered, releaseFlush } = uowWithGatedFlush();
+				const { uow, outbox, flushEntered, releaseFlush } = uowWithGatedFlush();
 				const order = createMockAggregate("order-1", [testEvent("order-1")]);
 				let repeatedCall: unknown = "not attempted";
 
-				await uow.run(async ({ repositories }) => {
-					const orders = repositories.orders;
-					orders.trackLoaded(order);
-					orders[operation](order, { expectedVersion: versionAtLoad });
-					void flushEntered.then(() => {
-						try {
-							(orders[operation] as (aggregate: MockAggregate) => void)(order);
-							repeatedCall = "accepted";
-						} catch (error) {
-							repeatedCall = error;
-						}
-						releaseFlush();
-					});
-				});
+				const rejection = await uow
+					.run(async ({ repositories }) => {
+						const orders = repositories.orders;
+						orders.trackLoaded(order);
+						orders[operation](order, { expectedVersion: versionAtLoad });
+						void flushEntered.then(() => {
+							try {
+								(orders[operation] as (aggregate: MockAggregate) => void)(
+									order,
+								);
+								repeatedCall = "accepted";
+							} catch (error) {
+								repeatedCall = error;
+							}
+							releaseFlush();
+						});
+					})
+					.then(
+						() => "committed",
+						(error: unknown) => error,
+					);
 
 				expect(repeatedCall).toMatchObject({
 					code: "AGGREGATE_TRACKING",
 					details: { reason: "expected_version_missing" },
 				});
+				expect(rejection).toBe(repeatedCall);
+				expect(outbox.added).toEqual([]);
+			},
+		);
+
+		it.each(["update", "remove"] as const)(
+			"rejects a repeated %s with an expected version that is not a version while the flush runs, and fails the run before it commits",
+			async (operation) => {
+				const { uow, outbox, flushEntered, releaseFlush } = uowWithGatedFlush();
+				const order = createMockAggregate("order-1", [testEvent("order-1")]);
+				let repeatedCall: unknown = "not attempted";
+
+				const rejection = await uow
+					.run(async ({ repositories }) => {
+						const orders = repositories.orders;
+						orders.trackLoaded(order);
+						orders[operation](order, { expectedVersion: versionAtLoad });
+						void flushEntered.then(() => {
+							try {
+								orders[operation](order, { expectedVersion: 1.5 as Version });
+								repeatedCall = "accepted";
+							} catch (error) {
+								repeatedCall = error;
+							}
+							releaseFlush();
+						});
+					})
+					.then(
+						() => "committed",
+						(error: unknown) => error,
+					);
+
+				expect(repeatedCall).toMatchObject({ code: "INVALID_VERSION" });
+				expect(rejection).toBe(repeatedCall);
+				expect(outbox.added).toEqual([]);
 			},
 		);
 	});

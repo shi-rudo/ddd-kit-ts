@@ -213,7 +213,9 @@ await can call `add`, `update`, or `remove` later. Until the last check before
 the commit, after the outbox write, that call throws `AGGREGATE_TRACKING`
 with the reason `registered_during_flush`, and the run fails before it
 commits, also when the caller swallows the error. A repeat of a write that is
-already registered for the same, unchanged instance stays a no-op. After the
+already registered for the same, unchanged instance stays a no-op. If the
+expected version of that repeat fails its check, the repeat throws, and the
+run fails the same way. After the
 last check, a call throws `TRANSACTION_CLOSED`: the transaction can no
 longer take the write, and a caller that swallows the error loses it. Await
 every repository call inside the `run()` callback.

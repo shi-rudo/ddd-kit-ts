@@ -18,7 +18,6 @@ import {
 	type InfrastructureError,
 	isInfrastructureErrorLike,
 	isWiringError,
-	type KitWiringError,
 	unregisteredChangesError,
 } from "../../errors/kit-errors";
 import {
@@ -126,13 +125,13 @@ export class Session<Evt extends AnyDomainEvent> {
 	 * commit ran or the run ended. A write registered in that window would
 	 * be committed and collected without its flush, so it is rejected, and
 	 * the first rejection also fails the attempt, even when the caller
-	 * swallows it. After the window, a registration reports a closed unit of
+	 * swallows it. A repeat whose expectation fails its check does the same:
+	 * its caller is work that the callback did not await, so the error cannot
+	 * reach the run. After the window, a registration reports a closed unit of
 	 * work: nothing can fail the attempt any more.
 	 */
 	private _lateRegistrationsFailAttempt = false;
-	private _registrationDuringFlush:
-		| KitWiringError<"AGGREGATE_TRACKING">
-		| undefined;
+	private _rejectionDuringFlush: unknown;
 
 	constructor(
 		private readonly commitRegistration: CommitRegistration<Evt>,
@@ -358,7 +357,12 @@ export class Session<Evt extends AnyDomainEvent> {
 		const entry = this._trackingByAggregate.get(
 			aggregate,
 		) as LoadedAggregate<Evt>;
-		this.assertExpectedVersionLoaded(entry, intent, expectation);
+		try {
+			this.assertExpectedVersionLoaded(entry, intent, expectation);
+		} catch (error) {
+			this._rejectionDuringFlush ??= error;
+			throw error;
+		}
 	}
 
 	/**
@@ -601,8 +605,8 @@ export class Session<Evt extends AnyDomainEvent> {
 	 * transaction.
 	 */
 	public assertReadyToCommit(): void {
-		if (this._registrationDuringFlush !== undefined) {
-			throw this._registrationDuringFlush;
+		if (this._rejectionDuringFlush !== undefined) {
+			throw this._rejectionDuringFlush;
 		}
 		for (const entry of this._trackedAggregates) {
 			if (entry.registration !== undefined) {
@@ -742,7 +746,7 @@ export class Session<Evt extends AnyDomainEvent> {
 			operation,
 			reason: "registered_during_flush",
 		});
-		this._registrationDuringFlush ??= rejection;
+		this._rejectionDuringFlush ??= rejection;
 		throw rejection;
 	}
 }
