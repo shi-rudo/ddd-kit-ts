@@ -7,6 +7,10 @@ import {
 	PgRollbackFailedError,
 } from "./pg-errors";
 import type { PgQueryExecutor } from "./pg-query-executor";
+import {
+	canSendStatementWithBegin,
+	sendStatementWithBegin,
+} from "./statement-with-begin";
 
 /** The part of a `pg` `Pool` that the scope uses. */
 export interface PgClientPool {
@@ -44,9 +48,17 @@ export interface PgTransactionScopeOptions {
  * `PgRollbackFailedError`, which names both failures. `UnitOfWork` reports it as
  * a `RollbackError`.
  *
- * The scope destroys the connection after a failed `BEGIN` or `ROLLBACK`, and
- * after a `COMMIT` that PostgreSQL did not answer, because its state is then
- * unknown. An answered `COMMIT` ends the transaction, also with an error.
+ * The scope sends the `BEGIN` when the callback runs its first statement. If
+ * that statement has values and the client is the JavaScript client of pg, the
+ * `BEGIN` and the statement go to PostgreSQL in one round trip. The scope sends
+ * nothing to PostgreSQL for a callback that runs no statement.
+ *
+ * The scope destroys the connection after a `BEGIN` that PostgreSQL did not
+ * confirm, after a failed `ROLLBACK`, and after a `COMMIT` that PostgreSQL did
+ * not answer, because its state is then unknown. An answered `COMMIT` ends the
+ * transaction, also with an error. After a `BEGIN` without confirmation, each
+ * statement of the callback rejects with the failure of the `BEGIN`. The scope
+ * rejects with that failure too, also when the callback caught it.
  *
  * The executor runs statements that start together, for example from
  * `Promise.all`, one after another, in call order. `COMMIT` and `ROLLBACK` wait
@@ -81,33 +93,37 @@ export class PgTransactionScope implements TransactionScope<PgQueryExecutor> {
 			connectionLost = true;
 		};
 		client.on("error", onConnectionError);
-		const session = openSession(client);
-		let transactionEnded = false;
+		const session = openSession(client, this.beginStatement);
+		// No transaction is open on the connection, and its state is known.
+		let connectionClean = false;
 		try {
-			await session.queryInTurn(this.beginStatement);
 			let result: T;
 			try {
 				result = await fn(session.executor);
 			} catch (workFailure) {
 				// A statement after this point would run outside the transaction.
 				session.close();
-				await rollback(session, workFailure);
-				transactionEnded = true;
+				if (await session.transactionBegan()) {
+					await rollback(session, workFailure);
+				}
+				connectionClean = true;
 				throw classifyTransactionFailure(workFailure);
 			}
 			session.close();
-			try {
-				await commit(session);
-			} catch (commitFailure) {
-				transactionEnded = answeredByServer(commitFailure);
-				throw commitFailure;
+			if (await session.transactionBegan()) {
+				try {
+					await commit(session);
+				} catch (commitFailure) {
+					connectionClean = answeredByServer(commitFailure);
+					throw commitFailure;
+				}
 			}
-			transactionEnded = true;
+			connectionClean = true;
 			return result;
 		} finally {
 			session.close();
 			client.off("error", onConnectionError);
-			client.release(!transactionEnded || connectionLost);
+			client.release(!connectionClean || connectionLost);
 		}
 	}
 }
@@ -158,27 +174,32 @@ function isErrorResponse(
 interface TransactionSession {
 	/** Stops when the transaction ends. */
 	readonly executor: PgQueryExecutor;
+	/**
+	 * Waits for the statements that the callback started. Resolves to `false`
+	 * when the callback started none, because no `BEGIN` went to PostgreSQL then.
+	 * Rejects with the failure of a `BEGIN` that PostgreSQL did not confirm.
+	 */
+	transactionBegan(): Promise<boolean>;
 	/** Runs a statement after the statements before it, also after `close`. */
 	queryInTurn(text: string): Promise<QueryResult>;
 	close(): void;
 }
 
-/**
- * Opens the statements of one transaction. The executor stops when the
- * transaction ends, because the pool can hand the connection to another
- * transaction, and a late statement would then join it.
- *
- * A client runs one statement at a time, and pg deprecates starting a statement
- * while another one runs. So each statement waits for the statement before it.
- * Only the scope has the client, so no other statement can go first.
- */
-function openSession(client: PoolClient): TransactionSession {
+type Begin =
+	| { readonly status: "not sent" }
+	| { readonly status: "confirmed" }
+	| { readonly status: "not confirmed"; readonly failure: unknown };
+
+function openSession(
+	client: PoolClient,
+	beginStatement: string,
+): TransactionSession {
 	let open = true;
+	let begin: Begin = { status: "not sent" };
 	let lastStatement: Promise<unknown> = Promise.resolve();
-	const queryInTurn = (text: string, values?: ReadonlyArray<unknown>) => {
-		const statement = lastStatement.then(() =>
-			client.query(text, values && [...values]),
-		);
+
+	const inTurn = <R>(send: () => Promise<R>): Promise<R> => {
+		const statement = lastStatement.then(send);
 		// The next statement also waits for a failed statement. It keeps no rows.
 		lastStatement = statement.then(
 			() => undefined,
@@ -186,6 +207,43 @@ function openSession(client: PoolClient): TransactionSession {
 		);
 		return statement;
 	};
+
+	const failBegin = (failure: unknown): never => {
+		begin = { status: "not confirmed", failure };
+		throw failure;
+	};
+
+	const sendWithBegin = async (
+		text: string,
+		values: unknown[] | undefined,
+	): Promise<QueryResult> => {
+		if (values?.length && canSendStatementWithBegin(client)) {
+			const outcome = await sendStatementWithBegin(
+				client,
+				beginStatement,
+				text,
+				values,
+			);
+			if (!outcome.beginConfirmed) return failBegin(outcome.failure);
+			begin = { status: "confirmed" };
+			if ("failure" in outcome.statement) throw outcome.statement.failure;
+			return outcome.statement.result;
+		}
+		await client.query(beginStatement).catch(failBegin);
+		begin = { status: "confirmed" };
+		return client.query(text, values);
+	};
+
+	const send = async (
+		text: string,
+		values: unknown[] | undefined,
+	): Promise<QueryResult> => {
+		// A statement after a BEGIN without confirmation would commit at once.
+		if (begin.status === "not confirmed") throw begin.failure;
+		if (begin.status === "not sent") return sendWithBegin(text, values);
+		return client.query(text, values);
+	};
+
 	return {
 		executor: {
 			query: async (text, values) => {
@@ -194,16 +252,20 @@ function openSession(client: PoolClient): TransactionSession {
 						code: "TRANSACTION_CLOSED",
 						message:
 							"A PgQueryExecutor ran a statement after its transaction ended. " +
-							"Await all work inside the callback of transactional, and do " +
-							"not keep the executor.",
+							"Await all work inside the callback of transactional, and do not keep the executor.",
 						details: { operation: "PgQueryExecutor.query" },
 					});
 				}
-				const { rows } = await queryInTurn(text, values);
+				const { rows } = await inTurn(() => send(text, values && [...values]));
 				return { rows };
 			},
 		},
-		queryInTurn: (text) => queryInTurn(text),
+		transactionBegan: async () => {
+			await lastStatement;
+			if (begin.status === "not confirmed") throw begin.failure;
+			return begin.status === "confirmed";
+		},
+		queryInTurn: (text) => inTurn(() => client.query(text)),
 		close: () => {
 			open = false;
 		},

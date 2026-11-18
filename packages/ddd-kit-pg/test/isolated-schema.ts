@@ -19,7 +19,7 @@ export interface IsolatedSchema {
 export async function openIsolatedSchema({
 	defaultTransactionIsolation,
 	...poolOptions
-}: Pick<PoolConfig, "max"> & {
+}: Pick<PoolConfig, "max" | "query_timeout"> & {
 	/** The isolation level of a transaction that names none, as `repeatable read`. */
 	readonly defaultTransactionIsolation?: string;
 } = {}): Promise<IsolatedSchema> {
