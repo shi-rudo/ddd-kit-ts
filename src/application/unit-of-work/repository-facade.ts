@@ -322,13 +322,7 @@ function createRepositoryFacadeHandler<Evt extends AnyDomainEvent>(
 			return readRepositorySource(state, property);
 		},
 		set: (_target, property, value, receiver) =>
-			setRepositoryFacadeProperty(
-				state,
-				targetWithAdapterProperties(state),
-				property,
-				value,
-				receiver,
-			),
+			setRepositoryFacadeProperty(state, property, value, receiver),
 		has: (target, property) => {
 			// The target gets a recorded property, so the answer is known.
 			if (state.unforwardedOwnProperties.has(property)) {
@@ -355,12 +349,7 @@ function createRepositoryFacadeHandler<Evt extends AnyDomainEvent>(
 			);
 		},
 		defineProperty: (_target, property, descriptor) =>
-			defineRepositoryFacadeProperty(
-				state,
-				targetWithAdapterProperties(state),
-				property,
-				descriptor,
-			),
+			defineRepositoryFacadeProperty(state, property, descriptor),
 		ownKeys: () => Reflect.ownKeys(targetWithAdapterProperties(state)),
 		getOwnPropertyDescriptor: (_target, property) =>
 			Reflect.getOwnPropertyDescriptor(
@@ -371,23 +360,19 @@ function createRepositoryFacadeHandler<Evt extends AnyDomainEvent>(
 		preventExtensions: () =>
 			Reflect.preventExtensions(targetWithAdapterProperties(state)),
 		deleteProperty: (_target, property) =>
-			deleteRepositoryFacadeProperty(
-				state,
-				targetWithAdapterProperties(state),
-				property,
-			),
+			deleteRepositoryFacadeProperty(state, property),
 	};
 }
 
 function setRepositoryFacadeProperty<Evt extends AnyDomainEvent>(
 	state: RepositoryFacadeState<Evt>,
-	target: object,
 	property: PropertyKey,
 	value: unknown,
 	receiver: unknown,
 ): boolean {
 	state.session.assertOpen(repositoryOperationName(property));
 	if (isRepositoryLifecycleOperation(property)) return false;
+	const target = targetWithAdapterProperties(state);
 	if (Reflect.getOwnPropertyDescriptor(target, property)) {
 		const set = Reflect.set(target, property, value, receiver);
 		if (set) state.methodCache.delete(property);
@@ -409,11 +394,11 @@ function setRepositoryFacadeProperty<Evt extends AnyDomainEvent>(
 
 function defineRepositoryFacadeProperty<Evt extends AnyDomainEvent>(
 	state: RepositoryFacadeState<Evt>,
-	target: object,
 	property: PropertyKey,
 	descriptor: PropertyDescriptor,
 ): boolean {
 	state.session.assertOpen(repositoryOperationName(property));
+	const target = targetWithAdapterProperties(state);
 	if (
 		isRepositoryLifecycleOperation(property) &&
 		!Reflect.getOwnPropertyDescriptor(target, property)
@@ -434,11 +419,11 @@ function defineRepositoryFacadeProperty<Evt extends AnyDomainEvent>(
 
 function deleteRepositoryFacadeProperty<Evt extends AnyDomainEvent>(
 	state: RepositoryFacadeState<Evt>,
-	target: object,
 	property: PropertyKey,
 ): boolean {
 	state.session.assertOpen(repositoryOperationName(property));
 	if (isRepositoryLifecycleOperation(property)) return false;
+	const target = targetWithAdapterProperties(state);
 	const targetDescriptor = Reflect.getOwnPropertyDescriptor(target, property);
 	if (targetDescriptor && !state.forwardedOwnProperties.has(property)) {
 		return Reflect.deleteProperty(target, property);

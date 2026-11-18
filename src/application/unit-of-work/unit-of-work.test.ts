@@ -1,3 +1,5 @@
+// @ts-expect-error Node's util exists in the test runtime; the package stays Node-type-free.
+import { inspect } from "node:util";
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { Aggregate, Version } from "../../domain/aggregate/aggregate";
 import { pendingEventLifecycleReadViewFor } from "../../domain/aggregate/pending-event-lifecycle";
@@ -1879,6 +1881,36 @@ describe("UnitOfWork", () => {
 				expect("constructor" in repositories.orders).toBe(true);
 			});
 		});
+
+		it.each([
+			[
+				"an assignment",
+				(repository: object) => Reflect.set(repository, "label", "changed"),
+			],
+			[
+				"a property definition",
+				(repository: object) =>
+					Reflect.defineProperty(repository, "label", { value: "changed" }),
+			],
+			[
+				"a deletion",
+				(repository: object) => Reflect.deleteProperty(repository, "label"),
+			],
+		])(
+			"prints a closed facade the same after it rejected %s",
+			async (_write, write) => {
+				const repository = await createReflectiveUow().run(
+					async ({ repositories }) => repositories.orders,
+				);
+				const printedBefore = inspect(repository);
+
+				expect(() => write(repository)).toThrow(
+					expect.objectContaining({ code: "TRANSACTION_CLOSED" }),
+				);
+
+				expect(inspect(repository)).toBe(printedBefore);
+			},
+		);
 
 		it("uses a replacement method after a forwarded method was cached", async () => {
 			await createReflectiveUow().run(async ({ repositories }) => {
