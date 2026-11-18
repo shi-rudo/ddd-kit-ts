@@ -274,9 +274,9 @@ function recordAdapterOwnProperties<Evt extends AnyDomainEvent>(
 
 /**
  * The target with the own properties of the adapter. The facade build records
- * these properties and does not define them, because a read and an `in` probe
- * answer without them. A trap that reads or changes the own properties of the
- * target takes the target from here.
+ * these properties and does not define them. The `get` and `has` traps answer
+ * for a recorded property from the record. Every other trap takes the target
+ * from here, and never from its own argument.
  */
 function targetWithAdapterProperties<Evt extends AnyDomainEvent>(
 	state: RepositoryFacadeState<Evt>,
@@ -293,6 +293,12 @@ function createRepositoryFacadeHandler<Evt extends AnyDomainEvent>(
 ): ProxyHandler<object> {
 	return {
 		get: (target, property, receiver) => {
+			// The accessor that the target gets for a recorded property does
+			// this read. Without a record of the property, the target is
+			// complete for it.
+			if (state.unforwardedOwnProperties.has(property)) {
+				return readRepositorySource(state, property);
+			}
 			// Member reads keep the loud `TRANSACTION_CLOSED`: a probe
 			// cannot leak state, a member read can. An installed lifecycle
 			// operation stays readable while a late registration still fails
@@ -324,6 +330,13 @@ function createRepositoryFacadeHandler<Evt extends AnyDomainEvent>(
 				receiver,
 			),
 		has: (target, property) => {
+			// The target gets a recorded property, so the answer is known.
+			if (state.unforwardedOwnProperties.has(property)) {
+				if (!isLanguagePlumbing(state, property)) {
+					state.session.assertOpen(repositoryOperationName(property));
+				}
+				return true;
+			}
 			if (isLanguagePlumbing(state, property)) {
 				return Reflect.has(target, property);
 			}
@@ -338,7 +351,6 @@ function createRepositoryFacadeHandler<Evt extends AnyDomainEvent>(
 				state.writes.has(property) ||
 				(!isRepositoryLifecycleOperation(property) &&
 					(Reflect.has(target, property) ||
-						state.unforwardedOwnProperties.has(property) ||
 						Reflect.has(state.source, property)))
 			);
 		},

@@ -1829,6 +1829,57 @@ describe("UnitOfWork", () => {
 			);
 		});
 
+		function createUowWithAdapter(create: () => object) {
+			return new UnitOfWork({
+				scope: createMockScope(),
+				outbox: recordingOutbox<TestEvent>(),
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						flush: async () => {},
+						create,
+					}),
+				},
+			});
+		}
+
+		it("reads an own constructor field of the adapter", async () => {
+			const uow = createUowWithAdapter(() => ({
+				constructor: "order adapter",
+			}));
+
+			await uow.run(async ({ repositories }) => {
+				expect(repositories.orders.constructor).toBe("order adapter");
+			});
+		});
+
+		it("fails a read after the run of an own constructor field of the adapter", async () => {
+			const uow = createUowWithAdapter(() => ({
+				constructor: "order adapter",
+			}));
+
+			const repository = await uow.run(
+				async ({ repositories }) => repositories.orders,
+			);
+
+			expect(() => repository.constructor).toThrow(
+				expect.objectContaining({ code: "TRANSACTION_CLOSED" }),
+			);
+		});
+
+		it("answers an in probe for an own constructor field of an adapter without a prototype", async () => {
+			const uow = createUowWithAdapter(() =>
+				Object.assign(Object.create(null) as object, {
+					constructor: "order adapter",
+				}),
+			);
+
+			await uow.run(async ({ repositories }) => {
+				expect("constructor" in repositories.orders).toBe(true);
+			});
+		});
+
 		it("uses a replacement method after a forwarded method was cached", async () => {
 			await createReflectiveUow().run(async ({ repositories }) => {
 				const cachedRead = repositories.orders.read;
