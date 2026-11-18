@@ -1845,3 +1845,10 @@ The root entry no longer exports `capturePersistenceBaseline`,
   or `non-claiming due`. To run them, give the environment an `expireClaims`
   that ends every claim, and declare `providesClaimExpiry: true` on the
   harness. For a SQL adapter with a lease column, clear that column.
+- A tool that prints the object behind a repository facade can print the
+  facade without the fields of its adapter, for example `OrderRepository {}`.
+  `console.log` and `util.inspect` in Node are such tools, and a debugger can
+  be one. The object behind the facade takes the fields on the first access
+  that needs them. To see the field names, print `Object.keys(repository)`.
+  A read, an `in` probe, a write, and a list of the own keys through the
+  facade give the same results as in rc.16.
