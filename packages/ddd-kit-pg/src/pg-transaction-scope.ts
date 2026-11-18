@@ -50,8 +50,8 @@ export interface PgTransactionScopeOptions {
  *
  * The scope sends the `BEGIN` when the callback runs its first statement. If
  * that statement has values and the client is the JavaScript client of pg, the
- * `BEGIN` and the statement go to PostgreSQL in one round trip. The scope sends
- * nothing to PostgreSQL for a callback that runs no statement.
+ * `BEGIN` and the statement go to PostgreSQL in one round trip. For a callback
+ * that runs no statement, the scope takes a connection and sends no statement.
  *
  * The scope destroys the connection after a `BEGIN` that PostgreSQL did not
  * confirm, after a failed `ROLLBACK`, and after a `COMMIT` that PostgreSQL did
@@ -190,6 +190,17 @@ type Begin =
 	| { readonly status: "confirmed" }
 	| { readonly status: "not confirmed"; readonly failure: unknown };
 
+/**
+ * Opens the statements of one transaction. The executor stops when the
+ * transaction ends, because the pool can hand the connection to another
+ * transaction, and a late statement would then join it.
+ *
+ * A client runs one statement at a time, and pg deprecates starting a statement
+ * while another one runs. So each statement waits for the statement before it.
+ * Only the scope has the client, so no other statement can go first.
+ *
+ * The `BEGIN` goes to PostgreSQL with the first statement, or before it.
+ */
 function openSession(
 	client: PoolClient,
 	beginStatement: string,
@@ -252,7 +263,8 @@ function openSession(
 						code: "TRANSACTION_CLOSED",
 						message:
 							"A PgQueryExecutor ran a statement after its transaction ended. " +
-							"Await all work inside the callback of transactional, and do not keep the executor.",
+							"Await all work inside the callback of transactional, and do " +
+							"not keep the executor.",
 						details: { operation: "PgQueryExecutor.query" },
 					});
 				}

@@ -46,15 +46,18 @@ The scope sends the `BEGIN` when your callback runs its first statement. If that
 statement has values and the pool gives the JavaScript client of `pg`, the
 `BEGIN` and the statement go to PostgreSQL in one round trip. A tracer at the
 driver then sees no separate `BEGIN`. In each other case, the `BEGIN` goes to
-PostgreSQL in a round trip of its own. The scope sends nothing to PostgreSQL for
-a callback that runs no statement.
+PostgreSQL in a round trip of its own. For a callback that runs no statement,
+the scope sends no statement to PostgreSQL. It still takes a connection from the
+pool.
 
 If PostgreSQL does not confirm the `BEGIN`, each statement of your callback
 rejects with that failure. The scope rejects with it too, also when your
-callback caught it, and destroys the connection. A statement that carries the
-`BEGIN` can fail before the answer of PostgreSQL arrives, for example with a
-read timeout of the client (`query_timeout`). The scope treats that failure as a
-`BEGIN` without confirmation.
+callback caught it, and destroys the connection.
+
+A statement that carries the `BEGIN` can fail before the answer of PostgreSQL
+arrives, for example with a read timeout of the client (`query_timeout`), or
+with a value that the driver cannot serialize. The scope treats that failure as
+a `BEGIN` without confirmation.
 
 A failed statement aborts a PostgreSQL transaction, and `COMMIT` then rolls back
 without an error. If your callback catches that failure and resolves, the scope
