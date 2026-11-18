@@ -6,6 +6,7 @@ import {
 	expect,
 	inject,
 	it,
+	vi,
 } from "vite-plus/test";
 import { countRoundTrips } from "../test/round-trips";
 import {
@@ -188,6 +189,24 @@ describe("canSendStatementWithBegin", () => {
 
 		const accepted = canSendStatementWithBegin(new Client());
 		driverQuery.handleCommandComplete = handler;
+
+		expect(accepted).toBe(false);
+	});
+
+	it("rejects a driver that exports no Query, and the module still loads", async () => {
+		vi.resetModules();
+		vi.doMock("pg", async (importOriginal) => ({
+			...(await importOriginal<typeof import("pg")>()),
+			Query: undefined,
+		}));
+
+		const withoutQuery = await import("./statement-with-begin");
+		const driver = await import("pg");
+		const accepted = withoutQuery.canSendStatementWithBegin(
+			new driver.Client(),
+		);
+		vi.doUnmock("pg");
+		vi.resetModules();
 
 		expect(accepted).toBe(false);
 	});
