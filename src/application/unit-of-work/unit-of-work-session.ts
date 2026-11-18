@@ -383,12 +383,12 @@ export class Session<Evt extends AnyDomainEvent> {
 			});
 		}
 		if (stated === versionAtLoad) return;
-		const expectedVersion = toVersion(stated as number);
-		if (expectedVersion === entry.expectedVersion) return;
+		const statedVersion = toVersion(stated as number);
+		if (statedVersion === entry.expectedVersion) return;
 		throw new ExpectedVersionMismatchError({
 			identity: entry.aggregate.aggregateIdentity,
 			intent,
-			expectedVersion,
+			expectedVersion: statedVersion,
 			loadedVersion: entry.expectedVersion,
 		});
 	}
