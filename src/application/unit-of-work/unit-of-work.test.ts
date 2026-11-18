@@ -1,3 +1,5 @@
+// @ts-expect-error Node's util exists in the test runtime; the package stays Node-type-free.
+import { inspect } from "node:util";
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { Aggregate, Version } from "../../domain/aggregate/aggregate";
 import { pendingEventLifecycleReadViewFor } from "../../domain/aggregate/pending-event-lifecycle";
@@ -1704,6 +1706,288 @@ describe("UnitOfWork", () => {
 				expect(Reflect.ownKeys(repository)).not.toContain("label");
 			});
 		});
+
+		it("lists the enumerable own properties of the adapter as own keys of the facade", async () => {
+			await createReflectiveUow().run(async ({ repositories }) => {
+				expect(Object.keys(repositories.orders)).toEqual([
+					"label",
+					"read",
+					"fixed",
+				]);
+			});
+		});
+
+		it("reports an own property of the adapter as an own property of the facade", async () => {
+			await createReflectiveUow().run(async ({ repositories }) => {
+				expect(Object.hasOwn(repositories.orders, "label")).toBe(true);
+			});
+		});
+
+		it("keeps the own properties of the adapter after the facade stops to accept new properties", async () => {
+			await createReflectiveUow().run(async ({ repositories }) => {
+				Object.preventExtensions(repositories.orders);
+
+				expect(Object.keys(repositories.orders)).toEqual([
+					"label",
+					"read",
+					"fixed",
+				]);
+				expect(repositories.orders.label).toBe("orders");
+			});
+		});
+
+		it("keeps a property that the application defined on the facade when the own keys are read", async () => {
+			await createReflectiveUow().run(async ({ repositories }) => {
+				Object.defineProperty(repositories.orders, "label", {
+					value: "facade label",
+					enumerable: true,
+					configurable: true,
+				});
+
+				expect(Object.keys(repositories.orders)).toEqual([
+					"label",
+					"read",
+					"fixed",
+				]);
+				expect(repositories.orders.label).toBe("facade label");
+			});
+		});
+
+		it("lists the own keys in the order of the adapter after an assignment through the facade", async () => {
+			await createReflectiveUow().run(async ({ repositories }) => {
+				repositories.orders.read = () => "replacement";
+
+				expect(Object.keys(repositories.orders)).toEqual([
+					"label",
+					"read",
+					"fixed",
+				]);
+			});
+		});
+
+		it("removes a field of the adapter that the application deletes through the facade", async () => {
+			await createReflectiveUow().run(async ({ repositories }) => {
+				const deleted = Reflect.deleteProperty(repositories.orders, "label");
+
+				expect(deleted).toBe(true);
+				expect(Object.keys(repositories.orders)).toEqual(["read", "fixed"]);
+			});
+		});
+
+		class SelfChangingAdapter {
+			label?: string = "orders";
+			declare cache?: Map<string, string>;
+
+			forgetLabel(): void {
+				delete this.label;
+			}
+
+			rememberCache(): void {
+				this.cache = new Map();
+			}
+
+			protectLabel(): void {
+				Object.defineProperty(this, "label", { writable: false });
+			}
+		}
+
+		function createSelfChangingUow() {
+			return new UnitOfWork({
+				scope: createMockScope(),
+				outbox: recordingOutbox<TestEvent>(),
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						flush: async () => {},
+						create: () => new SelfChangingAdapter(),
+					}),
+				},
+			});
+		}
+
+		it("keeps an own property of the facade after the adapter deleted the field", async () => {
+			await createSelfChangingUow().run(async ({ repositories }) => {
+				repositories.orders.forgetLabel();
+
+				expect("label" in repositories.orders).toBe(true);
+				expect(Object.keys(repositories.orders)).toEqual(["label"]);
+				expect(repositories.orders.label).toBeUndefined();
+			});
+		});
+
+		it("fails a read after the run of a field that the adapter deleted during the run", async () => {
+			const repository = await createSelfChangingUow().run(
+				async ({ repositories }) => {
+					repositories.orders.forgetLabel();
+					return repositories.orders;
+				},
+			);
+
+			expect(() => repository.label).toThrow(
+				expect.objectContaining({ code: "TRANSACTION_CLOSED" }),
+			);
+		});
+
+		it("fails an in probe after the run for a field that the adapter deleted during the run", async () => {
+			const repository = await createSelfChangingUow().run(
+				async ({ repositories }) => {
+					repositories.orders.forgetLabel();
+					return repositories.orders;
+				},
+			);
+
+			expect(() => "label" in repository).toThrow(
+				expect.objectContaining({ code: "TRANSACTION_CLOSED" }),
+			);
+		});
+
+		it("does not list a field that the adapter gave itself during the run", async () => {
+			await createSelfChangingUow().run(async ({ repositories }) => {
+				repositories.orders.rememberCache();
+
+				expect(Object.keys(repositories.orders)).toEqual(["label"]);
+				expect(repositories.orders.cache).toBeInstanceOf(Map);
+			});
+		});
+
+		it("names the property when an assignment fails on a field that the adapter made read-only", async () => {
+			await createSelfChangingUow().run(async ({ repositories }) => {
+				repositories.orders.protectLabel();
+
+				expect(() => {
+					repositories.orders.label = "changed";
+				}).toThrow("Cannot assign to repository property label");
+			});
+		});
+
+		it("fails the run when the adapter cannot report its own properties", async () => {
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: recordingOutbox<TestEvent>(),
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						flush: async () => {},
+						create: () =>
+							new Proxy(
+								{ label: "orders" },
+								{
+									ownKeys: () => {
+										throw new Error("own keys unavailable");
+									},
+								},
+							),
+					}),
+				},
+			});
+
+			await expect(uow.run(async () => undefined)).rejects.toThrow(
+				"own keys unavailable",
+			);
+		});
+
+		function createUowWithAdapter(create: () => object) {
+			return new UnitOfWork({
+				scope: createMockScope(),
+				outbox: recordingOutbox<TestEvent>(),
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						flush: async () => {},
+						create,
+					}),
+				},
+			});
+		}
+
+		it("reads an own constructor field of the adapter", async () => {
+			const uow = createUowWithAdapter(() => ({
+				constructor: "order adapter",
+			}));
+
+			await uow.run(async ({ repositories }) => {
+				expect(repositories.orders.constructor).toBe("order adapter");
+			});
+		});
+
+		it("fails a read after the run of an own constructor field of the adapter", async () => {
+			const uow = createUowWithAdapter(() => ({
+				constructor: "order adapter",
+			}));
+
+			const repository = await uow.run(
+				async ({ repositories }) => repositories.orders,
+			);
+
+			expect(() => repository.constructor).toThrow(
+				expect.objectContaining({ code: "TRANSACTION_CLOSED" }),
+			);
+		});
+
+		it("answers an in probe after the run for an own constructor field of the adapter", async () => {
+			const uow = createUowWithAdapter(() => ({
+				constructor: "order adapter",
+			}));
+
+			const repository = await uow.run(
+				async ({ repositories }) => repositories.orders,
+			);
+
+			expect("constructor" in repository).toBe(true);
+		});
+
+		it("answers an in probe for an own constructor field of an adapter without a prototype", async () => {
+			const uow = createUowWithAdapter(() =>
+				Object.assign(Object.create(null) as object, {
+					constructor: "order adapter",
+				}),
+			);
+
+			await uow.run(async ({ repositories }) => {
+				expect("constructor" in repositories.orders).toBe(true);
+			});
+		});
+
+		it("rejects an assignment to a field that the adapter declares read-only", async () => {
+			await createReflectiveUow().run(async ({ repositories }) => {
+				expect(Reflect.set(repositories.orders, "fixed", "changed")).toBe(
+					false,
+				);
+			});
+		});
+
+		it.each([
+			[
+				"an assignment",
+				(repository: object) => Reflect.set(repository, "label", "changed"),
+			],
+			[
+				"a property definition",
+				(repository: object) =>
+					Reflect.defineProperty(repository, "label", { value: "changed" }),
+			],
+			[
+				"a deletion",
+				(repository: object) => Reflect.deleteProperty(repository, "label"),
+			],
+		])(
+			"prints a closed facade the same after it rejected %s",
+			async (_write, write) => {
+				const repository = await createReflectiveUow().run(
+					async ({ repositories }) => repositories.orders,
+				);
+				const printedBefore = inspect(repository);
+
+				expect(() => write(repository)).toThrow(
+					expect.objectContaining({ code: "TRANSACTION_CLOSED" }),
+				);
+
+				expect(inspect(repository)).toBe(printedBefore);
+			},
+		);
 
 		it("uses a replacement method after a forwarded method was cached", async () => {
 			await createReflectiveUow().run(async ({ repositories }) => {

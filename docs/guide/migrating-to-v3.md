@@ -1865,3 +1865,10 @@ The root entry no longer exports `capturePersistenceBaseline`,
   `expectation: WriteExpectation`. JavaScript code without the argument fails
   with `AGGREGATE_TRACKING` and the reason `expected_version_missing`. See
   [Concurrency -> The version that the caller saw](./concurrency.md#the-version-that-the-caller-saw).
+- A tool that prints the object behind a repository facade can print the
+  facade without the fields of its adapter, for example `OrderRepository {}`.
+  `console.log` and `util.inspect` in Node are such tools, and a debugger can
+  be one. The object behind the facade takes the fields on the first access
+  that needs them. To see the field names, print `Object.keys(repository)`.
+  A read, an `in` probe, a write, and a list of the own keys through the
+  facade give the same results as in rc.16.
