@@ -309,9 +309,9 @@ read throws `TRANSACTION_CLOSED`.
 A language probe such as `then` or `constructor` does not.
 
 The facade has the own properties that the adapter has at the start of the
-run. In Node, `console.log(repository)` can print the facade without them,
-because it reads the object behind the facade. Print
-`Object.keys(repository)` to see the field names.
+run. A tool that prints the object behind the facade can print the facade
+without them. `console.log` and `util.inspect` in Node are such tools, and a
+debugger can be one. Print `Object.keys(repository)` to see the field names.
 
 Application code cannot access the raw transaction or the tracking capability.
 The `UnitOfWorkContext` contains only `repositories` and the optional
