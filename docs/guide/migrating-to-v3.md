@@ -1870,5 +1870,5 @@ The root entry no longer exports `capturePersistenceBaseline`,
   `console.log` and `util.inspect` in Node are such tools, and a debugger can
   be one. The object behind the facade takes the fields on the first access
   that needs them. To see the field names, print `Object.keys(repository)`.
-  A read, an `in` probe, a write, and a list of the own keys through the
-  facade give the same results as in rc.16.
+  A read, an `in` probe, a change of a property, and a list of the own keys
+  through the facade give the same results as in rc.16.
