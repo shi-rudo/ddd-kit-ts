@@ -1,4 +1,5 @@
 import { Client, type Connection, Query, type QueryResult } from "pg";
+import { PgTransactionNotOpenError } from "./pg-errors";
 
 type StatementCallback = (
 	failure: Error | null | undefined,
@@ -125,16 +126,11 @@ export function sendStatementWithBegin(
 					);
 					return;
 				}
-				const status = client.getTransactionStatus();
-				if (status !== "T") {
+				const transactionStatus = client.getTransactionStatus();
+				if (transactionStatus !== "T") {
 					resolve({
 						beginConfirmed: false,
-						failure: new Error(
-							`A BEGIN went to PostgreSQL in front of a statement, and the statement succeeded. ` +
-								`The client then reported the transaction status ${JSON.stringify(status)}, and "T" was expected. ` +
-								`The statement possibly ran outside of a transaction. ` +
-								`The installed version of pg is possibly not compatible with @shirudo/ddd-kit-pg.`,
-						),
+						failure: new PgTransactionNotOpenError({ transactionStatus }),
 					});
 					return;
 				}

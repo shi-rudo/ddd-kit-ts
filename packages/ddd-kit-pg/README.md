@@ -59,7 +59,9 @@ the failure of the `BEGIN`.
 A statement that carries the `BEGIN` can fail before the answer of PostgreSQL
 arrives, for example with a read timeout of the client (`query_timeout`), or
 with a value that the driver cannot serialize. The scope treats that failure as
-a `BEGIN` without confirmation.
+a `BEGIN` without confirmation. The scope does the same with a
+`PgTransactionNotOpenError`: the statement that carries the `BEGIN` succeeded,
+and the client then reported no open transaction.
 
 A failed statement aborts a PostgreSQL transaction, and `COMMIT` then rolls back
 without an error. If your callback catches that failure and resolves, the scope

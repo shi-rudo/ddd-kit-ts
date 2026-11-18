@@ -155,7 +155,7 @@ describe("sendStatementWithBegin", () => {
 
 		expect(outcome).toMatchObject({
 			beginConfirmed: false,
-			failure: expect.any(Error),
+			failure: { code: "PG_TRANSACTION_NOT_OPEN", transactionStatus: "I" },
 		});
 	});
 });

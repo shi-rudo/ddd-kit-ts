@@ -21,7 +21,9 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   error, the connection returns to the pool. It sends the `BEGIN` when the
   callback runs its first statement. On the JavaScript client of `pg`, a first
   statement with values carries the `BEGIN` in the same round trip. For a
-  callback that runs no statement, it sends no statement to PostgreSQL.
+  callback that runs no statement, it sends no statement to PostgreSQL. If the
+  client reports no open transaction after such a `BEGIN`, the run fails with
+  `PgTransactionNotOpenError`.
 - `PgIdempotencyStore`, the transactional `IdempotencyStore`, with its table in
   `sql/idempotency.sql`. A claim of a key that another open transaction holds
   throws `IdempotencyInFlightError` at once and blocks no connection, also for
