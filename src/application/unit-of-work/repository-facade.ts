@@ -84,6 +84,26 @@ interface GuardedMethodCacheEntry {
 	readonly guarded: (...args: unknown[]) => unknown;
 }
 
+/**
+ * What the facade keeps of an own property of the adapter. The descriptor
+ * itself keeps the first value of a data field reachable.
+ */
+interface AdapterPropertyShape {
+	readonly enumerable: boolean;
+	readonly assignable: boolean;
+}
+
+function adapterPropertyShape(
+	descriptor: PropertyDescriptor,
+): AdapterPropertyShape {
+	return {
+		enumerable: descriptor.enumerable === true,
+		assignable:
+			("value" in descriptor && descriptor.writable === true) ||
+			descriptor.set !== undefined,
+	};
+}
+
 interface RepositoryFacadeState<Evt extends AnyDomainEvent> {
 	readonly source: object;
 	readonly target: object;
@@ -94,7 +114,7 @@ interface RepositoryFacadeState<Evt extends AnyDomainEvent> {
 	readonly forwardedOwnProperties: Set<PropertyKey>;
 	/** The own properties of the adapter at the facade build that the target
 	 * does not have yet. */
-	readonly unforwardedOwnProperties: Map<PropertyKey, PropertyDescriptor>;
+	readonly unforwardedOwnProperties: Map<PropertyKey, AdapterPropertyShape>;
 	readonly writes: Set<PropertyKey>;
 }
 
@@ -211,23 +231,22 @@ function facadeInPlaceOfSource<Evt extends AnyDomainEvent>(
 function defineForwardedRepositoryProperty<Evt extends AnyDomainEvent>(
 	state: RepositoryFacadeState<Evt>,
 	property: PropertyKey,
-	descriptor: PropertyDescriptor,
+	shape: AdapterPropertyShape,
 ): void {
 	Object.defineProperty(state.target, property, {
 		configurable: true,
-		enumerable: descriptor.enumerable ?? false,
+		enumerable: shape.enumerable,
 		get: () => readRepositorySource(state, property),
-		set:
-			("value" in descriptor && descriptor.writable) || descriptor.set
-				? (value: unknown) => {
-						state.session.assertOpen(repositoryOperationName(property));
-						if (!Reflect.set(state.source, property, value, state.source)) {
-							throw new TypeError(
-								`Cannot assign to repository property ${String(property)}`,
-							);
-						}
+		set: shape.assignable
+			? (value: unknown) => {
+					state.session.assertOpen(repositoryOperationName(property));
+					if (!Reflect.set(state.source, property, value, state.source)) {
+						throw new TypeError(
+							`Cannot assign to repository property ${String(property)}`,
+						);
 					}
-				: undefined,
+				}
+			: undefined,
 	});
 	state.forwardedOwnProperties.add(property);
 }
@@ -268,7 +287,12 @@ function recordAdapterOwnProperties<Evt extends AnyDomainEvent>(
 	for (const property of Reflect.ownKeys(state.source)) {
 		if (isRepositoryLifecycleOperation(property)) continue;
 		const descriptor = Reflect.getOwnPropertyDescriptor(state.source, property);
-		if (descriptor) state.unforwardedOwnProperties.set(property, descriptor);
+		if (descriptor) {
+			state.unforwardedOwnProperties.set(
+				property,
+				adapterPropertyShape(descriptor),
+			);
+		}
 	}
 }
 
@@ -281,8 +305,8 @@ function recordAdapterOwnProperties<Evt extends AnyDomainEvent>(
 function targetWithAdapterProperties<Evt extends AnyDomainEvent>(
 	state: RepositoryFacadeState<Evt>,
 ): object {
-	for (const [property, descriptor] of state.unforwardedOwnProperties) {
-		defineForwardedRepositoryProperty(state, property, descriptor);
+	for (const [property, shape] of state.unforwardedOwnProperties) {
+		defineForwardedRepositoryProperty(state, property, shape);
 	}
 	state.unforwardedOwnProperties.clear();
 	return state.target;
@@ -382,7 +406,11 @@ function setRepositoryFacadeProperty<Evt extends AnyDomainEvent>(
 	const set = Reflect.set(state.source, property, value, state.source);
 	const descriptor = Reflect.getOwnPropertyDescriptor(state.source, property);
 	if (set && descriptor) {
-		defineForwardedRepositoryProperty(state, property, descriptor);
+		defineForwardedRepositoryProperty(
+			state,
+			property,
+			adapterPropertyShape(descriptor),
+		);
 	}
 	// Every successful set invalidates the guarded-method cache, matching the
 	// own-descriptor and delete paths: a cached wrapper closed over the
