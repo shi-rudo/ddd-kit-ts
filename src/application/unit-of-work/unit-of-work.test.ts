@@ -5399,6 +5399,59 @@ describe("UnitOfWork", () => {
 				expect(writes).toEqual([]);
 			},
 		);
+
+		it.each([
+			["no second argument", undefined],
+			["an expectation without an expected version", {}],
+			["an expected version that is undefined", { expectedVersion: undefined }],
+			["an expected version that is null", { expectedVersion: null }],
+		])("rejects a removal with %s", async (_name, expectation) => {
+			const { uow, writes } = uowThatRecordsWrites();
+			const aggregate = createMockAggregate("o-1");
+
+			await expectTrackingFailure(
+				uow.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(aggregate);
+					const remove = repositories.orders.remove as (
+						aggregate: MockAggregate,
+						expectation: unknown,
+					) => void;
+					remove(aggregate, expectation);
+				}),
+				"expected_version_missing",
+			);
+			expect(writes).toEqual([]);
+		});
+
+		it.each([
+			["a numeric string", "1"],
+			["a fraction", 1.5],
+			["a negative number", -1],
+			["a symbol of another origin", Symbol("versionAtLoad")],
+		])(
+			"rejects a removal with an expected version that is %s",
+			async (_name, expectedVersion) => {
+				const { uow, writes } = uowThatRecordsWrites();
+				const aggregate = createMockAggregate("o-1");
+
+				const rejection = await rejectionOf(
+					uow.run(async ({ repositories }) => {
+						repositories.orders.trackLoaded(aggregate);
+						const remove = repositories.orders.remove as (
+							aggregate: MockAggregate,
+							expectation: unknown,
+						) => void;
+						remove(aggregate, { expectedVersion });
+					}),
+				);
+
+				expect(rejection).toMatchObject({
+					code: "INVALID_VERSION",
+					category: "WIRING",
+				});
+				expect(writes).toEqual([]);
+			},
+		);
 	});
 
 	describe("cross-copy cooperation", () => {
