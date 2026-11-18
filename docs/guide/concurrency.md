@@ -205,7 +205,10 @@ Validate a version from a request at the boundary, then brand it with
 `toVersion`. An `expectedVersion` that is not a safe integer of at least zero
 fails the call with `INVALID_VERSION`. That is a wiring error, not a
 validation result. An HTTP API can carry the version in an `ETag` and read it
-from `If-Match`.
+from `If-Match`. A handler that reads `If-Match` maps
+`ExpectedVersionMismatchError` to HTTP 412, the status for a failed request
+precondition. The HTTP 409 of `createKitPublicErrors` fits a version that the
+request body carries.
 
 ## Handling conflicts
 
