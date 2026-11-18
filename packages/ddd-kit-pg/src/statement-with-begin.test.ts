@@ -1,4 +1,3 @@
-import type { EventEmitter } from "node:events";
 import { Client, Query } from "pg";
 import {
 	afterEach,
@@ -8,6 +7,7 @@ import {
 	inject,
 	it,
 } from "vite-plus/test";
+import { countRoundTrips } from "../test/round-trips";
 import {
 	canSendStatementWithBegin,
 	sendStatementWithBegin,
@@ -21,20 +21,13 @@ class ClientReportingNoTransaction extends Client {
 
 describe("sendStatementWithBegin", () => {
 	let client: Client;
-	let roundTrips: number;
+	let roundTrips: () => number;
 
 	const connect = async (ClientClass: typeof Client) => {
 		client = new ClientClass({ connectionString: inject("postgresUri") });
 		await client.connect();
 		await client.query("CREATE TEMP TABLE note (body text NOT NULL)");
-		roundTrips = 0;
-		// PostgreSQL ends each round trip with one ReadyForQuery.
-		(client as unknown as { connection: EventEmitter }).connection.on(
-			"readyForQuery",
-			() => {
-				roundTrips += 1;
-			},
-		);
+		roundTrips = countRoundTrips(client);
 	};
 
 	const noteCount = async () => {
@@ -56,7 +49,7 @@ describe("sendStatementWithBegin", () => {
 			["first"],
 		);
 
-		expect(roundTrips).toBe(1);
+		expect(roundTrips()).toBe(1);
 		expect(outcome).toMatchObject({
 			beginConfirmed: true,
 			statement: {

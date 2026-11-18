@@ -1,4 +1,3 @@
-import type { EventEmitter } from "node:events";
 import { someChainRetryable } from "@shirudo/base-error";
 import {
 	outboxWriterAcceptingEventLoss,
@@ -19,6 +18,7 @@ import {
 	type IsolatedSchema,
 	openIsolatedSchema,
 } from "../test/isolated-schema";
+import { countRoundTrips } from "../test/round-trips";
 import {
 	PgCommitRolledBackError,
 	PgRetryableTransactionFailureError,
@@ -44,23 +44,18 @@ function poolRejecting(statement: string, failure: Error) {
 	};
 }
 
-/** Counts the round trips on the connections of `pool`. PostgreSQL ends each with one ReadyForQuery. */
+/** Counts the round trips of the one connection that `pool` gives. */
 function countingRoundTrips(pool: PgClientPool) {
-	let roundTrips = 0;
+	let roundTrips = () => 0;
 	return {
 		pool: {
 			connect: async () => {
 				const client = await pool.connect();
-				(client as unknown as { connection: EventEmitter }).connection.on(
-					"readyForQuery",
-					() => {
-						roundTrips += 1;
-					},
-				);
+				roundTrips = countRoundTrips(client);
 				return client;
 			},
 		},
-		roundTrips: () => roundTrips,
+		roundTrips: () => roundTrips(),
 	};
 }
 
