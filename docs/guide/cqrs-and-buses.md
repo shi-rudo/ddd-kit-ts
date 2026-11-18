@@ -612,7 +612,7 @@ The bus dispatches the command. The command handler owns the use case.
 post-commit orchestration to `withCommit`.
 
 ```ts
-import { UnitOfWork } from "@shirudo/ddd-kit";
+import { UnitOfWork, versionAtLoad } from "@shirudo/ddd-kit";
 
 const result = await new UnitOfWork(
   {
@@ -626,7 +626,7 @@ const result = await new UnitOfWork(
   async ({ repositories }) => {
     const order = await repositories.orders.getById(orderId);
     order.confirm();
-    repositories.orders.update(order);
+    repositories.orders.update(order, { expectedVersion: versionAtLoad });
     return order.id;
   },
 );

@@ -12,6 +12,10 @@ import type {
 	StreamReadResult,
 } from "../persistence/event-store/event-store";
 import {
+	versionAtLoad,
+	type WriteExpectation,
+} from "../persistence/repository/repository";
+import {
 	assert,
 	assertChainConflictNamesIntent,
 	assertChainContainsKitError,
@@ -36,7 +40,7 @@ export interface EsContractRepository<
 > {
 	findById(id: TAggregate["id"]): Promise<TAggregate | undefined>;
 	add(aggregate: TAggregate): void;
-	update(aggregate: TAggregate): void;
+	update(aggregate: TAggregate, expectation: WriteExpectation): void;
 }
 
 export interface EsRepositoryContractEnvironment<
@@ -213,7 +217,7 @@ export function createEsRepositoryContractTests<
 						await hold();
 						harness.mutate(stale);
 						harness.mutate(stale);
-						repository.update(stale);
+						repository.update(stale, { expectedVersion: versionAtLoad });
 					}),
 				);
 
@@ -222,7 +226,7 @@ export function createEsRepositoryContractTests<
 						environment.run(async ({ repository }) => {
 							const current = await load(repository, seeded.id);
 							harness.mutate(current);
-							repository.update(current);
+							repository.update(current, { expectedVersion: versionAtLoad });
 							return current;
 						}),
 					writerB,
@@ -516,7 +520,7 @@ export function createEsRepositoryContractTests<
 					await environment.run(async ({ repository }) => {
 						const loaded = await load(repository, seeded.id);
 						harness.mutate(loaded);
-						repository.update(loaded);
+						repository.update(loaded, { expectedVersion: versionAtLoad });
 					});
 					const snapshotted = await environment.run(({ repository }) =>
 						load(repository, seeded.id),
@@ -535,7 +539,7 @@ export function createEsRepositoryContractTests<
 						const loaded = await load(repository, seeded.id);
 						harness.mutate(loaded);
 						harness.mutate(loaded);
-						repository.update(loaded);
+						repository.update(loaded, { expectedVersion: versionAtLoad });
 						return loaded;
 					});
 					const caughtUp = await environment.run(({ repository }) =>

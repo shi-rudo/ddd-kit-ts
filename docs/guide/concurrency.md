@@ -32,7 +32,7 @@ async function updateQuantity(
     const order = await repositories.orders.getById(orderId);
 
     order.updateItemQuantity(itemId, quantity);
-    repositories.orders.update(order);
+    repositories.orders.update(order, { expectedVersion: versionAtLoad });
   });
 }
 ```
@@ -86,8 +86,8 @@ registered by the use case.
 The kit does not infer creation from a version number:
 
 ```ts
-repositories.orders.add(newOrder);       // no expected version
-repositories.orders.update(loadedOrder); // expected version from the load
+repositories.orders.add(newOrder); // no expected version
+repositories.orders.update(loadedOrder, { expectedVersion: versionAtLoad });
 ```
 
 A new aggregate can already be at version 1 or 2 because its factory recorded
@@ -152,6 +152,63 @@ overwrite the change undetected.
 `setStateWithoutVersionBump` remains a deliberate escape hatch for data where
 a lost concurrent update is acceptable, such as a disposable display cache.
 Do not use it for domain-meaningful state.
+
+## The version that the caller saw
+
+The flush guards the time from the load to the write. It cannot guard the
+time before the load.
+
+An editor reads a catalog item at version 3 and submits a rename ten minutes
+later. In that time, another editor renames the item, and the store holds
+version 4. The command of the first editor loads version 4, and the flush
+finds version 4. The write succeeds, and it replaces a name that the first
+editor never saw.
+
+Only the caller knows the version that its decision used. Thus each `update`
+and each `remove` states that version as `expectedVersion`:
+
+| The decision used | Pass |
+| --- | --- |
+| only the state that this run loaded | `versionAtLoad` |
+| a read that a person or another system made before this run | the version of that read |
+
+The argument has no default. A call without it throws `AGGREGATE_TRACKING`
+with the reason `expected_version_missing`.
+
+A rename carries the decision of an editor. The read side gives the editor
+the version together with the name, and the command brings it back as
+`seenVersion`:
+
+<<< ../../examples/conflict-handling/conflict-handling-example.ts#rename-catalog-item{ts}
+
+If the loaded version differs from `seenVersion`, `update` throws
+`ExpectedVersionMismatchError` and registers no write. The error is not
+retryable, because a new attempt loads the same newer version. The handler
+returns `ITEM_CHANGED_SINCE_READ`. The editor reads the item again and
+decides again. `createKitPublicErrors` maps the error to HTTP 409.
+
+The handler also catches a retryable `ConcurrencyConflictError`. A rename
+can lose the race between its load and its flush. With a
+`RetryingTransactionScope`, the next attempt loads the newer version and
+fails with `ExpectedVersionMismatchError`. Without a retry, the conflict
+reaches the handler. The two errors mean the same to the editor.
+
+A reservation decides on the stock that the run loads. No person saw a
+version, so the handler passes `versionAtLoad`:
+
+<<< ../../examples/conflict-handling/conflict-handling-example.ts#reserve-stock{ts}
+
+Here a retry is correct. Each attempt loads the current stock and decides
+again.
+
+Validate a version from a request at the boundary, then brand it with
+`toVersion`. An `expectedVersion` that is not a safe integer of at least zero
+fails the call with `INVALID_VERSION`. That is a wiring error, not a
+validation result. An HTTP API can carry the version in an `ETag` and read it
+from `If-Match`. A handler that reads `If-Match` maps
+`ExpectedVersionMismatchError` to HTTP 412, the status for a failed request
+precondition. The HTTP 409 of `createKitPublicErrors` fits a version that the
+request body carries.
 
 ## Handling conflicts
 
@@ -241,7 +298,9 @@ policy for the whole operation.
 
 Pessimistic locking is not part of the repository contract. If a genuinely hot
 path needs `SELECT ... FOR UPDATE`, keep it inside an intent-revealing adapter
-operation and document why OCC is insufficient there.
+operation and document why OCC is insufficient there. A row lock at the load
+closes the time from the load to the write. It does not close the time before
+the load, so the write still states the version that its decision used.
 
 ## Publication after commit
 
@@ -257,6 +316,7 @@ transaction and outbox provide durability.
 
 - Use one aggregate instance per class and id inside an operation.
 - Register `add`, `update`, or `remove` only after domain decisions finish.
+- State the version that the decision used on each `update` and `remove`.
 - Compare updates and deletes with `write.expectedVersion`.
 - If only child tables changed, advance the root version.
 - Persist `write.changes` and `write.events`. Do not read the aggregate again.

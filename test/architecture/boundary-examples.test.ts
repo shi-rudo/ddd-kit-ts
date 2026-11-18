@@ -14,6 +14,7 @@ const exampleUrls = {
 		import.meta.url,
 	),
 	cqrsGuide: new URL("../../docs/guide/cqrs-and-buses.md", import.meta.url),
+	concurrencyGuide: new URL("../../docs/guide/concurrency.md", import.meta.url),
 	edgeGuide: new URL("../../docs/guide/edge-runtimes.md", import.meta.url),
 	idempotencyGuide: new URL("../../docs/guide/idempotency.md", import.meta.url),
 };
@@ -76,6 +77,17 @@ describe("untrusted-boundary examples", () => {
 		);
 		expect(cqrsGuide).toContain(
 			"<<< ../../examples/order-placement/order-placement-example.ts#place-order-handler{ts}",
+		);
+	});
+
+	it("renders the executable conflict-handling example in the concurrency guide", () => {
+		const concurrencyGuide = sourceOf("concurrencyGuide");
+
+		expect(concurrencyGuide).toContain(
+			"<<< ../../examples/conflict-handling/conflict-handling-example.ts#rename-catalog-item{ts}",
+		);
+		expect(concurrencyGuide).toContain(
+			"<<< ../../examples/conflict-handling/conflict-handling-example.ts#reserve-stock{ts}",
 		);
 	});
 

@@ -66,11 +66,11 @@ export interface TransactionalOptions {
  *
  *   const order = await orderRepository.getById(orderId);
  *   order.confirm();
- *   orderRepository.update(order);
+ *   orderRepository.update(order, { expectedVersion: versionAtLoad });
  * });
  * ```
  *
- * Repository contracts take the id or aggregate only: the tx handle
+ * Repository contracts take no tx handle: it
  * is wired into a concrete repository at construction time, not threaded
  * through every call. Different ORMs have different idioms for that
  * (constructor injection, factory functions, `withTx` chains); pick one

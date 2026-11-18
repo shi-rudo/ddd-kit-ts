@@ -236,6 +236,8 @@ export {
 	DuplicateAggregateError,
 	type DuplicateAggregateErrorOptions,
 	type EventStreamPageReason,
+	ExpectedVersionMismatchError,
+	type ExpectedVersionMismatchErrorOptions,
 	ForeignEventError,
 	IdempotencyClaimLostError,
 	type IdempotencyClaimLostErrorOptions,
@@ -371,9 +373,11 @@ export type {
 	PersistenceLifecycle,
 	PersistenceModel,
 } from "./persistence/repository/persistence-model";
-export type {
-	AggregatePersistence,
-	Repository,
+export {
+	type AggregatePersistence,
+	type Repository,
+	versionAtLoad,
+	type WriteExpectation,
 } from "./persistence/repository/repository";
 export {
 	RetryingTransactionScope,

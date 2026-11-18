@@ -298,7 +298,8 @@ export type AggregateTrackingReason =
 	| "conflicting_intent"
 	| "mutated_after_registration"
 	| "registered_during_flush"
-	| "identity_already_tracked";
+	| "identity_already_tracked"
+	| "expected_version_missing";
 
 /**
  * A deterministic violation of the Unit of Work's aggregate lifecycle.
@@ -386,6 +387,12 @@ function trackingReasonMessage(options: AggregateTrackingErrorOptions): string {
 				`Aggregate ${aggregate} cannot be registered for ${operation}: this ` +
 				"unit of work already tracks another instance with the same identity. " +
 				"Change the tracked instance, or give the new aggregate a new id."
+			);
+		case "expected_version_missing":
+			return (
+				`Aggregate ${aggregate} cannot be registered for ${operation}: the ` +
+				"call states no expected version. Pass { expectedVersion } with " +
+				"the version that the caller saw, or with versionAtLoad."
 			);
 	}
 }

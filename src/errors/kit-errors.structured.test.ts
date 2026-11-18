@@ -27,6 +27,8 @@ import {
 	type DuplicateEventIdErrorOptions,
 	directStateMutationError,
 	duplicateKitCopyError,
+	ExpectedVersionMismatchError,
+	type ExpectedVersionMismatchErrorOptions,
 	errorMapperFailedError,
 	eventCollectionError,
 	ForeignEventError,
@@ -121,6 +123,18 @@ const concreteCases: ReadonlyArray<{
 				identity: { aggregateType: "Order", aggregateId: "o-1" },
 			}),
 		code: "DUPLICATE_AGGREGATE",
+		category: "INFRASTRUCTURE",
+		retryable: false,
+	},
+	{
+		error: () =>
+			new ExpectedVersionMismatchError({
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
+				intent: "update",
+				expectedVersion: 3,
+				loadedVersion: 4,
+			}),
+		code: "EXPECTED_VERSION_MISMATCH",
 		category: "INFRASTRUCTURE",
 		retryable: false,
 	},
@@ -707,6 +721,7 @@ describe("KitErrorCode stays in sync with the classes", () => {
 			AssertKitCode<DuplicateAggregateError["code"]>,
 			AssertKitCode<KitWiringError<"ERROR_MAPPER_FAILED">["code"]>,
 			AssertKitCode<KitWiringError<"EVENT_COLLECTION_FAILED">["code"]>,
+			AssertKitCode<ExpectedVersionMismatchError["code"]>,
 			AssertKitCode<KitWiringError<"FOLD_RETURNED_NO_STATE">["code"]>,
 			AssertKitCode<ForeignEventError["code"]>,
 			AssertKitCode<KitWiringError<"PROTOTYPE_POLLUTION">["code"]>,
@@ -766,6 +781,16 @@ describe("an error that names an aggregate keeps its own copy of the identity", 
 		{
 			name: "DuplicateAggregateError",
 			build: (identity) => new DuplicateAggregateError({ identity }),
+		},
+		{
+			name: "ExpectedVersionMismatchError",
+			build: (identity) =>
+				new ExpectedVersionMismatchError({
+					identity,
+					intent: "remove",
+					expectedVersion: 3,
+					loadedVersion: 4,
+				}),
 		},
 		{
 			name: "AggregateNotFoundError",
@@ -930,6 +955,7 @@ type SameType<X, Y> =
 const identityShapesMatchAggregateIdentity: [
 	SameType<ConcurrencyConflictErrorOptions["identity"], AggregateIdentity>,
 	SameType<DuplicateAggregateErrorOptions["identity"], AggregateIdentity>,
+	SameType<ExpectedVersionMismatchErrorOptions["identity"], AggregateIdentity>,
 	SameType<AggregateNotFoundErrorOptions["identity"], AggregateIdentity>,
 	SameType<SnapshotSchemaMismatchErrorOptions["identity"], AggregateIdentity>,
 	SameType<
@@ -955,6 +981,7 @@ const identityShapesMatchAggregateIdentity: [
 	SameType<ReentrantEventRecordingErrorOptions["identity"], AggregateIdentity>,
 	SameType<DuplicateEventIdErrorOptions["identity"], AggregateIdentity>,
 ] = [
+	true,
 	true,
 	true,
 	true,

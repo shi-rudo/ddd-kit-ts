@@ -20,6 +20,7 @@ import type {
 } from "../messaging/committed-event";
 import type { Outbox } from "../messaging/outbox/ports";
 import type { PersistenceModel } from "../persistence/repository/persistence-model";
+import type { WriteExpectation } from "../persistence/repository/repository";
 import type { TransactionScope } from "../persistence/repository/scope";
 import { recordingOutbox } from "./recording-outbox";
 import {
@@ -232,8 +233,8 @@ class InMemoryOrderRepository {
 
 type OrderReadAdapter = Pick<ContractRepository<ContractOrder>, "findById">;
 interface OrderRepositoryPort extends ContractRepository<ContractOrder> {
-	update(aggregate: ContractOrder): void;
-	remove(aggregate: ContractOrder): void;
+	update(aggregate: ContractOrder, expectation: WriteExpectation): void;
+	remove(aggregate: ContractOrder, expectation: WriteExpectation): void;
 }
 type AppendOnlyOrderPort = Pick<
 	ContractRepository<ContractOrder>,

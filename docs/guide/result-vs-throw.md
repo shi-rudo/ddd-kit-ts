@@ -115,6 +115,7 @@ import {
   type Command,
   type CommandHandler,
   withCommit,
+  versionAtLoad,
 } from "@shirudo/ddd-kit";
 import { err, ok } from "@shirudo/result";
 
@@ -139,7 +140,7 @@ const confirmOrder: CommandHandler<
         const order = await repositories.orders.getById(command.orderId);
 
         order.confirm();
-        repositories.orders.update(order);
+        repositories.orders.update(order, { expectedVersion: versionAtLoad });
         return order.id;
       },
     );
@@ -171,7 +172,7 @@ return uow.run(async ({ repositories }) => {
   const order = await repositories.orders.getById(command.orderId);
 
   order.confirm();
-  repositories.orders.update(order);
+  repositories.orders.update(order, { expectedVersion: versionAtLoad });
   return ok(order.id);
 });
 ```
@@ -298,7 +299,7 @@ const orderId = await uow.run(async ({ repositories }) => {
   const order = await repositories.orders.getById(id);
 
   order.confirm();
-  repositories.orders.update(order);
+  repositories.orders.update(order, { expectedVersion: versionAtLoad });
   return order.id;
 });
 ```
@@ -314,7 +315,7 @@ calls `UnitOfWork.run` directly, catch and map errors there.
 const orderId = await uow.run(async ({ repositories }) => {
   const order = await repositories.orders.getById(id);
   order.confirm();
-  repositories.orders.update(order);
+  repositories.orders.update(order, { expectedVersion: versionAtLoad });
   return order.id;
 });
 ```

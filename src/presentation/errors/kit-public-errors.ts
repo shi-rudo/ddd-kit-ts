@@ -157,6 +157,13 @@ export function createKitPublicErrors(options: KitPublicErrorsOptions = {}) {
 			status: 409,
 			userMessages: english("The resource already exists."),
 		})
+		.registerByCode("EXPECTED_VERSION_MISMATCH", {
+			publicCode: "EXPECTED_VERSION_MISMATCH",
+			status: 409,
+			userMessages: english(
+				"The resource changed after you read it. Reload it and decide again.",
+			),
+		})
 		.registerByCode("INVALID_MONEY", {
 			publicCode: "INVALID_MONEY",
 			status: 422,

@@ -6,6 +6,7 @@ import {
 	AggregateNotFoundError,
 	ConcurrencyConflictError,
 	DomainError,
+	ExpectedVersionMismatchError,
 } from "../../errors/kit-errors";
 import { createKitPublicErrors } from "./kit-public-errors";
 import { toPublicErrorView } from "./public-error-view";
@@ -80,6 +81,26 @@ describe("createKitPublicErrors catalog", () => {
 
 		expect(view.code).toBe("CONCURRENCY_CONFLICT");
 		expect(view.retryable).toBe(true);
+	});
+
+	it("projects an expected version mismatch as a 409 without the retryable hint", () => {
+		const view = toPublicErrorView(
+			new ExpectedVersionMismatchError({
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
+				intent: "update",
+				expectedVersion: 3,
+				loadedVersion: 4,
+			}),
+		);
+
+		expect(view.code).toBe("EXPECTED_VERSION_MISMATCH");
+		expect(view.retryable).toBeUndefined();
+		expect(view.message).toBe(
+			"The resource changed after you read it. Reload it and decide again.",
+		);
+		expect(
+			kitPublicErrors.transportFor("EXPECTED_VERSION_MISMATCH")?.status,
+		).toBe(409);
 	});
 
 	it("projects a ValidationError with sanitized issues without their messages under details", () => {

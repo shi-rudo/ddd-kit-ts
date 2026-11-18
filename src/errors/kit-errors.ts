@@ -1671,7 +1671,7 @@ export function unregisteredChangesError(
 			(options.appendOnly
 				? "but its repository is append-only and installs no update. " +
 					"An append-only aggregate must not change after add."
-				: "but no update intent was registered. Call repository.update(aggregate) " +
+				: "but no update intent was registered. Call repository.update(aggregate, { expectedVersion }) " +
 					"after the final domain decision so state and events flush together."),
 		details: { identity: copyAggregateIdentity(options.identity) },
 	});
@@ -1925,6 +1925,53 @@ export class ConcurrencyConflictError extends InfrastructureError<"CONCURRENCY_C
 		this.expectedVersion = options.expectedVersion;
 		this.actualVersion = options.actualVersion ?? null;
 		this.reason = options.reason;
+	}
+}
+
+/** Options of {@link ExpectedVersionMismatchError}. */
+export interface ExpectedVersionMismatchErrorOptions {
+	/** The aggregate the error names. */
+	readonly identity: AggregateIdentity;
+	/** The write that the caller registered. */
+	readonly intent: "update" | "remove";
+	/** The version that the caller stated. */
+	readonly expectedVersion: number;
+	/** The version that the Unit of Work loaded. */
+	readonly loadedVersion: number;
+}
+
+/**
+ * Thrown by the `update` or the `remove` of a repository when the caller
+ * expects another version than the Unit of Work loaded. The aggregate
+ * changed between the read that the caller used and this run, so the
+ * decision of the caller used old facts. The typical response is HTTP 409.
+ *
+ * `InfrastructureError` because no business rule failed. NOT retryable: a
+ * new attempt cannot make the stated version the stored one. The caller
+ * must read the aggregate again and decide again. Compare
+ * {@link ConcurrencyConflictError}, which reports a writer that moved the
+ * aggregate between the load and the flush of one run.
+ */
+export class ExpectedVersionMismatchError extends InfrastructureError<"EXPECTED_VERSION_MISMATCH"> {
+	readonly identity: ExpectedVersionMismatchErrorOptions["identity"];
+	readonly intent: ExpectedVersionMismatchErrorOptions["intent"];
+	readonly expectedVersion: number;
+	readonly loadedVersion: number;
+
+	constructor(options: ExpectedVersionMismatchErrorOptions) {
+		super({
+			code: "EXPECTED_VERSION_MISMATCH",
+			message:
+				`Cannot register the ${options.intent} of ` +
+				`${describeAggregateIdentity(options.identity)}: the caller expects ` +
+				`version ${options.expectedVersion}, the unit of work loaded version ` +
+				`${options.loadedVersion}. The caller must read the aggregate again ` +
+				"and decide again.",
+		});
+		this.identity = copyAggregateIdentity(options.identity);
+		this.intent = options.intent;
+		this.expectedVersion = options.expectedVersion;
+		this.loadedVersion = options.loadedVersion;
 	}
 }
 
@@ -2205,6 +2252,7 @@ export type KitErrorCode =
 	| "EVENT_PAYLOAD_SCHEMA_ASYNC"
 	| "EVENT_SCHEMA_VERSION_INVALID"
 	| "EVENT_TYPE_INVALID"
+	| "EXPECTED_VERSION_MISMATCH"
 	| "FOLD_RETURNED_NO_STATE"
 	| "FOREIGN_EVENT"
 	| "PROTOTYPE_POLLUTION"

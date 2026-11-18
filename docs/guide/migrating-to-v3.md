@@ -62,7 +62,7 @@ await new UnitOfWork(deps).run(async ({ repositories }) => {
   const order = await repositories.orders.getById(orderId);
 
   order.confirm();
-  repositories.orders.update(order);
+  repositories.orders.update(order, { expectedVersion: versionAtLoad });
 });
 ```
 
@@ -165,8 +165,8 @@ The public method changes are:
 | Before | v3 | Meaning |
 | --- | --- | --- |
 | `save(newAggregate)` | `add(newAggregate)` | insert a new identity |
-| `save(loadedAggregate)` | `update(loadedAggregate)` | OCC update of the loaded instance |
-| `delete(id)` on `IRepository`, `delete(aggregate)` on `IUnitOfWorkRepository` | `remove(loadedAggregate)` | physical persistence removal |
+| `save(loadedAggregate)` | `update(loadedAggregate, { expectedVersion })` | OCC update of the loaded instance |
+| `delete(id)` on `IRepository`, `delete(aggregate)` on `IUnitOfWorkRepository` | `remove(loadedAggregate, { expectedVersion })` | physical persistence removal |
 | `getById(id)`, returns `null` when absent | `findById(id)`, returns `undefined` when absent | load by identity |
 | `getByIdOrFail(id)` | `getById(id)` | load or throw `AggregateNotFoundError` |
 | `exists(id)` | a method of your own port, when a command needs it | existence query |
@@ -203,7 +203,7 @@ await new UnitOfWork(deps).run(async ({ repositories }) => {
   const order = await repositories.orders.getById(orderId);
   order.addItems(items);
 
-  repositories.orders.update(order);
+  repositories.orders.update(order, { expectedVersion: versionAtLoad });
 });
 ```
 
@@ -211,6 +211,14 @@ Let TypeScript find every removed `save` and `delete` call. Decide each site
 from the use case's lifecycle. Do not add a temporary wrapper that restores a
 single `save` method. It hides the decision that this migration must
 surface.
+
+`update` and `remove` state the version that the decision used. A use case
+that decides only on the state that it loaded passes `versionAtLoad`. This is
+the correct value for most migrated `save` calls. A use case that carries the
+decision of a person or of another system passes the version that this
+caller saw. If your v2 code compared a version from the request by hand,
+replace that comparison with `expectedVersion`. See
+[Concurrency -> The version that the caller saw](./concurrency.md#the-version-that-the-caller-saw).
 
 Make all domain decisions before the final registration call. Mutating the
 aggregate after `add`, `update`, or `remove` is now a deterministic wiring
@@ -677,7 +685,7 @@ await uow.run(
   async ({ repositories }) => {
     const order = await repositories.orders.getById(command.orderId);
     order.confirm();
-    repositories.orders.update(order);
+    repositories.orders.update(order, { expectedVersion: versionAtLoad });
   },
   { stampOptions: { metadata: { correlationId: command.correlationId } } },
 );
@@ -1845,10 +1853,22 @@ The root entry no longer exports `capturePersistenceBaseline`,
   or `non-claiming due`. To run them, give the environment an `expireClaims`
   that ends every claim, and declare `providesClaimExpiry: true` on the
   harness. For a SQL adapter with a lease column, clear that column.
+- `update` and `remove` take `{ expectedVersion }` as a required second
+  argument. The compiler flags each call with one argument. Pass
+  `versionAtLoad` where the use case decides only on the state that it
+  loaded. Pass the version that the caller saw where the write carries the
+  decision of a person or of another system. A difference from the loaded
+  version throws `ExpectedVersionMismatchError` (code
+  `EXPECTED_VERSION_MISMATCH`), which is not retryable. A port that declares
+  `update(aggregate)` or `remove(aggregate)` by hand no longer compiles
+  against `defineRepository`: add the parameter
+  `expectation: WriteExpectation`. JavaScript code without the argument fails
+  with `AGGREGATE_TRACKING` and the reason `expected_version_missing`. See
+  [Concurrency -> The version that the caller saw](./concurrency.md#the-version-that-the-caller-saw).
 - A tool that prints the object behind a repository facade can print the
   facade without the fields of its adapter, for example `OrderRepository {}`.
   `console.log` and `util.inspect` in Node are such tools, and a debugger can
   be one. The object behind the facade takes the fields on the first access
   that needs them. To see the field names, print `Object.keys(repository)`.
-  A read, an `in` probe, a write, and a list of the own keys through the
-  facade give the same results as in rc.16.
+  A read, an `in` probe, a change of a property, and a list of the own keys
+  through the facade give the same results as in rc.16.

@@ -1,6 +1,7 @@
 import type { Aggregate } from "../../domain/aggregate/aggregate";
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
+import type { WriteExpectation } from "../../persistence/repository/repository";
 import { invalidRepositoryAdapterError } from "./errors";
 import type { RuntimePersistenceDefinition } from "./persistence-contract";
 
@@ -20,10 +21,12 @@ interface RepositoryFacadeSession<Evt extends AnyDomainEvent> {
 	update(
 		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
+		expectation: WriteExpectation,
 	): void;
 	remove(
 		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
+		expectation: WriteExpectation,
 	): void;
 }
 
@@ -271,10 +274,11 @@ function installRepositoryLifecycleOperations<Evt extends AnyDomainEvent>(
 			writable: false,
 			// The session checks the phase itself: a registration while the
 			// transaction commits must fail the run, not only this call.
-			value: (aggregate: unknown) => {
+			value: (aggregate: unknown, expectation: unknown) => {
 				state.session[operation](
 					aggregate as Aggregate<Id<string>, Evt>,
 					state.definition,
+					expectation as WriteExpectation,
 				);
 			},
 		});

@@ -227,9 +227,9 @@ async findById(id: OrderId): Promise<Order | undefined> {
 
 ::: warning Creation and update are explicit
 Call `repositories.orders.add(order)` for a new aggregate. For a loaded
-aggregate, call `repositories.orders.update(order)` with the exact instance
-that this unit of work loaded. Do not infer this lifecycle from `version`. A new
-aggregate can increase its version before persistence.
+aggregate, call `repositories.orders.update(order, { expectedVersion })` with
+the exact instance that this unit of work loaded. Do not infer this lifecycle
+from `version`. A new aggregate can increase its version before persistence.
 
 See [Repository -> Explicit lifecycle intent](./repository.md#explicit-lifecycle-intent).
 :::
