@@ -1792,7 +1792,7 @@ The root entry no longer exports `capturePersistenceBaseline`,
   catalog still returns the fallback view, and the observer now receives the
   failure.
 
-**After rc.16.**
+**rc.17.**
 
 - Every walk of the kit stops at 100 levels of nesting. The plain-data copy,
   `deepFreeze`, and `deepEqual` throw a `TypeError` past it, and the command

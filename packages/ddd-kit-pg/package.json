@@ -33,7 +33,7 @@
 	"license": "MIT",
 	"peerDependencies": {
 		"@shirudo/base-error": "^10.0.0",
-		"@shirudo/ddd-kit": "^3.0.0-rc.16",
+		"@shirudo/ddd-kit": "^3.0.0-rc.17",
 		"pg": "^8.23.1"
 	},
 	"devDependencies": {
